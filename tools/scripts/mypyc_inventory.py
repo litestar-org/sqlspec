@@ -299,6 +299,40 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "prove_separately",
         "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
     },
+    **{
+        f"sqlspec/adapters/{adapter}/tenant.py": {
+            "classification": "compile_now",
+            "reason": "Tenant strategy and lease callbacks with native SDK and interpreted-subclass coverage.",
+        }
+        for adapter in (
+            "asyncpg",
+            "cockroach_asyncpg",
+            "cockroach_psycopg",
+            "mssql_python",
+            "oracledb",
+            "psqlpy",
+            "psycopg",
+            "pymssql",
+        )
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/_hub.py": {
+            "classification": "compile_now",
+            "reason": "Native listener routing and queueing with SDK and shutdown-order coverage.",
+        }
+        for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
+    },
+    "sqlspec/adapters/oracledb/events/backend.py": {
+        "classification": "compile_now",
+        "reason": "Native AQ and TxEventQ event dispatch with live Oracle coverage.",
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/backend.py": {
+            "classification": "keep_interpreted",
+            "reason": "Native backend fields enforce concrete listener hub types and reject structural listeners.",
+        }
+        for adapter in ("asyncpg", "psqlpy", "psycopg")
+    },
     "sqlspec/utils/adapters.py": {
         "classification": "compile_now",
         "reason": "Adapter name and extension store resolution helpers are pure class/MRO/module lookups called by compiled event channel and hint paths.",
@@ -330,6 +364,22 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/utils/type_converters.py": {
         "classification": "compile_now",
         "reason": "Compiled adapter coercion helpers are on the hot path.",
+    },
+    "sqlspec/utils/tenant.py": {
+        "classification": "hard_block",
+        "reason": "Public tenant scopes use decorated class methods and async generators, which fail MyPyC code generation.",
+    },
+    "sqlspec/utils/tenant_asyncpg.py": {
+        "classification": "compile_now",
+        "reason": "Asyncpg pool release is joined through cancellation before tenant ownership ends.",
+    },
+    "sqlspec/utils/tenant_mssql.py": {
+        "classification": "compile_now",
+        "reason": "Typed SQL Server batch generation and result validation are shared by both tenant strategies.",
+    },
+    "sqlspec/utils/tenant_postgres.py": {
+        "classification": "compile_now",
+        "reason": "Shared PostgreSQL-family batch construction and validation with interpreted subclass support.",
     },
     "sqlspec/storage/backends/base.py": {
         "classification": "compile_now",

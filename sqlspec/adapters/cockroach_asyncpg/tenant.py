@@ -3,12 +3,15 @@
 import asyncio
 from typing import Any, ClassVar
 
-from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
+from mypy_extensions import mypyc_attr
+
+from sqlspec.adapters.asyncpg.tenant import AsyncpgRLSStrategy
 from sqlspec.utils.tenant_asyncpg import await_owned_release
 
 __all__ = ("CockroachAsyncpgRLSStrategy", "build_cockroach_asyncpg_tenant_lease")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CockroachAsyncpgRLSStrategy(AsyncpgRLSStrategy):
     """Apply tenant settings and clear unset CockroachDB values with empty strings."""
 

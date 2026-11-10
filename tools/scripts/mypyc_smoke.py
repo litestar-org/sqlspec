@@ -43,6 +43,22 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("tenant_lease_state", "sqlspec.core.tenant.base", "TenantLeaseState", True),
     SmokeImport("tenant_lease", "sqlspec.driver._tenant", "AsyncTenantLease", True),
     SmokeImport("tenant_context", "sqlspec.utils.tenant", "TenantContext"),
+    SmokeImport("tenant_asyncpg_release", "sqlspec.utils.tenant_asyncpg", "await_owned_release", True),
+    SmokeImport("tenant_mssql_batches", "sqlspec.utils.tenant_mssql", "build_checkout_sql", True),
+    SmokeImport("tenant_postgres_settings", "sqlspec.utils.tenant_postgres", "PostgresTenantSettings", True),
+    *(
+        SmokeImport(f"{adapter}_tenant", f"sqlspec.adapters.{adapter}.tenant", None, True, dependency)
+        for adapter, dependency in (
+            ("asyncpg", "asyncpg"),
+            ("cockroach_asyncpg", "asyncpg"),
+            ("cockroach_psycopg", "psycopg"),
+            ("mssql_python", "mssql_python"),
+            ("oracledb", "oracledb"),
+            ("psqlpy", "psqlpy"),
+            ("psycopg", "psycopg"),
+            ("pymssql", "pymssql"),
+        )
+    ),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
     SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
     SmokeImport("storage_backend_local", "sqlspec.storage.backends.local", "LocalStore", True),
@@ -66,6 +82,11 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_channel", "sqlspec.extensions.events._channel", "SyncEventChannel", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
+    *(
+        SmokeImport(f"{adapter}_events_hub", f"sqlspec.adapters.{adapter}.events._hub", None, True, adapter)
+        for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
+    ),
+    SmokeImport("oracledb_events_backend", "sqlspec.adapters.oracledb.events.backend", None, True, "oracledb"),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),

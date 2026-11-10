@@ -251,24 +251,35 @@ async def test_vpd_strategy_detects_setter_and_clear_failures(mode: str, failure
     )
     if "set" in failure:
         setattr(connection, failure, True)
-        with pytest.raises(TenantContextError):
+        with pytest.raises(TenantContextError) as checkout_error:
             await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+        if failure == "fail_context_set":
+            assert isinstance(checkout_error.value.__cause__, RuntimeError)
     else:
         state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
         setattr(connection, failure, True)
-        with pytest.raises(TenantCleanupError):
+        with pytest.raises(TenantCleanupError) as checkin_error:
             await _invoke(strategy.checkin, connection, state)
+        if failure == "fail_context_clear":
+            assert isinstance(checkin_error.value.__cause__, RuntimeError)
 
 
 @pytest.mark.parametrize("strategy_cls_name", ["OracleSyncVPDStrategy", "OracleAsyncVPDStrategy"])
 @pytest.mark.parametrize(
     "field,value",
-    [("set_procedure", "app; DROP"), ("clear_procedure", "app..clear"), ("namespace", "a' OR 1=1"), ("attribute", "")],
+    [
+        ("set_procedure", "app; DROP"),
+        ("set_procedure", 1),
+        ("clear_procedure", "app..clear"),
+        ("clear_procedure", 1),
+        ("namespace", "a' OR 1=1"),
+        ("attribute", ""),
+    ],
 )
-def test_vpd_strategy_rejects_untrusted_identifiers(strategy_cls_name: str, field: str, value: str) -> None:
+def test_vpd_strategy_rejects_untrusted_identifiers(strategy_cls_name: str, field: str, value: object) -> None:
     from sqlspec.adapters.oracledb import tenant
 
-    args = {
+    args: dict[str, object] = {
         "set_procedure": "app.ctx.set_tenant",
         "clear_procedure": "app.ctx.clear_tenant",
         "namespace": "tenant_ctx",

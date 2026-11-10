@@ -3,10 +3,11 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
 from psycopg import pq
 from psycopg.rows import tuple_row
 
-from sqlspec.core.tenant import TenantLeaseState, require_session_pooler
+from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant_postgres import PostgresTenantSettings, psycopg_setting_query
 
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = ("PsycopgAsyncRLSStrategy", "PsycopgSyncRLSStrategy")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsycopgSyncRLSStrategy(PostgresTenantSettings):
     """Capture, apply and verify synchronous PostgreSQL session settings."""
 
@@ -54,9 +56,12 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
             if isinstance(exc, TenantCleanupError):
                 raise
             msg = "Tenant session restoration failed"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
     """Capture, apply and verify asynchronous PostgreSQL session settings."""
 
@@ -94,7 +99,9 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             if isinstance(exc, TenantCleanupError):
                 raise
             msg = "Tenant session restoration failed"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
 
 
 def validate_psycopg_tenant_config(
@@ -135,7 +142,9 @@ def build_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: bool = Fal
                 pool.close(timeout=0)
             except BaseException as quarantine_error:
                 msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                raise TenantCleanupError(msg) from close_error
+                error = TenantCleanupError(msg)
+                error.__cause__ = close_error
+                raise error
             raise
         release(connection)
 
@@ -181,7 +190,9 @@ def build_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit: bool = Fa
                 await pool.close(timeout=0)
             except BaseException as quarantine_error:
                 msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                raise TenantCleanupError(msg) from close_error
+                error = TenantCleanupError(msg)
+                error.__cause__ = close_error
+                raise error
             raise
         await release(connection)
 

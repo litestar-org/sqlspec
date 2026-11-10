@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.oracledb.core import (
     OracleSessionContextConfig,
     _validate_oracle_identifier,
@@ -45,7 +47,7 @@ def tenant_client_identifier() -> str | None:
     Raises:
         TenantContextError: The identity exceeds Oracle's 64-byte limit.
     """
-    tenant_id = TenantContext.get_tenant_id()
+    tenant_id: str | None = TenantContext.get_tenant_id()
     if tenant_id is not None and len(tenant_id.encode("utf-8")) > ORACLE_TENANT_IDENTIFIER_MAX_BYTES:
         msg = "Oracle tenant identifiers must fit within 64 UTF-8 bytes"
         raise TenantContextError(msg)
@@ -87,6 +89,7 @@ def compose_tenant_session_hook(
     )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleSyncIdentifierStrategy:
     """Apply an Oracle client identifier, preserving configured session hooks.
 
@@ -124,6 +127,7 @@ class OracleSyncIdentifierStrategy:
             raise TenantCleanupError(msg)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleAsyncIdentifierStrategy:
     """Apply and verify a client identifier on an asynchronous Oracle connection."""
 
@@ -219,37 +223,46 @@ def build_oracle_async_tenant_lease(config: "OracleAsyncConfig") -> "AsyncTenant
     )
 
 
-def _validate_vpd_settings(set_procedure: str, clear_procedure: str, namespace: str, attribute: str) -> None:
-    for label, value in (("set_procedure", set_procedure), ("clear_procedure", clear_procedure)):
-        if not isinstance(value, str):
-            msg = f"Oracle tenant {label} must be an identifier"
-            raise ImproperConfigurationError(msg)
-        for segment in value.split("."):
-            _validate_oracle_identifier(segment, label)
+def _validate_vpd_procedure(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        msg = f"Oracle tenant {label} must be an identifier"
+        raise ImproperConfigurationError(msg)
+    for segment in value.split("."):
+        _validate_oracle_identifier(segment, label)
+    return value
+
+
+def _validate_vpd_settings(
+    set_procedure: object, clear_procedure: object, namespace: str, attribute: str
+) -> tuple[str, str]:
+    set_procedure = _validate_vpd_procedure(set_procedure, "set_procedure")
+    clear_procedure = _validate_vpd_procedure(clear_procedure, "clear_procedure")
     _validate_oracle_identifier(namespace, "namespace")
     _validate_oracle_identifier(attribute, "attribute")
+    return set_procedure, clear_procedure
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleSyncVPDStrategy(OracleSyncIdentifierStrategy):
     """Apply a tenant through an administrator-provisioned trusted context package."""
 
-    __slots__ = ("_attribute", "_clear_procedure", "_namespace", "_set_procedure")
+    __slots__ = ("_clear_procedure", "_context_attribute", "_namespace", "_set_procedure")
 
     def __init__(
         self,
         *,
-        set_procedure: str,
-        clear_procedure: str,
+        set_procedure: object,
+        clear_procedure: object,
         namespace: str,
         attribute: str,
         hook: OracleSessionContextConfig | Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(hook)
-        _validate_vpd_settings(set_procedure, clear_procedure, namespace, attribute)
-        self._set_procedure = set_procedure
-        self._clear_procedure = clear_procedure
+        self._set_procedure, self._clear_procedure = _validate_vpd_settings(
+            set_procedure, clear_procedure, namespace, attribute
+        )
         self._namespace = namespace
-        self._attribute = attribute
+        self._context_attribute = attribute
 
     def checkout(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Set and verify the trusted context after binding the client identifier."""
@@ -257,11 +270,13 @@ class OracleSyncVPDStrategy(OracleSyncIdentifierStrategy):
         try:
             with connection.cursor() as cursor:
                 cursor.execute(f"BEGIN {self._set_procedure}(:tenant_id); END;", {"tenant_id": payload.tenant_id})
-                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._attribute})
+                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute})
                 row = cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be set"
-            raise TenantContextError(msg) from exc
+            error = TenantContextError(msg)
+            error.__cause__ = exc
+            raise error
         if row is None or row[0] != payload.tenant_id:
             msg = "Oracle trusted tenant context verification failed"
             raise TenantContextError(msg)
@@ -272,37 +287,40 @@ class OracleSyncVPDStrategy(OracleSyncIdentifierStrategy):
         try:
             with connection.cursor() as cursor:
                 cursor.execute(f"BEGIN {self._clear_procedure}; END;")
-                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._attribute})
+                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute})
                 row = cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be cleared"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
         if row is None or row[0] is not None:
             msg = "Oracle trusted tenant context cleanup verification failed"
             raise TenantCleanupError(msg)
         super().checkin(connection, state)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
     """Apply a trusted application context on an asynchronous Oracle connection."""
 
-    __slots__ = ("_attribute", "_clear_procedure", "_namespace", "_set_procedure")
+    __slots__ = ("_clear_procedure", "_context_attribute", "_namespace", "_set_procedure")
 
     def __init__(
         self,
         *,
-        set_procedure: str,
-        clear_procedure: str,
+        set_procedure: object,
+        clear_procedure: object,
         namespace: str,
         attribute: str,
         hook: OracleSessionContextConfig | Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(hook)
-        _validate_vpd_settings(set_procedure, clear_procedure, namespace, attribute)
-        self._set_procedure = set_procedure
-        self._clear_procedure = clear_procedure
+        self._set_procedure, self._clear_procedure = _validate_vpd_settings(
+            set_procedure, clear_procedure, namespace, attribute
+        )
         self._namespace = namespace
-        self._attribute = attribute
+        self._context_attribute = attribute
 
     async def checkout(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Set and verify the trusted context after binding the client identifier."""
@@ -310,11 +328,15 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         try:
             with connection.cursor() as cursor:
                 await cursor.execute(f"BEGIN {self._set_procedure}(:tenant_id); END;", {"tenant_id": payload.tenant_id})
-                await cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._attribute})
+                await cursor.execute(
+                    _CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute}
+                )
                 row = await cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be set"
-            raise TenantContextError(msg) from exc
+            error = TenantContextError(msg)
+            error.__cause__ = exc
+            raise error
         if row is None or row[0] != payload.tenant_id:
             msg = "Oracle trusted tenant context verification failed"
             raise TenantContextError(msg)
@@ -325,11 +347,15 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         try:
             with connection.cursor() as cursor:
                 await cursor.execute(f"BEGIN {self._clear_procedure}; END;")
-                await cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._attribute})
+                await cursor.execute(
+                    _CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute}
+                )
                 row = await cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be cleared"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
         if row is None or row[0] is not None:
             msg = "Oracle trusted tenant context cleanup verification failed"
             raise TenantCleanupError(msg)

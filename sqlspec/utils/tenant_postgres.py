@@ -2,9 +2,11 @@
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import ClassVar
+from typing import ClassVar, cast
 
-from sqlspec.core.tenant import TenantLeaseState, validate_session_setting_name
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core.tenant.base import TenantLeaseState, validate_session_setting_name
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
 from sqlspec.utils.text import quote_identifier
@@ -34,23 +36,26 @@ def psycopg_setting_query(sql: str, params: Sequence[str]) -> tuple[str, dict[st
     return re.sub(r"\$(\d+)", r"%(p\1)s", sql), {f"p{i}": value for i, value in enumerate(params, 1)}
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PostgresTenantSettings:
     """Validate owned settings and prepare bound management statements."""
 
     __slots__ = ("_default_checkout_sql", "_schema_resolver", "_sorted_variable_keys", "_tenant_key", "_variable_keys")
 
+    _schema_resolver: Callable[[TenantContextPayload], object] | None
     _unset_restore_value: ClassVar[str] = ""
 
     def __init__(
         self,
         *,
-        tenant_key: str = DEFAULT_TENANT_KEY,
+        tenant_key: object = DEFAULT_TENANT_KEY,
         variable_keys: Mapping[str, str] | None = None,
         schema_resolver: Callable[[TenantContextPayload], str] | None = None,
     ) -> None:
         self._tenant_key = validate_session_setting_name(tenant_key)
         self._variable_keys = dict(variable_keys or {})
-        if any(not isinstance(key, str) or not key for key in self._variable_keys):
+        unvalidated = cast("Mapping[object, object]", self._variable_keys)
+        if any(not isinstance(key, str) or not key for key in unvalidated):
             msg = "Tenant variable names must be non-empty strings"
             raise ImproperConfigurationError(msg)
         targets = {self._tenant_key.casefold()}
@@ -59,7 +64,7 @@ class PostgresTenantSettings:
             if self._tenant_key.casefold() == "search_path":
                 msg = "Tenant key conflicts with strategy-owned search_path"
                 raise ImproperConfigurationError(msg)
-        for target in self._variable_keys.values():
+        for target in unvalidated.values():
             normalized = validate_session_setting_name(target).casefold()
             if normalized in targets:
                 msg = "Tenant session setting targets must be distinct"

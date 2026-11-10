@@ -2,7 +2,9 @@
 
 from typing import Any, ClassVar
 
-from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
+from mypy_extensions import mypyc_attr
+
+from sqlspec.adapters.psycopg.tenant import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
 from sqlspec.exceptions import TenantCleanupError
 
 __all__ = (
@@ -13,6 +15,7 @@ __all__ = (
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CockroachPsycopgSyncRLSStrategy(PsycopgSyncRLSStrategy):
     """Apply and restore synchronous CockroachDB session settings."""
 
@@ -20,6 +23,7 @@ class CockroachPsycopgSyncRLSStrategy(PsycopgSyncRLSStrategy):
     _unset_restore_value: ClassVar[str] = ""
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CockroachPsycopgAsyncRLSStrategy(PsycopgAsyncRLSStrategy):
     """Apply and restore asynchronous CockroachDB session settings."""
 
@@ -54,7 +58,9 @@ def build_cockroach_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: 
                 pool.close(timeout=0)
             except BaseException as quarantine_error:
                 msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                raise TenantCleanupError(msg) from close_error
+                error = TenantCleanupError(msg)
+                error.__cause__ = close_error
+                raise error
             raise
         release(connection)
 
@@ -100,7 +106,9 @@ def build_cockroach_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit:
                 await pool.close(timeout=0)
             except BaseException as quarantine_error:
                 msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                raise TenantCleanupError(msg) from close_error
+                error = TenantCleanupError(msg)
+                error.__cause__ = close_error
+                raise error
             raise
         await release(connection)
 

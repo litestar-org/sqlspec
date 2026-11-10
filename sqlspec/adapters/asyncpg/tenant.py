@@ -4,7 +4,9 @@ import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.core.tenant import TenantLeaseState, require_session_pooler, validate_tenant_session_baseline
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler, validate_tenant_session_baseline
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant_asyncpg import await_owned_release
 from sqlspec.utils.tenant_postgres import PostgresTenantSettings
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgRLSStrategy",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncpgRLSStrategy(PostgresTenantSettings):
     """Bind tenant identity and restore owned session settings in one query each."""
 
@@ -42,7 +45,9 @@ class AsyncpgRLSStrategy(PostgresTenantSettings):
             if isinstance(exc, TenantCleanupError):
                 raise
             msg = "Tenant session restoration failed"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
 
 
 async def apply_session_baseline(connection: "AsyncpgConnection", baseline: Mapping[str, str]) -> None:
@@ -98,14 +103,17 @@ def build_asyncpg_tenant_lease(config: Any) -> Any:
         nonlocal pool
         pool = await config.provide_pool()
         connection = await pool.acquire()
+        setup_error: BaseException | None = None
         try:
             await apply_session_baseline(connection, config.driver_features.get("tenant_session_baseline", {}))
         except BaseException as exc:
+            setup_error = exc
+        if setup_error is not None:
             try:
                 await invalidate(connection)
             except BaseException as cleanup:
-                exc.add_note(f"Tenant connection disposal failed: {type(cleanup).__name__}")
-            raise
+                setup_error.add_note(f"Tenant connection disposal failed: {type(cleanup).__name__}")
+            raise setup_error
         return connection
 
     async def finish_transaction(connection: Any, _exc_type: type[BaseException] | None) -> None:

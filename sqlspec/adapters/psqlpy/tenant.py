@@ -4,7 +4,9 @@ import asyncio
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Final
 
-from sqlspec.core.tenant import TenantLeaseState
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core.tenant.base import TenantLeaseState
 from sqlspec.exceptions import TenantCleanupError
 from sqlspec.utils.tenant_postgres import PostgresTenantSettings
 
@@ -17,6 +19,7 @@ PSQLPY_DISPOSAL_TIMEOUT_S: Final = 2.0
 __all__ = ("PsqlpyRLSStrategy",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsqlpyRLSStrategy(PostgresTenantSettings):
     """Apply and restore only owned settings through one bound query each."""
 
@@ -40,7 +43,9 @@ class PsqlpyRLSStrategy(PostgresTenantSettings):
             if isinstance(exc, TenantCleanupError):
                 raise
             msg = "Tenant session restoration failed"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
 
 
 def build_psqlpy_tenant_lease(config: Any) -> Any:
@@ -54,9 +59,12 @@ def build_psqlpy_tenant_lease(config: Any) -> Any:
         pool = await config.provide_pool()
         context = pool.acquire()
         connection = await context.__aenter__()
+        setup_error: BaseException | None = None
         try:
             await config._ensure_connection(connection)
         except BaseException as exc:
+            setup_error = exc
+        if setup_error is not None:
             cleanup = asyncio.create_task(invalidate(connection))
             while not cleanup.done():
                 try:
@@ -68,8 +76,8 @@ def build_psqlpy_tenant_lease(config: Any) -> Any:
             try:
                 cleanup.result()
             except BaseException as disposal_error:
-                exc.add_note(f"Tenant acquire connection disposal failed: {type(disposal_error).__name__}")
-            raise
+                setup_error.add_note(f"Tenant acquire connection disposal failed: {type(disposal_error).__name__}")
+            raise setup_error
         return connection
 
     async def release(_connection: Any) -> None:

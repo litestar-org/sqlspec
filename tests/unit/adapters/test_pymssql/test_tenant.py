@@ -120,15 +120,17 @@ def test_tenant_context_batches_capture_restore_and_binds(autocommit: bool) -> N
 def test_tenant_context_rejects_malformed_batch(malformed: str, cleanup: bool) -> None:
     conn = BatchConnection(malformed=malformed)
     strategy = PymssqlSessionContextStrategy()
-    if cleanup:
-        with pytest.raises(TenantCleanupError):
+    expected = TenantCleanupError if cleanup else TenantContextError
+    with pytest.raises(expected) as raised:
+        if cleanup:
             strategy.checkin(
                 cast("PymssqlConnection", conn),
                 TenantLeaseState(TenantContextPayload("a"), baseline={"tenant_id": "baseline"}),
             )
-    else:
-        with pytest.raises(TenantContextError):
+        else:
             strategy.checkout(cast("PymssqlConnection", conn), TenantContextPayload("a"))
+    if malformed != "mismatch":
+        assert isinstance(raised.value.__cause__, ValueError)
     assert len(conn.calls) == 1
     assert conn.closed == 1
 
@@ -136,10 +138,12 @@ def test_tenant_context_rejects_malformed_batch(malformed: str, cleanup: bool) -
 @pytest.mark.parametrize(
     "kwargs",
     [
+        {"tenant_key": 1},
         {"tenant_key": "a;b"},
         {"tenant_key": "a.b"},
         {"tenant_key": "a" * 129},
         {"variable_keys": {"x": "tenant_id"}},
+        {"variable_keys": {"x": 1}},
         {"variable_keys": {"x": "same", "y": "same"}},
     ],
 )

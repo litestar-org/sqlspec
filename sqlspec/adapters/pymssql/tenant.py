@@ -1,7 +1,9 @@
 """Bound, verified SQL Server session-context tenant strategy."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor
 from sqlspec.core.tenant import TenantLeaseState
@@ -19,17 +21,19 @@ __all__ = ("PymssqlSessionContextStrategy", "build_pymssql_tenant_lease")
 DEFAULT_MSSQL_TENANT_KEY: Final = "tenant_id"
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PymssqlSessionContextStrategy:
     """Apply and restore owned mutable keys with one verified SQL batch per boundary."""
 
     __slots__ = ("_sorted_variable_keys", "_tenant_key", "_variable_keys")
 
     def __init__(
-        self, *, tenant_key: str = DEFAULT_MSSQL_TENANT_KEY, variable_keys: Mapping[str, str] | None = None
+        self, *, tenant_key: object = DEFAULT_MSSQL_TENANT_KEY, variable_keys: Mapping[str, str] | None = None
     ) -> None:
         self._tenant_key = validate_session_key(tenant_key)
         self._variable_keys = dict(variable_keys or {})
-        targets = [self._tenant_key, *(validate_session_key(key) for key in self._variable_keys.values())]
+        keys = cast("Mapping[str, object]", self._variable_keys)
+        targets = [self._tenant_key, *(validate_session_key(key) for key in keys.values())]
         if len(set(targets)) != len(targets):
             msg = "Tenant session keys must be distinct"
             raise ImproperConfigurationError(msg)
@@ -57,7 +61,9 @@ class PymssqlSessionContextStrategy:
                 row = read_batch_result(cursor, columns)
         except Exception as exc:
             msg = "Tenant session context checkout failed"
-            raise TenantContextError(msg) from exc
+            error = TenantContextError(msg)
+            error.__cause__ = exc
+            raise error
         if row[count:] != tuple(value for _, value in pairs):
             msg = "Tenant session context verification failed"
             raise TenantContextError(msg)
@@ -77,7 +83,9 @@ class PymssqlSessionContextStrategy:
                 restored = read_batch_result(cursor, columns)
         except Exception as exc:
             msg = "Tenant session context cleanup failed"
-            raise TenantCleanupError(msg) from exc
+            error = TenantCleanupError(msg)
+            error.__cause__ = exc
+            raise error
         if restored != tuple(value for _, value in pairs):
             msg = "Tenant session context restore verification failed"
             raise TenantCleanupError(msg)

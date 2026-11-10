@@ -292,6 +292,19 @@ include = [
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
+  "sqlspec/adapters/asyncpg/tenant.py",            # PostgreSQL-family tenant strategies and leases
+  "sqlspec/adapters/cockroach_asyncpg/tenant.py",
+  "sqlspec/adapters/cockroach_psycopg/tenant.py",
+  "sqlspec/adapters/psqlpy/tenant.py",
+  "sqlspec/adapters/psycopg/tenant.py",
+  "sqlspec/adapters/mssql_python/tenant.py",        # SQL Server tenant strategies
+  "sqlspec/adapters/pymssql/tenant.py",
+  "sqlspec/adapters/oracledb/tenant.py",            # Oracle tenant strategies and hooks
+  "sqlspec/adapters/asyncpg/events/_hub.py",       # Native event listener runtimes
+  "sqlspec/adapters/oracledb/events/_hub.py",
+  "sqlspec/adapters/oracledb/events/backend.py",
+  "sqlspec/adapters/psqlpy/events/_hub.py",
+  "sqlspec/adapters/psycopg/events/_hub.py",
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers
   "sqlspec/adapters/oracledb/_json_handlers.py",   # Native JSON inputtypehandler / outputtypehandler chain
   "sqlspec/adapters/oracledb/_uuid_handlers.py",   # UUID ↔ RAW(16) inputtypehandler / outputtypehandler chain
@@ -311,6 +324,9 @@ include = [
   "sqlspec/utils/serializers/**/*.py",             # Serialization helpers package
   "sqlspec/utils/type_converters.py",              # Adapter type converters
   "sqlspec/utils/correlation.py",                  # Correlation context helpers
+  "sqlspec/utils/tenant_asyncpg.py",               # Asyncpg release ownership
+  "sqlspec/utils/tenant_mssql.py",                 # SQL Server tenant batch helpers
+  "sqlspec/utils/tenant_postgres.py",              # PostgreSQL tenant batch helpers
   "sqlspec/utils/portal.py",                       # Thread portal utilities
   "sqlspec/utils/schema.py",                       # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                        # UUID utilities
