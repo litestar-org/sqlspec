@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.migrations.context import MigrationContext
     from sqlspec.migrations.schema import SchemaTarget
 
-__all__ = ("reconcile",)
+__all__ = ("down", "downgrade", "reconcile")
 
 
 async def _noop_async() -> None:
@@ -206,3 +206,75 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
         return _reconcile_async(context.driver, stores, create_schema=create_schema)
     _reconcile_sync(context.driver, stores, create_schema=create_schema)
     return None
+
+
+def _store_drop_statements(store: Any) -> list[str]:
+    """Return the DROP statements for an ADK session, memory, or artifact store."""
+    if isinstance(store, (BaseSyncADKArtifactStore, BaseAsyncADKArtifactStore)):
+        build_drop = getattr(store, "_build_drop_artifact_table_sql", None)
+        if callable(build_drop):
+            return list(cast("list[str]", build_drop()))
+        return [f"DROP TABLE IF EXISTS {store.artifact_table}"]
+    if isinstance(store, (BaseSyncADKMemoryStore, BaseAsyncADKMemoryStore)):
+        return list(store._drop_memory_table_sql())
+    return list(store._drop_tables_sql())
+
+
+def _downgrade_sync(driver: Any, stores: list[Any]) -> None:
+    """Drop enabled ADK store schemas in reverse dependency order on a synchronous driver."""
+    for store in reversed(stores):
+        for stmt in _store_drop_statements(store):
+            driver.execute_script(stmt)
+
+
+async def _downgrade_async(driver: Any, stores: list[Any]) -> None:
+    """Drop enabled ADK store schemas in reverse dependency order on an asynchronous driver."""
+    for store in reversed(stores):
+        for stmt in _store_drop_statements(store):
+            await driver.execute_script(stmt)
+
+
+def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":
+    """Drop enabled ADK session, memory, and artifact store schemas on the active migration driver.
+
+    Args:
+        context: Active migration execution context supplying config and driver.
+
+    Raises:
+        MigrationError: Context lacks config/driver or adapter is unsupported.
+
+    Returns:
+        Awaitable resolving to ``None`` for async drivers, or ``None`` for sync drivers.
+    """
+    if context.config is None:
+        msg = "ADK schema reconciliation requires context.config on MigrationContext."
+        raise MigrationError(msg)
+    if context.driver is None:
+        msg = "ADK schema reconciliation requires context.driver on MigrationContext."
+        raise MigrationError(msg)
+
+    validate_builtin_reconcile_adapter(context.config)
+    try:
+        adk_config = _adk_config_from_extension(context.config)
+    except MigrationError:
+        raise
+    except SQLSpecError as exc:
+        raise MigrationError(str(exc)) from exc
+
+    stores = _selected_stores(context.config, adk_config)
+    is_async = context.is_async_driver
+    _validate_store_driver_mode(stores, is_async_driver=is_async)
+    if not stores:
+        return _noop_async() if is_async else None
+
+    manage_schema, _ = stores[0]._schema_management_flags()
+    if not manage_schema:
+        return _noop_async() if is_async else None
+
+    if is_async:
+        return _downgrade_async(context.driver, stores)
+    _downgrade_sync(context.driver, stores)
+    return None
+
+
+down = downgrade

@@ -22,6 +22,7 @@ from sqlspec.migrations.loaders import (
     _load_migration_sql,
     get_migration_loader,
     load_reconcile_callable,
+    load_reconcile_downgrade_callable,
 )
 from sqlspec.migrations.templates import TemplateDescriptionHints
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
@@ -246,21 +247,25 @@ class BaseMigrationRunner:
         """Construct sorted migration listing from directory entries."""
 
         migrations: list[tuple[str, Path]] = []
+        ext_order = {name: idx for idx, name in enumerate(self.extension_migrations)}
 
         for entry in entries:
             version = self._extract_version(entry.path.name)
             if not version:
                 continue
-            if entry.extension_name and not version.startswith(f"ext_{entry.extension_name}_"):
+            if entry.extension_name and not version.startswith("ext_"):
                 version = f"ext_{entry.extension_name}_{version}"
             migrations.append((version, entry.path))
 
         def version_sort_key(migration_tuple: "tuple[str, Path]") -> "Any":
             version_str = migration_tuple[0]
             try:
-                return parse_version(version_str)
+                parsed = parse_version(version_str)
             except ValueError:
-                return version_str
+                return (2, 0, version_str)
+            if parsed.extension is not None:
+                return (0, ext_order.get(parsed.extension, len(ext_order)), parsed)
+            return (1, 0, parsed)
 
         return sorted(migrations, key=version_sort_key)
 
@@ -365,6 +370,11 @@ class BaseMigrationRunner:
         checksum = self.calculate_checksum(content)
         if version is None:
             version = self._extract_version(file_path.name)
+            if version and not version.startswith("ext_"):
+                for ext_name, ext_path in self.extension_migrations.items():
+                    if file_path.parent == ext_path:
+                        version = f"ext_{ext_name}_{version}"
+                        break
         description = self._extract_description(content, file_path)
         if not description:
             description = file_path.stem.split("_", 1)[1] if "_" in file_path.stem else ""
@@ -898,12 +908,25 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if self._has_active_implicit_transaction(driver):
             driver.commit()
 
-    def _invoke_reconciler(self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor") -> None:
-        """Load and execute a synchronous reconcile(context) callback."""
+    def _invoke_reconciler(
+        self,
+        driver: "SyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"] = "up",
+    ) -> None:
+        """Load and execute a synchronous reconcile(context) or downgrade(context) callback."""
         context = self._build_reconciler_context(driver, descriptor)
-        reconcile_fn = load_reconcile_callable(
-            descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-        )
+        if direction == "down":
+            reconcile_fn = load_reconcile_downgrade_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+            if reconcile_fn is None:
+                return
+        else:
+            reconcile_fn = load_reconcile_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
         result: Any = reconcile_fn(context)
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
@@ -915,21 +938,18 @@ class SyncMigrationRunner(BaseMigrationRunner):
             raise MigrationError(msg)
         self._validate_reconciler_return_value(descriptor, result)
 
-    def execute_reconciliation(
-        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    def _execute_reconciler_step(
+        self,
+        driver: "SyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"],
     ) -> int:
-        """Execute an extension reconcile(context) callback synchronously.
-
-        Args:
-            driver: Active synchronous database driver.
-            descriptor: Extension reconciler descriptor to execute.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
+        """Execute an extension reconcile or downgrade callback synchronously."""
         self.set_driver(driver)
+        suffix = "reconcile" if direction == "up" else "reconcile_down"
         reconcile_meta = cast(
-            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_reconcile", "transactional": None}
+            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
         )
         default_schema = self._resolve_migration_schema(reconcile_meta)
         use_transaction = self._resolve_use_transaction(reconcile_meta, None)
@@ -948,7 +968,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
             try:
                 if default_schema:
                     driver.set_migration_session_schema(default_schema)
-                self._invoke_reconciler(driver, descriptor)
+                self._invoke_reconciler(driver, descriptor, direction=direction)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
                 driver.commit()
             except BaseException as exc:
@@ -964,7 +984,7 @@ class SyncMigrationRunner(BaseMigrationRunner):
             try:
                 if default_schema:
                     driver.set_migration_non_transactional_schema(default_schema)
-                self._invoke_reconciler(driver, descriptor)
+                self._invoke_reconciler(driver, descriptor, direction=direction)
                 self._commit_nontransactional_if_needed(driver)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
             except BaseException as exc:
@@ -998,6 +1018,34 @@ class SyncMigrationRunner(BaseMigrationRunner):
             span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
         )
         return execution_time
+
+    def execute_reconciliation(
+        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension reconcile(context) callback synchronously.
+
+        Args:
+            driver: Active synchronous database driver.
+            descriptor: Extension reconciler descriptor to execute.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return self._execute_reconciler_step(driver, descriptor, direction="up")
+
+    def execute_reconciliation_downgrade(
+        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension downgrade(context) callback synchronously.
+
+        Args:
+            driver: Active synchronous database driver.
+            descriptor: Extension reconciler descriptor to downgrade.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return self._execute_reconciler_step(driver, descriptor, direction="down")
 
     def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.
@@ -1319,33 +1367,41 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             await driver.commit()
 
     async def _invoke_reconciler(
-        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+        self,
+        driver: "AsyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"] = "up",
     ) -> None:
-        """Load and execute a sync or async reconcile(context) callback."""
+        """Load and execute a sync or async reconcile(context) or downgrade(context) callback."""
         context = self._build_reconciler_context(driver, descriptor)
-        reconcile_fn = load_reconcile_callable(
-            descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-        )
+        if direction == "down":
+            reconcile_fn = load_reconcile_downgrade_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+            if reconcile_fn is None:
+                return
+        else:
+            reconcile_fn = load_reconcile_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
         result: Any = reconcile_fn(context)
         if inspect.isawaitable(result):
             result = await result
         self._validate_reconciler_return_value(descriptor, result)
 
-    async def execute_reconciliation(
-        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    async def _execute_reconciler_step(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"],
     ) -> int:
-        """Execute an extension reconcile(context) callback asynchronously.
-
-        Args:
-            driver: Active asynchronous database driver.
-            descriptor: Extension reconciler descriptor to execute.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
+        """Execute an extension reconcile or downgrade callback asynchronously."""
         self.set_driver(driver)
+        suffix = "reconcile" if direction == "up" else "reconcile_down"
         reconcile_meta = cast(
-            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_reconcile", "transactional": None}
+            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
         )
         default_schema = self._resolve_migration_schema(reconcile_meta)
         use_transaction = self._resolve_use_transaction(reconcile_meta, None)
@@ -1364,7 +1420,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             try:
                 if default_schema:
                     await driver.set_migration_session_schema(default_schema)
-                await self._invoke_reconciler(driver, descriptor)
+                await self._invoke_reconciler(driver, descriptor, direction=direction)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
                 await driver.commit()
             except BaseException as exc:
@@ -1380,7 +1436,7 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             try:
                 if default_schema:
                     await driver.set_migration_non_transactional_schema(default_schema)
-                await self._invoke_reconciler(driver, descriptor)
+                await self._invoke_reconciler(driver, descriptor, direction=direction)
                 await self._commit_nontransactional_if_needed(driver)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
             except BaseException as exc:
@@ -1414,6 +1470,34 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
         )
         return execution_time
+
+    async def execute_reconciliation(
+        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension reconcile(context) callback asynchronously.
+
+        Args:
+            driver: Active asynchronous database driver.
+            descriptor: Extension reconciler descriptor to execute.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return await self._execute_reconciler_step(driver, descriptor, direction="up")
+
+    async def execute_reconciliation_downgrade(
+        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension downgrade(context) callback asynchronously.
+
+        Args:
+            driver: Active asynchronous database driver.
+            descriptor: Extension reconciler descriptor to downgrade.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return await self._execute_reconciler_step(driver, descriptor, direction="down")
 
     async def load_all_migrations(self) -> "dict[str, SQL]":
         """Load all migrations into a single namespace for bulk operations.

@@ -114,19 +114,19 @@ def test_add_extension_migrations_cache_invalidation_on_mode_change(tmp_path: Pa
     config.add_extension_migrations("ext_demo", ext_dir)
 
     cmds1 = config.get_migration_commands()
-    assert cmds1.extension_reconcilers == ()
+    assert cmds1.extension_reconcilers == (ExtensionReconcilerDescriptor("ext_demo", ext_dir / "reconcile.py"),)
 
-    config.add_extension_migrations("ext_demo", ext_dir, migration_mode="reconcile")
+    config.add_extension_migrations("ext_demo", ext_dir, migration_mode="versioned")
     assert config._migration_commands is None
 
     cmds2 = config.get_migration_commands()
     assert cmds2 is not cmds1
-    assert cmds2.extension_reconcilers == (ExtensionReconcilerDescriptor("ext_demo", ext_dir / "reconcile.py"),)
-
-    config.add_extension_migrations("ext_demo", ext_dir, migration_mode="reconcile")
-    assert config._migration_commands is cmds2
+    assert cmds2.extension_reconcilers == ()
 
     config.add_extension_migrations("ext_demo", ext_dir, migration_mode="versioned")
+    assert config._migration_commands is cmds2
+
+    config.add_extension_migrations("ext_demo", ext_dir, migration_mode="reconcile")
     assert config._migration_commands is None
 
 
@@ -184,15 +184,19 @@ def test_fresh_import_order_has_no_cycle() -> None:
         text=True,
         check=True,
     )
-    assert proc_cfg.stdout.strip() == "versioned"
+    assert proc_cfg.stdout.strip() == "reconcile"
 
 
 def test_resolve_extension_migration_mode_precedence_and_validation() -> None:
     default_mode: ExtensionMigrationMode = resolve_extension_migration_mode(None, None, extension_name="adk")
-    assert default_mode == "versioned"
+    assert default_mode == "reconcile"
     assert (
         resolve_extension_migration_mode("reconcile", {"migration_mode": "versioned"}, extension_name="adk")
         == "reconcile"
+    )
+    assert (
+        resolve_extension_migration_mode("versioned", {"migration_mode": "reconcile"}, extension_name="adk")
+        == "versioned"
     )
     with pytest.raises(MigrationError, match="adk"):
         resolve_extension_migration_mode("reconcile", {"migration_mode": "bad"}, extension_name="adk")
@@ -204,12 +208,22 @@ def test_versioned_mode_ignores_reconcile_module_and_keeps_numbered_files(tmp_pa
         connection_config={"database": ":memory:"},
         migration_config={"script_location": str(tmp_path / "app_migrations")},
     )
-    config.add_extension_migrations("ext_ver", ext_dir)
+    config.add_extension_migrations("ext_ver", ext_dir, migration_mode="versioned")
 
     commands = SyncMigrationCommands(config)
     assert commands.extension_reconcilers == ()
     versions = [version for version, _ in commands.runner.get_migration_files()]
     assert "ext_ext_ver_0001" in versions
+
+    fallback_dir = _write_extension_dir(tmp_path / "ext_fallback", with_reconcile=False)
+    fallback_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(tmp_path / "fallback_migrations")},
+    )
+    fallback_cfg.add_extension_migrations("ext_fallback", fallback_dir)
+    fallback_cmds = SyncMigrationCommands(fallback_cfg)
+    assert fallback_cmds.extension_reconcilers == ()
+    assert "ext_ext_fallback_0001" in [v for v, _ in fallback_cmds.runner.get_migration_files()]
 
 
 async def test_reconcile_mode_discovers_lazily_and_omits_numbered_files_sync_and_async(

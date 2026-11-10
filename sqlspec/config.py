@@ -455,7 +455,7 @@ class LitestarConfig(TypedDict):
     """Create a missing session table during managed reconciliation. Default: True."""
 
     migration_mode: NotRequired[ExtensionMigrationMode]
-    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'versioned'``."""
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
 
 class StarletteConfig(TypedDict):
@@ -698,7 +698,7 @@ class ADKConfig(TypedDict):
     """
 
     migration_mode: NotRequired[ExtensionMigrationMode]
-    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'versioned'``."""
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
 
 class EventsConfig(TypedDict):
@@ -755,7 +755,7 @@ class EventsConfig(TypedDict):
     """Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1."""
 
     migration_mode: NotRequired[ExtensionMigrationMode]
-    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'versioned'``."""
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
 
 class OpenTelemetryConfig(TypedDict):

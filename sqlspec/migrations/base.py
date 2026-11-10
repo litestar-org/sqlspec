@@ -512,6 +512,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
     extension_configs: "dict[str, dict[str, Any]]"
     extension_reconcilers: "tuple[ExtensionReconcilerDescriptor, ...]"
+    _resolved_extension_dirs: "dict[str, Path | None]"
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize migration commands.
@@ -534,6 +535,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         self.project_root = Path(raw_project_root) if raw_project_root is not None else None
         self.include_extensions = migration_config.get("include_extensions", [])
         self.extension_configs = self._parse_extension_configs()
+        self._resolved_extension_dirs = {}
         self.extension_reconcilers = self._discover_extension_reconcilers()
         self._template_settings: MigrationTemplateSettings = build_template_settings(migration_config)
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
@@ -689,17 +691,20 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
             ext_options: Per-extension configuration mapping.
 
         Raises:
-            MigrationError: Extension uses ``reconcile`` mode and its migrations directory cannot be resolved.
+            MigrationError: Extension explicitly configures ``reconcile`` mode and its migrations directory cannot be resolved.
 
         Returns:
-            Resolved directory path, or ``None`` when absent in ``versioned`` mode.
+            Resolved directory path, or ``None`` when absent without explicit ``reconcile`` mode.
         """
-        mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
+        resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
+        explicit_reconcile = ext_options.get("migration_mode") == "reconcile"
+        if ext_name in self._resolved_extension_dirs and not explicit_reconcile:
+            return self._resolved_extension_dirs[ext_name]
         spec = ext_options.get("migrations_path")
         if spec is not None:
             resolved = resolve_extension_migrations_path(ext_name, spec)
             if resolved is None:
-                if mode == "reconcile":
+                if explicit_reconcile:
                     msg = (
                         f"Extension '{ext_name}' configured migration_mode='reconcile', "
                         f"but migrations_path {spec!r} is not an existing directory."
@@ -711,14 +716,16 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                     ext_name,
                     spec,
                 )
+                self._resolved_extension_dirs[ext_name] = None
                 return None
+            self._resolved_extension_dirs[ext_name] = resolved
             return resolved
 
         module_name = f"sqlspec.extensions.{ext_name}"
         try:
             module_path = module_to_os_path(module_name)
         except ImportError as exc:
-            if mode == "reconcile":
+            if explicit_reconcile:
                 msg = (
                     f"Extension '{ext_name}' configured migration_mode='reconcile', "
                     f"but '{module_name}' could not be imported ({exc}). "
@@ -734,26 +741,29 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
                 module_name,
                 ext_name,
             )
+            self._resolved_extension_dirs[ext_name] = None
             return None
 
         migrations_dir = module_path / "migrations"
         if not migrations_dir.is_dir():
-            if mode == "reconcile":
+            if explicit_reconcile:
                 msg = (
                     f"Extension '{ext_name}' configured migration_mode='reconcile', "
                     f"but ships no migrations directory at '{migrations_dir}'."
                 )
                 raise MigrationError(msg)
             logger.debug("Extension %s ships no migrations directory", ext_name)
+            self._resolved_extension_dirs[ext_name] = None
             return None
 
+        self._resolved_extension_dirs[ext_name] = migrations_dir
         return migrations_dir
 
     def _discover_extension_reconcilers(self) -> "tuple[ExtensionReconcilerDescriptor, ...]":
-        """Discover opted-in extension reconciler modules without importing them.
+        """Discover extension reconciler modules without importing them.
 
         Raises:
-            MigrationError: A ``reconcile`` extension lacks a ``reconcile.py`` file.
+            MigrationError: An extension with explicit ``migration_mode='reconcile'`` lacks a ``reconcile.py`` file.
 
         Returns:
             Ordered tuple of reconciler descriptors matching ``include_extensions`` order.
@@ -763,15 +773,19 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
             mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
             if mode != "reconcile":
                 continue
+            explicit_reconcile = ext_options.get("migration_mode") == "reconcile"
             ext_dir = self._resolve_extension_migrations_dir(ext_name, ext_options)
-            assert ext_dir is not None
+            if ext_dir is None:
+                continue
             reconcile_path = ext_dir / "reconcile.py"
             if not reconcile_path.is_file():
-                msg = (
-                    f"Extension '{ext_name}' configured migration_mode='reconcile', "
-                    f"but no reconcile.py file exists at '{reconcile_path}'."
-                )
-                raise MigrationError(msg)
+                if explicit_reconcile:
+                    msg = (
+                        f"Extension '{ext_name}' configured migration_mode='reconcile', "
+                        f"but no reconcile.py file exists at '{reconcile_path}'."
+                    )
+                    raise MigrationError(msg)
+                continue
             reconcilers.append(ExtensionReconcilerDescriptor(ext_name, reconcile_path))
         return tuple(reconcilers)
 
@@ -803,17 +817,20 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
         An extension may declare ``migrations_path`` in its ``extension_config`` entry to
         ship migrations from any package. Extensions without it resolve against the
-        ``sqlspec.extensions.<name>`` namespace. Extensions configured with
-        ``migration_mode='reconcile'`` are omitted from numbered migration discovery.
+        ``sqlspec.extensions.<name>`` namespace. Extensions resolved as reconcilers
+        are omitted from numbered migration discovery.
 
         Returns:
             Dictionary mapping extension names to their migration paths.
         """
         extension_migrations: dict[str, Path] = {}
+        reconcile_names = {descriptor.name for descriptor in self.extension_reconcilers}
 
         for ext_name, ext_options in self.extension_configs.items():
+            if ext_name in reconcile_names:
+                continue
             mode = resolve_extension_migration_mode(None, ext_options, extension_name=ext_name)
-            if mode == "reconcile":
+            if mode == "reconcile" and ext_options.get("migration_mode") == "reconcile":
                 continue
             resolved = self._resolve_extension_migrations_dir(ext_name, ext_options)
             if resolved is not None:
@@ -922,8 +939,10 @@ out-of-order migrations gracefully.
             parsed_version = parse_version(version)
             if parsed_version in applied_parsed:
                 continue
-            if parsed_revision is None or (
-                parsed_version.extension == parsed_revision.extension and parsed_version <= parsed_revision
+            if (
+                parsed_revision is None
+                or (parsed_revision.extension is None and parsed_version.extension is not None)
+                or (parsed_version.extension == parsed_revision.extension and parsed_version <= parsed_revision)
             ):
                 pending.append((version, file_path))
         return pending
@@ -933,6 +952,9 @@ out-of-order migrations gracefully.
     ) -> "list[AppliedMigrationRecord]":
         """Collect migrations to revert based on target revision."""
         if revision == "-1":
+            core_applied = [m for m in applied if not m["version_num"].startswith("ext_")]
+            if core_applied:
+                return [core_applied[-1]]
             return [applied[-1]]
         if revision == "base":
             return list(reversed(applied))

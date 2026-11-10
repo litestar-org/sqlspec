@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.events._store import BaseEventQueueStore
     from sqlspec.migrations.context import MigrationContext
 
-__all__ = ("reconcile",)
+__all__ = ("down", "downgrade", "reconcile")
 
 
 def _resolve_backend(config: Any, settings: dict[str, Any]) -> tuple[str, bool]:
@@ -99,3 +99,44 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
         return _reconcile_async(context.driver, store, backend_name, needs_table)
     _reconcile_sync(context.driver, store, backend_name, needs_table)
     return None
+
+
+def _downgrade_sync(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
+    """Drop the events queue table and companion objects on a synchronous driver."""
+    if not needs_table:
+        return
+    manage_schema, _ = store._schema_management_flags()
+    if not manage_schema:
+        return
+    for stmt in store.drop_statements():
+        driver.execute_script(stmt)
+
+
+async def _downgrade_async(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
+    """Drop the events queue table and companion objects on an asynchronous driver."""
+    if not needs_table:
+        return
+    manage_schema, _ = store._schema_management_flags()
+    if not manage_schema:
+        return
+    for stmt in store.drop_statements():
+        await driver.execute_script(stmt)
+
+
+def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":
+    """Drop durable event queue schema on the migration runner's active driver.
+
+    Args:
+        context: Active migration execution context supplying config and driver.
+
+    Returns:
+        ``None`` for synchronous drivers or an awaitable resolving to ``None`` for async drivers.
+    """
+    store, is_async, _backend_name, needs_table = _resolve_store(context)
+    if is_async:
+        return _downgrade_async(context.driver, store, needs_table)
+    _downgrade_sync(context.driver, store, needs_table)
+    return None
+
+
+down = downgrade

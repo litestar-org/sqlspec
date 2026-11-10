@@ -411,8 +411,14 @@ async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_stri
         assert sync_rows[0]["attempts"] == 0
         assert all(not str(r["version_num"]).startswith("ext_events_") for r in sync_ledger)
 
-        with pytest.raises(MigrationError):
-            sync_commands.downgrade()
+        sync_commands.downgrade()
+        with sync_cfg.provide_session() as session:
+            tables_after_down = {str(t["table_name"]).casefold() for t in session.data_dictionary.get_tables(session)}
+        assert "sqlspec_event_queue" not in tables_after_down
+        sync_commands.upgrade()
+        with sync_cfg.provide_session() as session:
+            tables_after_up = {str(t["table_name"]).casefold() for t in session.data_dictionary.get_tables(session)}
+        assert "sqlspec_event_queue" in tables_after_up
 
         async with async_cfg.provide_session() as async_session:
             await async_session.execute_script(partial_ddl)
@@ -438,8 +444,18 @@ async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_stri
         assert len(async_rows) == 1
         assert async_rows[0]["attempts"] == 0
 
-        with pytest.raises(MigrationError):
-            await async_commands.downgrade()
+        await async_commands.downgrade()
+        async with async_cfg.provide_session() as async_session:
+            async_tables_after_down = {
+                str(t["table_name"]).casefold() for t in await async_session.data_dictionary.get_tables(async_session)
+            }
+        assert "sqlspec_event_queue" not in async_tables_after_down
+        await async_commands.upgrade()
+        async with async_cfg.provide_session() as async_session:
+            async_tables_after_up = {
+                str(t["table_name"]).casefold() for t in await async_session.data_dictionary.get_tables(async_session)
+            }
+        assert "sqlspec_event_queue" in async_tables_after_up
 
         with no_create_cfg.provide_session() as drv, pytest.raises(MigrationError, match="sqlspec_event_queue"):
             events_reconcile(MigrationContext(config=no_create_cfg, driver=drv))
@@ -1140,3 +1156,85 @@ async def test_litestar_companion_indexes_skipped_when_present_case_insensitive_
         async_missing.commit.assert_not_awaited()
     finally:
         cfg.close_pool()
+
+
+@pytest.mark.anyio
+async def test_builtin_extensions_default_to_reconcile_and_drop_at_base_downgrade(tmp_path: Path) -> None:
+    """Built-in extensions (litestar, adk, events) default to reconcile mode and drop tables on base downgrade."""
+    from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_app.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE app_items (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0001-down\nDROP TABLE app_items;\n",
+        encoding="utf-8",
+    )
+
+    sync_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "builtin_sync.db")},
+        migration_config={"script_location": str(migrations_dir)},
+        extension_config={
+            "litestar": {"session_table": "litestar_session"},
+            "adk": {"enable_memory": True},
+            "events": {"backend": "poll_queue"},
+        },
+    )
+    async_cfg = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "builtin_async.db")},
+        migration_config={"script_location": str(migrations_dir)},
+        extension_config={
+            "litestar": {"session_table": "litestar_session"},
+            "adk": {"enable_memory": True},
+            "events": {"backend": "poll_queue"},
+        },
+    )
+    try:
+        sync_cmds = SyncMigrationCommands(sync_cfg)
+        assert [d.name for d in sync_cmds.extension_reconcilers] == ["litestar", "adk", "events"]
+        assert sync_cmds.runner.extension_migrations == {}
+
+        sync_cmds.upgrade()
+        with sync_cfg.provide_session() as drv:
+            tables = {str(t["table_name"]).casefold() for t in drv.data_dictionary.get_tables(drv)}
+        assert {
+            "app_items",
+            "litestar_session",
+            "adk_session",
+            "adk_event",
+            "adk_memory",
+            "sqlspec_event_queue",
+        }.issubset(tables)
+
+        sync_cmds.downgrade()
+        with sync_cfg.provide_session() as drv:
+            tables_after = {str(t["table_name"]).casefold() for t in drv.data_dictionary.get_tables(drv)}
+        assert not (
+            {"app_items", "litestar_session", "adk_session", "adk_event", "adk_memory", "sqlspec_event_queue"}
+            & tables_after
+        )
+
+        async_cmds = AsyncMigrationCommands(async_cfg)
+        assert [d.name for d in async_cmds.extension_reconcilers] == ["litestar", "adk", "events"]
+        await async_cmds.upgrade()
+        async with async_cfg.provide_session() as drv:
+            async_tables = {str(t["table_name"]).casefold() for t in await drv.data_dictionary.get_tables(drv)}
+        assert {
+            "app_items",
+            "litestar_session",
+            "adk_session",
+            "adk_event",
+            "adk_memory",
+            "sqlspec_event_queue",
+        }.issubset(async_tables)
+
+        await async_cmds.downgrade()
+        async with async_cfg.provide_session() as drv:
+            async_tables_after = {str(t["table_name"]).casefold() for t in await drv.data_dictionary.get_tables(drv)}
+        assert not (
+            {"app_items", "litestar_session", "adk_session", "adk_event", "adk_memory", "sqlspec_event_queue"}
+            & async_tables_after
+        )
+    finally:
+        sync_cfg.close_pool()
+        await async_cfg.close_pool()

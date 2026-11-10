@@ -72,7 +72,7 @@ Configure table names, full-text indexing, artifact storage URIs, and optional o
 | `memory_use_fts` | `bool` | `False` | Enable full-text search when supported. Default: False. When True, adapters will use their native FTS capabilities where available: PostgreSQL: to_tsvector/to_tsquery with GIN index; SQLite: FTS5 virtual table; DuckDB: FTS extension with match_bm25; Oracle: CONTAINS() with CTXSYS.CONTEXT index; Spanner: TOKENIZE_FULLTEXT with search index; MySQL: MATCH...AGAINST with FULLTEXT index. When False, adapters use simple LIKE/ILIKE queries (works without indexes). |
 | `memory_max_results` | `int` | `20` | Maximum number of results for memory search queries. Default: 20. Limits the number of memory entries returned by search_memory(). Can be overridden per-query via the limit parameter. |
 | `owner_id_column` | `str` | - | Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity. Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]". The entire definition is passed through to DDL verbatim. We only parse the column name (first word) for use in INSERT/SELECT statements. This column is added to both session and memory tables for consistent multi-tenant isolation. Supports: Foreign key constraints: REFERENCES table(column); Nullable or NOT NULL; CASCADE options: ON DELETE CASCADE, ON UPDATE CASCADE; Dialect-specific options (DEFERRABLE, ENABLE VALIDATE, etc.); Plain columns without FK (just extra column storage) |
-| `migration_mode` | `ExtensionMigrationMode` | `'versioned'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'versioned'`. |
+| `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.ADKConfig -->
 
 ### Adapter-Specific ADKConfig Subclasses
@@ -210,9 +210,9 @@ Instead of calling `ensure_tables()` at runtime in production, enable `"adk"` in
 
 MySQL and MariaDB stores accept `database.table` names when the database already exists; SQLSpec does not create it.
 
-### Opt-In Schema Reconciliation
+### Schema Reconciliation
 
-`migration_mode="versioned"` remains the default. Setting `migration_mode="reconcile"` runs ADK's idempotent schema, companion index, FTS, and vector convergence on every head `sqlspec upgrade` without recording new `ext_adk_*` rows in `ddl_migrations` (while retaining prior `ext_adk_*` rows across `verify --strict`; see [Migrations](../learn/migrations.md)):
+`migration_mode="reconcile"` is the default for extensions. Reconciliation runs ADK's idempotent schema, companion index, FTS, and vector convergence on every `sqlspec upgrade` without recording new `ext_adk_*` rows in `ddl_migrations` (while retaining prior `ext_adk_*` rows across `verify --strict` and dropping the ADK tables when `downgrade` reaches `base`; see [Migrations](../learn/migrations.md)):
 
 ```python
 extension_config = {

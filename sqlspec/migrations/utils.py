@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.templates import MigrationTemplateSettings, TemplateValidationError, build_template_settings
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from sqlspec.config import DatabaseConfigProtocol
 __all__ = (
+    "DEFAULT_EXTENSION_MIGRATION_MODE",
     "UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS",
     "VALID_EXTENSION_MIGRATION_MODES",
     "ExtensionMigrationMode",
@@ -38,6 +39,7 @@ logger = get_logger(__name__)
 _MIN_MODULE_NAME_LENGTH = 2
 
 ExtensionMigrationMode = Literal["versioned", "reconcile"]
+DEFAULT_EXTENSION_MIGRATION_MODE: Final[ExtensionMigrationMode] = "reconcile"
 VALID_EXTENSION_MIGRATION_MODES: frozenset[str] = frozenset({"versioned", "reconcile"})
 UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
     "sqlite",
@@ -88,7 +90,7 @@ def resolve_extension_migration_mode(
         MigrationError: Either ``settings["migration_mode"]`` or ``explicit_mode`` is invalid.
 
     Returns:
-        Effective validated migration mode, defaulting to ``"versioned"``.
+        Effective validated migration mode, defaulting to ``"reconcile"``.
     """
     settings_mode: ExtensionMigrationMode | None = None
     if isinstance(settings, Mapping) and "migration_mode" in settings:
@@ -97,7 +99,7 @@ def resolve_extension_migration_mode(
         return _validate_migration_mode_value(explicit_mode, extension_name=extension_name)
     if settings_mode is not None:
         return settings_mode
-    return "versioned"
+    return DEFAULT_EXTENSION_MIGRATION_MODE
 
 
 def validate_builtin_reconcile_adapter(config: Any) -> str:

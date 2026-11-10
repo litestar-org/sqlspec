@@ -40,7 +40,7 @@ Configure the `events` extension on your database config (`EventsConfig`). When 
 | `select_for_update` | `bool` | `False` | Use SELECT FOR UPDATE locking when claiming events. Defaults to False. |
 | `skip_locked` | `bool` | `False` | Use SKIP LOCKED for non-blocking event claims. Defaults to False. |
 | `shard_count` | `int` | `1` | Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1. |
-| `migration_mode` | `ExtensionMigrationMode` | `'versioned'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'versioned'`. |
+| `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.EventsConfig -->
 
 ```python
@@ -108,9 +108,9 @@ asyncio.run(main())
 
 Both `AsyncEventChannel` and `SyncEventChannel` provide `publish_many(events)` where each item is a `(channel, payload, metadata)` tuple. On `poll_queue` and `notify_queue`, SQLSpec bulk-inserts all rows in a single publisher transaction; on `notify_queue`, it emits a single compact wakeup marker (`marker_id` + `batch_size`) per channel in the same transaction so consumers drain the batch immediately.
 
-### Opt-In Schema Reconciliation
+### Schema Reconciliation
 
-`migration_mode="versioned"` remains the default. Setting `migration_mode="reconcile"` converges durable event queue tables and companion claim indexes on every head `sqlspec upgrade` without recording new `ext_events_*` ledger rows while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
+`migration_mode="reconcile"` is the default for extensions. Reconciliation converges durable event queue tables and companion claim indexes on every `sqlspec upgrade` without recording new `ext_events_*` ledger rows, preserves the queue table during partial downgrades, and drops it when `downgrade` reaches `base` while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
 
 ```python
 extension_config = {

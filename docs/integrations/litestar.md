@@ -70,7 +70,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `enable_sqlcommenter_middleware` | `bool` | `True` | Control automatic SQLCommenter middleware registration. Default: True. When the driver's :class:`~sqlspec.core.statement.StatementConfig` has `enable_sqlcommenter=True`, the middleware is registered automatically. Set to `False` to explicitly disable middleware registration even when SQLCommenter is enabled on the driver config. |
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
-| `migration_mode` | `ExtensionMigrationMode` | `'versioned'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'versioned'`. |
+| `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -191,7 +191,7 @@ Call `await store.create_table()` during application startup (or configure `sess
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 
-`session_table` (`True` or a custom table name) is still required to include Litestar session migrations (`migration_mode="versioned"` remains the default). Setting `migration_mode="reconcile"` converges the session table on every head `litestar db upgrade` or `sqlspec upgrade` without recording new `ext_litestar_*` rows while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
+`session_table` (`True` or a custom table name) is still required to include Litestar session migrations (`migration_mode="reconcile"` is the default). Reconciliation converges the session table on every `litestar db upgrade` or `sqlspec upgrade` without recording new `ext_litestar_*` rows, preserves the table during partial downgrades, and drops it when `downgrade` reaches `base` while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
 
 ```python
 extension_config = {

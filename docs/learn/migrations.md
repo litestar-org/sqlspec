@@ -121,29 +121,29 @@ When `upgrade()` runs against downstream environments after a squash has been co
 
 ## Unversioned Extension Schema Reconciliation
 
-Built-in extensions (`adk`, `litestar`, and `events`) and external packages can opt into idempotent unversioned schema reconciliation (`migration_mode="reconcile"`) instead of recording synthetic `ext_<name>_*` rows in `ddl_migrations`:
+Built-in extensions (`adk`, `litestar`, and `events`) and external packages default to idempotent unversioned schema reconciliation (`migration_mode="reconcile"`) instead of recording synthetic `ext_<name>_*` rows in `ddl_migrations` (automatically falling back to `"versioned"` when an unconfigured external extension directory provides only numbered `0001_*` revisions and no `reconcile.py`):
 
 ```{ .python title="docs/examples/quickstart_migrations.py" }
 --8<-- "docs/examples/quickstart_migrations.py:reconcile"
 ```
 
-### Opting In Built-In and External Extensions
+### Configuring Built-In and External Extensions
 
-`"versioned"` (`from sqlspec.config import ExtensionMigrationMode`) remains the default mode for all extensions:
+`"reconcile"` (`from sqlspec.config import ExtensionMigrationMode`) is the default mode for extensions:
 
-- **Built-in extensions**: Set `extension_config["adk"]["migration_mode"] = "reconcile"`, `extension_config["litestar"]["migration_mode"] = "reconcile"` (alongside `session_table`), or `extension_config["events"]["migration_mode"] = "reconcile"`.
-- **External extensions**: Call `config.add_extension_migrations(name, migrations_path, settings=None, *, migration_mode="reconcile")` (which mutates `config` in place and returns `None`), or pass `settings={"migration_mode": "reconcile"}`.
+- **Built-in extensions**: `adk`, `litestar` (when `session_table` is enabled), and `events` reconcile automatically; pass `"migration_mode": "versioned"` inside `extension_config[name]` only if you need numbered `ext_<name>_*` revision rows.
+- **External extensions**: Call `config.add_extension_migrations(name, migrations_path, settings=None, *, migration_mode="reconcile")` (which mutates `config` in place and returns `None`), or pass `settings={"migration_mode": "versioned"}` when targeting numbered files.
 
 ### Authoring an Extension Reconciler Callback
 
-Place a `reconcile.py` module inside `<migrations_path>` exporting a synchronous or asynchronous `reconcile(context: MigrationContext) -> None` (`from sqlspec.migrations.context import MigrationContext`). Run DDL on `context.driver` within the migration runner's transaction and schema lifecycle, and pass `manage_schema=True, commit=False, strict=True` to `ensure_schema_sync` or `ensure_schema_async` (`manage_schema` defaults to `False`, `commit=False` leaves transaction commit and rollback to the runner, and `strict=True` refuses lossy or ambiguous schema changes).
+Place a `reconcile.py` module inside `<migrations_path>` exporting a synchronous or asynchronous `reconcile(context: MigrationContext) -> None` and an optional `downgrade(context: MigrationContext) -> None` (or `down`) callback (`from sqlspec.migrations.context import MigrationContext`). Run DDL on `context.driver` within the migration runner's transaction and schema lifecycle, and pass `manage_schema=True, commit=False, strict=True` to `ensure_schema_sync` or `ensure_schema_async` (`manage_schema` defaults to `False`, `commit=False` leaves transaction commit and rollback to the runner, and `strict=True` refuses lossy or ambiguous schema changes).
 
-### Scheduling, Ledger Retention, and Operational Guards
+### Scheduling, Base-Only Downgrade, and Ledger Retention
 
-- **Head execution order**: Reconcilers execute in `include_extensions` order before pending numbered revisions on every `upgrade("head")`, including when zero numbered migrations are pending. Co-located numbered migration files for that extension are skipped, and zero `ext_<name>_*` rows are inserted into `ddl_migrations`.
-- **Retained ledger compatibility**: Any previously applied `ext_<name>_*` rows already present in `ddl_migrations` are preserved and pass `sqlspec verify --strict` without orphan warnings.
-- **Historical target and dry-run guards**: `upgrade(revision)` with `revision != "head"` and `downgrade()` raise `MigrationError` while any reconciler is enabled; switch the extension back to `"versioned"` or exclude it before running historical revisions. `upgrade --dry-run` (`commands.upgrade(dry_run=True)`) previews configured reconcilers without importing `reconcile.py` or creating `ddl_migrations`.
-- **Serialized head upgrades**: SQLSpec adds no distributed migration lock, so run `upgrade("head")` from one process at a time (such as a release job rather than every replica at startup). If concurrent upgrades race and one fails with a duplicate-object error, re-running `upgrade("head")` converges idempotently.
+- **Upgrade execution order**: Reconcilers execute in `include_extensions` order before pending numbered revisions on every `upgrade(revision)` (both `upgrade("head")` and targeted revisions), including when zero numbered migrations are pending. Co-located numbered migration files for that extension are skipped, and zero `ext_<name>_*` rows are inserted into `ddl_migrations`.
+- **Drop-at-base downgrade**: Partial downgrades (such as rolling back `0002 -> 0001`) preserve reconciled extension tables. When `downgrade` reaches `base` (`downgrade("base")` or `downgrade("-1")` leaving zero applied revisions in `ddl_migrations`), SQLSpec executes each reconciler's `downgrade(context)` callback in reverse `include_extensions` order to drop the extension schema and removes any retained `ext_<name>_*` ledger rows. `downgrade --dry-run` at base previews reconciler downgrades without executing DDL.
+- **Retained ledger & versioned extension ordering**: Any previously applied `ext_<name>_*` rows already present in `ddl_migrations` pass `sqlspec verify --strict` without orphan warnings. When an extension uses `migration_mode="versioned"`, its `ext_<name>_*` migrations sort before core migrations in `include_extensions` order and are excluded from out-of-order and auto-sync checksum warnings.
+- **Serialized upgrades**: SQLSpec adds no distributed migration lock, so run `upgrade` from one process at a time (such as a release job rather than every replica at startup). If concurrent upgrades race and one fails with a duplicate-object error, re-running `upgrade` converges idempotently.
 
 ### Strict Schema Safety and Built-In Adapter Coverage
 

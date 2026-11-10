@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from sqlspec.extensions.litestar.store import BaseSQLSpecStore
     from sqlspec.migrations.context import MigrationContext
 
-__all__ = ("reconcile",)
+__all__ = ("down", "downgrade", "reconcile")
 
 
 def _raise_missing_store(adapter_name: str, cause: Exception | None = None) -> NoReturn:
@@ -90,3 +90,40 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
         return _reconcile_async(context.driver, store)
     _reconcile_sync(context.driver, store)
     return None
+
+
+def _downgrade_sync(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
+    """Drop Litestar session schema on a synchronous migration driver."""
+    manage_schema, _ = store._schema_management_flags()
+    if not manage_schema:
+        return
+    for stmt in store._drop_table_sql():
+        driver.execute_script(stmt)
+
+
+async def _downgrade_async(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
+    """Drop Litestar session schema on an asynchronous migration driver."""
+    manage_schema, _ = store._schema_management_flags()
+    if not manage_schema:
+        return
+    for stmt in store._drop_table_sql():
+        await driver.execute_script(stmt)
+
+
+def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":
+    """Drop Litestar session store tables on the active migration driver.
+
+    Args:
+        context: Active migration execution context containing config and driver.
+
+    Returns:
+        Awaitable resolving to ``None`` for async drivers, or ``None`` for sync drivers.
+    """
+    store, is_async = _resolve_store(context)
+    if is_async:
+        return _downgrade_async(context.driver, store)
+    _downgrade_sync(context.driver, store)
+    return None
+
+
+down = downgrade

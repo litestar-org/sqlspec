@@ -142,7 +142,19 @@ def test_migrations_path_accepts_module_specification(tmp_path: Path) -> None:
         migration_config={"script_location": str(tmp_path / "migrations")},
     )
 
-    resolved = SyncMigrationCommands(config).runner.extension_migrations["vendor_ext"]
+    commands = SyncMigrationCommands(config)
+    assert len(commands.extension_reconcilers) == 1
+    assert commands.extension_reconcilers[0].name == "vendor_ext"
+    assert commands.extension_reconcilers[0].module_path.name == "reconcile.py"
+
+    versioned_config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "vendor_ext": {"migrations_path": "sqlspec.extensions.adk:migrations", "migration_mode": "versioned"}
+        },
+        migration_config={"script_location": str(tmp_path / "migrations")},
+    )
+    resolved = SyncMigrationCommands(versioned_config).runner.extension_migrations["vendor_ext"]
     assert resolved.is_dir()
     assert resolved.name == "migrations"
 

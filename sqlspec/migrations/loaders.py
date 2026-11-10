@@ -30,6 +30,7 @@ __all__ = (
     "find_project_root",
     "get_migration_loader",
     "load_reconcile_callable",
+    "load_reconcile_downgrade_callable",
     "temporary_project_path",
 )
 
@@ -81,22 +82,10 @@ def temporary_project_path(project_root: Path) -> Iterator[None]:
             sys.path.remove(path_to_add)
 
 
-def load_reconcile_callable(
+def _exec_reconcile_module(
     module_path: Path, *, extension_name: str, project_root: Path | None = None
-) -> ReconcileCallable:
-    """Compile and execute a reconcile.py module fresh from disk and return its reconcile callable.
-
-    Args:
-        module_path: Path to the extension reconcile.py module.
-        extension_name: Registered extension identifier.
-        project_root: Optional explicit project root directory for sys.path resolution.
-
-    Returns:
-        Validated reconcile(context) callable defined by the module.
-
-    Raises:
-        MigrationError: If reading, compiling, executing, or validating reconcile(context) fails.
-    """
+) -> types.ModuleType:
+    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
     root = project_root if project_root is not None else find_project_root(module_path.parent)
     module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
 
@@ -126,12 +115,64 @@ def load_reconcile_callable(
         finally:
             sys.modules.pop(module_name, None)
 
+    return module
+
+
+def load_reconcile_callable(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> ReconcileCallable:
+    """Compile and execute a reconcile.py module fresh from disk and return its reconcile callable.
+
+    Args:
+        module_path: Path to the extension reconcile.py module.
+        extension_name: Registered extension identifier.
+        project_root: Optional explicit project root directory for sys.path resolution.
+
+    Returns:
+        Validated reconcile(context) callable defined by the module.
+
+    Raises:
+        MigrationError: If reading, compiling, executing, or validating reconcile(context) fails.
+    """
+    module = _exec_reconcile_module(module_path, extension_name=extension_name, project_root=project_root)
     reconcile_attr = module.__dict__.get("reconcile")
     if reconcile_attr is None or not callable(reconcile_attr):
         msg = f"Extension reconciler '{extension_name}' ({module_path}) must define a callable 'reconcile(context)'"
         raise MigrationError(msg)
 
     return cast("ReconcileCallable", reconcile_attr)
+
+
+def load_reconcile_downgrade_callable(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> ReconcileCallable | None:
+    """Compile and execute a reconcile.py module fresh from disk and return its optional downgrade callable.
+
+    Args:
+        module_path: Path to the extension reconcile.py module.
+        extension_name: Registered extension identifier.
+        project_root: Optional explicit project root directory for sys.path resolution.
+
+    Returns:
+        Validated downgrade(context) or down(context) callable, or ``None`` if neither is defined.
+
+    Raises:
+        MigrationError: If reading, compiling, executing, or validating the downgrade callable fails.
+    """
+    module = _exec_reconcile_module(module_path, extension_name=extension_name, project_root=project_root)
+    downgrade_attr = module.__dict__.get("downgrade")
+    if downgrade_attr is None:
+        downgrade_attr = module.__dict__.get("down")
+    if downgrade_attr is None:
+        return None
+    if not callable(downgrade_attr):
+        msg = (
+            f"Extension reconciler '{extension_name}' ({module_path}) "
+            "must define a callable 'downgrade(context)' or 'down(context)'"
+        )
+        raise MigrationError(msg)
+
+    return cast("ReconcileCallable", downgrade_attr)
 
 
 class MigrationLoadError(Exception):

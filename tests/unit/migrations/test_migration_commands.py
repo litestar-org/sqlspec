@@ -881,9 +881,27 @@ def test_plan_version_reconciliation_excludes_retained_reconcile_rows_and_ignore
     plain_cfg = _build_sqlite_mode_config(tmp_path / "plan2.db", core_dir, is_async=False)
     plain_cmds = SyncMigrationCommands(cast("SqliteConfig", plain_cfg))
     plan_plain = plain_cmds._plan_version_reconciliation([("0001", core_file)], applied, loaded)
-    assert len(plan_plain.renames) == 1
-    assert plan_plain.renames[0].old_version == "ext_demo_0001"
-    assert plan_plain.renames[0].new_version == "0001"
+    assert plan_plain.renames == ()
+    assert plan_plain.checksum_mismatches == ()
+
+    core_orphan_applied: list[AppliedMigrationRecord] = [
+        *applied,
+        {
+            "version_num": "20250101120000",
+            "version_type": "timestamp",
+            "execution_sequence": 3,
+            "description": "legacy_ts",
+            "applied_at": "now",
+            "execution_time_ms": 0,
+            "checksum": checksum,
+            "applied_by": "tester",
+            "replaces": None,
+        },
+    ]
+    plan_core_orphan = plain_cmds._plan_version_reconciliation([("0001", core_file)], core_orphan_applied, loaded)
+    assert len(plan_core_orphan.renames) == 1
+    assert plan_core_orphan.renames[0].old_version == "20250101120000"
+    assert plan_core_orphan.renames[0].new_version == "0001"
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
@@ -953,7 +971,7 @@ def reconcile(context):
         {"ext": "second", "app_seen": 1},
         {"ext": "first", "app_seen": 1},
     ]
-    assert [r["version_num"] for r in ledger_rows] == ["0001", "ext_versioned_ext_0001"]
+    assert [r["version_num"] for r in ledger_rows] == ["ext_versioned_ext_0001", "0001"]
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
@@ -1240,10 +1258,8 @@ async def _run_current(config: SqliteConfig | AiosqliteConfig, *, verbose: bool 
 async def test_historical_upgrade_and_downgrade_refused_before_session_with_reconcilers(
     tmp_path: Path, is_async: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Non-head upgrade and all downgrades fail before session opening when reconcilers are enabled."""
-    import sqlite3
-
-    fresh_db = tmp_path / "fresh_guard.db"
+    """Targeted upgrade runs reconcilers; partial downgrade preserves reconciled tables; base downgrade drops them in reverse order."""
+    db_path = tmp_path / "reconcile_lifecycle.db"
     core_dir = tmp_path / "migrations"
     core_dir.mkdir()
     (core_dir / "0001_app.sql").write_text(
@@ -1257,68 +1273,99 @@ async def test_historical_upgrade_and_downgrade_refused_before_session_with_reco
         encoding="utf-8",
     )
 
-    poison_dir = tmp_path / "ext_demo_poison"
-    poison_dir.mkdir()
-    (poison_dir / "reconcile.py").write_text('raise RuntimeError("imported")\n', encoding="utf-8")
+    first_dir = tmp_path / "ext_first"
+    first_dir.mkdir()
+    second_dir = tmp_path / "ext_second"
+    second_dir.mkdir()
 
-    cfg_fresh = _build_sqlite_mode_config(
-        fresh_db,
-        core_dir,
-        is_async=is_async,
-        include_extensions=["demo"],
-        extension_config={"demo": {"migrations_path": poison_dir, "migration_mode": "reconcile"}},
+    reconcile_template = """
+async def _up_async(driver):
+    await driver.execute("CREATE TABLE IF NOT EXISTS {table_name} (id INTEGER PRIMARY KEY)")
+    await driver.execute("CREATE TABLE IF NOT EXISTS ext_lifecycle_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT)")
+    await driver.execute("INSERT INTO ext_lifecycle_log (action) VALUES (:act)", act="up:{ext_name}")
+
+def _up_sync(driver):
+    driver.execute("CREATE TABLE IF NOT EXISTS {table_name} (id INTEGER PRIMARY KEY)")
+    driver.execute("CREATE TABLE IF NOT EXISTS ext_lifecycle_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT)")
+    driver.execute("INSERT INTO ext_lifecycle_log (action) VALUES (:act)", act="up:{ext_name}")
+
+async def _down_async(driver):
+    await driver.execute("DROP TABLE IF EXISTS {table_name}")
+    await driver.execute("INSERT INTO ext_lifecycle_log (action) VALUES (:act)", act="down:{ext_name}")
+
+def _down_sync(driver):
+    driver.execute("DROP TABLE IF EXISTS {table_name}")
+    driver.execute("INSERT INTO ext_lifecycle_log (action) VALUES (:act)", act="down:{ext_name}")
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _up_async(context.driver)
+    _up_sync(context.driver)
+    return None
+
+def downgrade(context):
+    if context.is_async_driver:
+        return _down_async(context.driver)
+    _down_sync(context.driver)
+    return None
+"""
+    (first_dir / "reconcile.py").write_text(
+        reconcile_template.format(ext_name="first", table_name="ext_first_t"), encoding="utf-8"
+    )
+    (second_dir / "reconcile.py").write_text(
+        reconcile_template.format(ext_name="second", table_name="ext_second_t"), encoding="utf-8"
     )
 
-    with (
-        caplog.at_level("ERROR", logger="sqlspec.migrations.commands"),
-        pytest.raises(MigrationError, match=r"demo.*head"),
-    ):
-        await _run_upgrade(cfg_fresh, revision="0001", use_logger=True, summary_only=True, echo=False)
-    summaries = [rec for rec in caplog.records if rec.getMessage() == "migration.command.summary"]
-    assert len(summaries) == 1
-    assert getattr(summaries[0], "extra_fields", {})["status"] == "failed"
-
-    with pytest.raises(MigrationError, match=r"demo.*head"):
-        await _run_upgrade(cfg_fresh, revision="0001", dry_run=True, echo=False)
-
-    if fresh_db.exists():
-        with sqlite3.connect(fresh_db) as conn:
-            assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
-    await _close_config_pool(cfg_fresh)
-
-    migrated_db = tmp_path / "migrated_guard.db"
-    noop_dir = tmp_path / "ext_demo_noop"
-    noop_dir.mkdir()
-    (noop_dir / "reconcile.py").write_text("def reconcile(context):\n    return None\n", encoding="utf-8")
-    cfg_migrated = _build_sqlite_mode_config(
-        migrated_db,
+    cfg = _build_sqlite_mode_config(
+        db_path,
         core_dir,
         is_async=is_async,
-        include_extensions=["demo"],
-        extension_config={"demo": {"migrations_path": noop_dir, "migration_mode": "reconcile"}},
+        include_extensions=["first", "second"],
+        extension_config={"first": {"migrations_path": first_dir}, "second": {"migrations_path": second_dir}},
     )
-    await _run_upgrade(cfg_migrated, echo=False)
 
-    with pytest.raises(MigrationError, match="demo"):
-        await _run_downgrade(cfg_migrated, revision="-1", echo=False)
-    with pytest.raises(MigrationError, match="demo"):
-        await _run_downgrade(cfg_migrated, revision="-1", dry_run=True, echo=False)
+    await _run_upgrade(cfg, revision="0001", echo=False)
+    ledger_after_0001 = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
+    tables_after_0001 = {
+        r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert ledger_after_0001 == ["0001"]
+    assert {"app_t", "ext_first_t", "ext_second_t"}.issubset(tables_after_0001)
+    assert "extra_t" not in tables_after_0001
 
-    ledger = [r["version_num"] for r in await _fetch_rows(cfg_migrated, "SELECT version_num FROM ddl_migrations")]
-    tables = {r["name"] for r in await _fetch_rows(cfg_migrated, "SELECT name FROM sqlite_master WHERE type = 'table'")}
-    await _close_config_pool(cfg_migrated)
-    assert ledger == ["0001", "0002"]
-    assert "app_t" in tables
+    await _run_upgrade(cfg, revision="head", echo=False)
+    ledger_after_head = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
+    assert ledger_after_head == ["0001", "0002"]
 
-    plain_db = tmp_path / "plain_hist.db"
-    cfg_plain = _build_sqlite_mode_config(plain_db, core_dir, is_async=is_async)
-    await _run_upgrade(cfg_plain, revision="0001", echo=False)
-    assert [r["version_num"] for r in await _fetch_rows(cfg_plain, "SELECT version_num FROM ddl_migrations")] == [
-        "0001"
-    ]
-    await _run_downgrade(cfg_plain, revision="-1", echo=False)
-    assert await _fetch_rows(cfg_plain, "SELECT version_num FROM ddl_migrations") == []
-    await _close_config_pool(cfg_plain)
+    await _run_downgrade(cfg, revision="-1", echo=False)
+    ledger_after_partial = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
+    tables_after_partial = {
+        r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert ledger_after_partial == ["0001"]
+    assert "extra_t" not in tables_after_partial
+    assert {"app_t", "ext_first_t", "ext_second_t"}.issubset(tables_after_partial)
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="sqlspec.migrations.commands"):
+        await _run_downgrade(cfg, revision="base", dry_run=True, use_logger=True, echo=False)
+    preview_msgs = [rec.getMessage() for rec in caplog.records]
+    assert any("Would downgrade reconciler 1/2: second" in m for m in preview_msgs)
+    assert any("Would downgrade reconciler 2/2: first" in m for m in preview_msgs)
+
+    await _run_downgrade(cfg, revision="-1", echo=False)
+    ledger_after_base = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
+    tables_after_base = {
+        r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    log_actions = [r["action"] for r in await _fetch_rows(cfg, "SELECT action FROM ext_lifecycle_log ORDER BY seq")]
+    await _close_config_pool(cfg)
+
+    assert ledger_after_base == []
+    assert "app_t" not in tables_after_base
+    assert "ext_first_t" not in tables_after_base
+    assert "ext_second_t" not in tables_after_base
+    assert log_actions[-2:] == ["down:second", "down:first"]
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
@@ -1556,7 +1603,7 @@ async def test_current_is_read_only_and_verbose_renders_configured_reconcilers_t
     printed_tables = [
         call.args[0] for call in mock_console.print.call_args_list if call.args and isinstance(call.args[0], Table)
     ]
-    assert [t.title for t in printed_tables] == ["Configured reconcilers (run on every head upgrade)"]
+    assert [t.title for t in printed_tables] == ["Configured reconcilers (run on upgrade; drop at base downgrade)"]
     assert printed_tables[0].row_count == 1
     with sqlite3.connect(rec_fresh_db) as conn:
         assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
@@ -1582,7 +1629,10 @@ async def test_current_is_read_only_and_verbose_renders_configured_reconcilers_t
     pop_tables = [
         call.args[0] for call in mock_console_v.print.call_args_list if call.args and isinstance(call.args[0], Table)
     ]
-    assert [t.title for t in pop_tables] == ["Applied Migrations", "Configured reconcilers (run on every head upgrade)"]
+    assert [t.title for t in pop_tables] == [
+        "Applied Migrations",
+        "Configured reconcilers (run on upgrade; drop at base downgrade)",
+    ]
     assert pop_tables[0].row_count == 1
     assert pop_tables[1].row_count == 1
 
@@ -1593,3 +1643,40 @@ async def test_current_is_read_only_and_verbose_renders_configured_reconcilers_t
     ]
     assert nv_tables == []
     await _close_config_pool(cfg_rec_pop)
+
+
+def test_versioned_extensions_skip_out_of_order_and_checksum_warnings(tmp_path: Path) -> None:
+    """Versioned extensions never emit out-of-order gaps or checksum mismatch failures when modified."""
+    from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
+    from sqlspec.migrations.validation import detect_out_of_order_migrations
+
+    assert detect_out_of_order_migrations(["ext_demo_0001"], ["0002", "20260101120000"]) == []
+    assert detect_out_of_order_migrations(["20260101120000"], ["ext_demo_20270101120000"]) == []
+
+    applied: list[AppliedMigrationRecord] = [
+        {
+            "version_num": "ext_demo_0001",
+            "version_type": "sequential",
+            "execution_sequence": 1,
+            "description": "init",
+            "applied_at": "now",
+            "execution_time_ms": 0,
+            "checksum": "old_checksum",
+            "applied_by": "tester",
+            "replaces": None,
+        }
+    ]
+    loaded: dict[str, LoadedMigrationMetadata] = {
+        "ext_demo_0001": {
+            "version": "ext_demo_0001",
+            "description": "init",
+            "file_path": tmp_path / "0001_init.sql",
+            "checksum": "new_package_checksum",
+            "replaces": [],
+            "loader": MagicMock(),
+            "transactional": None,
+        }
+    }
+    report = SyncMigrationCommands._evaluate_verification(applied, loaded)
+    assert report["valid"] is True
+    assert report["checksum_mismatches"] == []
