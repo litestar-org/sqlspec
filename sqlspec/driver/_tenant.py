@@ -18,6 +18,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 __all__ = (
+    "AsyncTenantLease",
     "AsyncTenantStrategy",
     "SyncTenantLease",
     "SyncTenantStrategy",
@@ -192,10 +193,44 @@ class AsyncTenantLease:
                 else _lease_state(payload, await self._strategy.checkout(connection, payload))
             )
         except BaseException as exc:
-            disposal = asyncio.ensure_future(self._invalidate(connection))
+            disposal = asyncio.create_task(self._dispose(connection))
             invalidation_error, _ = await _await_owned(disposal)
             if invalidation_error is not None:
                 exc.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
             raise
         self._connection, self._state = connection, state
         return connection
+
+    async def _dispose(self, connection: Any) -> None:
+        await self._invalidate(connection)
+
+    async def _cleanup(self, connection: Any, state: TenantLeaseState, exc_type: type[BaseException] | None) -> None:
+        await self._finish_transaction(connection, exc_type)
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError
+        if not state.payload.is_bypass:
+            await self._strategy.checkin(connection, state)
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError
+        await self._release(connection)
+
+    async def release(self, _conn: Any = None, **kwargs: Any) -> None:
+        """Complete bounded cleanup, waiting for owned tasks even after cancellation."""
+        connection, state = self._connection, self._state
+        self._connection, self._state = None, None
+        if state is None:
+            return
+        cleanup = asyncio.create_task(self._cleanup(connection, state, kwargs.get("exc_type")))
+        cause, cancellation = await _await_owned(cleanup, self._cleanup_timeout)
+        if not cleanup.done():
+            cleanup.cancel()
+            _, pending = await _await_owned(cleanup)
+            cancellation = cancellation or pending
+        if cause is not None:
+            disposal = asyncio.create_task(self._dispose(connection))
+            invalidation_error, pending = await _await_owned(disposal)
+            cancellation = cancellation or pending
+            _report_cleanup_failure(cause, cancellation or kwargs.get("exc_val"), invalidation_error)
+        if cancellation is not None:
+            raise cancellation

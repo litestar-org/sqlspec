@@ -1,47 +1,8 @@
-from typing import Any
-
 import pytest
 
-from sqlspec.driver import SyncTenantLease
 from sqlspec.exceptions import TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext
-
-
-def make_sync_lease(
-    calls: list[str], failures: dict[str, BaseException] | None = None
-) -> tuple[SyncTenantLease, object]:
-    from types import SimpleNamespace
-
-    errors = failures or {}
-    connection = object()
-
-    def record(name: str) -> None:
-        calls.append(name)
-        if name in errors:
-            raise errors[name]
-
-    def acquire() -> object:
-        record("acquire")
-        return connection
-
-    def checkout(conn: object, payload: Any) -> dict[str, str]:
-        assert conn is connection
-        record(f"checkout:{payload.tenant_id}")
-        return {"original": "x"}
-
-    def checkin(conn: object, state: Any) -> None:
-        assert conn is connection
-        assert state.baseline == {"original": "x"}
-        record(f"checkin:{state.payload.tenant_id}")
-
-    lease = SyncTenantLease(
-        SimpleNamespace(checkout=checkout, checkin=checkin),
-        acquire=acquire,
-        release=lambda conn: record("release"),
-        invalidate=lambda conn: record("invalidate"),
-        finish_transaction=lambda conn, exc_type: record(f"finish:{None if exc_type is None else exc_type.__name__}"),
-    )
-    return lease, connection
+from tests.unit.driver.test_tenant_lifecycle import make_sync_lease
 
 
 def test_sync_tenant_missing_before_acquisition() -> None:

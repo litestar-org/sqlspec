@@ -31,7 +31,7 @@ from sqlspec.driver._sync import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
-from sqlspec.driver._tenant import SyncTenantLease
+from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 
 __all__ = (
     "AsyncDataDictionaryBase",
@@ -40,6 +40,7 @@ __all__ = (
     "AsyncPoolConnectionContext",
     "AsyncPoolSessionFactory",
     "AsyncRowStream",
+    "AsyncTenantLease",
     "BaseAsyncExceptionHandler",
     "BaseSyncExceptionHandler",
     "CachedQuery",
