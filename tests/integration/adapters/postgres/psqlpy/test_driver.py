@@ -1,5 +1,7 @@
 """Test PSQLPy driver implementation."""
 
+from typing import Any
+
 import pytest
 
 from sqlspec import SQLResult, StatementStack
@@ -318,3 +320,101 @@ async def test_psqlpy_raw_begin_rolls_back_on_exception_exit(psqlpy_config: "Psq
                 assert tx_check.get_data()[0]["txid"] is None
     finally:
         await bounded_config.close_pool()
+
+
+async def test_tenant_rls_native_pool_and_disposal(postgres_service: Any) -> None:
+    """Sequential psqlpy leases restore identity and dispose an unverified backend."""
+    from uuid import uuid4
+
+    from sqlspec.adapters.psqlpy import PsqlpyRLSStrategy
+    from sqlspec.exceptions import TenantCleanupError, TenantContextError
+    from sqlspec.utils.tenant import TenantContext
+    from sqlspec.utils.text import quote_identifier
+
+    credentials = {
+        "host": postgres_service.host,
+        "port": postgres_service.port,
+        "username": postgres_service.user,
+        "password": postgres_service.password,
+        "db_name": postgres_service.database,
+        "max_db_pool_size": 2,
+    }
+    admin_config = PsqlpyConfig(connection_config=credentials)
+    admin = await admin_config.create_connection()
+    role = "sqlspec_tenant_" + uuid4().hex[:12]
+    table = "sqlspec_tenant_rows_" + uuid4().hex[:12]
+    role_sql = await admin.fetch_val(
+        "SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD %L', $1::text, $2::text)",
+        [role, "sqlspec-tenant-test"],
+    )
+    await admin.execute(role_sql)
+    quoted_role, quoted_table = quote_identifier(role), quote_identifier(table)
+    config = PsqlpyConfig(
+        connection_config={**credentials, "username": role, "password": "sqlspec-tenant-test"},
+        driver_features={"tenant_strategy": PsqlpyRLSStrategy(variable_keys={"region": "app.region"})},
+    )
+    try:
+        await admin.execute(f"CREATE TABLE {quoted_table} (tenant_id text NOT NULL, value integer NOT NULL)")
+        await admin.execute(f"ALTER TABLE {quoted_table} ENABLE ROW LEVEL SECURITY")
+        await admin.execute(f"ALTER TABLE {quoted_table} FORCE ROW LEVEL SECURITY")
+        await admin.execute(
+            f"CREATE POLICY tenant_policy ON {quoted_table} USING (tenant_id = current_setting('app.current_tenant_id', true)) WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true))"
+        )
+        await admin.execute(f"GRANT SELECT, INSERT ON {quoted_table} TO {quoted_role}")
+        first_pid = 0
+        for tenant, value in [("a", 1), ("b", 2)]:
+            with TenantContext.scope(tenant, variables={"region": "eu"} if tenant == "a" else None):
+                async with config.provide_session() as session:
+                    pid = await session.select_value("SELECT pg_backend_pid()")
+                    assert pid == first_pid if first_pid else pid > 0
+                    first_pid = pid
+                    await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", (tenant, value))
+                    assert await session.select_value(f"SELECT value FROM {quoted_table}") == value
+                    if tenant == "b":
+                        assert await session.select_value("SELECT current_setting('app.region', true)") in {None, ""}
+        with TenantContext.scope("a"):
+            async with config.provide_session() as session:
+                with pytest.raises(SQLSpecError):
+                    await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", ("b", 3))
+                await session.begin()
+                await session.commit()
+                assert await session.select_value("SELECT current_setting('app.current_tenant_id', true)") == "a"
+        with pytest.raises(TenantContextError):
+            async with config.provide_session():
+                pass
+        with TenantContext.scope("a"):
+            async with config.provide_connection() as connection:
+                await connection.execute("BEGIN")
+                await connection.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", ["a", 99])
+        with TenantContext.scope("b"):
+            async with config.provide_connection() as connection:
+                await connection.execute("BEGIN")
+                await connection.execute("ROLLBACK")
+                assert await connection.fetch_val("SELECT current_setting('app.current_tenant_id', true)") == "b"
+                assert await connection.fetch_val("SELECT pg_backend_pid()") == first_pid
+        with TenantContext.scope("a"):
+            async with config.provide_session() as session:
+                assert await session.select_value(f"SELECT count(*) FROM {quoted_table}") == 1
+        strategy = config.driver_features["tenant_strategy"]
+
+        class FailingRestore(PsqlpyRLSStrategy):
+            __slots__ = ()
+
+            async def checkin(self, connection: Any, state: Any) -> None:
+                raise TenantCleanupError("injected restore failure")
+
+        config.driver_features["tenant_strategy"] = FailingRestore()
+        with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
+            async with config.provide_connection():
+                pass
+        config.driver_features["tenant_strategy"] = strategy
+        with TenantContext.scope("b"):
+            async with config.provide_session() as session:
+                assert await session.select_value("SELECT pg_backend_pid()") != first_pid
+                assert await session.select_value(f"SELECT value FROM {quoted_table}") == 2
+    finally:
+        await config.close_pool()
+        await admin.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+        await admin.execute(f"DROP ROLE {quoted_role}")
+        admin.close()
+        await admin_config.close_pool()
