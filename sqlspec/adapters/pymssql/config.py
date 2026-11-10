@@ -8,9 +8,12 @@ from sqlspec.adapters.pymssql.core import apply_driver_features, build_connectio
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy, build_pymssql_tenant_lease
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -79,6 +82,9 @@ class PymssqlPoolParams(PymssqlConnectionParams):
 class PymssqlDriverFeatures(TypedDict):
     """Optional pymssql driver feature flags for JSON serialization, connection hooks, and events."""
 
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand]
+    """Opt in to verified tenant session leases."""
+
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
@@ -98,11 +104,43 @@ class PymssqlDriverFeatures(TypedDict):
 class PymssqlConnectionContext(SyncPoolConnectionContext):
     """Context manager for pymssql connections."""
 
-    __slots__ = ()
+    __slots__ = ("_lease",)
+
+    def __init__(self, config: "PymssqlConfig") -> None:
+        super().__init__(config)
+        self._lease = (
+            build_pymssql_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
+        )
+
+    def __enter__(self) -> PymssqlConnection:
+        return cast("PymssqlConnection", self._lease.acquire() if self._lease is not None else super().__enter__())
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> bool | None:
+        if self._lease is not None:
+            self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
+        return super().__exit__(exc_type, exc_val, exc_tb)
 
 
 class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_lease",)
+
+    def __init__(self, config: "PymssqlConfig") -> None:
+        super().__init__(config)
+        self._lease = (
+            build_pymssql_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
+        )
+
+    def acquire_connection(self) -> PymssqlConnection:
+        return cast(
+            "PymssqlConnection", self._lease.acquire() if self._lease is not None else super().acquire_connection()
+        )
+
+    def release_connection(self, _conn: PymssqlConnection, **kwargs: Any) -> None:
+        if self._lease is not None:
+            self._lease.release(_conn, **kwargs)
+        else:
+            super().release_connection(_conn, **kwargs)
 
 
 class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool, PymssqlDriver]):
@@ -113,6 +151,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     driver_type: "ClassVar[type[PymssqlDriver]]" = PymssqlDriver
     connection_type: "ClassVar[type[PymssqlConnection]]" = cast("type[PymssqlConnection]", PymssqlConnection)
     migration_tracker_type: "ClassVar[type[PymssqlSyncMigrationTracker]]" = PymssqlSyncMigrationTracker
+    supports_tenant_strategy: ClassVar[bool] = True
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -163,6 +202,11 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             **kwargs,
         )
 
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "session_context"}):
+            return PymssqlSessionContextStrategy()
+        return super()._resolve_tenant_strategy(strategy)
+
     def create_connection(self) -> "PymssqlConnection":
         """Open a standalone connection owned by the caller.
 
@@ -173,6 +217,9 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         Returns:
             PymssqlConnection: A newly opened connection.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Use provide_connection() for tenant configurations"
+            raise ImproperConfigurationError(msg)
         return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
