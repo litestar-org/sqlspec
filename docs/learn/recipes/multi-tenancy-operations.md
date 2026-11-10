@@ -71,9 +71,9 @@ Migration commands reject a tenant config even inside a bypass scope. PostgreSQL
 
 Without a scope or explicit bypass, acquisition raises `TenantContextError` before taking a connection. If checkout fails, the lease discards the connection. At exit it first finishes the transaction, then restores and checks tenant state, then returns the connection. A failed transaction finish skips tenant reset SQL and goes straight to disposal.
 
-Failed reset or release causes disposal too. With no body error, cleanup raises `TenantCleanupError` chained from the cause. With a body error, the body error keeps its identity and gets a cleanup note. Inspect that cause or note when diagnosing a failure.
+Failed reset or release causes disposal too. With no body error, cleanup raises `TenantCleanupError` chained from the cause. With a body error, the body error keeps its identity and gets a cleanup note. Inspect that cause or note when diagnosing a failure. If physical close fails, psycopg closes the owning pool before its native context can return a dirty connection. Recreate that pool after diagnosing the error.
 
-Async cleanup runs in an owned, shielded task with a five-second default deadline. Outer cancellation waits for cleanup or the deadline, then propagates. On timeout the lease cancels cleanup, waits for it to stop, and discards the connection. Disposal is shielded; adapters provide their own physical close or terminate operation. No cleanup task may return a connection after release has reported completion.
+Async cleanup owns a shielded task with a five-second default deadline. At the deadline, the lease cancels cleanup. It waits for that work to stop before it discards the connection. A cancelled caller also waits for owned work to stop. A native reset hook must respond to cancellation. If a hook ignores it, cleanup waits longer to keep the pool safe. No old release task may act on a connection that another lease has acquired.
 
 ## Database Deployment Limits
 
