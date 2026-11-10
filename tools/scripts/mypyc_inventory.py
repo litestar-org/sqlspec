@@ -289,7 +289,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/adapters/sqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Native compiled driver construction segfaulted in installed-wheel SqliteConfig session smoke; keep interpreted pending driver layout work.",
+        "reason": "Native Arrow ingestion bypasses interpreted parameter-conversion overrides and breaks rollback on rejected batches.",
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
         "classification": "prove_separately",
@@ -323,8 +323,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
     },
     "sqlspec/adapters/oracledb/events/backend.py": {
-        "classification": "compile_now",
-        "reason": "Native AQ and TxEventQ event dispatch with live Oracle coverage.",
+        "classification": "keep_interpreted",
+        "reason": "Compiled AQ and TxEventQ backends reject interpreted subclasses or their structural listener overrides.",
     },
     **{
         f"sqlspec/adapters/{adapter}/events/backend.py": {

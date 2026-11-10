@@ -1,6 +1,7 @@
 """Tenant session state is bound, verified, and restored through one SQL call."""
 
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -111,6 +112,20 @@ async def test_tenant_checkin_requires_verified_readback(missing: bool) -> None:
     connection.corrupt = not missing
     with pytest.raises(TenantCleanupError):
         await strategy.checkin(connection.native, state)
+
+
+async def test_tenant_checkin_preserves_driver_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = FakeGucConnection()
+    strategy = AsyncpgRLSStrategy()
+    state = await strategy.checkout(connection.native, TenantContextPayload("a"))
+    error = RuntimeError("native restore failed")
+    monkeypatch.setattr(connection, "fetchrow", AsyncMock(side_effect=error))
+
+    with pytest.raises(TenantCleanupError, match="Tenant session restoration failed") as caught:
+        await strategy.checkin(connection.native, state)
+
+    assert caught.value.__cause__ is error
+    assert caught.value.__suppress_context__
 
 
 async def test_tenant_baseline_replay_is_batched() -> None:

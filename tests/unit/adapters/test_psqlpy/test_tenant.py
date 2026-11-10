@@ -73,6 +73,20 @@ async def test_tenant_binds_and_restores_a_snapshot_in_one_call() -> None:
         await PsqlpyRLSStrategy().checkout(connection.native, TenantContextPayload("a", variables={"region": "eu"}))
 
 
+async def test_tenant_checkin_preserves_driver_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = GucConnection()
+    strategy = PsqlpyRLSStrategy()
+    state = await strategy.checkout(connection.native, TenantContextPayload("a"))
+    error = RuntimeError("native restore failed")
+    monkeypatch.setattr(connection, "fetch_row", AsyncMock(side_effect=error))
+
+    with pytest.raises(TenantCleanupError, match="Tenant session restoration failed") as caught:
+        await strategy.checkin(connection.native, state)
+
+    assert caught.value.__cause__ is error
+    assert caught.value.__suppress_context__
+
+
 @pytest.mark.parametrize("disposal", ["closed", "live", "timeout", "aborted"])
 async def test_tenant_disposal_is_verified_and_bounded(disposal: str, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlspec.adapters.psqlpy.tenant as tenant_module

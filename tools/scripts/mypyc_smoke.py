@@ -86,7 +86,6 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
         SmokeImport(f"{adapter}_events_hub", f"sqlspec.adapters.{adapter}.events._hub", None, True, adapter)
         for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
     ),
-    SmokeImport("oracledb_events_backend", "sqlspec.adapters.oracledb.events.backend", None, True, "oracledb"),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),

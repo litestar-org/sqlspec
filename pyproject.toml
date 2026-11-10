@@ -302,7 +302,6 @@ include = [
   "sqlspec/adapters/oracledb/tenant.py",            # Oracle tenant strategies and hooks
   "sqlspec/adapters/asyncpg/events/_hub.py",       # Native event listener runtimes
   "sqlspec/adapters/oracledb/events/_hub.py",
-  "sqlspec/adapters/oracledb/events/backend.py",
   "sqlspec/adapters/psqlpy/events/_hub.py",
   "sqlspec/adapters/psycopg/events/_hub.py",
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers

@@ -2,6 +2,7 @@
 """Unit tests for adapter-specific event backend factories."""
 
 from datetime import UTC
+from inspect import isawaitable
 from types import SimpleNamespace
 from typing import Any
 
@@ -259,6 +260,33 @@ def test_oracle_factory_unknown_returns_none() -> None:
     backend = create_event_backend(config, "notify", {})
 
     assert backend is None
+
+
+@pytest.mark.parametrize("backend_name", ["aq", "txeventq"])
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_backend_subclass_can_supply_a_custom_listener(backend_name: str, is_async: bool) -> None:
+    pytest.importorskip("oracledb")
+    from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.events import create_event_backend
+
+    config = OracleAsyncConfig() if is_async else OracleSyncConfig()
+    backend = create_event_backend(config, backend_name, {})
+    assert backend is not None
+    requests: list[tuple[str, float]] = []
+
+    def dequeue(channel: str, interval: float) -> None:
+        requests.append((channel, interval))
+
+    async def async_dequeue(channel: str, interval: float) -> None:
+        dequeue(channel, interval)
+
+    def ensure_hub(_backend: object) -> SimpleNamespace:
+        return SimpleNamespace(dequeue=async_dequeue if is_async else dequeue)
+
+    custom_type = type("CustomOracleBackend", (type(backend),), {"__slots__": (), "_ensure_hub": ensure_hub})
+    result = custom_type(config).dequeue("orders", 0.25)
+    assert (await result if isawaitable(result) else result) is None
+    assert requests == [("orders", 0.25)]
 
 
 @pytest.mark.parametrize("is_async", [False, True])

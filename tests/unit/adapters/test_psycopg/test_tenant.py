@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self, cast
+from unittest.mock import Mock
 
 import pytest
 from psycopg import pq
@@ -143,6 +144,21 @@ async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: b
     connection.corrupt = True
     with pytest.raises(TenantCleanupError):
         await checkin(strategy, connection, state)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tenant_checkin_preserves_driver_error(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = GucConnection(asynchronous)
+    strategy = PsycopgAsyncRLSStrategy() if asynchronous else PsycopgSyncRLSStrategy()
+    state = await checkout(strategy, connection, TenantContextPayload("a"))
+    error = RuntimeError("native restore failed")
+    monkeypatch.setattr(connection, "cursor", Mock(side_effect=error))
+
+    with pytest.raises(TenantCleanupError, match="Tenant session restoration failed") as caught:
+        await checkin(strategy, connection, state)
+
+    assert caught.value.__cause__ is error
+    assert caught.value.__suppress_context__
 
 
 @pytest.mark.parametrize("adapter", ["postgres", "cockroach"])
