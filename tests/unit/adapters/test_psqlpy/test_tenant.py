@@ -1,0 +1,126 @@
+"""Psqlpy tenant identity and disposal use the native connection boundary."""
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, build_psqlpy_tenant_lease
+from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+
+class GucConnection:
+    def __init__(self) -> None:
+        self.settings: dict[str, str | None] = {"app.current_tenant_id": "before", "search_path": ""}
+        self.calls: list[tuple[str, list[str]]] = []
+        self.corrupt = False
+
+    async def fetch_row(self, sql: str, params: list[str]) -> Any:
+        self.calls.append((sql, params))
+        values: list[str | None] = []
+        for key, value in zip(params[::2], params[1::2], strict=True):
+            old = self.settings.get(key)
+            self.settings[key] = value
+            values.extend(
+                (old, value) if "captured AS MATERIALIZED" in sql else (value, "wrong" if self.corrupt else value)
+            )
+        return SimpleNamespace(result=lambda **_: tuple(values))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"variable_keys": {"a": "APP.Current_Tenant_Id"}},
+        {"variable_keys": {"a": "app.x", "b": "APP.X"}},
+        {"schema_resolver": lambda _: "public", "tenant_key": "SEARCH_PATH"},
+    ],
+)
+def test_tenant_ownership_rejects_collisions(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        PsqlpyRLSStrategy(**kwargs)
+
+
+async def test_tenant_binds_and_restores_a_snapshot_in_one_call() -> None:
+    mapping = {"region": "app.region"}
+    strategy = PsqlpyRLSStrategy(variable_keys=mapping, schema_resolver=lambda _: "public")
+    mapping["region"] = "app.current_tenant_id"
+    connection = GucConnection()
+    state = await strategy.checkout(connection, TenantContextPayload("a'; DROP", variables={"region": "eu"}))
+    assert state.baseline["app.current_tenant_id"] == "before"
+    assert connection.settings["app.current_tenant_id"] == "a'; DROP"
+    assert connection.settings["app.region"] == "eu"
+    assert len(connection.calls) == 1
+    assert "a'; DROP" not in connection.calls[0][0]
+    assert isinstance(connection.calls[0][1], list)
+    await strategy.checkin(connection, state)
+    assert connection.settings == {"app.current_tenant_id": "before", "app.region": "", "search_path": ""}
+    assert len(connection.calls) == 2
+    connection.corrupt = True
+    with pytest.raises(TenantCleanupError):
+        await strategy.checkin(connection, state)
+    with pytest.raises(TenantContextError):
+        await PsqlpyRLSStrategy().checkout(connection, TenantContextPayload("a", variables={"region": "eu"}))
+
+
+@pytest.mark.parametrize("disposal", ["closed", "live", "timeout", "aborted"])
+async def test_tenant_disposal_is_verified_and_bounded(disposal: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sqlspec.adapters.psqlpy.tenant as tenant_module
+
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    strategy.checkin.side_effect = RuntimeError("restore failed")
+    events: list[str] = []
+    connection = AsyncMock()
+    connection.is_closed = Mock(return_value=disposal == "closed")
+
+    async def execute(sql: str) -> None:
+        events.append(sql)
+        if "pg_terminate_backend" in sql and disposal == "timeout":
+            await asyncio.Event().wait()
+        if sql == "SELECT 1" and disposal in {"closed", "aborted"}:
+            raise RuntimeError("probe error")
+
+    connection.execute.side_effect = execute
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = SimpleNamespace(acquire=lambda: context)
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=pool),
+        _ensure_connection=AsyncMock(),
+        _close_pool=AsyncMock(),
+        driver_features={"tenant_strategy": strategy},
+    )
+    monkeypatch.setattr(tenant_module, "PSQLPY_DISPOSAL_TIMEOUT_S", 0.01)
+    lease = build_psqlpy_tenant_lease(config)
+    with TenantContext.scope(payload):
+        await lease.acquire()
+    with pytest.raises(TenantCleanupError):
+        await lease.release()
+    assert events[0] == "ROLLBACK"
+    assert "pg_terminate_backend" in events[1]
+    context.__aexit__.assert_awaited_once()
+    if disposal == "closed":
+        config._close_pool.assert_not_awaited()
+    else:
+        config._close_pool.assert_awaited_once()
+
+
+async def test_tenant_acquire_probe_failure_exits_once() -> None:
+    context = AsyncMock()
+    error = RuntimeError("initialization failed")
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=SimpleNamespace(acquire=lambda: context)),
+        _ensure_connection=AsyncMock(side_effect=error),
+        driver_features={"tenant_strategy": AsyncMock()},
+    )
+    lease = build_psqlpy_tenant_lease(config)
+    with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
+        await lease.acquire()
+    assert caught.value is error
+    context.__aexit__.assert_awaited_once()
+    config.driver_features["tenant_strategy"].checkout.assert_not_awaited()
