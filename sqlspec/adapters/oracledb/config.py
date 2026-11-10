@@ -53,8 +53,14 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncExceptionHandler,
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
+from sqlspec.adapters.oracledb.tenant import (
+    build_oracle_async_tenant_lease,
+    build_oracle_sync_tenant_lease,
+    validate_oracle_tenant_hook,
+)
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.tenant import TenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import (
     AsyncPoolConnectionContext,
     AsyncPoolSessionFactory,
@@ -294,6 +300,8 @@ class OracleDriverFeatures(TypedDict):
     """Event queue backend (``'poll_queue'`` default, ``'aq'``, or ``'txeventq'``)."""
     enable_direct_path_load: NotRequired[bool]
     """Route ``load_from_arrow`` through Thin-mode ``Connection.direct_path_load`` with ``executemany`` fallback (defaults to ``True``)."""
+    tenant_strategy: NotRequired[TenantStrategy | TenantStrategyShorthand]
+    """Opt-in tenant identifier or explicit trusted-context strategy."""
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
     """Declarative ``DBMS_SESSION`` / ``CLIENT_IDENTIFIER`` context applied on checkout and cleared on release."""
     enable_session_tracing: NotRequired[bool]
@@ -428,13 +436,20 @@ def _derive_oracle_pool_kwargs(
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Oracle sync connections."""
 
-    __slots__ = ("_conn",)
+    __slots__ = ("_conn", "_tenant_lease")
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
         self._conn: OracleSyncConnection | None = None
+        self._tenant_lease = (
+            build_oracle_sync_tenant_lease(config)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     def acquire_connection(self) -> "OracleSyncConnection":
+        if self._tenant_lease is not None:
+            return cast("OracleSyncConnection", self._tenant_lease.acquire())
         if self._config.connection_instance is None:
             self._config.connection_instance = self._config.create_pool()
         conn = self._config.connection_instance.acquire()
@@ -450,6 +465,9 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         return cast("OracleSyncConnection", conn)
 
     def release_connection(self, _conn: "OracleSyncConnection | None" = None, **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
+            return
         if self._conn is None:
             return
         conn = self._conn
@@ -471,7 +489,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         if self._conn is not None and exc_type is not None:
             with contextlib.suppress(Exception):
                 self._conn.rollback()
-        self.release_connection()
+        self.release_connection(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
         return None
 
 
@@ -497,6 +515,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     driver_type: ClassVar[type[OracleSyncDriver]] = OracleSyncDriver
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
+    supports_tenant_strategy: ClassVar[bool] = True
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -560,6 +579,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config=extension_config,
             **kwargs,
         )
+        validate_oracle_tenant_hook(
+            self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+        )
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
@@ -570,6 +592,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An Oracle Connection instance.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Oracle tenant configurations require provide_session() or provide_connection()"
+            raise ImproperConfigurationError(msg)
         _initialize_oracle_client(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = oracledb.connect(**config)
@@ -735,9 +760,19 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Oracle connections."""
 
-    __slots__ = ()
+    __slots__ = ("_tenant_lease",)
+
+    def __init__(self, config: "OracleAsyncConfig") -> None:
+        super().__init__(config)
+        self._tenant_lease = (
+            build_oracle_async_tenant_lease(config)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     async def __aenter__(self) -> Any:
+        if self._tenant_lease is not None:
+            return await self._tenant_lease.acquire()
         conn = await super().__aenter__()
         session_hook = self._config.driver_features.get("session_context_hook")
         if session_hook is not None:
@@ -751,6 +786,9 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         conn = self._connection
         if conn is not None and exc_type is not None:
             with contextlib.suppress(Exception):
@@ -765,9 +803,19 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
 
 
 class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_tenant_lease",)
+
+    def __init__(self, config: "OracleAsyncConfig") -> None:
+        super().__init__(config)
+        self._tenant_lease = (
+            build_oracle_async_tenant_lease(config)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     async def acquire_connection(self) -> Any:
+        if self._tenant_lease is not None:
+            return await self._tenant_lease.acquire()
         conn = await super().acquire_connection()
         session_hook = self._config.driver_features.get("session_context_hook")
         if session_hook is not None:
@@ -779,6 +827,9 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         return conn
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(_conn, **kwargs)
+            return
         conn = self._connection
         session_hook = self._config.driver_features.get("session_context_hook") if conn is not None else None
         try:
@@ -796,6 +847,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     connection_type: "ClassVar[type[OracleAsyncConnection]]" = OracleAsyncConnection
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
+    supports_tenant_strategy: ClassVar[bool] = True
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -862,6 +914,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config=extension_config,
             **kwargs,
         )
+        validate_oracle_tenant_hook(
+            self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+        )
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
@@ -872,6 +927,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An Oracle AsyncConnection instance.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Oracle tenant configurations require provide_session() or provide_connection()"
+            raise ImproperConfigurationError(msg)
         _validate_async_oracle_mode(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = await oracledb.connect_async(**config)

@@ -11,19 +11,24 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
 )
 from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
     from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "ORACLE_TENANT_IDENTIFIER_MAX_BYTES",
     "OracleAsyncIdentifierStrategy",
     "OracleSyncIdentifierStrategy",
+    "build_oracle_async_tenant_lease",
+    "build_oracle_sync_tenant_lease",
     "compose_tenant_session_hook",
     "tenant_client_identifier",
+    "validate_oracle_tenant_hook",
 )
 
 ORACLE_TENANT_IDENTIFIER_MAX_BYTES: Final = 64
@@ -127,3 +132,64 @@ class OracleAsyncIdentifierStrategy:
         if row is None or row[0] is not None:
             msg = "Oracle tenant identifier cleanup verification failed"
             raise TenantCleanupError(msg)
+
+
+def validate_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | None) -> None:
+    """Reject a hook that a tenant strategy would silently bypass."""
+    if strategy is not None and hook is not None and getattr(strategy, "source_hook", None) != hook:
+        msg = "Oracle tenant strategy must be constructed with the configured session_context_hook"
+        raise ImproperConfigurationError(msg)
+
+
+def build_oracle_sync_tenant_lease(config: "OracleSyncConfig") -> "SyncTenantLease":
+    """Wrap Oracle pool callbacks with verified tenant cleanup and physical drop."""
+    pool: Any = None
+
+    def acquire() -> Any:
+        nonlocal pool
+        pool = config.provide_pool()
+        return pool.acquire()
+
+    def release(connection: Any) -> None:
+        pool.release(connection)
+
+    def invalidate(connection: Any) -> None:
+        pool.drop(connection)
+
+    def finish(connection: Any, _exc_type: type[BaseException] | None) -> None:
+        connection.rollback()
+
+    return SyncTenantLease(
+        config.driver_features["tenant_strategy"],
+        acquire=acquire,
+        release=release,
+        invalidate=invalidate,
+        finish_transaction=finish,
+    )
+
+
+def build_oracle_async_tenant_lease(config: "OracleAsyncConfig") -> "AsyncTenantLease":
+    """Wrap asynchronous Oracle pool callbacks and dispose unverified sessions."""
+    pool: Any = None
+
+    async def acquire() -> Any:
+        nonlocal pool
+        pool = await config.provide_pool()
+        return await pool.acquire()
+
+    async def release(connection: Any) -> None:
+        await pool.release(connection)
+
+    async def invalidate(connection: Any) -> None:
+        await pool.drop(connection)
+
+    async def finish(connection: Any, _exc_type: type[BaseException] | None) -> None:
+        await connection.rollback()
+
+    return AsyncTenantLease(
+        config.driver_features["tenant_strategy"],
+        acquire=acquire,
+        release=release,
+        invalidate=invalidate,
+        finish_transaction=finish,
+    )
