@@ -565,6 +565,9 @@ class SanicConfig(TypedDict):
     All fields are optional with sensible defaults. Use in ``extension_config["sanic"]``.
     """
 
+    tenant_extractor: NotRequired[Callable[[Any], "TenantExtractorValue | Awaitable[TenantExtractorValue]"]]
+    """Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Required with a tenant strategy."""
+
     connection_key: NotRequired[str]
     """Key for storing connection in request.ctx. Default: 'db_connection'"""
 

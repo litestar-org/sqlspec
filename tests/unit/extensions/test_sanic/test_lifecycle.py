@@ -103,6 +103,7 @@ class _AsyncConnectionManagerFake:
 
 def _make_config(*, pool: object) -> MagicMock:
     config = MagicMock()
+    config.driver_features = {}
     config.supports_connection_pooling = True
     config.extension_config = {"sanic": {}}
     config.create_pool = AsyncMock(return_value=pool)

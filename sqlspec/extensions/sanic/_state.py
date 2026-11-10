@@ -1,5 +1,6 @@
 """Internal configuration state models for the Sanic SQLSpec extension."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -30,6 +31,7 @@ class SanicConfigState:
     extra_commit_statuses: "set[int] | None"
     extra_rollback_statuses: "set[int] | None"
     disable_di: bool
+    tenant_extractor: Callable[[Any], Any] | None = None
     enable_correlation_middleware: bool = True
     correlation_header: str = "x-request-id"
     correlation_headers: "tuple[str, ...] | None" = None

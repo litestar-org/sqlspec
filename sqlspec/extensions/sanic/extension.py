@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from contextvars import ContextVar
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.base import SQLSpec
@@ -21,9 +22,12 @@ from sqlspec.extensions.sanic._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sanic import Sanic
 
 __all__ = ("SQLSpecPlugin",)
@@ -55,7 +59,14 @@ class SQLSpecPlugin:
     Runtime listener and middleware behavior is registered by ``init_app``.
     """
 
-    __slots__ = ("_config_states", "_extractor", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
+    __slots__ = (
+        "_config_states",
+        "_extractor",
+        "_lifecycle_listeners_added",
+        "_request_middleware_added",
+        "_sqlspec",
+        "_tenant_extractor",
+    )
 
     def __init__(self, sqlspec: SQLSpec, app: "Sanic[Any, Any] | None" = None) -> None:
         """Initialize SQLSpec Sanic extension.
@@ -68,6 +79,7 @@ class SQLSpecPlugin:
         self._config_states: list[SanicConfigState] = []
         self._lifecycle_listeners_added = False
         self._request_middleware_added = False
+        self._tenant_extractor: Callable[[Any], Any] | None = None
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_extension_settings(cfg)
@@ -104,6 +116,7 @@ class SQLSpecPlugin:
             app: Sanic application instance.
         """
         self._ensure_unique_keys()
+        self._configure_tenant_extractor()
         setattr(app.ctx, "sqlspec_plugin", self)
         self._add_lifecycle_listeners(app)
         self._add_request_middleware(app)
@@ -156,6 +169,7 @@ class SQLSpecPlugin:
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),
+            "tenant_extractor": framework_config.get("tenant_extractor"),
             "enable_correlation_middleware": framework_config.get("enable_correlation_middleware", True),
             "correlation_header": framework_config.get("correlation_header", "x-request-id"),
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
@@ -183,6 +197,7 @@ class SQLSpecPlugin:
             extra_commit_statuses=settings["extra_commit_statuses"],
             extra_rollback_statuses=settings["extra_rollback_statuses"],
             disable_di=settings["disable_di"],
+            tenant_extractor=settings["tenant_extractor"],
             enable_correlation_middleware=settings["enable_correlation_middleware"],
             correlation_header=settings["correlation_header"],
             correlation_headers=settings["correlation_headers"],
@@ -190,6 +205,38 @@ class SQLSpecPlugin:
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
+
+    def _configure_tenant_extractor(self) -> None:
+        for state in self._config_states:
+            if state.disable_di:
+                continue
+            extractor = state.tenant_extractor
+            if state.config.driver_features.get("tenant_strategy") is not None and extractor is None:
+                msg = f"Sanic session {state.session_key!r} requires tenant_extractor for tenant strategy"
+                raise ImproperConfigurationError(msg)
+            if extractor is None:
+                continue
+            if not callable(extractor):
+                msg = "Sanic tenant_extractor must be callable"
+                raise ImproperConfigurationError(msg)
+            if self._tenant_extractor is not None and self._tenant_extractor is not extractor:
+                msg = "Sanic configurations must share the same tenant_extractor"
+                raise ImproperConfigurationError(msg)
+            self._tenant_extractor = extractor
+
+    async def _bind_tenant(self, request: Any) -> None:
+        if self._tenant_extractor is None:
+            return
+        raw = self._tenant_extractor(request)
+        if isawaitable(raw):
+            raw = await raw
+        payload = coerce_tenant_payload(raw)
+        set_context_value(request.ctx, "sqlspec_tenant_token", TenantContext.set(payload))
+
+    def _reset_tenant(self, request: Any) -> None:
+        token = pop_context_value(request.ctx, "sqlspec_tenant_token")
+        if token is not None:
+            TenantContext.reset(token)
 
     def _add_lifecycle_listeners(self, app: "Sanic[Any, Any]") -> None:
         """Register Sanic server lifecycle listeners.
@@ -308,7 +355,10 @@ class SQLSpecPlugin:
             if primary_exc is not None:
                 raise primary_exc
         finally:
-            self._restore_observability_contexts(target_request, None)
+            try:
+                self._restore_observability_contexts(target_request, None)
+            finally:
+                self._reset_tenant(target_request)
 
     async def _on_request(self, request: Any) -> None:
         """Acquire request-scoped connections.
@@ -320,6 +370,7 @@ class SQLSpecPlugin:
         self._set_observability_contexts(request)
         acquired_states: list[SanicConfigState] = []
         try:
+            await self._bind_tenant(request)
             for config_state in self._config_states:
                 if config_state.disable_di:
                     continue
@@ -341,8 +392,11 @@ class SQLSpecPlugin:
                     raise primary_exc
                 raise
             finally:
-                self._restore_observability_contexts(request, None)
-                self._unbind_active_request(request)
+                try:
+                    self._restore_observability_contexts(request, None)
+                    self._unbind_active_request(request)
+                finally:
+                    self._reset_tenant(request)
 
     async def _on_response(self, request: Any, response: Any) -> None:
         """Finalize request-scoped connections.
@@ -363,8 +417,11 @@ class SQLSpecPlugin:
             if primary_exc is not None:
                 raise primary_exc
         finally:
-            self._restore_observability_contexts(request, response)
-            self._unbind_active_request(request)
+            try:
+                self._restore_observability_contexts(request, response)
+                self._unbind_active_request(request)
+            finally:
+                self._reset_tenant(request)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.

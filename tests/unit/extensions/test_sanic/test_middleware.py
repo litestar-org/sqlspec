@@ -207,3 +207,105 @@ class _SyncConnectionManager(AbstractContextManager[MagicMock]):
 
     def __exit__(self, *_: object) -> None:
         self.exited += 1
+
+
+@pytest.mark.parametrize("identity", ["a", "uuid", "bypass", "none", "awaitable"])
+async def test_tenant_extractor_binds_and_resets_sanic_request(identity: str) -> None:
+    from uuid import UUID
+
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    raw = {"a": "a", "uuid": UUID(int=1), "bypass": TenantContextPayload.bypass(), "none": None, "awaitable": "a"}[
+        identity
+    ]
+    seen = []
+    config = _make_config(connection=_make_connection())
+
+    async def async_extractor(request: object) -> str:
+        return "a"
+
+    config.extension_config["sanic"]["tenant_extractor"] = (
+        async_extractor if identity == "awaitable" else lambda request: raw
+    )
+    original = config.provide_connection
+
+    def provide_connection(pool: object) -> object:
+        seen.append(TenantContext.get())
+        return original(pool)
+
+    config.provide_connection = provide_connection
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin.init_app(Sanic("tenant_" + uuid4().hex))
+    request = _make_request(pool=object())
+    with TenantContext.scope("outer"):
+        await plugin._on_request(request)
+        await plugin._on_response(request, SimpleNamespace(status=200))
+        await plugin._on_response(request, SimpleNamespace(status=200))
+        assert TenantContext.get_tenant_id() == "outer"
+    expected = None if raw is None else raw if isinstance(raw, TenantContextPayload) else TenantContextPayload(raw)
+    assert seen == [expected]
+
+
+@pytest.mark.parametrize("failure", ["extractor", "acquire", "release", "complete"])
+async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    def extractor(request: object) -> str:
+        if failure == "extractor":
+            raise ValueError("auth")
+        return "a"
+
+    config = _make_config(connection=_make_connection())
+    config.extension_config["sanic"]["tenant_extractor"] = extractor
+    if failure == "acquire":
+        config.provide_connection.side_effect = ValueError("acquire")
+    if failure == "release":
+        config.provide_connection.return_value.__aexit__ = AsyncMock(side_effect=ValueError("release"))
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin.init_app(Sanic("failure_" + uuid4().hex))
+    request = _make_request(pool=object())
+    with TenantContext.scope("outer"):
+        if failure in {"extractor", "acquire"}:
+            with pytest.raises(ValueError):
+                await plugin._on_request(request)
+        else:
+            await plugin._on_request(request)
+            if failure == "complete":
+                await plugin._on_request_complete(request=request)
+            else:
+                with pytest.raises(ValueError):
+                    await plugin._on_response(request, SimpleNamespace(status=200))
+        assert TenantContext.get_tenant_id() == "outer"
+
+
+@pytest.mark.parametrize("disable_di", [False, True])
+async def test_sanic_tenant_extractor_required_for_injected_config(disable_di: bool) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = _make_config(connection=_make_connection(), disable_di=disable_di)
+    config.driver_features["tenant_strategy"] = object()
+    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    app = Sanic("validation_" + uuid4().hex)
+    if disable_di:
+        plugin.init_app(app)
+    else:
+        with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
+            plugin.init_app(app)
+
+
+async def test_sanic_rejects_conflicting_tenant_extractors() -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    configs = []
+    for index in range(2):
+        config = _make_config(connection=_make_connection())
+        config.extension_config["sanic"].update({
+            "session_key": f"session{index}",
+            "connection_key": f"connection{index}",
+            "pool_key": f"pool{index}",
+            "tenant_extractor": lambda request: "a",
+        })
+        configs.append(config)
+    plugin = SQLSpecPlugin(MagicMock(configs=dict(enumerate(configs))))
+    with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
+        plugin.init_app(Sanic("conflict_" + uuid4().hex))
