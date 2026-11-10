@@ -134,14 +134,14 @@ async def test_tenant_lease_normalizes_strategy_state_to_captured_payload(asynch
     async def async_value(value: Any) -> Any:
         return value
 
+    async def async_checkin(conn: object, state: TenantLeaseState) -> None:
+        checked_in.append(state)
+
     if asynchronous:
         lease: SyncTenantLease | AsyncTenantLease = AsyncTenantLease(
             cast(
                 "AsyncTenantStrategy",
-                SimpleNamespace(
-                    checkout=lambda conn, payload: async_value(returned),
-                    checkin=lambda conn, state: async_value(checked_in.append(state)),
-                ),
+                SimpleNamespace(checkout=lambda conn, payload: async_value(returned), checkin=async_checkin),
             ),
             acquire=lambda: async_value(connection),
             release=lambda conn: async_value(None),

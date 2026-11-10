@@ -215,9 +215,14 @@ async def test_tenant_extractor_binds_and_resets_sanic_request(identity: str) ->
 
     from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
-    raw = {"a": "a", "uuid": UUID(int=1), "bypass": TenantContextPayload.bypass(), "none": None, "awaitable": "a"}[
-        identity
-    ]
+    identities: dict[str, str | UUID | TenantContextPayload | None] = {
+        "a": "a",
+        "uuid": UUID(int=1),
+        "bypass": TenantContextPayload.bypass(),
+        "none": None,
+        "awaitable": "a",
+    }
+    raw = identities[identity]
     seen = []
     config = _make_config(connection=_make_connection())
 

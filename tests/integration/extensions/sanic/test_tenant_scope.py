@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import pytest
 from sanic import Request, Sanic, response
-from sanic_testing.reusable import ReusableClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -14,6 +13,7 @@ from sqlspec.extensions.sanic import SQLSpecPlugin
 from tests.integration.fixtures.tenant import tenant_policy_database as tenant_policy_database
 
 pytestmark = pytest.mark.xdist_group("postgres")
+ReusableClient = pytest.importorskip("sanic_testing.reusable").ReusableClient
 
 
 @pytest.mark.parametrize("adapter", ["asyncpg", "psycopg"])

@@ -170,7 +170,13 @@ def test_tenant_extractor_binds_before_flask_acquisition(
 
     from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
-    raw = {"a": "a", "uuid": UUID(int=1), "bypass": TenantContextPayload.bypass(), "none": None}[identity]
+    identities: dict[str, str | UUID | TenantContextPayload | None] = {
+        "a": "a",
+        "uuid": UUID(int=1),
+        "bypass": TenantContextPayload.bypass(),
+        "none": None,
+    }
+    raw = identities[identity]
     seen = []
 
     def extractor() -> Any:

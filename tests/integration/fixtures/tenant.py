@@ -24,7 +24,14 @@ def tenant_policy_database(postgres_service: "PostgresService") -> Iterator[tupl
     }
     suffix = uuid4().hex[:12]
     role, table = "tenant_framework_" + suffix, "tenant_rows_" + suffix
-    with psycopg.connect(**credentials, autocommit=True) as admin:
+    with psycopg.connect(
+        host=postgres_service.host,
+        port=postgres_service.port,
+        user=postgres_service.user,
+        password=postgres_service.password,
+        dbname=postgres_service.database,
+        autocommit=True,
+    ) as admin:
         admin.execute(
             SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(
                 Identifier(role), Literal(postgres_service.password)
