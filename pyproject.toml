@@ -380,7 +380,7 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin,DOUB"
+ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin,DOUB,checkin"
 skip = 'uv.lock'
 
 [tool.coverage.run]

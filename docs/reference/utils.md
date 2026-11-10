@@ -73,6 +73,18 @@ Prefer scopes for automatic restoration. For manual binding, `set(payload)` or `
 
 Invalid identities, variable entries, bypass payloads, or values passed to `set()` raise `TenantContextError`, a subclass of both `SQLSpecError` and `ValueError`. Token misuse follows `ContextVar.reset()` errors. `TenantCleanupError` is exported for connection cleanup failures; context scopes do not raise it.
 
+All `TenantContext` methods are class methods:
+
+| Method | Return and behavior |
+| --- | --- |
+| `get()` | Current `TenantContextPayload`, or `None` when unset. |
+| `get_tenant_id()` | Current identity string, or `None` when unset or bypassed. |
+| `is_bypassed()` | Whether explicit bypass state is active. |
+| `set(payload)` | Restoration token; accepts `TenantContextPayload` or `None`. |
+| `reset(token)` | Restores the preceding state; returns `None`. |
+| `scope(tenant_id, *, variables=None)` | Sync context manager yielding a payload; accepts a string, UUID, or existing payload. |
+| `bypass()` | Sync context manager yielding `TenantContextPayload.bypass()`. |
+
 ::: sqlspec.utils.tenant.TenantContextPayload
     options:
       heading_level: 4
@@ -81,7 +93,7 @@ Invalid identities, variable entries, bypass payloads, or values passed to `set(
 ::: sqlspec.utils.tenant.TenantContext
     options:
       heading_level: 4
-      members: [get, get_tenant_id, is_bypassed, set, reset, scope, bypass]
+      members: false
 
 ::: sqlspec.utils.tenant.async_tenant_scope
     options:
