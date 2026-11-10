@@ -10,6 +10,7 @@ from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgPool,
     CockroachAsyncpgPoolConfig,
     CockroachAsyncpgRetryConfig,
+    CockroachAsyncpgRLSStrategy,
 )
 ```
 
@@ -44,6 +45,19 @@ Asynchronous CockroachDB adapter built on `asyncpg` with `SQLSTATE 40001` serial
     options:
       heading_level: 3
       members: false
+
+## Tenant Strategies
+
+Set `driver_features={"tenant_strategy": "rls"}`; `"default"` and `True` select the CockroachDB strategy. Omitted or `None` pooler mode becomes `"session"`; transaction, statement, and auto modes are rejected. Both providers acquire through the tenant lease. Dirty connections are terminated and released to native pool bookkeeping only after physical disposal.
+
+One management query captures/applies owned GUCs; another restores/verifies them. Unset owned keys restore to an empty string because NULL does not reset a CockroachDB setting. Cleanup uses no blanket RESET ALL. Existing retry and follower-read behavior remains available; database policies must enforce tenant access.
+
+Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
+
+::: sqlspec.adapters.cockroach_asyncpg.CockroachAsyncpgRLSStrategy
+    options:
+      heading_level: 3
+      members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary
 

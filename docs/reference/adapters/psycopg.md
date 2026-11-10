@@ -11,6 +11,8 @@ from sqlspec.adapters.psycopg import (
     PsycopgSyncConfig,
     PsycopgSyncDriver,
     PsycopgSyncExceptionHandler,
+    PsycopgSyncRLSStrategy,
+    PsycopgAsyncRLSStrategy,
 )
 ```
 
@@ -45,6 +47,30 @@ Synchronous and asynchronous PostgreSQL adapters built on `psycopg` v3 and `psyc
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+## Tenant Strategies
+
+Set `driver_features={"tenant_strategy": "rls"}` to protect both `provide_session()` and `provide_connection()`. `"default"` and `True` select the mode-specific strategy. Both configs accept structural strategy instances, including unhashable ones. Missing scope raises `TenantContextError`; failed cleanup physically closes the connection and raises `TenantCleanupError` when no body exception is pending.
+
+Tenant mode defaults `pooler_mode` to `"session"` and rejects transaction, statement, and auto modes. `close_returns=True` is rejected because invalidation must physically close the connection. Normal exit retains the native pool's commit behavior; exceptional exit rolls back. Management queries run in their own finished transactions when autocommit is disabled. Each boundary uses one capture/apply or restore/verify query, with transaction completion as a separate operation.
+
+See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy setup and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md) for workers and cleanup.
+
+::: sqlspec.adapters.psycopg.PsycopgSyncRLSStrategy
+    options:
+      heading_level: 3
+      members:
+        - __init__
+        - checkout
+        - checkin
+
+::: sqlspec.adapters.psycopg.PsycopgAsyncRLSStrategy
+    options:
+      heading_level: 3
+      members:
+        - __init__
+        - checkout
+        - checkin
 
 ## Driver, Pool & Data Dictionary
 
