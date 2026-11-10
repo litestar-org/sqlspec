@@ -1,7 +1,7 @@
 """Session RLS identity for synchronous and asynchronous psycopg pools."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from psycopg import pq
 from psycopg.rows import tuple_row
@@ -29,7 +29,8 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
         with connection.cursor(row_factory=tuple_row) as cursor:
-            cursor.execute(*psycopg_setting_query(sql, params))
+            query, binds = psycopg_setting_query(sql, params)
+            cursor.execute(cast("LiteralString", query), binds)
             state = self.capture(payload, params, cursor.fetchone())
         if not connection.autocommit:
             connection.commit()
@@ -44,7 +45,8 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
                 connection.rollback()
             sql, params = self.prepare_checkin(state)
             with connection.cursor(row_factory=tuple_row) as cursor:
-                cursor.execute(*psycopg_setting_query(sql, params))
+                query, binds = psycopg_setting_query(sql, params)
+                cursor.execute(cast("LiteralString", query), binds)
                 self.verify_checkin(params, cursor.fetchone())
             if not connection.autocommit:
                 connection.commit()
@@ -67,7 +69,8 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
         async with connection.cursor(row_factory=tuple_row) as cursor:
-            await cursor.execute(*psycopg_setting_query(sql, params))
+            query, binds = psycopg_setting_query(sql, params)
+            await cursor.execute(cast("LiteralString", query), binds)
             state = self.capture(payload, params, await cursor.fetchone())
         if not connection.autocommit:
             await connection.commit()
@@ -82,7 +85,8 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
                 await connection.rollback()
             sql, params = self.prepare_checkin(state)
             async with connection.cursor(row_factory=tuple_row) as cursor:
-                await cursor.execute(*psycopg_setting_query(sql, params))
+                query, binds = psycopg_setting_query(sql, params)
+                await cursor.execute(cast("LiteralString", query), binds)
                 self.verify_checkin(params, await cursor.fetchone())
             if not connection.autocommit:
                 await connection.commit()

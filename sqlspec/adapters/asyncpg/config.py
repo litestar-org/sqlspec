@@ -217,7 +217,7 @@ class AsyncpgDriverFeatures(TypedDict):
     """External pooler compatibility mode; sets ``statement_cache_size=0`` in ``transaction`` or ``statement`` mode."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
-    tenant_strategy: NotRequired["AsyncTenantStrategy | TenantStrategyShorthand"]
+    tenant_strategy: NotRequired["AsyncTenantStrategy | TenantStrategyShorthand | None"]
     """Opt-in tenant strategy or ``rls`` shorthand applied to every session lease."""
     tenant_session_baseline: NotRequired["Mapping[str, str]"]
     """Declared session settings replayed before each tenant checkout."""
