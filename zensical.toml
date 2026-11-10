@@ -47,7 +47,11 @@ nav = [
     { "Recipes" = [
       "learn/recipes/index.md",
       { "Service Layer" = "learn/recipes/service-layer.md" },
-      { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
+      { "Multi-Tenancy" = [
+        "learn/recipes/multi-tenancy.md",
+        { "Frameworks" = "learn/recipes/multi-tenancy-frameworks.md" },
+        { "Operations" = "learn/recipes/multi-tenancy-operations.md" },
+      ] },
       { "Health Checks" = "learn/recipes/health-checks.md" },
       { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
     ] },
@@ -146,6 +150,7 @@ nav = [
       { "Service Layer" = "reference/service.md" },
       { "Dialects" = "reference/dialects.md" },
       { "Utilities" = "reference/utils.md" },
+      { "Tenant APIs" = "reference/tenant.md" },
     ] },
     { "Extensions" = [
       "reference/extensions/index.md",
