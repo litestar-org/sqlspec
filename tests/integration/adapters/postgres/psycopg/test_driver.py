@@ -1,6 +1,6 @@
 """Integration tests for psycopg driver implementation."""
 
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from typing import Any, cast
 
 import pytest
@@ -347,12 +347,12 @@ async def test_tenant_rls_reuse_and_transaction_ownership(
         return await value if inspect.isawaitable(value) else value
 
     @asynccontextmanager
-    async def session_scope() -> Any:
+    async def session_scope() -> AsyncIterator[Any]:
         if asynchronous:
-            async with config.provide_session() as session:
+            async with cast("PsycopgAsyncConfig", config).provide_session() as session:
                 yield session
         else:
-            with config.provide_session() as session:
+            with cast("PsycopgSyncConfig", config).provide_session() as session:
                 yield session
 
     quoted_table = Identifier(table).as_string(admin)

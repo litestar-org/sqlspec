@@ -1,16 +1,21 @@
 """Sync and async psycopg tenant management obey identical session contracts."""
 
-from typing import Any, Self
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import pytest
 from psycopg import pq
 
 from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
+from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
 
+if TYPE_CHECKING:
+    from sqlspec.adapters.psycopg import PsycopgAsyncConnection, PsycopgSyncConnection
 
-class GucCursor:
+
+class GucCursorBase:
     def __init__(self, connection: "GucConnection") -> None:
         self.connection = connection
         self.row: tuple[str | None, ...] = ()
@@ -42,6 +47,8 @@ class GucCursor:
         self.row = tuple(values)
         self.connection.info.transaction_status = pq.TransactionStatus.INTRANS
 
+
+class GucCursor(GucCursorBase):
     def execute(self, sql: str | bytes, params: dict[str, str]) -> None:
         self.apply(sql, params)
 
@@ -49,7 +56,7 @@ class GucCursor:
         return self.row
 
 
-class AsyncGucCursor(GucCursor):
+class AsyncGucCursor(GucCursorBase):
     async def execute(self, sql: str | bytes, params: dict[str, str]) -> None:
         self.apply(sql, params)
 
@@ -61,14 +68,14 @@ class GucConnection:
     def __init__(self, asynchronous: bool, autocommit: bool = False) -> None:
         self.asynchronous = asynchronous
         self.autocommit = autocommit
-        self.info = type("ConnectionInfo", (), {"transaction_status": pq.TransactionStatus.IDLE})()
+        self.info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
         self.settings: dict[str, str | None] = {"app.current_tenant_id": "before"}
         self.calls: list[tuple[str, dict[str, str]]] = []
         self.commits = 0
         self.rollbacks = 0
         self.corrupt = False
 
-    def cursor(self, **_: Any) -> GucCursor:
+    def cursor(self, **_: Any) -> GucCursor | AsyncGucCursor:
         return AsyncGucCursor(self) if self.asynchronous else GucCursor(self)
 
     def commit(self) -> Any:
@@ -85,23 +92,37 @@ class GucConnection:
         pass
 
 
+async def checkout(
+    strategy: PsycopgAsyncRLSStrategy | PsycopgSyncRLSStrategy, connection: GucConnection, payload: TenantContextPayload
+) -> TenantLeaseState:
+    if isinstance(strategy, PsycopgAsyncRLSStrategy):
+        return await strategy.checkout(cast("PsycopgAsyncConnection", connection), payload)
+    return strategy.checkout(cast("PsycopgSyncConnection", connection), payload)
+
+
+async def checkin(
+    strategy: PsycopgAsyncRLSStrategy | PsycopgSyncRLSStrategy, connection: GucConnection, state: TenantLeaseState
+) -> None:
+    if isinstance(strategy, PsycopgAsyncRLSStrategy):
+        await strategy.checkin(cast("PsycopgAsyncConnection", connection), state)
+    else:
+        strategy.checkin(cast("PsycopgSyncConnection", connection), state)
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("autocommit", [False, True])
 async def test_tenant_manages_bound_identity_and_restores(asynchronous: bool, autocommit: bool) -> None:
     connection = GucConnection(asynchronous, autocommit)
     strategy = PsycopgAsyncRLSStrategy() if asynchronous else PsycopgSyncRLSStrategy()
     payload = TenantContextPayload("a'; DROP")
-    state = await strategy.checkout(connection, payload) if asynchronous else strategy.checkout(connection, payload)
+    state = await checkout(strategy, connection, payload)
     assert state.baseline["app.current_tenant_id"] == "before"
     assert connection.settings["app.current_tenant_id"] == "a'; DROP"
     assert len(connection.calls) == 1
     assert "a'; DROP" not in connection.calls[0][0]
     assert connection.commits == int(not autocommit)
     connection.info.transaction_status = pq.TransactionStatus.INTRANS
-    if asynchronous:
-        await strategy.checkin(connection, state)
-    else:
-        strategy.checkin(connection, state)
+    await checkin(strategy, connection, state)
     assert connection.settings["app.current_tenant_id"] == "before"
     assert connection.rollbacks == 1
     assert connection.commits == 2 * int(not autocommit)
@@ -115,16 +136,10 @@ async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: b
     payload = TenantContextPayload("a")
     connection.info.transaction_status = pq.TransactionStatus.INTRANS
     with pytest.raises(TenantContextError):
-        if asynchronous:
-            await strategy.checkout(connection, payload)
-        else:
-            strategy.checkout(connection, payload)
+        await checkout(strategy, connection, payload)
     assert connection.calls == []
     connection.info.transaction_status = pq.TransactionStatus.IDLE
-    state = await strategy.checkout(connection, payload) if asynchronous else strategy.checkout(connection, payload)
+    state = await checkout(strategy, connection, payload)
     connection.corrupt = True
     with pytest.raises(TenantCleanupError):
-        if asynchronous:
-            await strategy.checkin(connection, state)
-        else:
-            strategy.checkin(connection, state)
+        await checkin(strategy, connection, state)

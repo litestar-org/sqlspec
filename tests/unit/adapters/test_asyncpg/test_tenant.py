@@ -1,6 +1,6 @@
 """Tenant session state is bound, verified, and restored through one SQL call."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -8,6 +8,9 @@ from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
 from sqlspec.adapters.asyncpg.tenant import apply_session_baseline, validate_asyncpg_tenant_config
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.asyncpg import AsyncpgConnection
 
 
 class FakeGucConnection:
@@ -19,6 +22,10 @@ class FakeGucConnection:
         self.busy = False
         self.corrupt = False
         self.missing = False
+
+    @property
+    def native(self) -> "AsyncpgConnection":
+        return cast("AsyncpgConnection", self)
 
     def is_in_transaction(self) -> bool:
         return self.busy
@@ -61,12 +68,12 @@ async def test_tenant_captures_and_restores_owned_settings_once() -> None:
     connection = FakeGucConnection({"app.Tenant": "previous", "unrelated": "leave"})
     strategy = AsyncpgRLSStrategy(tenant_key="app.Tenant", variable_keys={"z": "app.Z", "a": "app.A"})
     payload = TenantContextPayload("a'; DROP", variables={"z": "2", "a": "1"})
-    state = await strategy.checkout(connection, payload)
+    state = await strategy.checkout(connection.native, payload)
     assert dict(state.baseline) == {"app.Tenant": "previous", "app.A": None, "app.Z": None}
     assert connection.calls[0][1] == ("app.Tenant", "a'; DROP", "app.A", "1", "app.Z", "2")
     assert "a'; DROP" not in connection.calls[0][0]
     assert connection.settings["app.Tenant"] == "a'; DROP"
-    await strategy.checkin(connection, state)
+    await strategy.checkin(connection.native, state)
     assert len(connection.calls) == 2
     assert connection.settings == {"app.Tenant": "previous", "unrelated": "leave", "app.A": "", "app.Z": ""}
 
@@ -74,10 +81,10 @@ async def test_tenant_captures_and_restores_owned_settings_once() -> None:
 async def test_tenant_schema_restore_and_subset() -> None:
     connection = FakeGucConnection()
     strategy = AsyncpgRLSStrategy(variable_keys={"a": "app.a", "b": "app.b"}, schema_resolver=lambda _: "tenant_a")
-    state = await strategy.checkout(connection, TenantContextPayload("a", variables={"b": "2"}))
+    state = await strategy.checkout(connection.native, TenantContextPayload("a", variables={"b": "2"}))
     assert connection.settings["search_path"] == '"tenant_a"'
     assert connection.calls[0][1] == ("app.current_tenant_id", "a", "app.b", "2", "search_path", '"tenant_a"')
-    await strategy.checkin(connection, state)
+    await strategy.checkin(connection.native, state)
     assert connection.settings["search_path"] == '"$user", public'
 
 
@@ -90,7 +97,7 @@ async def test_tenant_checkout_fails_closed(case: str) -> None:
     strategy = AsyncpgRLSStrategy(schema_resolver=(lambda _: "bad;schema") if case == "schema" else None)
     payload = TenantContextPayload("a", variables={"region": "eu"} if case == "unmapped" else None)
     with pytest.raises(TenantContextError):
-        await strategy.checkout(connection, payload)
+        await strategy.checkout(connection.native, payload)
     if case in {"busy", "unmapped", "schema"}:
         assert connection.calls == []
 
@@ -99,18 +106,18 @@ async def test_tenant_checkout_fails_closed(case: str) -> None:
 async def test_tenant_checkin_requires_verified_readback(missing: bool) -> None:
     connection = FakeGucConnection()
     strategy = AsyncpgRLSStrategy()
-    state = await strategy.checkout(connection, TenantContextPayload("a"))
+    state = await strategy.checkout(connection.native, TenantContextPayload("a"))
     connection.missing = missing
     connection.corrupt = not missing
     with pytest.raises(TenantCleanupError):
-        await strategy.checkin(connection, state)
+        await strategy.checkin(connection.native, state)
 
 
 async def test_tenant_baseline_replay_is_batched() -> None:
     connection = FakeGucConnection()
-    await apply_session_baseline(connection, {})
+    await apply_session_baseline(connection.native, {})
     assert connection.calls == []
-    await apply_session_baseline(connection, {"timezone": "UTC", "statement_timeout": "5000"})
+    await apply_session_baseline(connection.native, {"timezone": "UTC", "statement_timeout": "5000"})
     assert len(connection.calls) == 1
     assert connection.settings == {"timezone": "UTC", "statement_timeout": "5000"}
 
@@ -145,8 +152,8 @@ def test_tenant_baseline_validates_values_and_conflicts() -> None:
 async def test_tenant_preserves_empty_search_path_baseline() -> None:
     connection = FakeGucConnection({"search_path": ""})
     strategy = AsyncpgRLSStrategy(schema_resolver=lambda _: "tenant_a")
-    state = await strategy.checkout(connection, TenantContextPayload("a"))
-    await strategy.checkin(connection, state)
+    state = await strategy.checkout(connection.native, TenantContextPayload("a"))
+    await strategy.checkin(connection.native, state)
     assert connection.settings["search_path"] == ""
 
 

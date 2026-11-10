@@ -1033,9 +1033,9 @@ async def test_tenant_standalone_connection_is_rejected(asynchronous: bool) -> N
     config = config_type(driver_features={"tenant_strategy": "rls"})
     with pytest.raises(ImproperConfigurationError, match="lease"):
         if asynchronous:
-            await config.create_connection()
+            await cast("PsycopgAsyncConfig", config).create_connection()
         else:
-            config.create_connection()
+            cast("PsycopgSyncConfig", config).create_connection()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -1074,10 +1074,10 @@ async def test_tenant_prepare_failure_releases_native_context(
     monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
     with TenantContext.scope(payload), pytest.raises(RuntimeError) as caught:
         if asynchronous:
-            async with config.provide_session():
+            async with cast("PsycopgAsyncConfig", config).provide_session():
                 pass
         else:
-            with config.provide_session():
+            with cast("PsycopgSyncConfig", config).provide_session():
                 pass
     assert caught.value is error
     if asynchronous:

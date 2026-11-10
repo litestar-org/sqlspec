@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -12,12 +12,19 @@ from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
+if TYPE_CHECKING:
+    from sqlspec.adapters.psqlpy import PsqlpyConnection
+
 
 class GucConnection:
     def __init__(self) -> None:
         self.settings: dict[str, str | None] = {"app.current_tenant_id": "before", "search_path": ""}
         self.calls: list[tuple[str, list[str]]] = []
         self.corrupt = False
+
+    @property
+    def native(self) -> "PsqlpyConnection":
+        return cast("PsqlpyConnection", self)
 
     async def fetch_row(self, sql: str, params: list[str]) -> Any:
         self.calls.append((sql, params))
@@ -49,21 +56,21 @@ async def test_tenant_binds_and_restores_a_snapshot_in_one_call() -> None:
     strategy = PsqlpyRLSStrategy(variable_keys=mapping, schema_resolver=lambda _: "public")
     mapping["region"] = "app.current_tenant_id"
     connection = GucConnection()
-    state = await strategy.checkout(connection, TenantContextPayload("a'; DROP", variables={"region": "eu"}))
+    state = await strategy.checkout(connection.native, TenantContextPayload("a'; DROP", variables={"region": "eu"}))
     assert state.baseline["app.current_tenant_id"] == "before"
     assert connection.settings["app.current_tenant_id"] == "a'; DROP"
     assert connection.settings["app.region"] == "eu"
     assert len(connection.calls) == 1
     assert "a'; DROP" not in connection.calls[0][0]
     assert isinstance(connection.calls[0][1], list)
-    await strategy.checkin(connection, state)
+    await strategy.checkin(connection.native, state)
     assert connection.settings == {"app.current_tenant_id": "before", "app.region": "", "search_path": ""}
     assert len(connection.calls) == 2
     connection.corrupt = True
     with pytest.raises(TenantCleanupError):
-        await strategy.checkin(connection, state)
+        await strategy.checkin(connection.native, state)
     with pytest.raises(TenantContextError):
-        await PsqlpyRLSStrategy().checkout(connection, TenantContextPayload("a", variables={"region": "eu"}))
+        await PsqlpyRLSStrategy().checkout(connection.native, TenantContextPayload("a", variables={"region": "eu"}))
 
 
 @pytest.mark.parametrize("disposal", ["closed", "live", "timeout", "aborted"])
