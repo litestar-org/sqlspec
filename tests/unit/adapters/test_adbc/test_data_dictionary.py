@@ -670,3 +670,99 @@ def test_normalize_native_columns_marks_autoincrement_and_generated() -> None:
 
     assert by_name["id"]["is_identity"] is True
     assert by_name["slug"]["is_generated"] is True
+
+
+def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None:
+    """Snowflake fallback queries information_schema and normalizes uppercase row keys."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.side_effect = [
+        [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
+        [
+            {
+                "SCHEMA_NAME": "PUBLIC",
+                "TABLE_NAME": "LS_SESS",
+                "COLUMN_NAME": "SESSION_ID",
+                "DATA_TYPE": "TEXT",
+                "ORDINAL_POSITION": 1,
+                "IS_NULLABLE": "NO",
+                "COLUMN_DEFAULT": None,
+            }
+        ],
+    ]
+
+    tables = dictionary.get_tables(driver)
+    columns = dictionary.get_columns(driver, table="ls_sess", schema="PUBLIC")
+
+    assert tables == [{"schema_name": "PUBLIC", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
+    assert columns[0]["column_name"] == "SESSION_ID"
+    assert columns[0]["data_type"] == "TEXT"
+
+
+def test_oracle_and_db2_index_fallback_normalizes_rows() -> None:
+    """Oracle and Db2 SQL index fallbacks normalize uppercase keys and column lists."""
+    dictionary = AdbcDataDictionary()
+
+    oracle_driver = Mock()
+    oracle_driver.dialect = "oracle"
+    oracle_driver.select.return_value = [
+        {
+            "SCHEMA_NAME": "APP",
+            "INDEX_NAME": "IDX_SESS_EXP",
+            "TABLE_NAME": "LS_SESS",
+            "IS_UNIQUE": 0,
+            "IS_PRIMARY": 0,
+            "COLUMNS": "EXPIRES_AT,SESSION_ID",
+        }
+    ]
+    oracle_indexes = dictionary.get_indexes(oracle_driver, table="ls_sess")
+    assert oracle_indexes[0]["index_name"] == "IDX_SESS_EXP"
+    assert oracle_indexes[0]["columns"] == ["EXPIRES_AT", "SESSION_ID"]
+
+    db2_driver = Mock()
+    db2_driver.dialect = "db2"
+    db2_driver.select.return_value = [
+        {
+            "SCHEMA_NAME": "DB2INST1",
+            "TABLE_NAME": "ADK_SESS",
+            "INDEX_NAME": "IDX_ADK_SESS_APP_USER",
+            "COLUMN_NAME": "APP_NAME",
+            "COLUMN_POSITION": 1,
+            "IS_UNIQUE": 0,
+            "IS_PRIMARY": 0,
+        },
+        {
+            "SCHEMA_NAME": "DB2INST1",
+            "TABLE_NAME": "ADK_SESS",
+            "INDEX_NAME": "IDX_ADK_SESS_APP_USER",
+            "COLUMN_NAME": "USER_ID",
+            "COLUMN_POSITION": 2,
+            "IS_UNIQUE": 0,
+            "IS_PRIMARY": 0,
+        },
+    ]
+    db2_indexes = dictionary.get_indexes(db2_driver, table="adk_sess")
+    assert len(db2_indexes) == 1
+    assert db2_indexes[0]["index_name"] == "IDX_ADK_SESS_APP_USER"
+    assert db2_indexes[0]["columns"] == ["APP_NAME", "USER_ID"]
+
+
+def test_snowflake_tables_and_columns_filter_permutations() -> None:
+    """Snowflake SQL catalog fallback supports schema-scoped, table-scoped, and unfiltered queries."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "SESS", "COLUMN_NAME": "ID"}]
+
+    schema_tables = dictionary.get_tables(driver, schema="PUBLIC")
+    table_cols = dictionary.get_columns(driver, table="sess")
+    schema_cols = dictionary.get_columns(driver, schema="PUBLIC")
+    all_cols = dictionary.get_columns(driver)
+
+    assert schema_tables[0]["table_name"] == "SESS"
+    assert table_cols[0]["column_name"] == "ID"
+    assert schema_cols[0]["column_name"] == "ID"
+    assert all_cols[0]["column_name"] == "ID"

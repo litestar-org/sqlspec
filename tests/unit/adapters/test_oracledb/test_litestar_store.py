@@ -1,14 +1,19 @@
 """Unit tests for Oracle Litestar session store behavior."""
 
+import inspect
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleAsyncStore, OracleSyncStore
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+from sqlspec.migrations.context import MigrationContext
 
 
 class _FakeCursor:
@@ -215,3 +220,149 @@ async def test_session_renewal_binds_each_sql_placeholder(is_async: bool) -> Non
     assert cursor.execute.call_count == 2
     assert cursor.execute.call_args.args[1] == (60, 60, "session-1")
     connection.commit.assert_called_once()
+
+
+def test_oracle_stores_build_companion_index_for_bare_table() -> None:
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "litestar_session"}},
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "litestar_session"}},
+    )
+    sync_store = OracleSyncStore(sync_cfg)
+    async_store = OracleAsyncStore(async_cfg)
+
+    for store in (sync_store, async_store):
+        targets = store.get_schema_targets()
+        assert len(targets) == 1
+        assert targets[0].table_name == "litestar_session"
+        assert targets[0].schema is None
+        assert [col.name for col in targets[0].create_table.columns] == [
+            "session_id",
+            "data",
+            "expires_at",
+            "created_at",
+            "updated_at",
+        ]
+        indexes = store.get_companion_indexes()
+        assert len(indexes) == 1
+        assert indexes[0].name == "idx_litestar_session_expires_at"[:30]
+        assert indexes[0].table == "litestar_session"
+        assert indexes[0].schema is None
+        assert "SQLCODE NOT IN (-955, -1408)" in indexes[0].ddl
+
+
+@pytest.mark.anyio
+async def test_oracle_reconcile_creates_missing_companion_index_sync_and_async() -> None:
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"}},
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"}},
+    )
+    existing_tables = [{"table_name": "LITESTAR_SESSION"}]
+    existing_columns = [
+        {"column_name": "SESSION_ID", "data_type": "VARCHAR2", "nullable": False},
+        {"column_name": "DATA", "data_type": "BLOB", "nullable": False},
+        {"column_name": "EXPIRES_AT", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": True},
+        {"column_name": "CREATED_AT", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": False},
+        {"column_name": "UPDATED_AT", "data_type": "TIMESTAMP(6) WITH TIME ZONE", "nullable": False},
+    ]
+    upper_index_row = [{"index_name": "IDX_LITESTAR_SESSION_EXPIRES_A", "table_name": "LITESTAR_SESSION"}]
+
+    sync_missing = MagicMock()
+    sync_missing.dialect = "oracle"
+    sync_missing.data_dictionary.get_tables.return_value = existing_tables
+    sync_missing.data_dictionary.get_columns.return_value = existing_columns
+    sync_missing.data_dictionary.get_indexes.return_value = []
+
+    assert litestar_reconcile(MigrationContext(config=sync_cfg, driver=sync_missing)) is None
+    assert sync_missing.execute_script.call_count == 1
+    sync_ddl = str(sync_missing.execute_script.call_args.args[0])
+    assert "CREATE INDEX idx_litestar_session_expires_a" in sync_ddl
+    assert "SQLCODE NOT IN (-955, -1408)" in sync_ddl
+    sync_missing.commit.assert_not_called()
+
+    sync_present = MagicMock()
+    sync_present.dialect = "oracle"
+    sync_present.data_dictionary.get_tables.return_value = existing_tables
+    sync_present.data_dictionary.get_columns.return_value = existing_columns
+    sync_present.data_dictionary.get_indexes.return_value = upper_index_row
+
+    assert litestar_reconcile(MigrationContext(config=sync_cfg, driver=sync_present)) is None
+    sync_present.execute_script.assert_not_called()
+    sync_present.commit.assert_not_called()
+
+    async_missing = SimpleNamespace(
+        dialect="oracle",
+        data_dictionary=SimpleNamespace(
+            get_tables=AsyncMock(return_value=existing_tables),
+            get_columns=AsyncMock(return_value=existing_columns),
+            get_indexes=AsyncMock(return_value=[]),
+        ),
+        execute_script=AsyncMock(),
+        commit=AsyncMock(),
+    )
+    coro = litestar_reconcile(MigrationContext(config=async_cfg, driver=cast("Any", async_missing)))
+    assert inspect.isawaitable(coro)
+    await coro
+    async_missing.execute_script.assert_awaited_once()
+    assert "SQLCODE NOT IN (-955, -1408)" in str(async_missing.execute_script.await_args.args[0])
+    async_missing.commit.assert_not_awaited()
+
+    async_present = SimpleNamespace(
+        dialect="oracle",
+        data_dictionary=SimpleNamespace(
+            get_tables=AsyncMock(return_value=existing_tables),
+            get_columns=AsyncMock(return_value=existing_columns),
+            get_indexes=AsyncMock(return_value=upper_index_row),
+        ),
+        execute_script=AsyncMock(),
+        commit=AsyncMock(),
+    )
+    coro_present = litestar_reconcile(MigrationContext(config=async_cfg, driver=cast("Any", async_present)))
+    assert inspect.isawaitable(coro_present)
+    await coro_present
+    async_present.execute_script.assert_not_awaited()
+    async_present.commit.assert_not_awaited()
+
+
+def test_oracle_stores_accept_qualified_session_table_names() -> None:
+    """Oracle sync and async stores accept validated schema.table names and scope targets and indexes."""
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "APP.litestar_session"}},
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"},
+        extension_config={"litestar": {"session_table": "APP.litestar_session"}},
+    )
+
+    for store in (OracleSyncStore(sync_cfg), OracleAsyncStore(async_cfg)):
+        target = store.get_schema_targets()[0]
+        index = store.get_companion_indexes()[0]
+        assert target.schema == "APP"
+        assert target.table_name == "litestar_session"
+        assert index.schema == "APP"
+        assert index.table == "litestar_session"
+        assert index.name == "idx_APP_litestar_session_expir"
+        assert "ON APP.litestar_session(expires_at)" in index.ddl
+
+
+@pytest.mark.parametrize("invalid_name", ["", "   ", "A.B.C", "APP..T", ".T", "APP.", "bad;drop", "x" * 64])
+def test_oracle_stores_reject_invalid_qualified_session_table_names(invalid_name: str) -> None:
+    """Oracle sync and async stores raise ValueError for malformed or unsafe session_table names."""
+    sync_cfg = OracleSyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"}, extension_config={"litestar": {"session_table": invalid_name}}
+    )
+    async_cfg = OracleAsyncConfig(
+        connection_config={"dsn": "localhost/FREEPDB1"}, extension_config={"litestar": {"session_table": invalid_name}}
+    )
+    with pytest.raises(ValueError):
+        OracleSyncStore(sync_cfg)
+    with pytest.raises(ValueError):
+        OracleAsyncStore(async_cfg)

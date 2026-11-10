@@ -1,5 +1,6 @@
 """Spanner ADK store."""
 
+import re
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, cast
@@ -32,6 +33,7 @@ from sqlspec.extensions.adk import (
 )
 from sqlspec.extensions.adk._table_utils import ensure_table_name
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -58,6 +60,22 @@ __all__ = (
 _SPANNER_DIALECT = Spanner
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 _DDL_TIMEOUT_SECONDS = 300
+_SPANNER_VECTOR_LENGTH = re.compile(r"\(vector_length=>\d+\)")
+
+
+def _parse_spanner_target(table: str, ddl: str) -> SchemaTarget:
+    """Parse Spanner DDL, removing vector_length only for parsing and keeping the original statement."""
+    parsed = SchemaTarget.from_ddl(table, _SPANNER_VECTOR_LENGTH.sub("", ddl), dialect="spanner")
+    return SchemaTarget(
+        parsed.table_name,
+        parsed.create_table,
+        schema=parsed.schema,
+        create_statement=ddl,
+        constraint_columns=parsed.constraint_columns,
+        unsafe_add_columns=parsed.unsafe_add_columns,
+    )
+
+
 _EMBEDDING_ROW_INDEX = 12
 _SPANNER_DISTANCE_FUNCTIONS: dict[str, str] = {
     "COSINE": "COSINE_DISTANCE",
@@ -591,6 +609,22 @@ CREATE TABLE {self._metadata_table} (
             f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp ON {self._events_table}(timestamp){options}",
         ]
 
+    def _build_session_schema_targets(self) -> "list[SchemaTarget]":
+        return [
+            _parse_spanner_target(self._session_table, self._build_sessions_table_ddl()),
+            _parse_spanner_target(self._events_table, self._build_events_table_ddl()),
+            _parse_spanner_target(self._app_state_table, self._build_app_states_table_ddl()),
+            _parse_spanner_target(self._user_state_table, self._build_user_states_table_ddl()),
+            _parse_spanner_target(self._metadata_table, self._build_metadata_table_ddl()),
+        ]
+
+    def _session_companion_indexes(self) -> "list[tuple[str, str, str]]":
+        statements = self._expiration_index_ddl()
+        return [
+            (self._session_table, f"idx_{self._session_table}_update_time", statements[0]),
+            (self._events_table, f"idx_{self._events_table}_timestamp", statements[1]),
+        ]
+
     def _missing_table_ddl_statements(self, existing_tables: "set[str]") -> "list[str]":
         ddl_statements: list[str] = []
         if self._session_table not in existing_tables:
@@ -979,6 +1013,21 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     def _metadata_table_ddl(self) -> str:
         return self._build_metadata_table_ddl()
 
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        return self._build_session_schema_targets()
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_session_schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing session and event expiration indexes using the active sync driver."""
+        for table_name, index_name, ddl in self._session_companion_indexes():
+            rows = driver.data_dictionary.get_indexes(driver, table=table_name)
+            if not metadata_has_index(rows, table_name, index_name):
+                driver.execute_script(ddl)
+
 
 class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsyncConfig]):
     """Spanner ADK store backed by asynchronous Spanner client."""
@@ -1331,6 +1380,21 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     async def _metadata_table_ddl(self) -> str:
         return self._build_metadata_table_ddl()
 
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        return self._build_session_schema_targets()
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_session_schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing session and event expiration indexes using the active async driver."""
+        for table_name, index_name, ddl in self._session_companion_indexes():
+            rows = await driver.data_dictionary.get_indexes(driver, table=table_name)
+            if not metadata_has_index(rows, table_name, index_name):
+                await driver.execute_script(ddl)
+
 
 class _SpannerADKMemoryStoreMixin:
     """Shared SQL, DDL, parameter type, and decoding helpers for Spanner ADK memory stores."""
@@ -1393,16 +1457,14 @@ class _SpannerADKMemoryStoreMixin:
             unique_entries.append(entry)
         return unique_entries
 
-    def _build_memory_table_ddl(self) -> "list[str]":
+    def _build_memory_table_sql(self) -> str:
         owner_line = ""
         if self._owner_id_column_ddl:
             owner_line = f",\n  {self._owner_id_column_ddl}"
 
         fts_column_line = ""
-        fts_index = ""
         if self._use_fts:
             fts_column_line = ",\n  content_tokens TOKENLIST AS (TOKENIZE_FULLTEXT(content_text)) HIDDEN"
-            fts_index = f"CREATE SEARCH INDEX idx_{self._memory_table}_fts ON {self._memory_table}(content_tokens)"
 
         embedding_type = (
             f"ARRAY<FLOAT32>(vector_length=>{self._vector_dimensions})"
@@ -1419,7 +1481,7 @@ class _SpannerADKMemoryStoreMixin:
         if self._memory_table_options:
             options = f"\nOPTIONS ({self._memory_table_options})"
 
-        table_sql = f"""
+        return f"""
 CREATE TABLE {self._memory_table} (
   id STRING(128) NOT NULL,
   session_id STRING(128) NOT NULL,
@@ -1437,30 +1499,62 @@ CREATE TABLE {self._memory_table} (
 ) {pk}{options}{self._memory_row_deletion_policy}
 """
 
-        app_scope_user_idx = f"CREATE INDEX idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
-        scope_idx = f"CREATE INDEX idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
-        session_idx = f"CREATE INDEX idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
-        event_id_idx = f"CREATE INDEX idx_{self._memory_table}_event_id ON {self._memory_table}(event_id)"
-
-        statements = [table_sql, app_scope_user_idx, scope_idx, session_idx, event_id_idx]
-        if fts_index:
-            statements.append(fts_index)
+    def _memory_companion_indexes(self) -> "list[tuple[str, str]]":
+        indexes: list[tuple[str, str]] = [
+            (
+                f"idx_{self._memory_table}_app_scope_user_time",
+                f"CREATE INDEX idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)",
+            ),
+            (
+                f"idx_{self._memory_table}_scope",
+                f"CREATE INDEX idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)",
+            ),
+            (
+                f"idx_{self._memory_table}_session",
+                f"CREATE INDEX idx_{self._memory_table}_session ON {self._memory_table}(session_id)",
+            ),
+            (
+                f"idx_{self._memory_table}_event_id",
+                f"CREATE INDEX idx_{self._memory_table}_event_id ON {self._memory_table}(event_id)",
+            ),
+        ]
+        if self._use_fts:
+            indexes.append((
+                f"idx_{self._memory_table}_fts",
+                f"CREATE SEARCH INDEX idx_{self._memory_table}_fts ON {self._memory_table}(content_tokens)",
+            ))
         if self._vector_index_enabled:
-            statements.append(
+            vector_ddl = (
                 f"CREATE VECTOR INDEX idx_{self._memory_table}_embedding ON {self._memory_table}(embedding) "
                 f"STORING (app_name, scope, user_id, timestamp) "
                 f"WHERE embedding IS NOT NULL "
                 f"OPTIONS (distance_type = '{self._vector_distance_type}', tree_depth = {self._scann_tree_depth}, num_leaves = {self._scann_num_leaves})"
             )
-        if self._enable_memory_graph:
-            statements.append(
-                f"CREATE OR REPLACE PROPERTY GRAPH {self._memory_graph_name} "
-                f"NODE TABLES ("
-                f"{self._memory_table} AS MemoryNode KEY (id) LABEL Memory "
-                f"PROPERTIES (id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_text)"
-                f")"
-            )
+            indexes.append((f"idx_{self._memory_table}_embedding", vector_ddl))
+        return indexes
+
+    def _memory_graph_ddl(self) -> "str | None":
+        if not self._enable_memory_graph:
+            return None
+        return (
+            f"CREATE OR REPLACE PROPERTY GRAPH {self._memory_graph_name} "
+            f"NODE TABLES ("
+            f"{self._memory_table} AS MemoryNode KEY (id) LABEL Memory "
+            f"PROPERTIES (id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_text)"
+            f")"
+        )
+
+    def _build_memory_table_ddl(self) -> "list[str]":
+        statements = [self._build_memory_table_sql(), *(ddl for _name, ddl in self._memory_companion_indexes())]
+        graph_ddl = self._memory_graph_ddl()
+        if graph_ddl is not None:
+            statements.append(graph_ddl)
         return statements
+
+    def _build_memory_schema_targets(self) -> "list[SchemaTarget]":
+        if not self._enabled:
+            return []
+        return [_parse_spanner_target(self._memory_table, self._build_memory_table_sql())]
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get SQL to drop the memory table and its indexes.
@@ -1817,6 +1911,26 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
     def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
 
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        return self._build_memory_schema_targets()
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_memory_schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing memory indexes and refresh the optional property graph."""
+        if not self._enabled:
+            return
+        rows = driver.data_dictionary.get_indexes(driver, table=self._memory_table)
+        for index_name, ddl in self._memory_companion_indexes():
+            if not metadata_has_index(rows, self._memory_table, index_name):
+                driver.execute_script(ddl)
+        graph_ddl = self._memory_graph_ddl()
+        if graph_ddl is not None:
+            driver.execute_script(graph_ddl)
+
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1976,6 +2090,26 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
 
     async def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
+
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        return self._build_memory_schema_targets()
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_memory_schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing memory indexes and refresh the optional property graph."""
+        if not self._enabled:
+            return
+        rows = await driver.data_dictionary.get_indexes(driver, table=self._memory_table)
+        for index_name, ddl in self._memory_companion_indexes():
+            if not metadata_has_index(rows, self._memory_table, index_name):
+                await driver.execute_script(ddl)
+        graph_ddl = self._memory_graph_ddl()
+        if graph_ddl is not None:
+            await driver.execute_script(graph_ddl)
 
     async def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:

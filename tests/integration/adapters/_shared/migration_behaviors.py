@@ -201,6 +201,21 @@ async def _table_exists_async(config: Any, table: str) -> bool:
         return True
 
 
+def _driver_table_exists_sync(driver: Any, config: Any, table: str) -> bool:
+    if str(getattr(driver, "dialect", "")) == "spanner":
+        folded = table.casefold()
+        return any(str(row["table_name"]).casefold() == folded for row in driver.data_dictionary.get_tables(driver))
+    return _table_exists_sync(config, table)
+
+
+async def _driver_table_exists_async(driver: Any, config: Any, table: str) -> bool:
+    if str(getattr(driver, "dialect", "")) == "spanner":
+        folded = table.casefold()
+        rows = await driver.data_dictionary.get_tables(driver)
+        return any(str(row["table_name"]).casefold() == folded for row in rows)
+    return await _table_exists_async(config, table)
+
+
 def _recorded_count_sync(config: Any, version_table: str) -> int:
     with config.provide_session() as driver:
         try:
@@ -691,5 +706,158 @@ async def assert_async_migration_non_transactional_default_schema_contract(
         with contextlib.suppress(Exception):
             async with config.provide_session() as driver:
                 await driver.execute_script(_drop_schema_sql(schema))
+                await driver.commit()
+        await config.close_pool()
+
+
+def _reconcile_ordered_table_migration(case: MigrationCase, table: str, smoke_table: str) -> str:
+    create_sql, drop_sql = _table_ddl(case, table)
+    return f'''"""Create {table} populated from reconciled {smoke_table}."""
+
+
+def up():
+    """Create the table and copy reconciled rows."""
+    return [
+        "{create_sql}",
+        "INSERT INTO {table} (id, name) SELECT id, name FROM {smoke_table}",
+    ]
+
+
+def down():
+    """Drop the table."""
+    return ["{drop_sql}"]
+'''
+
+
+def assert_sync_extension_reconciliation_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Sync head upgrades run opt-in reconcilers before numbered revisions without writing ext_* ledger rows."""
+    token, script_location, version_table, table = _migration_paths(case, "reconcile", tmp_path)
+    smoke_table = f"{table}_s"
+    numbered_table = f"{table}_n"
+    create_smoke_sql, drop_smoke_sql = _table_ddl(case, smoke_table)
+    _, drop_table_sql = _table_ddl(case, table)
+    ext_dir = tmp_path / f"ext_{token}"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    (ext_dir / "0001_shipped.sql").write_text(
+        f"-- name: migrate-0001-up\nCREATE TABLE {numbered_table} (id INTEGER);\n"
+        f"-- name: migrate-0001-down\nDROP TABLE {numbered_table};\n",
+        encoding="utf-8",
+    )
+    (ext_dir / "reconcile.py").write_text(
+        "from tests.integration.adapters._shared.migration_behaviors import _driver_table_exists_sync\n\n\n"
+        "def reconcile(context) -> None:\n"
+        "    assert context.driver is not None\n"
+        f"    if not _driver_table_exists_sync(context.driver, context.config, {smoke_table!r}):\n"
+        f"        context.driver.execute_script({create_smoke_sql!r})\n"
+        f"    max_id = context.driver.select_value('SELECT MAX(id) FROM {smoke_table}')\n"
+        "    next_id = (int(max_id) if max_id is not None else 0) + 1\n"
+        f"    context.driver.execute_script(f\"INSERT INTO {smoke_table} (id, name) VALUES ({{next_id}}, 'run')\")\n",
+        encoding="utf-8",
+    )
+    config = _build(make_config, script_location, version_table, token)
+    config.add_extension_migrations("smoke_ext", ext_dir, migration_mode="reconcile")
+    try:
+        commands = SyncMigrationCommands(config)
+        commands.init(script_location, package=True)
+        _write_migration(
+            script_location, "0001_create.py", _reconcile_ordered_table_migration(case, table, smoke_table)
+        )
+
+        commands.upgrade(echo=False)
+        commands.upgrade(echo=False)
+
+        assert _table_exists_sync(config, table)
+        assert _table_exists_sync(config, smoke_table)
+        assert not _table_exists_sync(config, numbered_table)
+        with config.provide_session() as driver:
+            smoke_ids = [int(row["id"]) for row in driver.select(f"SELECT id FROM {smoke_table} ORDER BY id")]
+            copied_ids = [int(row["id"]) for row in driver.select(f"SELECT id FROM {table} ORDER BY id")]
+            versions = [
+                str(row["version_num"])
+                for row in driver.select(f"SELECT version_num FROM {version_table} ORDER BY execution_sequence")
+            ]
+            ext_ledger_count = int(
+                driver.select_value(f"SELECT COUNT(*) FROM {version_table} WHERE version_num LIKE 'ext_smoke_ext_%'")
+            )
+        assert smoke_ids == [1, 2]
+        assert copied_ids == [1]
+        assert versions == ["0001"]
+        assert ext_ledger_count == 0
+    finally:
+        with contextlib.suppress(Exception):
+            with config.provide_session() as driver:
+                driver.execute_script(drop_table_sql)
+                driver.commit()
+        with contextlib.suppress(Exception):
+            with config.provide_session() as driver:
+                driver.execute_script(drop_smoke_sql)
+                driver.commit()
+        config.close_pool()
+
+
+async def assert_async_extension_reconciliation_contract(make_config: Any, case: MigrationCase, tmp_path: Path) -> None:
+    """Async head upgrades run opt-in reconcilers before numbered revisions without writing ext_* ledger rows."""
+    token, script_location, version_table, table = _migration_paths(case, "reconcile", tmp_path)
+    smoke_table = f"{table}_s"
+    numbered_table = f"{table}_n"
+    create_smoke_sql, drop_smoke_sql = _table_ddl(case, smoke_table)
+    _, drop_table_sql = _table_ddl(case, table)
+    ext_dir = tmp_path / f"ext_{token}"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    (ext_dir / "0001_shipped.sql").write_text(
+        f"-- name: migrate-0001-up\nCREATE TABLE {numbered_table} (id INTEGER);\n"
+        f"-- name: migrate-0001-down\nDROP TABLE {numbered_table};\n",
+        encoding="utf-8",
+    )
+    (ext_dir / "reconcile.py").write_text(
+        "from tests.integration.adapters._shared.migration_behaviors import _driver_table_exists_async\n\n\n"
+        "async def reconcile(context) -> None:\n"
+        "    assert context.driver is not None\n"
+        f"    if not await _driver_table_exists_async(context.driver, context.config, {smoke_table!r}):\n"
+        f"        await context.driver.execute_script({create_smoke_sql!r})\n"
+        f"    max_id = await context.driver.select_value('SELECT MAX(id) FROM {smoke_table}')\n"
+        "    next_id = (int(max_id) if max_id is not None else 0) + 1\n"
+        f"    await context.driver.execute_script(f\"INSERT INTO {smoke_table} (id, name) VALUES ({{next_id}}, 'run')\")\n",
+        encoding="utf-8",
+    )
+    config = _build(make_config, script_location, version_table, token)
+    config.add_extension_migrations("smoke_ext", ext_dir, migration_mode="reconcile")
+    try:
+        commands = AsyncMigrationCommands(config)
+        await commands.init(script_location, package=True)
+        _write_migration(
+            script_location, "0001_create.py", _reconcile_ordered_table_migration(case, table, smoke_table)
+        )
+
+        await commands.upgrade(echo=False)
+        await commands.upgrade(echo=False)
+
+        assert await _table_exists_async(config, table)
+        assert await _table_exists_async(config, smoke_table)
+        assert not await _table_exists_async(config, numbered_table)
+        async with config.provide_session() as driver:
+            smoke_ids = [int(row["id"]) for row in await driver.select(f"SELECT id FROM {smoke_table} ORDER BY id")]
+            copied_ids = [int(row["id"]) for row in await driver.select(f"SELECT id FROM {table} ORDER BY id")]
+            versions = [
+                str(row["version_num"])
+                for row in await driver.select(f"SELECT version_num FROM {version_table} ORDER BY execution_sequence")
+            ]
+            ext_ledger_count = int(
+                await driver.select_value(
+                    f"SELECT COUNT(*) FROM {version_table} WHERE version_num LIKE 'ext_smoke_ext_%'"
+                )
+            )
+        assert smoke_ids == [1, 2]
+        assert copied_ids == [1]
+        assert versions == ["0001"]
+        assert ext_ledger_count == 0
+    finally:
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(drop_table_sql)
+                await driver.commit()
+        with contextlib.suppress(Exception):
+            async with config.provide_session() as driver:
+                await driver.execute_script(drop_smoke_sql)
                 await driver.commit()
         await config.close_pool()

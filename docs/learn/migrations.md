@@ -119,6 +119,48 @@ When `upgrade()` runs against downstream environments after a squash has been co
 2. **No replaced versions applied**: Fresh databases execute the squashed migration once.
 3. **Partial overlap**: If only a subset of replaced versions was applied, `upgrade()` and `verify --strict` raise an error rather than guessing which statements remain unapplied.
 
+## Unversioned Extension Schema Reconciliation
+
+Built-in extensions (`adk`, `litestar`, and `events`) and external packages default to idempotent unversioned schema reconciliation (`migration_mode="reconcile"`) instead of recording synthetic `ext_<name>_*` rows in `ddl_migrations` (automatically falling back to `"versioned"` when an unconfigured external extension directory provides only numbered `0001_*` revisions and no `reconcile.py`):
+
+```{ .python title="docs/examples/quickstart_migrations.py" }
+--8<-- "docs/examples/quickstart_migrations.py:reconcile"
+```
+
+### Configuring Built-In and External Extensions
+
+`"reconcile"` (`from sqlspec.config import ExtensionMigrationMode`) is the default mode for extensions:
+
+- **Built-in extensions**: `adk`, `litestar` (when `session_table` is enabled), and `events` reconcile automatically; pass `"migration_mode": "versioned"` inside `extension_config[name]` only if you need numbered `ext_<name>_*` revision rows.
+- **External extensions**: Call `config.add_extension_migrations(name, migrations_path, settings=None, *, migration_mode="reconcile")` (which mutates `config` in place and returns `None`), or pass `settings={"migration_mode": "versioned"}` when targeting numbered files.
+
+### Authoring an Extension Reconciler Callback
+
+Place a `reconcile.py` module inside `<migrations_path>` exporting a synchronous or asynchronous `reconcile(context: MigrationContext) -> None` and an optional `downgrade(context: MigrationContext) -> None` (or `down`) callback (`from sqlspec.migrations.context import MigrationContext`). Run DDL on `context.driver` within the migration runner's transaction and schema lifecycle, and pass `manage_schema=True, commit=False, strict=True` to `ensure_schema_sync` or `ensure_schema_async` (`manage_schema` defaults to `False`, `commit=False` leaves transaction commit and rollback to the runner, and `strict=True` refuses lossy or ambiguous schema changes).
+
+### Scheduling, Base-Only Downgrade, and Ledger Retention
+
+- **Upgrade execution order**: Reconcilers execute in `include_extensions` order before pending numbered revisions on every `upgrade(revision)` (both `upgrade("head")` and targeted revisions), including when zero numbered migrations are pending. Co-located numbered migration files for that extension are skipped, and zero `ext_<name>_*` rows are inserted into `ddl_migrations`.
+- **Drop-at-base downgrade**: Partial downgrades (such as rolling back `0002 -> 0001`) preserve reconciled extension tables. When `downgrade` reaches `base` (`downgrade("base")` or `downgrade("-1")` leaving zero applied revisions in `ddl_migrations`), SQLSpec executes each reconciler's `downgrade(context)` callback in reverse `include_extensions` order to drop the extension schema and removes any retained `ext_<name>_*` ledger rows. `downgrade --dry-run` at base previews reconciler downgrades without executing DDL.
+- **Retained ledger & versioned extension ordering**: Any previously applied `ext_<name>_*` rows already present in `ddl_migrations` pass `sqlspec verify --strict` without orphan warnings. When an extension uses `migration_mode="versioned"`, its `ext_<name>_*` migrations sort before core migrations in `include_extensions` order and are excluded from out-of-order and auto-sync checksum warnings.
+- **Serialized upgrades**: SQLSpec adds no distributed migration lock, so run `upgrade` from one process at a time (such as a release job rather than every replica at startup). If concurrent upgrades race and one fails with a duplicate-object error, re-running `upgrade` converges idempotently.
+
+### Strict Schema Safety and Built-In Adapter Coverage
+
+When `strict=True`, `ensure_schema_sync` and `ensure_schema_async` raise `MigrationError` before executing DDL if a target requires missing `constraint_columns` (`PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY`, or `CHECK`), `unsafe_add_columns` (generated, identity, or collated columns), defaultless `NOT NULL` columns, missing tables when `create_schema=False`, or existing-column nullability narrowing or cross-family type drift. Existing-row backfills and versioned data conversions remain separate work.
+
+Built-in reconcilers (`litestar`, `events`, and `adk`) run across:
+
+- **20 unconditional adapters**: `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `bigquery`, `db2`, `sqlanywhere`, and `sybase`.
+- **Arrow ODBC (`arrow_odbc`)**: Supported when `statement_config.dialect` is `"mssql"`, `"tsql"`, or `"db2"`.
+- **Apache Arrow ADBC (`adbc`)**: Supported on every backend with a resolved dialect (`postgresql`, `sqlite`, `duckdb`, `bigquery`, `snowflake`, `mssql`, `oracle`, `db2`, and `mysql`).
+
+Remaining built-in refusals and their remedies:
+
+- **ADBC over FlightSQL without a dialect**: Configure an explicit `statement_config` dialect or `gizmosql_backend` (`"duckdb"` or `"sqlite"`), or set `migration_mode="versioned"`.
+- **Arrow ODBC outside SQL Server or Db2, or unresolvable/external adapters**: Register a custom `reconcile.py` via `add_extension_migrations(..., migration_mode="reconcile")` (custom callbacks control their own dialect checks) or keep `migration_mode="versioned"`.
+- **Constrained or unsafe column additions, or BigQuery `NOT NULL`/defaulted columns on existing tables**: Author an explicit numbered `.sql` or `.py` revision for non-additive or backfilled schema transitions.
+
 ## Schema Snapshots, Verification, and Data Bootstrap
 
 - **Read-Only `verify`**: Checks applied tracker rows against migration files on disk without creating `version_table_name` on empty databases. Combine `--strict` with `--fail-on-pending` as a pre-deploy CI gate.

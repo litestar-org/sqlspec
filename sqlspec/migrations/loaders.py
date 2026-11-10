@@ -5,22 +5,174 @@ This module provides loader classes for different migration file formats.
 
 import abc
 import ast
+import builtins
 import inspect
 import sys
 import types
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Final, cast
 
+from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.version import extract_migration_version
 from sqlspec.utils.sync_tools import await_
+from sqlspec.utils.uuids import uuid4
 
-__all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
+__all__ = (
+    "BaseMigrationLoader",
+    "MigrationLoadError",
+    "PythonFileLoader",
+    "ReconcileCallable",
+    "SQLFileLoader",
+    "find_project_root",
+    "get_migration_loader",
+    "load_reconcile_callable",
+    "load_reconcile_downgrade_callable",
+    "temporary_project_path",
+)
 
 PROJECT_ROOT_MARKERS: Final[list[str]] = ["pyproject.toml", ".git", "setup.cfg", "setup.py"]
+
+ReconcileCallable = Callable[[MigrationContext], Awaitable[None] | None]
+
+
+def find_project_root(start_path: Path) -> Path:
+    """Search upward from start_path for a project marker file.
+
+    Args:
+        start_path: Directory to start searching from.
+
+    Returns:
+        Path to project root or parent directory.
+    """
+    current_path = start_path.resolve()
+
+    while current_path != current_path.parent:
+        for marker in PROJECT_ROOT_MARKERS:
+            if (current_path / marker).exists():
+                return current_path
+        current_path = current_path.parent
+
+    return start_path.resolve().parent
+
+
+@contextmanager
+def temporary_project_path(project_root: Path) -> Iterator[None]:
+    """Temporarily add project_root to sys.path for imports.
+
+    Args:
+        project_root: Project root directory to expose on sys.path.
+
+    Yields:
+        None while project_root is present on sys.path.
+    """
+    path_to_add = str(project_root)
+    if path_to_add in sys.path:
+        yield
+        return
+
+    sys.path.insert(0, path_to_add)
+    try:
+        yield
+    finally:
+        with suppress(ValueError):
+            sys.path.remove(path_to_add)
+
+
+def _exec_reconcile_module(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> types.ModuleType:
+    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
+    root = project_root if project_root is not None else find_project_root(module_path.parent)
+    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
+
+    try:
+        source_code = module_path.read_text(encoding="utf-8")
+        compiled_code = compile(source_code, str(module_path), "exec")
+    except Exception as exc:
+        msg = f"Failed to load extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+        error = MigrationError(msg)
+        error.__cause__ = exc
+        raise error
+
+    module = types.ModuleType(module_name)
+    module.__file__ = str(module_path)
+
+    with temporary_project_path(root):
+        try:
+            sys.modules[module_name] = module
+            builtins.__dict__["exec"](compiled_code, module.__dict__)
+        except MigrationError:
+            raise
+        except Exception as exc:
+            msg = f"Failed to execute extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+            exec_error = MigrationError(msg)
+            exec_error.__cause__ = exc
+            raise exec_error
+        finally:
+            sys.modules.pop(module_name, None)
+
+    return module
+
+
+def load_reconcile_callable(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> ReconcileCallable:
+    """Compile and execute a reconcile.py module fresh from disk and return its reconcile callable.
+
+    Args:
+        module_path: Path to the extension reconcile.py module.
+        extension_name: Registered extension identifier.
+        project_root: Optional explicit project root directory for sys.path resolution.
+
+    Returns:
+        Validated reconcile(context) callable defined by the module.
+
+    Raises:
+        MigrationError: If reading, compiling, executing, or validating reconcile(context) fails.
+    """
+    module = _exec_reconcile_module(module_path, extension_name=extension_name, project_root=project_root)
+    reconcile_attr = module.__dict__.get("reconcile")
+    if reconcile_attr is None or not callable(reconcile_attr):
+        msg = f"Extension reconciler '{extension_name}' ({module_path}) must define a callable 'reconcile(context)'"
+        raise MigrationError(msg)
+
+    return cast("ReconcileCallable", reconcile_attr)
+
+
+def load_reconcile_downgrade_callable(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> ReconcileCallable | None:
+    """Compile and execute a reconcile.py module fresh from disk and return its optional downgrade callable.
+
+    Args:
+        module_path: Path to the extension reconcile.py module.
+        extension_name: Registered extension identifier.
+        project_root: Optional explicit project root directory for sys.path resolution.
+
+    Returns:
+        Validated downgrade(context) or down(context) callable, or ``None`` if neither is defined.
+
+    Raises:
+        MigrationError: If reading, compiling, executing, or validating the downgrade callable fails.
+    """
+    module = _exec_reconcile_module(module_path, extension_name=extension_name, project_root=project_root)
+    downgrade_attr = module.__dict__.get("downgrade")
+    if downgrade_attr is None:
+        downgrade_attr = module.__dict__.get("down")
+    if downgrade_attr is None:
+        return None
+    if not callable(downgrade_attr):
+        msg = (
+            f"Extension reconciler '{extension_name}' ({module_path}) "
+            "must define a callable 'downgrade(context)' or 'down(context)'"
+        )
+        raise MigrationError(msg)
+
+    return cast("ReconcileCallable", downgrade_attr)
 
 
 class MigrationLoadError(Exception):
@@ -316,30 +468,13 @@ class PythonFileLoader(BaseMigrationLoader):
         Returns:
             Path to project root or parent directory.
         """
-        current_path = start_path.resolve()
-
-        while current_path != current_path.parent:
-            for marker in PROJECT_ROOT_MARKERS:
-                if (current_path / marker).exists():
-                    return current_path
-            current_path = current_path.parent
-
-        return start_path.resolve().parent
+        return find_project_root(start_path)
 
     @contextmanager
     def _temporary_project_path(self) -> Iterator[None]:
         """Temporarily add project root to sys.path for imports."""
-        path_to_add = str(self.project_root)
-        if path_to_add in sys.path:
+        with temporary_project_path(self.project_root):
             yield
-            return
-
-        sys.path.insert(0, path_to_add)
-        try:
-            yield
-        finally:
-            with suppress(ValueError):
-                sys.path.remove(path_to_add)
 
     def _load_module_from_path(self, path: Path) -> Any:
         """Load a Python module from file path.

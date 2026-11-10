@@ -70,6 +70,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `enable_sqlcommenter_middleware` | `bool` | `True` | Control automatic SQLCommenter middleware registration. Default: True. When the driver's :class:`~sqlspec.core.statement.StatementConfig` has `enable_sqlcommenter=True`, the middleware is registered automatically. Set to `False` to explicitly disable middleware registration even when SQLCommenter is enabled on the driver config. |
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
+| `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -187,6 +188,26 @@ Supported database adapters export a Litestar `Store` implementation under `sqls
 ```
 
 Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+
+SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
+
+`session_table` (`True` or a custom table name) is still required to include Litestar session migrations (`migration_mode="reconcile"` is the default). Reconciliation converges the session table on every `litestar db upgrade` or `sqlspec upgrade` without recording new `ext_litestar_*` rows, preserves the table during partial downgrades, and drops it when `downgrade` reaches `base` while honoring `manage_schema` and `create_schema` (see [Migrations](../learn/migrations.md)):
+
+```python
+extension_config = {
+    "litestar": {
+        "session_table": True,
+        "migration_mode": "reconcile",
+    }
+}
+```
+
+| Adapter Family | Built-In Adapters | Reconcile Scope and Boundaries |
+| --- | --- | --- |
+| Embedded, OLTP, and Enterprise | `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `db2`, `sqlanywhere`, `sybase` | Creates missing session tables, adds safe missing nullable or defaulted columns, and converges the companion `expires_at` index (`dbo`-defaulted or schema-qualified on SQL Server and validated schema-qualified on Oracle). |
+| Arrow ODBC | `arrow_odbc` (`mssql`, `tsql`, `db2`) | Converges compound primary session and `<table_name>_chunks` tables and their companion expiry and chunk indexes across SQL Server and Db2 targets. |
+| Cloud Spanner and BigQuery | `spanner`, `bigquery` | Converges `litestar_session` tables and companion expiry indexes (`spanner` TTL/index DDL; `bigquery` nullable-only additive column repair on existing tables, refusing `NOT NULL` or defaulted column additions with `MigrationError`). |
+| Multi-backend ADBC | `adbc` | Converges session tables and companion expiry indexes across all ADBC backends with a resolved dialect. ADBC over FlightSQL needs an explicit `statement_config` dialect or `gizmosql_backend`. |
 
 ### Litestar Channels Backend
 

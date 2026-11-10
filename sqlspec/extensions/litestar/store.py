@@ -3,19 +3,19 @@
 import re
 from abc import abstractmethod
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Final, Generic, TypeVar, cast
+from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 
 from litestar.stores.base import Store
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync, metadata_has_index
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
-__all__ = ("BaseSQLSpecStore",)
+__all__ = ("BaseSQLSpecStore", "CompanionIndex")
 
 
 ConfigT = TypeVar("ConfigT")
@@ -26,6 +26,25 @@ logger = get_logger("sqlspec.extensions.litestar.store")
 
 VALID_TABLE_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 MAX_TABLE_NAME_LENGTH: Final = 63
+_SQLGLOT_PARSE_DIALECTS: Final[dict[str, str]] = {"mariadb": "mysql", "mssql": "tsql", "postgresql": "postgres"}
+_PROCEDURAL_DDL_PATTERN: Final = re.compile(
+    r"^\s*(?:BEGIN\b|DECLARE\b|IF\s+NOT\s+EXISTS\b[\s\S]*?\bBEGIN\b)", re.IGNORECASE
+)
+_STANDALONE_CREATE_INDEX_PATTERN: Final = re.compile(
+    r"^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<name>[^\s(]+)\s+ON\b", re.IGNORECASE
+)
+_INLINE_MYSQL_INDEX_PATTERN: Final = re.compile(
+    r"\bINDEX\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*expires_at\s*\)", re.IGNORECASE
+)
+
+
+class CompanionIndex(NamedTuple):
+    """Companion index definition reconciled alongside Litestar session tables."""
+
+    name: str
+    table: str
+    schema: str | None
+    ddl: str
 
 
 class BaseSQLSpecStore(Store, Generic[ConfigT]):
@@ -64,6 +83,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         "extra_rollback_statuses",
         "manage_lifespan",
         "manage_schema",
+        "migration_mode",
         "migrations_path",
         "pool_key",
         "session_key",
@@ -117,6 +137,78 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
+    def get_schema_targets(self) -> "list[SchemaTarget]":
+        """Return ordered SchemaTarget definitions for this session store."""
+        return [self._schema_target()]
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Extract standalone or inline companion index definitions from store DDL."""
+        ddl = self._table_ddl()
+        if _PROCEDURAL_DDL_PATTERN.match(ddl):
+            return []
+
+        raw_schema, dot, raw_table = self._table_name.partition(".")
+        if dot:
+            schema_name = raw_schema.strip('"`[]') or None
+            bare_table = raw_table.strip('"`[]')
+        else:
+            schema_name = None
+            bare_table = self._table_name.strip('"`[]')
+
+        companion_indexes: list[CompanionIndex] = []
+        for raw_stmt in ddl.split(";"):
+            stmt = raw_stmt.strip()
+            if not stmt:
+                continue
+            match = _STANDALONE_CREATE_INDEX_PATTERN.match(stmt)
+            if match is not None:
+                companion_indexes.append(
+                    CompanionIndex(
+                        name=match.group("name").strip('"`[]'), table=bare_table, schema=schema_name, ddl=f"{stmt};"
+                    )
+                )
+        if companion_indexes:
+            return companion_indexes
+
+        inline_match = _INLINE_MYSQL_INDEX_PATTERN.search(ddl)
+        if inline_match is not None:
+            index_name = inline_match.group("name")
+            index_options = getattr(self, "_index_options", "")
+            return [
+                CompanionIndex(
+                    name=index_name,
+                    table=bare_table,
+                    schema=schema_name,
+                    ddl=f"CREATE INDEX {index_name} ON {self._table_name} (expires_at){index_options}",
+                )
+            ]
+        return []
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create any missing companion indexes using the active sync driver."""
+        for index in self.get_companion_indexes():
+            rows = driver.data_dictionary.get_indexes(driver, table=index.table, schema=index.schema)
+            if not metadata_has_index(rows, index.table, index.name, schema_name=index.schema):
+                driver.execute_script(index.ddl)
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create any missing companion indexes using the active async driver."""
+        for index in self.get_companion_indexes():
+            rows = await driver.data_dictionary.get_indexes(driver, table=index.table, schema=index.schema)
+            if not metadata_has_index(rows, index.table, index.name, schema_name=index.schema):
+                await driver.execute_script(index.ddl)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget from store DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
+        dialect = (
+            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
+            if isinstance(raw_dialect, str)
+            else raw_dialect
+        )
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
+
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive session-table changes from the canonical store DDL.
 
@@ -126,19 +218,16 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        target = SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
         session_context = cast("Any", self._config).provide_session()
         if hasattr(session_context, "__aenter__"):
             async with session_context as driver:
+                await self.prepare_schema_async(driver)
+                targets = self.get_schema_targets()
                 await ensure_schema_async(
-                    driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+                    driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
                 )
             return
-        await async_(_reconcile_schema_sync)(
-            self._config, target, create_schema=create_schema, assume_existing=assume_existing
-        )
+        await async_(_reconcile_schema_sync)(self, create_schema=create_schema, assume_existing=assume_existing)
 
     def _table_name_from_config(self) -> str:
         """Extract the configured session table name."""
@@ -269,9 +358,11 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             raise ValueError(msg)
 
 
-def _reconcile_schema_sync(config: Any, target: SchemaTarget, *, create_schema: bool, assume_existing: bool) -> None:
+def _reconcile_schema_sync(store: "BaseSQLSpecStore[Any]", *, create_schema: bool, assume_existing: bool) -> None:
     """Run additive reconciliation for a synchronous Litestar store."""
-    with config.provide_session() as driver:
+    with cast("Any", store.config).provide_session() as driver:
+        store.prepare_schema_sync(driver)
+        targets = store.get_schema_targets()
         ensure_schema_sync(
-            driver, [target], manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
+            driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
         )

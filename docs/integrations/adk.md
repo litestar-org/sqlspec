@@ -72,6 +72,7 @@ Configure table names, full-text indexing, artifact storage URIs, and optional o
 | `memory_use_fts` | `bool` | `False` | Enable full-text search when supported. Default: False. When True, adapters will use their native FTS capabilities where available: PostgreSQL: to_tsvector/to_tsquery with GIN index; SQLite: FTS5 virtual table; DuckDB: FTS extension with match_bm25; Oracle: CONTAINS() with CTXSYS.CONTEXT index; Spanner: TOKENIZE_FULLTEXT with search index; MySQL: MATCH...AGAINST with FULLTEXT index. When False, adapters use simple LIKE/ILIKE queries (works without indexes). |
 | `memory_max_results` | `int` | `20` | Maximum number of results for memory search queries. Default: 20. Limits the number of memory entries returned by search_memory(). Can be overridden per-query via the limit parameter. |
 | `owner_id_column` | `str` | - | Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity. Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]". The entire definition is passed through to DDL verbatim. We only parse the column name (first word) for use in INSERT/SELECT statements. This column is added to both session and memory tables for consistent multi-tenant isolation. Supports: Foreign key constraints: REFERENCES table(column); Nullable or NOT NULL; CASCADE options: ON DELETE CASCADE, ON UPDATE CASCADE; Dialect-specific options (DEFERRABLE, ENABLE VALIDATE, etc.); Plain columns without FK (just extra column storage) |
+| `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
 <!-- GENERATED:END config-table:sqlspec.config.ADKConfig -->
 
 ### Adapter-Specific ADKConfig Subclasses
@@ -99,7 +100,7 @@ When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemory
 `ADKMemoryStore` (`AiosqliteADKMemoryStore`, `AsyncpgADKMemoryStore`, `OracleAsyncADKMemoryStore`, `SpannerAsyncADKMemoryStore`, `DuckDBADKMemoryStore`) supports four search modes across engines:
 
 1. **Simple (`simple`)**: Portable case-insensitive substring matching across all ADK-enabled adapters.
-2. **Full-Text (`fts`)**: Native lexical ranking (`FTS5` on `sqlite`/`aiosqlite`, `tsvector` or `pg_textsearch` BM25 on PostgreSQL, Oracle Text `CONTAINS` with `"AND"`, `"OR"`, `"ACCUM"`, and `"NEAR"` operators, `MATCH ... AGAINST` on MySQL, and `TOKENIZE_FULLTEXT`/`SEARCH` on Spanner).
+2. **Full-Text (`fts`)**: Native lexical ranking (`FTS5` on `sqlite`, `aiosqlite`, and local SQLite `adbc` with one-time index rebuild when enabled on an existing table, `tsvector` or `pg_textsearch` BM25 on PostgreSQL, Oracle Text `CONTAINS` with `"AND"`, `"OR"`, `"ACCUM"`, and `"NEAR"` operators, `MATCH ... AGAINST` on MySQL, and `TOKENIZE_FULLTEXT`/`SEARCH` on Spanner). Remote Flight SQL, gRPC, and GizmoSQL ADBC endpoints use substring `LIKE` search because the client cannot detect the server engine's search features.
 3. **Vector (`vector`)**: Cosine or inner-product similarity search on `asyncpg`, `psycopg`, `psqlpy`, `adbc` (`pgvector`), `oracledb` (Oracle 26ai HNSW `FETCH APPROX FIRST` or exact top-K), `spanner` (`APPROX_COSINE_DISTANCE`), and `duckdb` (`array_cosine_similarity`).
 4. **Hybrid RRF (`hybrid`)**: Single-round-trip Reciprocal Rank Fusion (`1 / (k + rank)`) combining vector distance and full-text rank in one SQL CTE on PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`, `adbc`), Oracle 26ai (`oracledb`), Cloud Spanner (`spanner`), and DuckDB (`duckdb`).
 
@@ -208,6 +209,32 @@ def create_adk_services(
 Instead of calling `ensure_tables()` at runtime in production, enable `"adk"` in `migration_config={"include_extensions": ["adk"]}` (or configure `extension_config["adk"]`, which auto-includes ADK migrations) so `sqlspec upgrade` tracks ADK schema revisions alongside your application migrations.
 
 MySQL and MariaDB stores accept `database.table` names when the database already exists; SQLSpec does not create it.
+
+### Schema Reconciliation
+
+`migration_mode="reconcile"` is the default for extensions. Reconciliation runs ADK's idempotent schema, companion index, FTS, and vector convergence on every `sqlspec upgrade` without recording new `ext_adk_*` rows in `ddl_migrations` (while retaining prior `ext_adk_*` rows across `verify --strict` and dropping the ADK tables when `downgrade` reaches `base`; see [Migrations](../learn/migrations.md)):
+
+```python
+extension_config = {
+    "adk": {
+        "migration_mode": "reconcile",
+        "enable_sessions": True,
+        "enable_memory": True,
+    }
+}
+```
+
+Reconciliation honors `manage_schema` and `create_schema`, converges enabled `enable_sessions` and `enable_memory` stores, and reconciles the Cloud Spanner `adk_artifact` table whenever `artifact_table` is configured. Table qualification follows each store's `_max_table_name_parts` (`schema.table` on schema-capable engines and `database.table` on MySQL and MariaDB). Versioned row conversions and legacy `parent_id` schema upgrades remain separate from additive schema reconciliation.
+
+| Adapter Family | Built-In Adapters | Reconcile Scope and Boundaries |
+| --- | --- | --- |
+| Embedded and local ADBC | `sqlite`, `aiosqlite`, `duckdb`, local SQLite `adbc` | Converges `adk_session`, `adk_event`, `adk_memory`, and companion indexes; when `memory_use_fts=True` is enabled on a populated table, creates missing FTS5/FTS companion objects and runs a one-time index rebuild. |
+| PostgreSQL and CockroachDB | `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg` | Ensures `pgvector` and `pg_textsearch` prerequisites where enabled, converges session, event, and memory tables alongside GIN, HNSW/IVFFlat/ScaNN, and BM25 indexes, and applies table storage options (`fillfactor`). |
+| MySQL and MariaDB | `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector` | Converges session, event, and memory tables (`database.table` or bare names) plus `FULLTEXT` and secondary lookup indexes. |
+| Enterprise OLTP and Arrow ODBC | `mssql_python`, `pymssql`, `oracledb`, `db2`, `sybase`, `sqlanywhere`, `arrow_odbc` (`mssql`, `tsql`, `db2`) | Prepares version and storage capabilities on the active migration driver and converges session, event, and memory tables plus companion expiry, lookup, Oracle Text, and Oracle 26ai `VECTOR` indexes. |
+| Cloud Spanner | `spanner` | Converges `adk_session`, `adk_event`, `adk_memory`, and `adk_artifact` (when `artifact_table` is set) together with search, vector, and TTL companion DDL. |
+| BigQuery | `bigquery` | Converges session, state, and event tables; additive column repair on existing BigQuery tables applies to nullable columns without defaults (`NOT NULL` or defaulted column additions raise `MigrationError`). |
+| Multi-backend ADBC | `adbc` | Converges ADK tables and companion objects across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, SQL Server, Oracle, Db2, and MySQL backends when the dialect is known. ADBC over FlightSQL needs an explicit `statement_config` dialect or `gizmosql_backend`. |
 
 Use the built-in `sqlspec adk memory` CLI commands to verify table reachability or delete memory entries older than a retention threshold:
 

@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, ca
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
 from sqlspec.adapters.psqlpy.core import build_postgres_storage_params_sql
 from sqlspec.config import ADKConfig
+from sqlspec.core.config_runtime import is_postgres_extension_active, resolve_postgres_extension_state
+from sqlspec.core.statement import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -104,6 +107,15 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Ensure session and event companion indexes exist on the migration driver."""
+        adk_config = _adk_config(self._config)
+        for statement in (
+            *_postgres_session_index_statements(self._session_table),
+            *_postgres_event_index_statements(adk_config, self._events_table),
+        ):
+            await driver.execute_script(statement)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -557,6 +569,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         table_options = build_postgres_storage_params_sql(
             _adk_config(self._config), default_fillfactor=80, section="adk"
         )
+        indexes_sql = "\n        ".join(_postgres_session_index_statements(self._session_table))
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -567,15 +580,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ){table_options};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
-            ON {self._session_table} USING GIN (state)
-            WHERE state != '{{}}'::jsonb;
+        {indexes_sql}
         """
 
     async def _events_table_ddl(self) -> str:
@@ -583,9 +588,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         table_options = build_postgres_storage_params_sql(
             adk_config, include_autovacuum=True, default_fillfactor=80, section="adk"
         )
-        generated_columns, generated_indexes, covering_columns = _postgres_event_ddl_options(
-            adk_config, self._events_table
-        )
+        generated_columns, _ = _postgres_event_ddl_options(adk_config)
+        indexes_sql = "\n        ".join(_postgres_event_index_statements(adk_config, self._events_table))
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -599,12 +603,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ){table_options};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(session_id, timestamp ASC){covering_columns};
-
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
-            ON {self._events_table}(app_name, timestamp ASC);
-        {generated_indexes}
+        {indexes_sql}
         """
 
     async def _app_states_table_ddl(self) -> str:
@@ -684,6 +683,47 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             if self._enable_bm25:
                 self._config._ensure_pg_textsearch_available()
             await driver.execute_script(await self._memory_table_ddl())
+
+    async def prepare_reconcile_async(self, driver: Any) -> None:
+        """Validate memory index settings and install PostgreSQL extensions before target DDL."""
+        if not self._enabled:
+            return
+        _postgres_memory_index_statements(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
+        for ext_name, statement in _postgres_memory_extensions(enable_bm25=self._enable_bm25):
+            try:
+                await driver.execute_script(statement)
+            except SQLSpecError as exc:
+                msg = f"Failed to install required PostgreSQL extension '{ext_name}' during ADK reconciliation: {exc}"
+                raise MigrationError(msg) from exc
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Ensure memory companion indexes exist on the migration driver."""
+        if not self._enabled:
+            return
+        for statement in _postgres_memory_index_statements(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        ):
+            await driver.execute_script(statement)
+
+    async def finalize_reconcile_async(self, driver: Any) -> None:
+        """Refresh PsqlpyConfig extension state after DDL succeeds."""
+        _ = driver
+        if not self._enabled:
+            return
+        installed = {name for name, _ in _postgres_memory_extensions(enable_bm25=self._enable_bm25)}
+        _refresh_psqlpy_extension_state(self._config, installed)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -891,13 +931,15 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        indexes_sql = _postgres_memory_indexes(
-            self._memory_table,
-            self._use_fts,
-            self._enable_bm25,
-            self._vector_index_type,
-            self._scann_num_leaves,
-            self._scann_quantizer,
+        indexes_sql = "\n        ".join(
+            _postgres_memory_index_statements(
+                self._memory_table,
+                self._use_fts,
+                self._enable_bm25,
+                self._vector_index_type,
+                self._scann_num_leaves,
+                self._scann_quantizer,
+            )
         )
 
         return f"""
@@ -1188,16 +1230,39 @@ def _adk_config(config: Any) -> PsqlpyADKConfig:
     return cast("PsqlpyADKConfig", adk_config)
 
 
-def _postgres_memory_indexes(
+def _postgres_session_index_statements(session_table: str) -> list[str]:
+    """Return guarded companion index DDL statements for the ADK session table."""
+    return [
+        f"CREATE INDEX IF NOT EXISTS idx_{session_table}_app_user ON {session_table}(app_name, user_id);",
+        f"CREATE INDEX IF NOT EXISTS idx_{session_table}_update_time ON {session_table}(update_time DESC);",
+        f"CREATE INDEX IF NOT EXISTS idx_{session_table}_state ON {session_table} USING GIN (state) WHERE state != '{{}}'::jsonb;",
+    ]
+
+
+def _postgres_event_index_statements(adk_config: PsqlpyADKConfig, events_table: str) -> list[str]:
+    """Return guarded companion index DDL statements for the ADK events table."""
+    _, covering_columns = _postgres_event_ddl_options(adk_config)
+    indexes = [
+        f"CREATE INDEX IF NOT EXISTS idx_{events_table}_session ON {events_table}(session_id, timestamp ASC){covering_columns};",
+        f"CREATE INDEX IF NOT EXISTS idx_{events_table}_app_timestamp ON {events_table}(app_name, timestamp ASC);",
+    ]
+    if adk_config.get("enable_event_generated_columns", False):
+        indexes.extend([
+            f"CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc ON {events_table}(session_id, author_gc, timestamp ASC);",
+            f"CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc ON {events_table}(session_id, node_path_gc, timestamp ASC);",
+        ])
+    return indexes
+
+
+def _postgres_memory_index_statements(
     memory_table: str,
     use_fts: bool,
     enable_bm25: bool,
     vector_index_type: str,
     scann_num_leaves: int,
     scann_quantizer: str,
-) -> str:
-    """Return the index DDL statements for the ADK memory table."""
-
+) -> list[str]:
+    """Return guarded companion index DDL statements for the ADK memory table."""
     indexes: list[str] = [
         f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_app_scope_user_time ON {memory_table}(app_name, scope, user_id, timestamp DESC);",
         f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scope ON {memory_table}(app_name, scope);",
@@ -1217,10 +1282,10 @@ def _postgres_memory_indexes(
     if vector_index_type == "scann":
         if not isinstance(scann_num_leaves, int) or isinstance(scann_num_leaves, bool) or scann_num_leaves <= 0:
             msg = "extension_config['adk']['scann_num_leaves'] must be a positive integer"
-            raise ValueError(msg)
+            raise ImproperConfigurationError(msg)
         if scann_quantizer not in {"SQ8", "FP32"}:
             msg = "extension_config['adk']['scann_quantizer'] must be 'SQ8' or 'FP32'"
-            raise ValueError(msg)
+            raise ImproperConfigurationError(msg)
         indexes.append(
             f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scann ON {memory_table} USING scann (embedding) WITH (num_leaves = {scann_num_leaves}, quantizer = '{scann_quantizer}');"
         )
@@ -1232,31 +1297,57 @@ def _postgres_memory_indexes(
         indexes.append(
             f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_hnsw ON {memory_table} USING hnsw (embedding vector_cosine_ops);"
         )
+    elif vector_index_type != "none":
+        msg = f"Invalid vector_index_type '{vector_index_type}'. Must be one of: hnsw, ivfflat, scann, none"
+        raise ImproperConfigurationError(msg)
 
-    return "\n        ".join(indexes)
+    return indexes
 
 
-def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig, events_table: str) -> "tuple[str, str, str]":
+def _postgres_memory_extensions(*, enable_bm25: bool) -> list[tuple[str, str]]:
+    """Return PostgreSQL extension name and DDL pairs required by ADK memory."""
+    extensions = [("vector", "CREATE EXTENSION IF NOT EXISTS vector")]
+    if enable_bm25:
+        extensions.append(("pg_textsearch", "CREATE EXTENSION IF NOT EXISTS pg_textsearch"))
+    return extensions
+
+
+def _refresh_psqlpy_extension_state(config: Any, installed_extensions: set[str]) -> None:
+    """Refresh cached PostgreSQL extension flags on PsqlpyConfig."""
+    statement_config = getattr(config, "statement_config", None)
+    driver_features = getattr(config, "driver_features", None)
+    if not isinstance(statement_config, StatementConfig) or not isinstance(driver_features, dict):
+        return
+
+    detected = set(installed_extensions)
+    existing_active = driver_features.get("active_extensions")
+    if isinstance(existing_active, (set, frozenset, list, tuple)):
+        detected.update(str(ext) for ext in existing_active)
+
+    base_stmt_cfg = (
+        statement_config.replace(dialect="postgres")
+        if statement_config.dialect in {"pgvector", "pg_textsearch", "paradedb"}
+        else statement_config
+    )
+    config.statement_config, config._pgvector_available, config._paradedb_available = resolve_postgres_extension_state(
+        base_stmt_cfg, driver_features, detected
+    )
+    config._pg_textsearch_available = is_postgres_extension_active(driver_features, "pg_textsearch")
+    config._pg_textsearch_probe_error = None
+
+
+def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig) -> "tuple[str, str]":
     generated_columns = ""
-    generated_indexes = ""
     if adk_config.get("enable_event_generated_columns", False):
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (event_data->>'author') STORED,
             node_path_gc TEXT GENERATED ALWAYS AS (event_data->'node_info'->>'path') STORED"""
-        generated_indexes = f"""
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_author_gc
-            ON {events_table}(session_id, author_gc, timestamp ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_{events_table}_node_path_gc
-            ON {events_table}(session_id, node_path_gc, timestamp ASC);
-        """
 
     covering_columns = ""
     if adk_config.get("enable_covering_indexes", False):
         covering_columns = " INCLUDE (invocation_id)"
 
-    return generated_columns, generated_indexes, covering_columns
+    return generated_columns, covering_columns
 
 
 def _raise_missing_session(session_id: str) -> NoReturn:

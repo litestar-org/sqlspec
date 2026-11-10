@@ -579,3 +579,91 @@ def test_cli_multi_config_continues_past_rejected_config(tmp_path: Path) -> None
     with sqlite3.connect(good_db) as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert "users" in tables
+
+
+def _reconcile_cli_config(bind_key: str, db_path: Path, migrations_dir: Path, ext_dir: Path) -> SqliteConfig:
+    from typing import Any, cast
+
+    return SqliteConfig(
+        bind_key=bind_key,
+        connection_config={"database": str(db_path)},
+        migration_config={"enabled": True, "script_location": str(migrations_dir), "include_extensions": ["demo"]},
+        extension_config=cast("Any", {"demo": {"migrations_path": ext_dir, "migration_mode": "reconcile"}}),
+    )
+
+
+@pytest.mark.parametrize(
+    "cli_args",
+    [("upgrade", "0001", "--dry-run", "--no-prompt"), ("downgrade", "--dry-run", "--no-prompt")],
+    ids=["upgrade-dry", "downgrade-dry"],
+)
+def test_cli_single_and_multi_config_dry_run_ops_succeed_without_importing_reconcilers(
+    tmp_path: Path, cli_args: tuple[str, ...]
+) -> None:
+    """Single- and multi-config CLI dry-run upgrade and downgrade succeed without importing reconcile.py."""
+    migrations_dir = tmp_path / "migrations"
+    _write_migrations(migrations_dir)
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text('raise RuntimeError("imported_cli")\n', encoding="utf-8")
+
+    cfg1 = _reconcile_cli_config("primary", tmp_path / "one.db", migrations_dir, ext_dir)
+    single_res = _invoke(cfg1, *cli_args)
+    assert single_res.exit_code == 0, single_res.output
+
+    cfg2 = _sqlite_config(tmp_path / "two.db", migrations_dir)
+    cfg2.bind_key = "secondary"
+    multi_res = _invoke([cfg1, cfg2], *cli_args)
+    assert multi_res.exit_code == 0, multi_res.output
+
+
+@pytest.mark.parametrize(
+    "cli_args",
+    [("upgrade", "0001", "--no-prompt"), ("downgrade", "--no-prompt")],
+    ids=["upgrade-live", "downgrade-live"],
+)
+def test_cli_single_and_multi_config_live_ops_report_reconciler_errors(
+    tmp_path: Path, cli_args: tuple[str, ...]
+) -> None:
+    """Single- and multi-config CLI live upgrade and base downgrade surface reconciler errors cleanly."""
+    migrations_dir = tmp_path / "migrations"
+    _write_migrations(migrations_dir)
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text(
+        'from sqlspec.exceptions import MigrationError\nraise_err = MigrationError("demo_reconcile_failed")\ndef reconcile(context):\n    raise raise_err\ndef downgrade(context):\n    raise raise_err\n',
+        encoding="utf-8",
+    )
+
+    cfg1 = _reconcile_cli_config("primary", tmp_path / "one.db", migrations_dir, ext_dir)
+    single_res = _invoke(cfg1, *cli_args)
+    _assert_cli_error(single_res, "demo_reconcile_failed")
+
+    cfg2 = _sqlite_config(tmp_path / "two.db", migrations_dir)
+    cfg2.bind_key = "secondary"
+    multi_res = _invoke([cfg1, cfg2], *cli_args)
+    assert multi_res.exit_code == 1, multi_res.output
+    assert isinstance(multi_res.exception, SystemExit)
+
+
+def test_cli_multi_config_head_dry_run_succeeds_and_missing_reconcile_module_exits_cleanly(tmp_path: Path) -> None:
+    """Multi-config upgrade --dry-run to head succeeds with reconcilers, and missing reconcile.py exits 1 cleanly."""
+    migrations_dir = tmp_path / "migrations"
+    _write_migrations(migrations_dir)
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text('raise RuntimeError("imported_head_dry")\n', encoding="utf-8")
+
+    cfg1 = _reconcile_cli_config("primary", tmp_path / "one.db", migrations_dir, ext_dir)
+    cfg2 = _reconcile_cli_config("secondary", tmp_path / "two.db", migrations_dir, ext_dir)
+
+    ok_res = _invoke([cfg1, cfg2], "upgrade", "--dry-run")
+    assert ok_res.exit_code == 0, ok_res.output
+    assert "Would upgrade to head 2 configuration(s)" in ok_res.output
+
+    missing_ext = tmp_path / "ext_missing"
+    missing_ext.mkdir()
+    bad_cfg = _reconcile_cli_config("broken", tmp_path / "broken.db", migrations_dir, missing_ext)
+    bad_res = _invoke([cfg1, bad_cfg], "upgrade", "--dry-run")
+    _assert_cli_error(bad_res, "reconcile.py")
+    assert "Would upgrade" not in bad_res.output

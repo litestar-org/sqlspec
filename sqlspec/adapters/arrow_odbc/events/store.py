@@ -6,6 +6,7 @@ from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
 from sqlspec.adapters.arrow_odbc.core import quote_bracket_identifier, split_db2_name, strip_bracket_quotes
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.text import split_qualified_identifier
 
 __all__ = ("ArrowOdbcEventQueueStore",)
@@ -77,6 +78,13 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
         if self._db2:
             return split_db2_name(self.table_name)
         return None
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build a queue SchemaTarget with Db2 catalog-folded schema and table names when applicable."""
+        if self._db2:
+            schema, table = split_db2_name(self.table_name)
+            return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="db2")
+        return super()._schema_target()
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         if self._db2:

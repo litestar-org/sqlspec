@@ -17,6 +17,7 @@ from sqlspec.adapters.oracledb.adk import (
     OracleSyncADKStore,
 )
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
+from sqlspec.migrations.schema import metadata_has_index
 
 pytestmark = [pytest.mark.xdist_group("oracle"), pytest.mark.oracledb, pytest.mark.integration]
 
@@ -610,3 +611,103 @@ def test_oracle_sync_adk_memory_store_insert_and_search_embedding(
     )
     assert len(results) >= 1
     assert results[0]["embedding"] is not None
+
+
+class _SyncRecordingDriverProxy:
+    """Forwarding proxy for slotted OracleSyncDriver recording direct execute DDL statements."""
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+        self.executed: list[str] = []
+
+    def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.executed.append(str(statement))
+        return self._driver.execute(statement, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._driver, name)
+
+
+class _AsyncRecordingDriverProxy:
+    """Forwarding proxy for slotted OracleAsyncDriver recording direct execute DDL statements."""
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+        self.executed: list[str] = []
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.executed.append(str(statement))
+        return await self._driver.execute(statement, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._driver, name)
+
+
+async def test_oracle_companions_restore_dropped_index_sync(oracle_sync_store: "OracleSyncADKStore") -> None:
+    """Sync companion reconciliation restores a dropped index without altering rows or JSON storage."""
+    session_id = _unique_session_id("reconcile-idx-sync")
+    app_name = "test-app"
+    user_id = "user-reconcile"
+    state = {"preserved": True, "count": 7}
+    oracle_sync_store.create_session(session_id, app_name, user_id, state)
+
+    state_type_sql = "SELECT data_type FROM user_tab_columns WHERE table_name = 'ADK_SESSION' AND column_name = 'STATE'"
+    with oracle_sync_store.config.provide_session() as driver:
+        before_type = driver.select_value(state_type_sql)
+        driver.execute("DROP INDEX idx_adk_session_update_time")
+        assert not metadata_has_index(
+            driver.data_dictionary.get_indexes(driver), "adk_session", "idx_adk_session_update_time"
+        )
+
+        proxy = _SyncRecordingDriverProxy(driver)
+        oracle_sync_store.reconcile_companion_objects_sync(proxy)
+        assert proxy.executed == ["CREATE INDEX idx_adk_session_update_time ON adk_session(update_time DESC)"]
+        assert metadata_has_index(
+            driver.data_dictionary.get_indexes(driver), "adk_session", "idx_adk_session_update_time"
+        )
+
+        proxy.executed.clear()
+        oracle_sync_store.reconcile_companion_objects_sync(proxy)
+        assert proxy.executed == []
+
+        after_type = driver.select_value(state_type_sql)
+        assert after_type == before_type
+
+    retrieved = oracle_sync_store.get_session(app_name, user_id, session_id)
+    assert retrieved is not None
+    assert retrieved["state"] == state
+
+
+async def test_oracle_companions_restore_dropped_index_async(oracle_async_store: "OracleAsyncADKStore") -> None:
+    """Async companion reconciliation restores a dropped index without altering rows or JSON storage."""
+    session_id = _unique_session_id("reconcile-idx-async")
+    app_name = "test-app"
+    user_id = "user-reconcile"
+    state = {"preserved": True, "count": 9}
+    await oracle_async_store.create_session(session_id, app_name, user_id, state)
+
+    state_type_sql = "SELECT data_type FROM user_tab_columns WHERE table_name = 'ADK_SESSION' AND column_name = 'STATE'"
+    async with oracle_async_store.config.provide_session() as driver:
+        before_type = await driver.select_value(state_type_sql)
+        await driver.execute("DROP INDEX idx_adk_session_update_time")
+        assert not metadata_has_index(
+            await driver.data_dictionary.get_indexes(driver), "adk_session", "idx_adk_session_update_time"
+        )
+
+        proxy = _AsyncRecordingDriverProxy(driver)
+        await oracle_async_store.reconcile_companion_objects_async(proxy)
+        assert proxy.executed == ["CREATE INDEX idx_adk_session_update_time ON adk_session(update_time DESC)"]
+        assert metadata_has_index(
+            await driver.data_dictionary.get_indexes(driver), "adk_session", "idx_adk_session_update_time"
+        )
+
+        proxy.executed.clear()
+        await oracle_async_store.reconcile_companion_objects_async(proxy)
+        assert proxy.executed == []
+
+        after_type = await driver.select_value(state_type_sql)
+        assert after_type == before_type
+
+    retrieved = await oracle_async_store.get_session(app_name, user_id, session_id)
+    assert retrieved is not None
+    assert retrieved["state"] == state

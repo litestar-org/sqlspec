@@ -134,3 +134,8 @@ def test_db2_merge_unaliased_source_casts_remaining_types() -> None:
     assert "CAST(:raw AS VARBINARY(32672)) AS raw" in flat
     assert "CAST(:ratio AS DOUBLE) AS ratio" in flat
     assert "USING ( SELECT" in flat
+
+
+def test_db2_create_table_inline_primary_key_emits_not_null() -> None:
+    built = sql.create_table("ddl_migrations").column("version_num", "VARCHAR(32)", primary_key=True).build("db2")
+    assert "version_num VARCHAR(32) NOT NULL PRIMARY KEY" in built.sql

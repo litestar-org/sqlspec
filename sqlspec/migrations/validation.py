@@ -79,8 +79,8 @@ def detect_out_of_order_migrations(
 
     gaps: list[MigrationGap] = []
 
-    valid_applied = [v for v in applied_versions if v is not None and v.strip()]
-    valid_pending = [v for v in pending_versions if v is not None and v.strip()]
+    valid_applied = [v for v in applied_versions if v is not None and v.strip() and not v.strip().startswith("ext_")]
+    valid_pending = [v for v in pending_versions if v is not None and v.strip() and not v.strip().startswith("ext_")]
 
     if not valid_applied or not valid_pending:
         return []

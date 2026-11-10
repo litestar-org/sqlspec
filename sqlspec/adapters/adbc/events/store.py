@@ -15,8 +15,15 @@ ADBC supports the following database backends:
 import logging
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.adapters.adbc.core import is_postgres_dialect, resolve_dialect_from_config
+from sqlspec.adapters.adbc.core import (
+    RECONCILE_ADBC_DIALECTS,
+    is_postgres_dialect,
+    resolve_dialect_from_config,
+    split_db2_table_name,
+)
+from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -130,8 +137,23 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         driver_lower = str(driver_name).lower() if driver_name else ""
         uri_lower = str(uri).lower() if uri else ""
 
-        if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
-            return DIALECT_FLIGHTSQL
+        raw_gizmo = connection_config.get("gizmosql_backend")
+        if isinstance(raw_gizmo, str) and raw_gizmo.strip():
+            normalized_gizmo = normalize_dialect_name(raw_gizmo.strip())
+            if normalized_gizmo in {DIALECT_DUCKDB, DIALECT_SQLITE}:
+                return normalized_gizmo
+
+        is_flight_or_grpc = (
+            "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith(("grpc://", "grpc+tls://"))
+        )
+        if is_flight_or_grpc:
+            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+            if isinstance(explicit_dialect, str) and explicit_dialect.strip():
+                normalized_explicit = normalize_dialect_name(explicit_dialect.strip())
+                if normalized_explicit in RECONCILE_ADBC_DIALECTS and normalized_explicit != DIALECT_SQLITE:
+                    return normalized_explicit
+            if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
+                return DIALECT_FLIGHTSQL
 
         resolved = resolve_dialect_from_config(connection_config)
         if is_postgres_dialect(resolved):
@@ -269,7 +291,32 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 return f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NULL BEGIN {statement}; END"
             if object_type == "index":
                 return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{self._index_name()}' AND object_id = OBJECT_ID(N'{self.table_name}')) BEGIN {statement}; END"
+        upper_statement = statement.upper()
+        if object_type == "table" and "CREATE TABLE IF NOT EXISTS" not in upper_statement:
+            return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+        if object_type == "index" and "CREATE INDEX IF NOT EXISTS" not in upper_statement:
+            return statement.replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1)
         return statement
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build a queue SchemaTarget using the resolved ADBC backend dialect."""
+        dialect = self.dialect
+        if dialect == DIALECT_DB2:
+            schema, table = split_db2_table_name(self.table_name)
+            return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="db2")
+        parse_dialect = "tsql" if dialect == DIALECT_MSSQL else ("sqlite" if dialect == DIALECT_FLIGHTSQL else dialect)
+        return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=parse_dialect)
+
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        """Return optional schema and table name for companion queue index catalog lookup."""
+        if self._index_ddl() is None:
+            return None
+        if self.dialect == DIALECT_DB2:
+            return split_db2_table_name(self.table_name)
+        raw_schema, dot, raw_table = self.table_name.partition(".")
+        if dot:
+            return raw_schema or None, raw_table
+        return None, self.table_name
 
     def _wrap_drop_statement(self, statement: str) -> str:
         """Return statement unchanged since drop_statements handles dialect guards."""

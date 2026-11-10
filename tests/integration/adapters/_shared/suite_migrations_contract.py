@@ -10,6 +10,7 @@ from tests.integration.adapters._shared._migration_cases import (
     sync_migration_params_with,
 )
 from tests.integration.adapters._shared.migration_behaviors import (
+    assert_async_extension_reconciliation_contract,
     assert_async_migration_current_contract,
     assert_async_migration_default_schema_contract,
     assert_async_migration_error_handling_contract,
@@ -20,6 +21,7 @@ from tests.integration.adapters._shared.migration_behaviors import (
     assert_async_migration_multiple_contract,
     assert_async_migration_non_transactional_default_schema_contract,
     assert_async_migration_version_table_schema_contract,
+    assert_sync_extension_reconciliation_contract,
     assert_sync_migration_current_contract,
     assert_sync_migration_default_schema_contract,
     assert_sync_migration_error_handling_contract,
@@ -184,5 +186,19 @@ async def test_async_migration_non_transactional_default_schema_contract(
 ) -> None:
     """Async non-transactional SQL migrations honor the configured default schema."""
     await assert_async_migration_non_transactional_default_schema_contract(
+        async_migration_case.make_config, async_migration_case.case, tmp_path
+    )
+
+
+def test_sync_extension_reconciliation_contract(sync_migration_case: MigrationCaseContext, tmp_path: Path) -> None:
+    """Sync migrations execute opt-in extension reconcilers on head upgrades and isolate the ledger."""
+    assert_sync_extension_reconciliation_contract(sync_migration_case.make_config, sync_migration_case.case, tmp_path)
+
+
+async def test_async_extension_reconciliation_contract(
+    async_migration_case: MigrationCaseContext, tmp_path: Path
+) -> None:
+    """Async migrations execute opt-in extension reconcilers on head upgrades and isolate the ledger."""
+    await assert_async_extension_reconciliation_contract(
         async_migration_case.make_config, async_migration_case.case, tmp_path
     )

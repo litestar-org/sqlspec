@@ -11,7 +11,8 @@ from sqlspec.adapters.sybase.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -64,28 +65,41 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
+    def _schema_target(self) -> SchemaTarget:
+        """Build the Sybase ASE session SchemaTarget from unwrapped DDL."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        parsed = SchemaTarget.from_ddl(
+            bare_table, _session_create_table_sql(self._table_name), schema=schema_name, dialect="sybase"
+        )
+        return SchemaTarget(
+            parsed.table_name,
+            parsed.create_table,
+            schema=parsed.schema,
+            create_statement=self._table_ddl(),
+            constraint_columns=parsed.constraint_columns,
+            unsafe_add_columns=parsed.unsafe_add_columns,
+        )
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Sybase ASE session expiry companion index and guarded DDL."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        return [
+            CompanionIndex(
+                name=f"IX_{bare_table}_expires_at",
+                table=bare_table,
+                schema=schema_name,
+                ddl=_session_index_guard_sql(self._table_name),
+            )
+        ]
+
     def _table_ddl(self) -> str:
         """Get Sybase ASE CREATE TABLE SQL with OBJECT_ID existence guards."""
-        _, table_name = split_schema_and_table(self._table_name)
         table_ref = _table_ref(self._table_name)
         escaped_table_ref = escape_sql_literal(table_ref)
-        index_bare = f"IX_{table_name}_expires_at"
-        escaped_index_bare = escape_sql_literal(index_bare)
-        index_name = quote_bracket_identifier(index_bare)
-        create_table_sql = escape_sql_literal(
-            f"CREATE TABLE {table_ref} ("
-            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
-            "data IMAGE NOT NULL, "
-            "expires_at BIGDATETIME NULL, "
-            "created_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
-            "updated_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL"
-            ")"
-        )
-        create_index_sql = escape_sql_literal(f"CREATE INDEX {index_name} ON {table_ref}(expires_at)")
+        create_table_sql = escape_sql_literal(_session_create_table_sql(self._table_name))
         return (
             f"IF OBJECT_ID('{escaped_table_ref}') IS NULL EXECUTE('{create_table_sql}');\n"
-            f"IF NOT EXISTS (SELECT 1 FROM dbo.sysindexes WHERE name = '{escaped_index_bare}' "
-            f"AND id = OBJECT_ID('{escaped_table_ref}')) EXECUTE('{create_index_sql}');"
+            f"{_session_index_guard_sql(self._table_name)}"
         )
 
     def _drop_table_sql(self) -> "list[str]":
@@ -223,6 +237,35 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         if count > 0:
             self._log_delete_expired(count)
         return count
+
+
+def _session_create_table_sql(table: str) -> str:
+    """Return the unwrapped Sybase ASE CREATE TABLE statement for session storage."""
+    table_ref = _table_ref(table)
+    return (
+        f"CREATE TABLE {table_ref} ("
+        "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
+        "data IMAGE NOT NULL, "
+        "expires_at BIGDATETIME NULL, "
+        "created_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
+        "updated_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL"
+        ")"
+    )
+
+
+def _session_index_guard_sql(table: str) -> str:
+    """Return the guarded Sybase ASE companion index DDL for session expiration."""
+    _, table_name = split_schema_and_table(table)
+    table_ref = _table_ref(table)
+    escaped_table_ref = escape_sql_literal(table_ref)
+    index_bare = f"IX_{table_name}_expires_at"
+    escaped_index_bare = escape_sql_literal(index_bare)
+    index_name = quote_bracket_identifier(index_bare)
+    create_index_sql = escape_sql_literal(f"CREATE INDEX {index_name} ON {table_ref}(expires_at)")
+    return (
+        f"IF NOT EXISTS (SELECT 1 FROM dbo.sysindexes WHERE name = '{escaped_index_bare}' "
+        f"AND id = OBJECT_ID('{escaped_table_ref}')) EXECUTE('{create_index_sql}');"
+    )
 
 
 def _table_ref(table_name: str) -> str:

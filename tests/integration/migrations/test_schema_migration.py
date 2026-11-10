@@ -1,10 +1,13 @@
 """Integration tests for migration tracking table schema migration."""
 
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.exceptions import MigrationError
+from sqlspec.migrations import create_migration_commands
 from sqlspec.migrations.tracker import SyncMigrationTracker
 
 
@@ -313,3 +316,196 @@ def test_tracker_get_applied_migrations_orders_by_execution_sequence(sqlite_sess
     assert applied[0]["version_num"] == "0001"
     assert applied[1]["version_num"] == "0003"
     assert applied[2]["version_num"] == "0002"
+
+
+def test_sqlite_litestar_reconcile_mode_end_to_end(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from sqlspec.migrations.commands import SyncMigrationCommands
+
+    root = Path(str(tmp_path))
+    migrations_dir = root / "migrations"
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    db_path = root / "litestar_e2e.db"
+
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        migration_config={"script_location": str(migrations_dir)},
+        extension_config={"litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"}},
+    )
+    try:
+        with config.provide_session() as session:
+            session.execute_script(
+                "CREATE TABLE litestar_session (session_id TEXT PRIMARY KEY, data BLOB NOT NULL); "
+                "INSERT INTO litestar_session (session_id, data) VALUES ('keep-me', X'0102');"
+            )
+            session.commit()
+
+        commands = SyncMigrationCommands(config)
+        commands.upgrade()
+        commands.upgrade()
+
+        with config.provide_session() as session:
+            cols = {
+                str(col["column_name"]).casefold()
+                for col in session.data_dictionary.get_columns(session, "litestar_session")
+            }
+            rows = session.select("SELECT session_id, data FROM litestar_session")
+            ledger = session.select("SELECT version_num FROM ddl_migrations")
+
+        assert "expires_at" in cols
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == "keep-me"
+        assert all(not str(r["version_num"]).startswith("ext_litestar_") for r in ledger)
+
+        commands.downgrade()
+        with config.provide_session() as session:
+            remaining_tables = {
+                str(tbl["table_name"]).casefold() for tbl in session.data_dictionary.get_tables(session)
+            }
+        assert "litestar_session" not in remaining_tables
+    finally:
+        config.close_pool()
+
+
+def test_extension_reconciliation_acceptance(tmp_path: Path) -> None:
+    """Verify public upgrade() reconciliation, dry-run isolation, ledger exclusion, and retry recovery."""
+    preview_db = tmp_path / "preview.db"
+    preview_migrations = tmp_path / "preview_migrations"
+    preview_migrations.mkdir(parents=True, exist_ok=True)
+    preview_ext = tmp_path / "preview_ext"
+    preview_ext.mkdir(parents=True, exist_ok=True)
+    (preview_ext / "reconcile.py").write_text(
+        'raise RuntimeError("dry_run must not import reconcile")\n', encoding="utf-8"
+    )
+
+    preview_config = SqliteConfig(
+        connection_config={"database": str(preview_db)}, migration_config={"script_location": str(preview_migrations)}
+    )
+    preview_config.add_extension_migrations("smoke_ext", preview_ext, migration_mode="reconcile")
+    try:
+        create_migration_commands(preview_config).upgrade(dry_run=True, echo=False)
+        with preview_config.provide_session() as session:
+            assert session.select("SELECT name FROM sqlite_master WHERE type = 'table'") == []
+    finally:
+        preview_config.close_pool()
+
+    db_path = tmp_path / "acceptance.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    ext_dir = tmp_path / "smoke_ext"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    fail_marker = tmp_path / "fail"
+
+    (ext_dir / "0001_shipped.sql").write_text(
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE smoke_numbered (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0001-down\n"
+        "DROP TABLE smoke_numbered;\n",
+        encoding="utf-8",
+    )
+    (ext_dir / "reconcile.py").write_text(
+        "from pathlib import Path\n\n\n"
+        "def reconcile(context) -> None:\n"
+        "    if Path(str(context.extension_config['fail_marker'])).exists():\n"
+        "        raise RuntimeError('boom')\n"
+        "    assert context.driver is not None\n"
+        "    context.driver.execute_script(\n"
+        "        'CREATE TABLE IF NOT EXISTS smoke_calls (id INTEGER PRIMARY KEY); '\n"
+        "        'INSERT INTO smoke_calls DEFAULT VALUES;'\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+    )
+    config.add_extension_migrations("smoke_ext", ext_dir, {"fail_marker": str(fail_marker)}, migration_mode="reconcile")
+    try:
+        commands = create_migration_commands(config)
+        commands.upgrade(echo=False)
+        with config.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_calls") == 1
+            assert (
+                session.select_value(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_numbered'"
+                )
+                == 0
+            )
+            if session.select_value(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ddl_migrations'"
+            ):
+                assert session.select_value("SELECT COUNT(*) FROM ddl_migrations") == 0
+
+        commands.upgrade(echo=False)
+        with config.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_calls") == 2
+            assert (
+                session.select_value(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_numbered'"
+                )
+                == 0
+            )
+
+        (migrations_dir / "0001_items.sql").write_text(
+            "-- name: migrate-0001-up\n"
+            "CREATE TABLE smoke_items AS SELECT COUNT(*) AS seen_calls FROM smoke_calls;\n"
+            "-- name: migrate-0001-down\n"
+            "DROP TABLE smoke_items;\n",
+            encoding="utf-8",
+        )
+        commands.upgrade(echo=False)
+        with config.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_calls") == 3
+            assert session.select_value("SELECT seen_calls FROM smoke_items") == 3
+            assert [
+                row["version_num"]
+                for row in session.select("SELECT version_num FROM ddl_migrations ORDER BY execution_sequence")
+            ] == ["0001"]
+            assert (
+                session.select_value("SELECT COUNT(*) FROM ddl_migrations WHERE version_num LIKE 'ext_smoke_ext_%'")
+                == 0
+            )
+
+        fail_marker.write_text("1", encoding="utf-8")
+        (migrations_dir / "0002_after.sql").write_text(
+            "-- name: migrate-0002-up\n"
+            "CREATE TABLE smoke_after (id INTEGER PRIMARY KEY);\n"
+            "-- name: migrate-0002-down\n"
+            "DROP TABLE smoke_after;\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MigrationError) as exc_info:
+            commands.upgrade(echo=False)
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert str(exc_info.value.__cause__) == "boom"
+
+        with config.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_calls") == 3
+            assert (
+                session.select_value("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_after'")
+                == 0
+            )
+            assert [
+                row["version_num"]
+                for row in session.select("SELECT version_num FROM ddl_migrations ORDER BY execution_sequence")
+            ] == ["0001"]
+
+        fail_marker.unlink()
+        commands.upgrade(echo=False)
+        with config.provide_session() as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_calls") == 4
+            assert (
+                session.select_value("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_after'")
+                == 1
+            )
+            assert [
+                row["version_num"]
+                for row in session.select("SELECT version_num FROM ddl_migrations ORDER BY execution_sequence")
+            ] == ["0001", "0002"]
+            assert (
+                session.select_value("SELECT COUNT(*) FROM ddl_migrations WHERE version_num LIKE 'ext_smoke_ext_%'")
+                == 0
+            )
+    finally:
+        config.close_pool()

@@ -712,6 +712,31 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await _close_cursor(await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
         self._configured_connections.add(connection)
 
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing aiosqlite session and event companion indexes without committing."""
+        for statement in self._companion_index_statements():
+            await driver.execute(statement)
+
+    def _session_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the sessions table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user\n            ON {self._session_table}(app_name, user_id)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time\n            ON {self._session_table}(update_time DESC)",
+        ]
+
+    def _event_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the events table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session\n            ON {self._events_table}(app_name, user_id, session_id, timestamp ASC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_invocation\n            ON {self._events_table}(invocation_id)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp\n            ON {self._events_table}(timestamp ASC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp\n            ON {self._events_table}(app_name, timestamp ASC)",
+        ]
+
+    def _companion_index_statements(self) -> list[str]:
+        """Return canonical session and event companion index statements."""
+        return [*self._session_index_statements(), *self._event_index_statements()]
+
     async def _sessions_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for sessions.
 
@@ -722,43 +747,37 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id TEXT PRIMARY KEY,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL{owner_id_line},
-            state TEXT NOT NULL DEFAULT '{{}}',
-            create_time REAL NOT NULL,
-            update_time REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
-            ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
-            ON {self._session_table}(update_time DESC);
-        """
+        index_lines = "\n".join(f"        {stmt};" for stmt in self._session_index_statements())
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._session_table} (\n"
+            f"            id TEXT PRIMARY KEY,\n"
+            f"            app_name TEXT NOT NULL,\n"
+            f"            user_id TEXT NOT NULL{owner_id_line},\n"
+            f"            state TEXT NOT NULL DEFAULT '{{}}',\n"
+            f"            create_time REAL NOT NULL,\n"
+            f"            update_time REAL NOT NULL\n"
+            f"        );\n"
+            f"{index_lines}\n"
+            f"        "
+        )
 
     async def _events_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for events."""
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id TEXT PRIMARY KEY,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            invocation_id TEXT,
-            timestamp REAL NOT NULL,
-            event_data TEXT NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
-            ON {self._events_table}(app_name, user_id, session_id, timestamp ASC);
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_invocation
-            ON {self._events_table}(invocation_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_timestamp
-            ON {self._events_table}(timestamp ASC);
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
-            ON {self._events_table}(app_name, timestamp ASC);
-        """
+        index_lines = "\n".join(f"        {stmt};" for stmt in self._event_index_statements())
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._events_table} (\n"
+            f"            id TEXT PRIMARY KEY,\n"
+            f"            app_name TEXT NOT NULL,\n"
+            f"            user_id TEXT NOT NULL,\n"
+            f"            session_id TEXT NOT NULL,\n"
+            f"            invocation_id TEXT,\n"
+            f"            timestamp REAL NOT NULL,\n"
+            f"            event_data TEXT NOT NULL,\n"
+            f"            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE\n"
+            f"        );\n"
+            f"{index_lines}\n"
+            f"        "
+        )
 
     async def _app_states_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for app-scoped state."""
@@ -857,8 +876,26 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         async with self._config.provide_session() as driver:
             await self._enable_foreign_keys(driver.connection)
+            missing = await self._missing_fts_objects(driver) if self._use_fts else []
             await driver.execute_script(await self._memory_table_ddl())
+            if missing and await self._has_memory_rows(driver):
+                await driver.execute(self._memory_fts_rebuild_statement())
             await driver.commit()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing aiosqlite memory indexes and FTS5 companions without committing."""
+        if not self._enabled:
+            return
+        for statement in self._memory_index_statements():
+            await driver.execute(statement)
+        if not self._use_fts:
+            return
+        fts_statements = self._memory_fts_statements()
+        missing = await self._missing_fts_objects(driver)
+        for name in missing:
+            await driver.execute(fts_statements[name])
+        if missing and await self._has_memory_rows(driver):
+            await driver.execute(self._memory_fts_rebuild_statement())
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication.
@@ -1104,6 +1141,69 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             await _close_cursor(await connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
         self._configured_connections.add(connection)
 
+    def _memory_index_statements(self) -> list[str]:
+        """Return canonical CREATE INDEX statements for the memory table."""
+        return [
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time\n            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope\n            ON {self._memory_table}(app_name, scope)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session\n            ON {self._memory_table}(session_id)",
+        ]
+
+    def _memory_fts_statements(self) -> dict[str, str]:
+        """Return canonical FTS5 virtual-table and trigger DDL keyed by object name."""
+        if not self._use_fts:
+            return {}
+        fts_options = _format_fts_options(self._fts_options)
+        table = self._memory_table
+        return {
+            f"{table}_fts": (
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {table}_fts USING fts5(\n"
+                f"            content_text,\n"
+                f"            content={table},\n"
+                f"            content_rowid=rowid{fts_options}\n"
+                f"        )"
+            ),
+            f"{table}_ai": (
+                f"CREATE TRIGGER IF NOT EXISTS {table}_ai AFTER INSERT ON {table} BEGIN\n"
+                f"            INSERT INTO {table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);\n"
+                f"        END"
+            ),
+            f"{table}_ad": (
+                f"CREATE TRIGGER IF NOT EXISTS {table}_ad AFTER DELETE ON {table} BEGIN\n"
+                f"            INSERT INTO {table}_fts({table}_fts, rowid, content_text)\n"
+                f"            VALUES('delete', old.rowid, old.content_text);\n"
+                f"        END"
+            ),
+            f"{table}_au": (
+                f"CREATE TRIGGER IF NOT EXISTS {table}_au AFTER UPDATE ON {table} BEGIN\n"
+                f"            INSERT INTO {table}_fts({table}_fts, rowid, content_text)\n"
+                f"            VALUES('delete', old.rowid, old.content_text);\n"
+                f"            INSERT INTO {table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);\n"
+                f"        END"
+            ),
+        }
+
+    def _memory_fts_rebuild_statement(self) -> str:
+        """Return the SQLite external-content FTS5 rebuild statement."""
+        return f"INSERT INTO {self._memory_table}_fts({self._memory_table}_fts) VALUES('rebuild')"
+
+    async def _missing_fts_objects(self, driver: Any) -> list[str]:
+        """Return configured FTS5 table and trigger names missing from sqlite_master."""
+        expected = tuple(self._memory_fts_statements())
+        if not expected:
+            return []
+        rows = await driver.select(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') AND lower(name) IN (?, ?, ?, ?)",
+            tuple(name.lower() for name in expected),
+        )
+        present = {str(row["name"]).lower() for row in rows}
+        return [name for name in expected if name.lower() not in present]
+
+    async def _has_memory_rows(self, driver: Any) -> bool:
+        """Return whether the memory table currently contains at least one row."""
+        rows = await driver.select(f"SELECT 1 AS present FROM {self._memory_table} LIMIT 1")
+        return bool(rows)
+
     async def _memory_table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL for memory entries.
 
@@ -1114,59 +1214,32 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        fts_table = ""
-        if self._use_fts:
-            fts_options = _format_fts_options(self._fts_options)
-            fts_table = f"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS {self._memory_table}_fts USING fts5(
-            content_text,
-            content={self._memory_table},
-            content_rowid=rowid{fts_options}
-        );
+        index_lines = "\n\n".join(f"        {stmt};" for stmt in self._memory_index_statements())
+        fts_statements = self._memory_fts_statements()
+        fts_section = ""
+        if fts_statements:
+            fts_lines = "\n\n".join(f"        {stmt};" for stmt in fts_statements.values())
+            fts_section = f"\n\n{fts_lines}"
 
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ai AFTER INSERT ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_ad AFTER DELETE ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
-            VALUES('delete', old.rowid, old.content_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {self._memory_table}_au AFTER UPDATE ON {self._memory_table} BEGIN
-            INSERT INTO {self._memory_table}_fts({self._memory_table}_fts, rowid, content_text)
-            VALUES('delete', old.rowid, old.content_text);
-            INSERT INTO {self._memory_table}_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
-        END;
-            """
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._memory_table} (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            app_name TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            scope TEXT NOT NULL DEFAULT 'user',
-            event_id TEXT NOT NULL UNIQUE,
-            author TEXT{owner_id_line},
-            timestamp REAL NOT NULL,
-            content_json TEXT NOT NULL,
-            content_text TEXT NOT NULL,
-            metadata_json TEXT,
-            inserted_at REAL NOT NULL,
-            embedding BLOB
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
-            ON {self._memory_table}(app_name, scope, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
-            ON {self._memory_table}(app_name, scope);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_table}
-        """
+        return (
+            f"\n        CREATE TABLE IF NOT EXISTS {self._memory_table} (\n"
+            f"            id TEXT PRIMARY KEY,\n"
+            f"            session_id TEXT NOT NULL,\n"
+            f"            app_name TEXT NOT NULL,\n"
+            f"            user_id TEXT NOT NULL,\n"
+            f"            scope TEXT NOT NULL DEFAULT 'user',\n"
+            f"            event_id TEXT NOT NULL UNIQUE,\n"
+            f"            author TEXT{owner_id_line},\n"
+            f"            timestamp REAL NOT NULL,\n"
+            f"            content_json TEXT NOT NULL,\n"
+            f"            content_text TEXT NOT NULL,\n"
+            f"            metadata_json TEXT,\n"
+            f"            inserted_at REAL NOT NULL,\n"
+            f"            embedding BLOB\n"
+            f"        );\n\n"
+            f"{index_lines}{fts_section}\n"
+            f"        "
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get SQLite DROP TABLE SQL statements."""

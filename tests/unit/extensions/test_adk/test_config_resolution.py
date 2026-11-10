@@ -12,7 +12,7 @@ from sqlspec.adapters.spanner.adk.store import SpannerSyncADKMemoryStore, Spanne
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk.store import SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
 from sqlspec.extensions.adk import _config_utils
 from sqlspec.extensions.adk._config_utils import (
     _adk_artifact_store_config,
@@ -414,3 +414,23 @@ def test_adk_instance_store_attribute_supplies_declared_options() -> None:
     assert _adk_session_store_config(accepted)["session_table"] == "adk_session"
     with pytest.raises(ImproperConfigurationError, match="unknown_option"):
         _adk_session_store_config(rejected)
+
+
+@pytest.mark.parametrize("config_class", [_DeclaringBuiltinConfig, _ExternalConfig])
+def test_adk_explicit_custom_store_validates_migration_mode(config_class: type[SqliteConfig]) -> None:
+    """Explicit custom ADK stores accept migration_mode without declaring it and reject invalid values."""
+    valid_config = _sqlite_config(config_class, {"session_opt": 1, "migration_mode": "reconcile"})
+    assert _DeclaringADKStore(valid_config).session_table == "adk_session"
+
+    with pytest.raises(MigrationError, match="migration_mode"):
+        _sqlite_config(config_class, {"session_opt": 1, "migration_mode": "bogus"})
+
+    with pytest.raises(ImproperConfigurationError, match="unknown_opt"):
+        _sqlite_config(config_class, {"session_opt": 1, "unknown_opt": 2})
+
+
+@pytest.mark.parametrize("invalid_mode", ["bogus", None], ids=["bogus-str", "none-value"])
+def test_adk_unresolved_external_config_rejects_invalid_migration_mode(invalid_mode: object) -> None:
+    """Unresolved external ADK configs reject invalid migration_mode before the early return."""
+    with pytest.raises(MigrationError, match="migration_mode"):
+        _adk_session_store_config(_BareExternalConfig({"migration_mode": invalid_mode}))

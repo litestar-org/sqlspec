@@ -5,7 +5,7 @@ import inspect
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 import rich_click as click
 from rich import get_console
@@ -506,6 +506,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             msg = f"Operation failed for config(s): {failed}"
             raise click.ClickException(msg)
 
+    def _validate_cli_reconcilers(config: Any, op: Literal["upgrade", "downgrade"], target_revision: str) -> None:
+        """Validate extension reconciler guards before running CLI operations."""
+        commands = _create_cli_migration_commands(config)
+        try:
+            commands.ensure_reconcilers_allow(op, target_revision)
+        except SQLSpecError as exc:
+            raise click.ClickException(str(exc)) from exc
+
     def process_multiple_configs(
         ctx: "click.Context",
         bind_key: str | None,
@@ -515,6 +523,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
         operation_name: str,
         echo: bool = True,
         output_console: "Console | None" = None,
+        before_dry_run: "Callable[[Any], None] | None" = None,
     ) -> "list[tuple[str, Any]] | None":
         """Process configuration selection for multi-config operations.
 
@@ -530,6 +539,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             operation_name: Name of the operation for display.
             echo: Whether to echo output to the console.
             output_console: Optional Console override for status messages.
+            before_dry_run: Optional preflight validator executed per selected config before printing dry-run output.
 
         Returns:
             List of (config_name, config) tuples to process, or None for single config mode.
@@ -552,6 +562,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             return []
 
         if dry_run:
+            if before_dry_run is not None:
+                for _, cfg in configs_to_process:
+                    before_dry_run(cfg)
             if echo:
                 active_console.print(
                     f"[blue]Dry run: Would {operation_name} {len(configs_to_process)} configuration(s)[/]"
@@ -680,6 +693,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             dry_run=dry_run,
             operation_name=f"downgrade to {revision}",
             echo=echo_enabled,
+            before_dry_run=lambda cfg: _validate_cli_reconcilers(cfg, "downgrade", revision),
         )
 
         async def _async_downgrade(config: Any) -> None:
@@ -778,7 +792,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             _dispatch_migration_call(config, "upgrade", **upgrade_kwargs)
 
         configs_to_process = process_multiple_configs(
-            ctx, bind_key, include, exclude, dry_run, operation_name=f"upgrade to {revision}", echo=echo_enabled
+            ctx,
+            bind_key,
+            include,
+            exclude,
+            dry_run,
+            operation_name=f"upgrade to {revision}",
+            echo=echo_enabled,
+            before_dry_run=lambda cfg: _validate_cli_reconcilers(cfg, "upgrade", revision),
         )
 
         async def _async_upgrade(config: Any) -> None:

@@ -1,8 +1,9 @@
 """Unit tests for psycopg ADK store sync wrappers."""
 
+import inspect
 from datetime import UTC, datetime
 from typing import Any, Self, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from psycopg.types.json import Jsonb
@@ -15,7 +16,10 @@ from sqlspec.adapters.psycopg.adk import (
     PsycopgSyncADKStore,
 )
 from sqlspec.adapters.psycopg.adk.store import decode_postgres_vector
-from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, SQLSpecError
+from sqlspec.extensions.adk.migrations.reconcile import reconcile
+from sqlspec.migrations.context import MigrationContext
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -118,17 +122,17 @@ def _build_store(
 ) -> "tuple[PsycopgSyncADKStore, _DummyCursor, _DummyConnection]":
     cursor = _DummyCursor(rows)
     connection = _DummyConnection(cursor)
-    store = PsycopgSyncADKStore.__new__(PsycopgSyncADKStore)  # type: ignore[call-arg]
+    store: Any = PsycopgSyncADKStore.__new__(PsycopgSyncADKStore)
     config = _DummyConfig(connection)
-    store._config = config  # type: ignore[attr-defined]
-    store._events_table = "test_events"  # type: ignore[attr-defined]
-    store._session_table = "test_sessions"  # type: ignore[attr-defined]
-    store._app_state_table = "test_app_state"  # type: ignore[attr-defined]
-    store._user_state_table = "test_user_state"  # type: ignore[attr-defined]
-    store._metadata_table = "test_metadata"  # type: ignore[attr-defined]
-    store._owner_id_column_ddl = None  # type: ignore[attr-defined]
-    store._owner_id_column_name = None  # type: ignore[attr-defined]
-    return store, cursor, connection
+    store._config = config
+    store._events_table = "test_events"
+    store._session_table = "test_sessions"
+    store._app_state_table = "test_app_state"
+    store._user_state_table = "test_user_state"
+    store._metadata_table = "test_metadata"
+    store._owner_id_column_ddl = None
+    store._owner_id_column_name = None
+    return cast("PsycopgSyncADKStore", store), cursor, connection
 
 
 async def test_psycopg_typed_memory_tuning_reaches_schema() -> None:
@@ -209,7 +213,7 @@ def test_sync_append_event_inserts_without_session_update() -> None:
         "event_data": {"id": "event-1"},
     }
 
-    store.append_event(event_record)  # type: ignore[arg-type]
+    store.append_event(cast("Any", event_record))
 
     assert len(cursor.execute_calls) == 1
     _, params = cursor.execute_calls[0]
@@ -371,7 +375,7 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
     }
 
     result = store.append_event_and_update_state(
-        event_record,  # type: ignore[arg-type]
+        cast("Any", event_record),
         "app",
         "user",
         "session-1",
@@ -398,31 +402,43 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
     assert connection.commit_called
 
 
-class _AsyncDummyCursor(_DummyCursor):
+class _AsyncDummyCursor:
+    def __init__(self, rows: "list[dict[str, Any]] | None" = None) -> None:
+        self.execute_calls: list[tuple[Any, Any]] = []
+        self._rows = rows or []
+        self.rowcount = 1
+
     async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    async def execute(self, query: Any, params: Any = None) -> None:  # type: ignore[override]
-        _DummyCursor.execute(self, query, params)
+    async def execute(self, query: Any, params: Any = None) -> None:
+        self.execute_calls.append((query, params))
 
-    async def fetchall(self) -> "list[dict[str, Any]]":  # type: ignore[override]
+    async def fetchall(self) -> "list[dict[str, Any]]":
         return self._rows
 
-    async def fetchone(self) -> "dict[str, Any] | None":  # type: ignore[override]
+    async def fetchone(self) -> "dict[str, Any] | None":
         return self._rows[0] if self._rows else None
 
 
-class _AsyncDummyConnection(_DummyConnection):
+class _AsyncDummyConnection:
+    def __init__(self, cursor: _AsyncDummyCursor) -> None:
+        self._cursor = cursor
+        self.commit_called = False
+
     async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    async def commit(self) -> None:  # type: ignore[override]
+    def cursor(self, **kwargs: Any) -> _AsyncDummyCursor:
+        return self._cursor
+
+    async def commit(self) -> None:
         self.commit_called = True
 
 
@@ -635,3 +651,317 @@ def test_psycopg_sync_memory_fts_and_simple_select_13_columns() -> None:
     assert "embedding" in cursor.execute_calls[1][0].as_string()
     assert fts_rows[0]["embedding"] == [0.5, 0.25]
     assert simple_rows[0]["embedding"] == [0.5, 0.25]
+
+
+async def _await_if_needed(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _normalized_sql(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _mock_migration_driver(*, is_async: bool) -> MagicMock:
+    driver = MagicMock()
+    driver.connection = MagicMock()
+    driver.data_dictionary = MagicMock()
+    if is_async:
+        driver.execute_script = AsyncMock()
+        driver.commit = AsyncMock()
+        driver.data_dictionary.get_tables = AsyncMock(return_value=[])
+        driver.data_dictionary.get_columns = AsyncMock(return_value=[])
+    else:
+        driver.execute_script = MagicMock()
+        driver.commit = MagicMock()
+        driver.data_dictionary.get_tables = MagicMock(return_value=[])
+        driver.data_dictionary.get_columns = MagicMock(return_value=[])
+    return driver
+
+
+def _recorded_scripts(driver: MagicMock, *, is_async: bool) -> list[str]:
+    calls = driver.execute_script.await_args_list if is_async else driver.execute_script.call_args_list
+    return [_normalized_sql(call.args[0]) for call in calls]
+
+
+_SESSION_STORE_MODES = [
+    pytest.param(PsycopgAsyncADKStore, True, "reconcile_companion_objects_async", id="async"),
+    pytest.param(PsycopgSyncADKStore, False, "reconcile_companion_objects_sync", id="sync"),
+]
+
+_MEMORY_STORE_MODES = [
+    pytest.param(
+        PsycopgAsyncADKMemoryStore,
+        True,
+        "prepare_schema_async",
+        "prepare_reconcile_async",
+        "reconcile_companion_objects_async",
+        "finalize_reconcile_async",
+        id="async",
+    ),
+    pytest.param(
+        PsycopgSyncADKMemoryStore,
+        False,
+        "prepare_schema_sync",
+        "prepare_reconcile_sync",
+        "reconcile_companion_objects_sync",
+        "finalize_reconcile_sync",
+        id="sync",
+    ),
+]
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "companion_method"), _SESSION_STORE_MODES)
+async def test_psycopg_session_companions_create_guarded_indexes_only(
+    store_cls: Any, is_async: bool, companion_method: str
+) -> None:
+    store = store_cls(_mock_config())
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(getattr(store, companion_method)(driver))
+
+    statements = _recorded_scripts(driver, is_async=is_async)
+    assert statements == [
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user ON adk_session(app_name, user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time ON adk_session(update_time DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_state ON adk_session USING GIN (state) WHERE state != '{}'::jsonb;",
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC);",
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_app_timestamp ON adk_event(app_name, timestamp ASC);",
+    ]
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "companion_method"), _SESSION_STORE_MODES)
+async def test_psycopg_event_companions_follow_generated_and_covering_settings(
+    store_cls: Any, is_async: bool, companion_method: str
+) -> None:
+    store = store_cls(_mock_config({"enable_event_generated_columns": True, "enable_covering_indexes": True}))
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(getattr(store, companion_method)(driver))
+
+    statements = _recorded_scripts(driver, is_async=is_async)
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session ON adk_event(session_id, timestamp ASC) INCLUDE (invocation_id);"
+        in statements
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_author_gc ON adk_event(session_id, author_gc, timestamp ASC);"
+        in statements
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_node_path_gc ON adk_event(session_id, node_path_gc, timestamp ASC);"
+        in statements
+    )
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_schema", "_prep_rec", "companion_method", "_finalize"), _MEMORY_STORE_MODES
+)
+async def test_psycopg_memory_companions_follow_search_settings(
+    store_cls: Any, is_async: bool, _prep_schema: str, _prep_rec: str, companion_method: str, _finalize: str
+) -> None:
+    store = store_cls(_mock_config({"enable_bm25": True, "memory_use_fts": True, "vector_index_type": "ivfflat"}))
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(getattr(store, companion_method)(driver))
+
+    statements = _recorded_scripts(driver, is_async=is_async)
+    assert any("USING GIN (to_tsvector('english', content_text));" in sql for sql in statements)
+    assert any("USING bm25 (content_text) WITH (text_config='english');" in sql for sql in statements)
+    assert any("idx_adk_memory_ivfflat" in sql for sql in statements)
+    assert all("idx_adk_memory_hnsw" not in sql for sql in statements)
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+async def test_psycopg_sync_and_async_companions_emit_identical_statements() -> None:
+    async_store = PsycopgAsyncADKMemoryStore(_mock_config({"enable_bm25": True}))
+    sync_store = PsycopgSyncADKMemoryStore(_mock_config({"enable_bm25": True}))
+    async_driver = _mock_migration_driver(is_async=True)
+    sync_driver = _mock_migration_driver(is_async=False)
+
+    await async_store.prepare_reconcile_async(async_driver)
+    await async_store.reconcile_companion_objects_async(async_driver)
+    sync_store.prepare_reconcile_sync(sync_driver)
+    sync_store.reconcile_companion_objects_sync(sync_driver)
+
+    async_statements = _recorded_scripts(async_driver, is_async=True)
+    assert len(async_statements) >= 7
+    assert async_statements == _recorded_scripts(sync_driver, is_async=False)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "prep_schema_method", "prep_reconcile_method", "_companion", "_finalize"),
+    _MEMORY_STORE_MODES,
+)
+async def test_psycopg_memory_prepare_reconcile_installs_extensions_and_prepare_schema_is_noop(
+    store_cls: Any, is_async: bool, prep_schema_method: str, prep_reconcile_method: str, _companion: str, _finalize: str
+) -> None:
+    driver = _mock_migration_driver(is_async=is_async)
+    default_store = store_cls(_mock_config())
+
+    await _await_if_needed(getattr(default_store, prep_schema_method)(driver))
+    driver.execute_script.assert_not_called()
+
+    await _await_if_needed(getattr(default_store, prep_reconcile_method)(driver))
+    assert _recorded_scripts(driver, is_async=is_async) == ["CREATE EXTENSION IF NOT EXISTS vector"]
+
+    driver.execute_script.reset_mock()
+    bm25_store = store_cls(_mock_config({"enable_bm25": True}))
+    await _await_if_needed(getattr(bm25_store, prep_schema_method)(driver))
+    driver.execute_script.assert_not_called()
+
+    await _await_if_needed(getattr(bm25_store, prep_reconcile_method)(driver))
+    assert _recorded_scripts(driver, is_async=is_async) == [
+        "CREATE EXTENSION IF NOT EXISTS vector",
+        "CREATE EXTENSION IF NOT EXISTS pg_textsearch",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config_cls", "store_cls", "is_async", "prep_method", "finalize_method", "register_attr"),
+    [
+        pytest.param(
+            PsycopgAsyncConfig,
+            PsycopgAsyncADKMemoryStore,
+            True,
+            "prepare_reconcile_async",
+            "finalize_reconcile_async",
+            "register_pgvector_async",
+            id="async",
+        ),
+        pytest.param(
+            PsycopgSyncConfig,
+            PsycopgSyncADKMemoryStore,
+            False,
+            "prepare_reconcile_sync",
+            "finalize_reconcile_sync",
+            "register_pgvector_sync",
+            id="sync",
+        ),
+    ],
+)
+async def test_psycopg_memory_finalize_reconcile_refreshes_config_extension_state(
+    monkeypatch: pytest.MonkeyPatch,
+    config_cls: Any,
+    store_cls: Any,
+    is_async: bool,
+    prep_method: str,
+    finalize_method: str,
+    register_attr: str,
+) -> None:
+    register_mock = AsyncMock() if is_async else MagicMock()
+    monkeypatch.setattr(f"sqlspec.adapters.psycopg.adk.store.{register_attr}", register_mock)
+
+    config = config_cls(
+        driver_features={"enable_pgvector": True, "enable_pg_textsearch": True},
+        extension_config={"adk": {"enable_bm25": True}},
+    )
+    stale_error = RuntimeError("stale")
+    config._pgvector_available = False
+    config._pg_textsearch_available = False
+    config._pg_textsearch_probe_error = stale_error
+
+    store = store_cls(config)
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(getattr(store, prep_method)(driver))
+    assert config._pgvector_available is False
+    assert config._pg_textsearch_available is False
+    assert config._pg_textsearch_probe_error is stale_error
+    register_mock.assert_not_called()
+
+    await _await_if_needed(getattr(store, finalize_method)(driver))
+    assert config._pgvector_available is True
+    assert config._pg_textsearch_available is True
+    assert config._pg_textsearch_probe_error is None
+    assert config._ensure_pg_textsearch_available() is None
+    register_mock.assert_called_once_with(driver.connection)
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_schema", "prep_method", "companion_method", "finalize_method"), _MEMORY_STORE_MODES
+)
+async def test_psycopg_disabled_memory_prepares_nothing(
+    store_cls: Any, is_async: bool, _prep_schema: str, prep_method: str, companion_method: str, finalize_method: str
+) -> None:
+    store = store_cls(_mock_config({"enable_memory": False}))
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(getattr(store, prep_method)(driver))
+    await _await_if_needed(getattr(store, companion_method)(driver))
+    await _await_if_needed(getattr(store, finalize_method)(driver))
+
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_schema", "prep_method", "_companion", "_finalize"), _MEMORY_STORE_MODES
+)
+@pytest.mark.parametrize(
+    ("adk_settings", "expected_match"),
+    [
+        pytest.param({"vector_index_type": "scann", "scann_quantizer": "BAD"}, "scann_quantizer", id="bad-quantizer"),
+        pytest.param({"vector_index_type": "scann", "scann_num_leaves": -1}, "scann_num_leaves", id="bad-leaves"),
+        pytest.param({"vector_index_type": "unknown"}, "vector_index_type", id="bad-vector-type"),
+    ],
+)
+async def test_psycopg_memory_prepare_reconcile_validates_settings_first(
+    store_cls: Any,
+    is_async: bool,
+    _prep_schema: str,
+    prep_method: str,
+    _companion: str,
+    _finalize: str,
+    adk_settings: dict[str, object],
+    expected_match: str,
+) -> None:
+    store = store_cls(_mock_config(adk_settings))
+    driver = _mock_migration_driver(is_async=is_async)
+
+    with pytest.raises(ImproperConfigurationError, match=expected_match):
+        await _await_if_needed(getattr(store, prep_method)(driver))
+
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_schema", "prep_method", "_companion", "_finalize"), _MEMORY_STORE_MODES
+)
+async def test_psycopg_memory_prepare_reconcile_reports_missing_extension(
+    store_cls: Any, is_async: bool, _prep_schema: str, prep_method: str, _companion: str, _finalize: str
+) -> None:
+    store = store_cls(_mock_config())
+    driver = _mock_migration_driver(is_async=is_async)
+    err = SQLSpecError("not available")
+    driver.execute_script.side_effect = err
+
+    with pytest.raises(MigrationError, match="vector") as exc_info:
+        await _await_if_needed(getattr(store, prep_method)(driver))
+
+    assert exc_info.value.__cause__ is err
+
+
+@pytest.mark.parametrize(
+    ("config_cls", "is_async", "register_attr"),
+    [
+        pytest.param(PsycopgAsyncConfig, True, "register_pgvector_async", id="async"),
+        pytest.param(PsycopgSyncConfig, False, "register_pgvector_sync", id="sync"),
+    ],
+)
+async def test_psycopg_reconcile_prepares_before_targets_and_companions(
+    monkeypatch: pytest.MonkeyPatch, config_cls: Any, is_async: bool, register_attr: str
+) -> None:
+    monkeypatch.setattr(f"sqlspec.adapters.psycopg.adk.store.{register_attr}", AsyncMock() if is_async else MagicMock())
+    config = config_cls(extension_config={"adk": {"enable_sessions": False}})
+    driver = _mock_migration_driver(is_async=is_async)
+
+    await _await_if_needed(reconcile(MigrationContext(config=config, dialect="postgres", driver=driver)))
+
+    statements = _recorded_scripts(driver, is_async=is_async)
+    assert statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
+    assert statements[1].startswith("CREATE TABLE IF NOT EXISTS adk_memory")
+    assert all(sql.startswith("CREATE INDEX IF NOT EXISTS") for sql in statements[2:])

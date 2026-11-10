@@ -29,6 +29,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_nested_decimal_normalizer
@@ -1206,6 +1207,17 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
         await _prepare_oracle_schema_async(self._config, driver)
 
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Oracle session and event companion indexes via catalog comparison.
+
+        Args:
+            driver: Asynchronous Oracle driver executing schema reconciliation.
+        """
+        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
+        rows = await driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            await driver.execute(statement)
+
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
         return await _get_oracle_version_info_async(self._config)
@@ -2198,6 +2210,17 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Prepare adapter-specific schema decisions with a synchronous driver."""
         _prepare_oracle_schema_sync(self._config, driver)
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Oracle session and event companion indexes via catalog comparison.
+
+        Args:
+            driver: Synchronous Oracle driver executing schema reconciliation.
+        """
+        specs = _oracle_session_index_specs(self._session_table) + _oracle_event_index_specs(self._events_table)
+        rows = driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            driver.execute(statement)
+
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
         return _get_oracle_version_info_sync(self._config)
@@ -2666,6 +2689,19 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
         await _prepare_oracle_schema_async(self._config, driver)
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing Oracle memory companion indexes via catalog comparison.
+
+        Args:
+            driver: Asynchronous Oracle driver executing schema reconciliation.
+        """
+        if not self._enabled:
+            return
+        specs = _oracle_memory_index_specs(self._memory_table, use_fts=self._use_fts)
+        rows = await driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            await driver.execute(statement)
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         return await _get_oracle_version_info_async(self._config)
@@ -3163,6 +3199,19 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """Prepare adapter-specific schema decisions with a synchronous driver."""
         _prepare_oracle_schema_sync(self._config, driver)
 
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Oracle memory companion indexes via catalog comparison.
+
+        Args:
+            driver: Synchronous Oracle driver executing schema reconciliation.
+        """
+        if not self._enabled:
+            return
+        specs = _oracle_memory_index_specs(self._memory_table, use_fts=self._use_fts)
+        rows = driver.data_dictionary.get_indexes(driver)
+        for statement in _oracle_missing_index_statements(specs, rows):
+            driver.execute(statement)
+
     def _get_version_info(self) -> "OracleVersionInfo | None":
         return _get_oracle_version_info_sync(self._config)
 
@@ -3633,3 +3682,72 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, params
+
+
+def _oracle_session_index_specs(table: str) -> list[tuple[str, str, str]]:
+    """Return companion index specifications for the Oracle ADK sessions table.
+
+    Args:
+        table: Unqualified Oracle sessions table name.
+
+    Returns:
+        Ordered ``(index_name, table_name, definition)`` tuples.
+    """
+    return [
+        (f"idx_{table}_app_user", table, "(app_name, user_id)"),
+        (f"idx_{table}_update_time", table, "(update_time DESC)"),
+    ]
+
+
+def _oracle_event_index_specs(table: str) -> list[tuple[str, str, str]]:
+    """Return companion index specifications for the Oracle ADK events table.
+
+    Args:
+        table: Unqualified Oracle events table name.
+
+    Returns:
+        Ordered ``(index_name, table_name, definition)`` tuples.
+    """
+    return [
+        (f"idx_{table}_session", table, "(session_id, timestamp ASC)"),
+        (f"idx_{table}_invocation", table, "(invocation_id)"),
+        (f"idx_{table}_timestamp", table, "(timestamp ASC)"),
+        (f"idx_{table}_app_timestamp", table, "(app_name, timestamp ASC)"),
+    ]
+
+
+def _oracle_memory_index_specs(table: str, *, use_fts: bool) -> list[tuple[str, str, str]]:
+    """Return companion index specifications for the Oracle ADK memory table.
+
+    Args:
+        table: Unqualified Oracle memory table name.
+        use_fts: Whether Oracle Text ``CTXSYS.CONTEXT`` FTS indexing is enabled.
+
+    Returns:
+        Ordered ``(index_name, table_name, definition)`` tuples.
+    """
+    specs: list[tuple[str, str, str]] = [
+        (f"idx_{table}_app_scope_user_time", table, "(app_name, scope, user_id, timestamp DESC)"),
+        (f"idx_{table}_scope", table, "(app_name, scope)"),
+        (f"idx_{table}_session", table, "(session_id)"),
+    ]
+    if use_fts:
+        specs.append((f"idx_{table}_fts", table, "(content_text) INDEXTYPE IS CTXSYS.CONTEXT"))
+    return specs
+
+
+def _oracle_missing_index_statements(specs: list[tuple[str, str, str]], rows: list[Any]) -> list[str]:
+    """Filter Oracle companion index specs against schema-scoped catalog metadata.
+
+    Args:
+        specs: Ordered ``(index_name, table_name, definition)`` tuples.
+        rows: Rows returned by ``data_dictionary.get_indexes(driver)``.
+
+    Returns:
+        Bare ``CREATE INDEX`` statements for missing ``(table_name, index_name)`` pairs.
+    """
+    return [
+        f"CREATE INDEX {index_name} ON {table}{definition}"
+        for index_name, table, definition in specs
+        if not metadata_has_index(rows, table, index_name)
+    ]

@@ -32,6 +32,7 @@ from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyErro
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.migrations.utils import ExtensionMigrationMode, resolve_extension_migration_mode
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
@@ -59,6 +60,7 @@ __all__ = (
     "DriverT",
     "EventsConfig",
     "ExtensionConfigs",
+    "ExtensionMigrationMode",
     "FastAPIConfig",
     "FlaskConfig",
     "LifecycleConfig",
@@ -77,6 +79,7 @@ __all__ = (
     "SyncConfigT",
     "SyncDatabaseConfig",
     "TypeCoercionCapabilities",
+    "resolve_extension_migration_mode",
     "validate_migration_config_keys",
 )
 
@@ -451,6 +454,9 @@ class LitestarConfig(TypedDict):
     create_schema: NotRequired[bool]
     """Create a missing session table during managed reconciliation. Default: True."""
 
+    migration_mode: NotRequired[ExtensionMigrationMode]
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
+
 
 class StarletteConfig(TypedDict):
     """Configuration options for Starlette SQLSpec extension.
@@ -691,6 +697,9 @@ class ADKConfig(TypedDict):
         - Plain columns without FK (just extra column storage)
     """
 
+    migration_mode: NotRequired[ExtensionMigrationMode]
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
+
 
 class EventsConfig(TypedDict):
     """Configuration options for the events extension.
@@ -744,6 +753,9 @@ class EventsConfig(TypedDict):
 
     shard_count: NotRequired[int]
     """Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1."""
+
+    migration_mode: NotRequired[ExtensionMigrationMode]
+    """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
 
 class OpenTelemetryConfig(TypedDict):
@@ -1047,7 +1059,12 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         return self._ensure_migration_commands()
 
     def add_extension_migrations(
-        self, name: str, migrations_path: "str | Path", settings: "dict[str, Any] | None" = None
+        self,
+        name: str,
+        migrations_path: "str | Path",
+        settings: "dict[str, Any] | None" = None,
+        *,
+        migration_mode: ExtensionMigrationMode | None = None,
     ) -> None:
         """Register migrations shipped by a package outside the ``sqlspec.extensions`` namespace.
 
@@ -1063,6 +1080,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
                 ``'<dotted.module>:<subdir>'`` specification.
             settings: Extension settings passed to its migrations. Merged into any
                 settings already registered under ``name``.
+            migration_mode: Optional explicit migration mode (``'versioned'`` or ``'reconcile'``).
         """
         with self._migration_lock:
             extension_config = cast("dict[str, Any]", self.extension_config)
@@ -1071,6 +1089,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             if settings:
                 merged.update(settings)
             merged["migrations_path"] = migrations_path
+            resolve_extension_migration_mode(migration_mode, merged, extension_name=name)
+            if migration_mode is not None:
+                merged["migration_mode"] = migration_mode
             extension_config[name] = merged
 
             migration_config = cast("dict[str, Any]", self.migration_config)
@@ -1248,6 +1269,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """
         extension_settings = cast("dict[str, Any]", self.extension_config)
         migration_config = cast("dict[str, Any]", self.migration_config)
+
+        for ext_name, ext_settings in extension_settings.items():
+            if isinstance(ext_settings, Mapping):
+                resolve_extension_migration_mode(None, dict(ext_settings), extension_name=ext_name)
 
         exclude_extensions = migration_config.get("exclude_extensions", [])
         if isinstance(exclude_extensions, tuple):

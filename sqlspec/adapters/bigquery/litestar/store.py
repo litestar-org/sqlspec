@@ -1,15 +1,17 @@
 """BigQuery session store for Litestar integration."""
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
 
 from sqlspec.adapters.bigquery.core import _bigquery_partition_clauses, _positive_int_or_none, resolve_dataset_id
+from sqlspec.adapters.bigquery.events.store import _bigquery_additive_target
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
+    from sqlspec.migrations.schema import SchemaTarget
 
 
 __all__ = ("BigQueryLitestarConfig", "BigQueryStore")
@@ -51,6 +53,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
     """
 
     __slots__ = ("_partition_expiration_days", "_partitioning", "_require_partition_filter")
+    _dialect: ClassVar[str] = "bigquery"
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
         "partition_expiration_days",
         "partitioning",
@@ -175,6 +178,9 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             List containing DROP TABLE statement.
         """
         return [f"DROP TABLE IF EXISTS {self._table_name}"]
+
+    def _schema_target(self) -> "SchemaTarget":
+        return _bigquery_additive_target(super()._schema_target())
 
     def _partition_filter(self, qualifier: str = "") -> str:
         """Return a constant partition predicate when require_partition_filter is enabled.

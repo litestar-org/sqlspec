@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import quote_identifier
 
@@ -74,6 +74,14 @@ def session_index_ddl(table: str) -> str:
     if schema is not None:
         return f"CREATE INDEX {quote_identifier(schema)}.{quote_identifier(idx_name)} ON {table}(expires_at)"
     return f"CREATE INDEX {idx_name} ON {table}(expires_at)"
+
+
+def _session_companion_index(table_name: str) -> CompanionIndex:
+    """Build the catalog-probed Db2 session expiry index definition."""
+    schema, table = session_catalog_names(table_name)
+    return CompanionIndex(
+        name=session_index_name(table_name), table=table, schema=schema, ddl=session_index_ddl(table_name)
+    )
 
 
 def select_session_sql(table: str) -> str:
@@ -270,6 +278,10 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         """Get Db2 CREATE TABLE SQL."""
         return session_table_ddl(self._table_name)
 
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the catalog-probed Db2 session expiry companion index."""
+        return [_session_companion_index(self._table_name)]
+
     def _drop_table_sql(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""
         return [drop_session_table_sql(self._table_name)]
@@ -428,6 +440,10 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
     def _table_ddl(self) -> str:
         """Get Db2 CREATE TABLE SQL."""
         return session_table_ddl(self._table_name)
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the catalog-probed Db2 session expiry companion index."""
+        return [_session_companion_index(self._table_name)]
 
     def _drop_table_sql(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""

@@ -267,6 +267,20 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
+    async def prepare_reconcile_async(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return await self._schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Reconcile adapter-specific companion objects; the default does nothing."""
+
+    async def finalize_reconcile_async(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
+
     @abstractmethod
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -534,15 +548,8 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
-    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive ADK table changes from canonical adapter DDL.
-
-        Args:
-            assume_existing: Skip table discovery after adapter-level creation.
-        """
-        manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema:
-            return
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for all ADK session tables."""
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         ddl_targets = (
@@ -552,7 +559,18 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
             (self._user_state_table, await self._user_states_table_ddl()),
             (self._metadata_table, await self._metadata_table_ddl()),
         )
-        targets = [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+
+    async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        targets = await self._schema_targets()
         session_context = self._config.provide_session()
         if hasattr(session_context, "__aenter__"):
             async with cast("Any", session_context) as driver:
@@ -713,6 +731,20 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""
 
+    def prepare_reconcile_sync(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Reconcile adapter-specific companion objects; the default does nothing."""
+
+    def finalize_reconcile_sync(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
+
     @abstractmethod
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -843,15 +875,8 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Set a value in the ADK internal metadata table."""
         raise NotImplementedError
 
-    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
-        """Apply additive ADK table changes from canonical adapter DDL.
-
-        Args:
-            assume_existing: Skip table discovery after adapter-level creation.
-        """
-        manage_schema, create_schema = self._schema_management_flags()
-        if not manage_schema:
-            return
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for all ADK session tables."""
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         ddl_targets = (
@@ -861,7 +886,18 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
             (self._user_state_table, self._user_states_table_ddl()),
             (self._metadata_table, self._metadata_table_ddl()),
         )
-        targets = [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
+
+    def reconcile_schema(self, *, assume_existing: bool = False) -> None:
+        """Apply additive ADK table changes from canonical adapter DDL.
+
+        Args:
+            assume_existing: Skip table discovery after adapter-level creation.
+        """
+        manage_schema, create_schema = self._schema_management_flags()
+        if not manage_schema:
+            return
+        targets = self._schema_targets()
         _reconcile_adk_schema_sync(self._config, targets, create_schema=create_schema, assume_existing=assume_existing)
 
     def ensure_tables(self) -> None:

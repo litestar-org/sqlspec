@@ -449,7 +449,10 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             indexes: list[IndexMetadata] = driver.select(
-                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
             )
             expr_rows: list[dict[str, Any]] = driver.select(
                 self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=None
@@ -870,7 +873,10 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             indexes: list[IndexMetadata] = await driver.select(
-                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
             )
             expr_rows: list[dict[str, Any]] = await driver.select(
                 self.get_query("indexes", "expressions"), schema_name=schema_name, table_name=None

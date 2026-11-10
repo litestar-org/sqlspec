@@ -14,13 +14,20 @@ Supports:
 """
 
 import contextlib
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.adbc.core import _DB2_INDEX_EXISTS_SQL, _DB2_TABLE_EXISTS_SQL, is_postgres_dialect
+from sqlspec.adapters.adbc.core import (
+    _DB2_INDEX_EXISTS_SQL,
+    _DB2_TABLE_EXISTS_SQL,
+    is_postgres_dialect,
+    resolve_reconcile_adbc_dialect,
+)
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.exceptions import IntegrityError
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
@@ -135,6 +142,103 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             Number of sessions deleted.
         """
         return await async_(self._delete_expired)()
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Cache dialect from explicit FlightSQL/GizmoSQL config hints or the active driver."""
+        if self._dialect is not None:
+            return
+        connection_config = getattr(self._config, "connection_config", None)
+        explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+        if isinstance(connection_config, Mapping) and (connection_config.get("gizmosql_backend") or explicit_dialect):
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return
+        dialect_value = getattr(driver, "dialect", None)
+        raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+        if raw_dialect in {"tsql", "sqlserver"}:
+            self._dialect = "mssql"
+        elif raw_dialect == "postgresql":
+            self._dialect = "postgres"
+        else:
+            self._dialect = raw_dialect
+
+    def _resolve_schema_dialect(self) -> str:
+        """Return cached or config-classified dialect before falling back to a live session."""
+        if self._dialect is not None:
+            return self._dialect
+        connection_config = getattr(self._config, "connection_config", None)
+        if isinstance(connection_config, Mapping):
+            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return resolved
+        return self._get_dialect()
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
+        dialect = self._resolve_schema_dialect()
+        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        raw_schema, dot, raw_table = self._table_name.partition(".")
+        if dot:
+            schema_name = raw_schema.strip('"`[]') or None
+            bare_table = raw_table.strip('"`[]')
+        else:
+            schema_name = None
+            bare_table = self._table_name.strip('"`[]')
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return dialect-specific companion index definitions for ADBC session storage."""
+        dialect = self._resolve_schema_dialect()
+        if dialect in {"bigquery", "snowflake"}:
+            return []
+
+        if dialect == "oracle":
+            raw_schema, dot, raw_table = self._table_name.partition(".")
+            schema_name = raw_schema.strip('"') or None if dot else None
+            bare_table = raw_table.strip('"') if dot else self._table_name.strip('"')
+            index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            ddl = f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE INDEX {index_name} ON {self._table_name}(expires_at)';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE NOT IN (-955, -1408) THEN
+                        RAISE;
+                    END IF;
+            END;
+            """.strip()
+            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            raw_index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            index_name = normalize_identifier(raw_index_name, "db2")
+            ddl = f"CREATE INDEX {raw_index_name} ON {self._table_name}(expires_at)"
+            return [CompanionIndex(name=index_name, table=catalog_table, schema=schema_name, ddl=ddl)]
+
+        if dialect == "mssql":
+            raw_schema, dot, raw_table = self._table_name.partition(".")
+            schema_name = raw_schema.strip('[]"') or None if dot else None
+            bare_table = raw_table.strip('[]"') if dot else self._table_name.strip('[]"')
+            index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            ddl = f"""
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE name = N'{index_name}'
+                AND object_id = OBJECT_ID(N'{self._table_name}')
+            )
+            CREATE INDEX {index_name}
+            ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+            """.strip()
+            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+        return super().get_companion_indexes()
 
     def _get_dialect(self) -> str:
         """Get the database dialect, caching it after first access.
@@ -417,11 +521,19 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Synchronous implementation of get using ADBC driver."""
+        dialect = self._get_dialect()
         p1 = self._get_param_placeholder(1)
         current_ts = self._get_current_timestamp_expr()
+        if dialect == "db2":
+            select_cols = (
+                "HEX(CAST(data AS VARCHAR(16336) FOR BIT DATA)) AS data, "
+                "CASE WHEN expires_at IS NULL THEN 0 ELSE 1 END AS expires_at"
+            )
+        else:
+            select_cols = "data, expires_at"
 
         sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
+        SELECT {select_cols} FROM {self._table_name}
         WHERE session_id = {p1}
         AND (expires_at IS NULL OR expires_at > {current_ts})
         """
@@ -432,10 +544,10 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             if result is None:
                 return None
 
-            data = result["data"]
-            expires_at = result["expires_at"]
+            data = result["data"] if "data" in result else result["DATA"]
+            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
-            if renew_for is not None and expires_at is not None:
+            if renew_for is not None and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 p1_update = self._get_param_placeholder(1)
                 p2_update = self._get_param_placeholder(2)
@@ -447,6 +559,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 driver.execute(update_sql, new_expires_at, key)
                 driver.commit()
 
+            if isinstance(data, str):
+                try:
+                    return bytes.fromhex(data)
+                except ValueError:
+                    return data.encode("utf-8")
             return bytes(data)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
@@ -500,55 +617,59 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
         elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
+            bind_data: bytes | str = data.hex() if dialect == "snowflake" else data
+            insert_data_expr = f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
+            update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
             with self._config.provide_session() as driver:
                 try:
                     check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    exists = result and result.get("count", 0) > 0
+                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
                         if expires_at is None:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = NULL
+                            SET data = {update_data_expr}, expires_at = NULL
                             WHERE session_id = {p2}
                             """
-                            driver.execute(sql, data, key)
+                            driver.execute(sql, bind_data, key)
                         else:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = {p2}
+                            SET data = {update_data_expr}, expires_at = {p2}
                             WHERE session_id = {p3}
                             """
-                            driver.execute(sql, data, expires_at, key)
+                            driver.execute(sql, bind_data, expires_at, key)
                     elif expires_at is None:
                         sql = f"""
                         INSERT INTO {self._table_name} (session_id, data, expires_at)
-                        VALUES ({p1}, {p2}, NULL)
+                        VALUES ({p1}, {insert_data_expr}, NULL)
                         """
                         try:
-                            driver.execute(sql, key, data)
+                            driver.execute(sql, key, bind_data)
                         except IntegrityError:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = NULL
+                            SET data = {update_data_expr}, expires_at = NULL
                             WHERE session_id = {p2}
                             """
-                            driver.execute(sql, data, key)
+                            driver.execute(sql, bind_data, key)
                     else:
                         sql = f"""
                         INSERT INTO {self._table_name} (session_id, data, expires_at)
-                        VALUES ({p1}, {p2}, {p3})
+                        VALUES ({p1}, {insert_data_expr}, {p3})
                         """
                         try:
-                            driver.execute(sql, key, data, expires_at)
+                            driver.execute(sql, key, bind_data, expires_at)
                         except IntegrityError:
                             sql = f"""
                             UPDATE {self._table_name}
-                            SET data = {p1}, expires_at = {p2}
+                            SET data = {update_data_expr}, expires_at = {p2}
                             WHERE session_id = {p3}
                             """
-                            driver.execute(sql, data, expires_at, key)
+                            driver.execute(sql, bind_data, expires_at, key)
                     driver.commit()
                 except Exception:
                     with contextlib.suppress(Exception):
@@ -621,15 +742,18 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         sql = f"""
         SELECT expires_at FROM {self._table_name}
         WHERE session_id = {p1}
+        AND expires_at IS NOT NULL
         """
 
         with self._config.provide_session() as driver:
             result = driver.select_one_or_none(sql, key)
 
-            if result is None or result.get("expires_at") is None:
+            if result is None:
                 return None
 
-            expires_at = result["expires_at"]
+            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
+            if expires_at is None:
+                return None
 
             if not isinstance(expires_at, datetime):
                 return None
@@ -659,7 +783,8 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    count = result.get("count", 0) if result else 0
+                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    count = int(raw_count) if raw_count else 0
 
                     if count > 0:
                         driver.execute(delete_sql)

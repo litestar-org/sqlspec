@@ -1505,6 +1505,140 @@ finally:
     )
 
 
+def _check_extension_reconciliation(*, require_compiled: bool) -> dict[str, Any]:
+    """Exercise compiled runner reconciliation across built-in Litestar and external callbacks."""
+    script = """
+import asyncio
+import importlib.util
+import sys
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from sqlspec import SQLSpec, Select
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import MigrationError
+from sqlspec.migrations import create_migration_commands
+
+with TemporaryDirectory() as root_dir:
+    root = Path(root_dir)
+    migrations = root / "migrations"
+    migrations.mkdir()
+    ext_dir = root / "smoke_ext"
+    ext_dir.mkdir()
+    (ext_dir / "0001_shipped.sql").write_text(
+        "-- name: migrate-0001-up\\nCREATE TABLE smoke_numbered (id INTEGER PRIMARY KEY);\\n"
+        "-- name: migrate-0001-down\\nDROP TABLE smoke_numbered;\\n",
+        encoding="utf-8",
+    )
+    (ext_dir / "reconcile.py").write_text(
+        "def reconcile(context):\\n"
+        "    context.driver.execute_script(\\n"
+        "        'CREATE TABLE IF NOT EXISTS smoke_calls (id INTEGER PRIMARY KEY); '\\n"
+        "        'INSERT INTO smoke_calls DEFAULT VALUES;'\\n"
+        "    )\\n",
+        encoding="utf-8",
+    )
+    config = SqliteConfig(
+        connection_config={"database": str(root / "smoke.db")},
+        migration_config={"script_location": str(migrations), "echo": False},
+        extension_config={"litestar": {"session_table": "smoke_sessions", "migration_mode": "reconcile"}},
+    )
+    manager = SQLSpec()
+    assert manager.add_config(config) is config
+    assert config.add_extension_migrations("smoke_ext", ext_dir, migration_mode="reconcile") is None
+    try:
+        create_migration_commands(config).upgrade(echo=False)
+        config.migrate_up(echo=False)
+        with manager.provide_session(config) as session:
+            assert session.select_value(Select("COUNT(*)").from_("smoke_calls")) == 2
+            assert (
+                session.select_value(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_sessions'"
+                )
+                == 1
+            )
+            assert (
+                session.select_value(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_numbered'"
+                )
+                == 0
+            )
+            if session.select_value(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ddl_migrations'"
+            ):
+                assert session.select_value("SELECT COUNT(*) FROM ddl_migrations WHERE version_num LIKE 'ext_%'") == 0
+    finally:
+        config.close_pool()
+
+    if importlib.util.find_spec("aiosqlite") is not None:
+        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+        async_migrations = root / "async_migrations"
+        async_migrations.mkdir()
+        async_ext = root / "smoke_async"
+        async_ext.mkdir()
+        (async_ext / "reconcile.py").write_text(
+            "async def reconcile(context):\\n"
+            "    assert context.is_async_driver\\n"
+            "    await context.driver.execute_script(\\n"
+            "        'CREATE TABLE IF NOT EXISTS smoke_async_calls (id INTEGER PRIMARY KEY)'\\n"
+            "    )\\n",
+            encoding="utf-8",
+        )
+
+        async def run_async_reconcile() -> None:
+            async_config = AiosqliteConfig(
+                connection_config={"database": str(root / "smoke_async.db")},
+                migration_config={"script_location": str(async_migrations), "echo": False},
+            )
+            assert async_config.add_extension_migrations("smoke_async", async_ext, migration_mode="reconcile") is None
+            try:
+                await create_migration_commands(async_config).upgrade(echo=False)
+                async with async_config.provide_session() as session:
+                    assert (
+                        await session.select_value(
+                            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'smoke_async_calls'"
+                        )
+                        == 1
+                    )
+            finally:
+                await async_config.close_pool()
+
+        asyncio.run(run_async_reconcile())
+
+    fail_migrations = root / "fail_migrations"
+    fail_migrations.mkdir()
+    fail_ext = root / "smoke_fail"
+    fail_ext.mkdir()
+    (fail_ext / "reconcile.py").write_text(
+        "def reconcile(context):\\n    raise ValueError('boom')\\n",
+        encoding="utf-8",
+    )
+    fail_config = SqliteConfig(
+        connection_config={"database": str(root / "smoke_fail.db")},
+        migration_config={"script_location": str(fail_migrations), "echo": False},
+    )
+    assert fail_config.add_extension_migrations("smoke_fail", fail_ext, migration_mode="reconcile") is None
+    try:
+        try:
+            create_migration_commands(fail_config).upgrade(echo=False)
+        except MigrationError as error:
+            assert isinstance(error.__cause__, ValueError)
+        else:
+            raise AssertionError("failing reconciler did not raise MigrationError")
+    finally:
+        fail_config.close_pool()
+
+base_compiled = sys.modules["sqlspec.base"].__file__.endswith(tuple(EXTENSION_SUFFIXES))
+runner_compiled = sys.modules["sqlspec.migrations.runner"].__file__.endswith(tuple(EXTENSION_SUFFIXES))
+assert runner_compiled == base_compiled
+"""
+    return _run_startup_check(
+        "extension_reconciliation", script, require_compiled=require_compiled, optional_dependency="litestar"
+    )
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -1515,6 +1649,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
         _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
         _check_migration_first_use(require_compiled=require_compiled),
+        _check_extension_reconciliation(require_compiled=require_compiled),
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
         _check_adapter_config_construction(),

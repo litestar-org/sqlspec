@@ -2,6 +2,7 @@
 
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
@@ -14,6 +15,9 @@ from sqlspec.adapters.arrow_odbc.core import atomic_store_write
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.adapters.arrow_odbc.litestar.store import _TsqlSessionSql
+from sqlspec.exceptions import MigrationError
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
+from sqlspec.migrations.context import MigrationContext
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     EMPTY_RESULT,
     ISO_TIMESTAMP,
@@ -28,6 +32,7 @@ from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
 _SESSION_COLUMNS = pa.table({
     name: pa.array([], pa.string()) for name in ("session_id", "data", "expires_at", "created_at", "updated_at")
 })
+_CHUNK_COLUMNS = pa.table({name: pa.array([], pa.string()) for name in ("session_id", "chunk_index", "data")})
 _TSQL_SESSION_DDL = (
     "IF NOT EXISTS ( SELECT 1 FROM sys.tables WHERE name = N'sess' AND schema_id = SCHEMA_ID(N'dbo') ) BEGIN "
     "CREATE TABLE sess ( session_id NVARCHAR(255) PRIMARY KEY, data NVARCHAR(MAX) NULL, expires_at DATETIME2(6) NULL, "
@@ -51,9 +56,12 @@ def _session_store(connection: FakeArrowOdbcConnection) -> ArrowOdbcStore:
 
 
 async def test_tsql_session_create_table() -> None:
-    connection = FakeArrowOdbcConnection(
-        result=EMPTY_RESULT, responder=ScriptedResponder(("WHERE 1=0", _SESSION_COLUMNS))
-    )
+    def responder(sql: str, _parameters: "list[str | None] | None") -> "pa.Table | None":
+        if "WHERE 1=0" in sql:
+            return _CHUNK_COLUMNS if "sess_chunks" in sql.lower() else _SESSION_COLUMNS
+        return None
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
 
     await _session_store(connection).create_table()
 
@@ -64,7 +72,7 @@ async def test_tsql_session_create_table() -> None:
 async def test_tsql_session_drop_statements() -> None:
     store = _session_store(FakeArrowOdbcConnection())
 
-    assert store._drop_table_sql() == [  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_table_sql() == [
         "IF OBJECT_ID(N'dbo.sess_chunks', N'U') IS NOT NULL DROP TABLE dbo.sess_chunks;",
         "IF OBJECT_ID(N'dbo.sess', N'U') IS NOT NULL DROP TABLE dbo.sess;",
     ]
@@ -227,7 +235,7 @@ def test_tsql_event_store_create_and_drop_statements() -> None:
         ),
     ]
     assert store.drop_statements() == ["IF OBJECT_ID(N'[dbo].[app_events]', N'U') IS NOT NULL DROP TABLE app_events;"]
-    assert store._index_existence_target() is None  # pyright: ignore[reportPrivateUsage]
+    assert store._index_existence_target() is None
 
 
 _ADK_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=UTC)
@@ -492,15 +500,15 @@ def test_tsql_adk_session_store_ddl() -> None:
     store = ArrowOdbcADKStore(_tsql_adk_config(FakeArrowOdbcConnection()))
 
     ddls = [
-        store._sessions_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._events_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._app_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._user_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
-        store._metadata_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._sessions_table_ddl(),
+        store._events_table_ddl(),
+        store._app_states_table_ddl(),
+        store._user_states_table_ddl(),
+        store._metadata_table_ddl(),
     ]
 
     assert [" ".join(ddl.split()) for ddl in ddls] == _TSQL_ADK_DDL
-    assert store._drop_tables_sql() == _TSQL_ADK_DROPS  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_tables_sql() == _TSQL_ADK_DROPS
 
 
 def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -605,8 +613,8 @@ def test_tsql_adk_memory_store_statements() -> None:
     store.delete_entries_older_than(30, app_name="app", scope="user")
 
     assert normalized_calls(connection) == _TSQL_ADK_MEMORY_CALLS
-    assert " ".join(store._memory_table_ddl().split()) == _TSQL_ADK_MEMORY_DDL  # pyright: ignore[reportPrivateUsage]
-    assert store._drop_memory_table_sql() == _TSQL_ADK_MEMORY_DROPS  # pyright: ignore[reportPrivateUsage]
+    assert " ".join(store._memory_table_ddl().split()) == _TSQL_ADK_MEMORY_DDL
+    assert store._drop_memory_table_sql() == _TSQL_ADK_MEMORY_DROPS
 
 
 def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
@@ -625,6 +633,7 @@ def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
         "CREATE INDEX [idx_adk_memory_app_scope_user_time] ON [dbo].[adk_memory]",
         "CREATE INDEX [idx_adk_memory_scope] ON [dbo].[adk_memory]",
         "CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]",
+        "CREATE INDEX [idx_adk_memory_timestamp] ON [dbo].[adk_memory]",
     ]
     assert statements[-2] == (
         "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, "
@@ -773,3 +782,138 @@ def test_atomic_write_rolls_back_on_failure_with_default_autocommit() -> None:
 
     assert driver.rolled_back is True
     assert driver.committed is False
+
+
+def test_arrow_odbc_store_targets_session_then_chunks() -> None:
+    """ArrowOdbcStore exposes session and chunk targets in FK order without altering _table_ddl."""
+    store = _session_store(FakeArrowOdbcConnection())
+
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+
+    assert [target.table_name for target in targets] == ["sess", "sess_chunks"]
+    assert [target.schema for target in targets] == ["dbo", "dbo"]
+    assert [col.name for col in targets[0].create_table.columns] == [
+        "session_id",
+        "data",
+        "expires_at",
+        "created_at",
+        "updated_at",
+    ]
+    assert targets[0].constraint_columns == frozenset({"session_id"})
+    assert [col.name for col in targets[1].create_table.columns] == ["session_id", "chunk_index", "data"]
+    assert targets[1].constraint_columns == frozenset({"session_id", "chunk_index"})
+    assert len(indexes) == 1
+    assert indexes[0].name == "IX_sess_expires_at"
+    assert indexes[0].table == "sess"
+    assert indexes[0].schema == "dbo"
+    assert " ".join(store._table_ddl().split()) == _TSQL_SESSION_DDL
+
+
+def test_arrow_odbc_reconcile_creates_missing_chunks_table_and_index_when_primary_exists() -> None:
+    """Reconcile creates missing sess_chunks table and IX_sess_expires_at index in order without committing."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": "sess", "migration_mode": "reconcile"}},
+    )
+    session_columns = [
+        {"column_name": "session_id", "data_type": "nvarchar", "nullable": False},
+        {"column_name": "data", "data_type": "nvarchar", "nullable": True},
+        {"column_name": "expires_at", "data_type": "datetime2", "nullable": True},
+        {"column_name": "created_at", "data_type": "datetime2", "nullable": False},
+        {"column_name": "updated_at", "data_type": "datetime2", "nullable": False},
+    ]
+    driver = MagicMock()
+    driver.dialect = "tsql"
+    driver.data_dictionary.get_tables.return_value = [{"table_name": "sess", "schema_name": "dbo"}]
+    driver.data_dictionary.get_columns.return_value = session_columns
+    driver.data_dictionary.get_indexes.return_value = []
+
+    assert litestar_reconcile(MigrationContext(config=config, driver=driver)) is None
+
+    scripts = [str(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert len(scripts) == 2
+    assert "CREATE TABLE sess_chunks" in scripts[0]
+    assert "CREATE INDEX IX_sess_expires_at" in scripts[1]
+    driver.commit.assert_not_called()
+
+
+def test_arrow_odbc_reconcile_strict_refuses_incomplete_chunks_table() -> None:
+    """Strict reconcile refuses incomplete chunk tables before running companion index DDL."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": "sess", "migration_mode": "reconcile"}},
+    )
+    session_columns = [
+        {"column_name": "session_id", "data_type": "nvarchar", "nullable": False},
+        {"column_name": "data", "data_type": "nvarchar", "nullable": True},
+        {"column_name": "expires_at", "data_type": "datetime2", "nullable": True},
+        {"column_name": "created_at", "data_type": "datetime2", "nullable": False},
+        {"column_name": "updated_at", "data_type": "datetime2", "nullable": False},
+    ]
+    incomplete_chunk_columns = [{"column_name": "session_id", "data_type": "nvarchar", "nullable": False}]
+
+    def mock_get_columns(_driver: Any, table: str, schema: str | None = None) -> list[dict[str, Any]]:
+        del schema
+        return incomplete_chunk_columns if table == "sess_chunks" else session_columns
+
+    driver = MagicMock()
+    driver.dialect = "tsql"
+    driver.data_dictionary.get_tables.return_value = [
+        {"table_name": "sess", "schema_name": "dbo"},
+        {"table_name": "sess_chunks", "schema_name": "dbo"},
+    ]
+    driver.data_dictionary.get_columns.side_effect = mock_get_columns
+
+    with pytest.raises(MigrationError, match="sess_chunks"):
+        litestar_reconcile(MigrationContext(config=config, driver=driver))
+
+    driver.execute_script.assert_not_called()
+    driver.data_dictionary.get_indexes.assert_not_called()
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("session_table", "expected_chunk_table", "expected_schema", "expected_table"),
+    [
+        ("sess", "sess_chunks", "dbo", "sess"),
+        ("custom.sess", "custom.sess_chunks", "custom", "sess"),
+        ("[custom].[sess]", "[custom].[sess_chunks]", "custom", "sess"),
+        ('"App"."MixedSess"', '"App"."MixedSess_chunks"', "App", "MixedSess"),
+    ],
+)
+def test_arrow_odbc_tsql_qualified_session_table_and_chunk_names(
+    session_table: str, expected_chunk_table: str, expected_schema: str, expected_table: str
+) -> None:
+    """ArrowOdbcStore accepts validated 1-2 part names and renders bracket/quote-safe chunk table names."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": session_table}},
+    )
+    store = ArrowOdbcStore(config)
+
+    assert store._chunk_table_name == expected_chunk_table
+    targets = store.get_schema_targets()
+    indexes = store.get_companion_indexes()
+    assert [(target.schema, target.table_name) for target in targets] == [
+        (expected_schema, expected_table),
+        (expected_schema, f"{expected_table}_chunks"),
+    ]
+    assert f"CREATE TABLE {expected_chunk_table}" in store._table_ddl()
+    assert indexes[0].schema == expected_schema
+    assert indexes[0].table == expected_table
+    assert indexes[0].name == f"IX_{expected_table}_expires_at"
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    ["", "   ", "a.b.c", "app..sess", ".sess", "sess.", "[unclosed", '"unclosed', "bad;name", "[bad;name]", "x" * 64],
+)
+def test_arrow_odbc_store_rejects_invalid_qualified_session_table_names(invalid_name: str) -> None:
+    """ArrowOdbcStore raises ValueError on empty, unclosed, 3-part, or unsafe session_table names."""
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"litestar": {"session_table": invalid_name}},
+    )
+    with pytest.raises(ValueError):
+        ArrowOdbcStore(config)

@@ -16,7 +16,7 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
 from sqlspec.extensions.adk.memory import StoredMemory
-from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Cursor, db2_description, db2_error
+from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor, db2_description, db2_error
 
 pytestmark = pytest.mark.anyio
 
@@ -700,3 +700,130 @@ def test_create_index_sql_qualifies_schema() -> None:
         == 'CREATE INDEX "MYSCHEMA"."IX_SESSIONS" ON MYSCHEMA.SESSIONS (user_id)'
     )
     assert _create_index_sql("sessions", "ix_sessions", "user_id") == "CREATE INDEX ix_sessions ON sessions (user_id)"
+
+
+_ADK_INDEX_METADATA_COLUMNS = (
+    "schema_name",
+    "table_name",
+    "index_name",
+    "column_name",
+    "column_position",
+    "is_unique",
+    "is_primary",
+)
+
+
+def _adk_targets_method(store: Any, db2_mode: DriverMode) -> Any:
+    return store.get_schema_targets_async if db2_mode.is_async else store.get_schema_targets_sync
+
+
+def _adk_companion_method(store: Any, db2_mode: DriverMode) -> Any:
+    return store.reconcile_companion_objects_async if db2_mode.is_async else store.reconcile_companion_objects_sync
+
+
+async def test_adk_reconcile_schema_targets_and_disabled_memory_parity(db2_mode: DriverMode) -> None:
+    """Session and memory stores expose Db2 catalog-folded SchemaTargets and skip disabled memory."""
+    session_store, _ = _session_store(db2_mode)
+    driver = db2_mode.driver(FakeDb2Connection())
+    targets = await db2_mode.call(_adk_targets_method(session_store, db2_mode), driver)
+    assert [(target.schema, target.table_name) for target in targets] == [
+        (None, "ADK_SESSION"),
+        (None, "ADK_EVENT"),
+        (None, "ADK_APP_STATE"),
+        (None, "ADK_USER_STATE"),
+        (None, "ADK_INTERNAL_METADATA"),
+    ]
+
+    qualified_store, _ = _session_store(
+        db2_mode,
+        adk={
+            "session_table": "app.adk_session",
+            "events_table": "app.adk_event",
+            "app_state_table": "app.adk_app_state",
+            "user_state_table": "app.adk_user_state",
+            "metadata_table": "app.adk_internal_metadata",
+        },
+    )
+    qualified_targets = await db2_mode.call(_adk_targets_method(qualified_store, db2_mode), driver)
+    assert [(target.schema, target.table_name) for target in qualified_targets] == [
+        ("APP", "ADK_SESSION"),
+        ("APP", "ADK_EVENT"),
+        ("APP", "ADK_APP_STATE"),
+        ("APP", "ADK_USER_STATE"),
+        ("APP", "ADK_INTERNAL_METADATA"),
+    ]
+
+    disabled_memory_store, _ = _memory_store(db2_mode, adk={"enable_memory": False})
+    assert await db2_mode.call(_adk_targets_method(disabled_memory_store, db2_mode), driver) == []
+
+    enabled_memory_store, _ = _memory_store(db2_mode, adk={"enable_memory": True, "memory_table": "app.adk_memory"})
+    memory_targets = await db2_mode.call(_adk_targets_method(enabled_memory_store, db2_mode), driver)
+    assert [(target.schema, target.table_name) for target in memory_targets] == [("APP", "ADK_MEMORY")]
+
+
+async def test_adk_reconcile_companion_objects_repairs_only_missing_indexes(db2_mode: DriverMode) -> None:
+    """Companion repair queries SYSCAT.INDEXES once per table and creates only absent indexes without committing."""
+    session_index_rows = [
+        ("DB2INST1", "ADK_SESSION", "IDX_ADK_SESSION_APP_USER", "APP_NAME", 1, 0, 0),
+        ("DB2INST1", "ADK_SESSION", "IDX_ADK_SESSION_UPDATE_TIME", "UPDATE_TIME", 1, 0, 0),
+    ]
+    event_index_rows = [
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_SCOPE", "APP_NAME", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_SESSION", "SESSION_ID", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_INVOCATION", "INVOCATION_ID", 1, 0, 0),
+        ("DB2INST1", "ADK_EVENT", "IDX_ADK_EVENT_TIMESTAMP", "TIMESTAMP", 1, 0, 0),
+    ]
+    connection = FakeDb2Connection([
+        FakeDb2Cursor(rows=session_index_rows, description=db2_description(*_ADK_INDEX_METADATA_COLUMNS)),
+        FakeDb2Cursor(rows=event_index_rows, description=db2_description(*_ADK_INDEX_METADATA_COLUMNS)),
+        FakeDb2Cursor(),
+    ])
+    driver = db2_mode.driver(connection)
+    store, _ = _session_store(db2_mode)
+
+    await db2_mode.call(_adk_companion_method(store, db2_mode), driver)
+
+    ddl_statements = [
+        sql.strip()
+        for cursor in connection.cursors
+        for sql, _ in cursor.executed
+        if sql.lstrip().upper().startswith("CREATE")
+    ]
+    assert ddl_statements == ["CREATE INDEX idx_adk_event_app_timestamp ON adk_event (app_name, timestamp)"]
+    assert len(connection.cursors) == 3
+    assert connection.commits == 0
+
+    disabled_conn = FakeDb2Connection()
+    disabled_memory_store, _ = _memory_store(db2_mode, adk={"enable_memory": False})
+    await db2_mode.call(_adk_companion_method(disabled_memory_store, db2_mode), db2_mode.driver(disabled_conn))
+    assert disabled_conn.cursors == []
+
+
+async def test_adk_reconcile_companion_objects_scopes_qualified_schema(db2_mode: DriverMode) -> None:
+    """Qualified ADK memory tables scope catalog index probes to the folded Db2 schema."""
+    present_rows = [
+        ("APP", "ADK_MEMORY_ENTRIES", "IDX_APP_ADK_MEMORY_ENTRIES_SCOPE", "APP_NAME", 1, 0, 0),
+        ("APP", "ADK_MEMORY_ENTRIES", "IDX_APP_ADK_MEMORY_ENTRIES_SESSION", "SESSION_ID", 1, 0, 0),
+    ]
+    connection = FakeDb2Connection([
+        FakeDb2Cursor(rows=present_rows, description=db2_description(*_ADK_INDEX_METADATA_COLUMNS)),
+        FakeDb2Cursor(),
+    ])
+    driver = db2_mode.driver(connection)
+    memory_store, _ = _memory_store(db2_mode, adk={"enable_memory": True, "memory_table": "app.adk_memory_entries"})
+
+    await db2_mode.call(_adk_companion_method(memory_store, db2_mode), driver)
+
+    probe_sql, probe_params = connection.cursors[0].executed[0]
+    assert "SYSCAT.INDEXES" in probe_sql.upper()
+    assert probe_params == ("ADK_MEMORY_ENTRIES", "APP")
+    ddl_statements = [
+        sql.strip()
+        for cursor in connection.cursors
+        for sql, _ in cursor.executed
+        if sql.lstrip().upper().startswith("CREATE")
+    ]
+    assert ddl_statements == [
+        'CREATE INDEX "APP"."IDX_APP_ADK_MEMORY_ENTRIES_INSERTED" ON app.adk_memory_entries (inserted_at)'
+    ]
+    assert connection.commits == 0

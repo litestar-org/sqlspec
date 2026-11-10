@@ -1039,6 +1039,29 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return self._transaction_active
 
+    def _has_implicit_transaction(self) -> bool:
+        """Return True when the DBAPI connection holds an uncommitted non-autocommit session."""
+        if self._transaction_active:
+            return True
+        if bool(self.driver_features.get("autocommit", False)):
+            return False
+        conn = self.connection
+        commit_supported = getattr(conn, "_commit_supported", None)
+        if isinstance(commit_supported, bool):
+            if not commit_supported or getattr(conn, "_autocommit", False) is True:
+                return False
+            native = getattr(conn, "adbc_connection", None)
+            get_option = getattr(native, "get_option", None)
+            if callable(get_option):
+                with contextlib.suppress(Exception):
+                    if get_option("adbc.connection.autocommit") == "true":
+                        return False
+            return True
+        autocommit_attr = getattr(conn, "autocommit", None)
+        if isinstance(autocommit_attr, bool):
+            return not autocommit_attr
+        return False
+
     def _require_savepoints(self) -> None:
         if self._dialect_name in _DIALECTS_WITHOUT_SAVEPOINTS:
             msg = f"ADBC {self._dialect_name} connections do not support savepoints."

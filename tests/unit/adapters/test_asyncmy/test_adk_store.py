@@ -1,10 +1,9 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for asyncmy ADK store extension configuration."""
 
 import asyncio
 from datetime import UTC
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -395,3 +394,142 @@ async def test_asyncmy_stream_source_closes_cursor_when_execute_raises() -> None
 
     cursor.close.assert_awaited_once()
     assert source._cursor is None
+
+
+def _mock_companion_driver(index_map: dict[tuple[str | None, str], list[dict[str, Any]]]) -> MagicMock:
+    driver = MagicMock()
+    driver.execute = AsyncMock()
+    driver.commit = AsyncMock()
+
+    async def _get_indexes(_drv: Any, *, table: str | None = None, schema: str | None = None) -> list[dict[str, Any]]:
+        assert table is not None
+        return list(index_map.get((schema, table), []))
+
+    driver.data_dictionary.get_indexes = AsyncMock(side_effect=_get_indexes)
+    return driver
+
+
+async def test_asyncmy_companions_create_only_missing_session_index() -> None:
+    """Qualified database.table targets scope catalog lookup and create only absent indexes."""
+    driver = _mock_companion_driver({
+        ("app", "t"): [
+            {"index_name": "idx_t_app_user", "table_name": "t"},
+            {"index_name": "idx_t_update_time", "table_name": "unrelated_table"},
+        ],
+        ("app", "e"): [
+            {"index_name": "idx_e_scope", "table_name": "e"},
+            {"index_name": "idx_e_session", "table_name": "e"},
+            {"index_name": "idx_e_app_timestamp", "table_name": "e"},
+        ],
+    })
+    store = AsyncmyADKStore(_mock_config({"session_table": "app.t", "events_table": "app.e"}))
+
+    await store.reconcile_companion_objects_async(driver)
+
+    assert [call.args[0] for call in driver.execute.call_args_list] == [
+        "CREATE INDEX idx_t_update_time ON `app`.`t` (update_time DESC)"
+    ]
+    assert driver.data_dictionary.get_indexes.call_args_list[0].kwargs == {"table": "t", "schema": "app"}
+    assert driver.data_dictionary.get_indexes.call_args_list[1].kwargs == {"table": "e", "schema": "app"}
+    driver.commit.assert_not_called()
+
+
+async def test_asyncmy_companions_use_connection_database_for_bare_names() -> None:
+    """Bare table names pass schema=None and emit unquoted table DDL including generated/covering indexes."""
+    driver = _mock_companion_driver({})
+    store = AsyncmyADKStore(
+        _mock_config({
+            "session_table": "custom_sessions",
+            "events_table": "custom_events",
+            "enable_event_generated_columns": True,
+            "enable_covering_indexes": True,
+        })
+    )
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = [call.args[0] for call in driver.execute.call_args_list]
+    assert "CREATE INDEX idx_custom_sessions_app_user ON custom_sessions (app_name, user_id)" in statements
+    assert (
+        "CREATE INDEX idx_custom_events_session ON custom_events (session_id, timestamp ASC, invocation_id)"
+        in statements
+    )
+    assert (
+        "CREATE INDEX idx_custom_events_author_gc ON custom_events (session_id, author_gc, timestamp ASC)" in statements
+    )
+    assert driver.data_dictionary.get_indexes.call_args_list[0].kwargs == {"table": "custom_sessions", "schema": None}
+    driver.commit.assert_not_called()
+
+
+async def test_asyncmy_companions_repeat_is_noop() -> None:
+    """Case-folded catalog matches skip existing session and event indexes without executing DDL."""
+    driver = _mock_companion_driver({
+        ("app", "t"): [
+            {"index_name": "IDX_T_APP_USER", "table_name": "t"},
+            {"index_name": "idx_t_update_time", "table_name": "t"},
+        ],
+        ("app", "e"): [
+            {"index_name": "IDX_E_SCOPE", "table_name": "e"},
+            {"index_name": "idx_e_session", "table_name": "e"},
+            {"index_name": "idx_e_app_timestamp", "table_name": "e"},
+        ],
+    })
+    store = AsyncmyADKStore(_mock_config({"session_table": "app.t", "events_table": "app.e"}))
+
+    await store.reconcile_companion_objects_async(driver)
+
+    assert driver.data_dictionary.get_indexes.call_count == 2
+    driver.execute.assert_not_called()
+    driver.commit.assert_not_called()
+
+
+async def test_asyncmy_memory_companions_create_fulltext() -> None:
+    """Enabled FTS memory stores emit CREATE FULLTEXT INDEX while disabled stores skip catalog queries."""
+    disabled_driver = _mock_companion_driver({})
+    disabled_store = AsyncmyADKMemoryStore(_mock_config({"enable_memory": False}))
+    await disabled_store.reconcile_companion_objects_async(disabled_driver)
+    disabled_driver.data_dictionary.get_indexes.assert_not_called()
+    disabled_driver.execute.assert_not_called()
+
+    driver = _mock_companion_driver({})
+    store = AsyncmyADKMemoryStore(
+        _mock_config({"enable_memory": True, "memory_table": "app.m", "memory_use_fts": True})
+    )
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = [call.args[0] for call in driver.execute.call_args_list]
+    assert statements == [
+        "CREATE INDEX idx_m_app_scope_user_time ON `app`.`m` (app_name, scope, user_id, timestamp)",
+        "CREATE INDEX idx_m_scope ON `app`.`m` (app_name, scope)",
+        "CREATE INDEX idx_m_session ON `app`.`m` (session_id)",
+        "CREATE FULLTEXT INDEX idx_m_fts ON `app`.`m` (content_text)",
+    ]
+    driver.commit.assert_not_called()
+
+
+async def test_asyncmy_companions_propagate_failure_and_retry() -> None:
+    """Mid-batch DDL failures propagate cleanly and subsequent retries create only remaining absent indexes."""
+    catalog: dict[tuple[str | None, str], list[dict[str, Any]]] = {
+        (None, "adk_session"): [],
+        (None, "adk_event"): [
+            {"index_name": "idx_adk_event_scope", "table_name": "adk_event"},
+            {"index_name": "idx_adk_event_session", "table_name": "adk_event"},
+            {"index_name": "idx_adk_event_app_timestamp", "table_name": "adk_event"},
+        ],
+    }
+    driver = _mock_companion_driver(catalog)
+    driver.execute = AsyncMock(side_effect=[None, RuntimeError("boom")])
+    store = AsyncmyADKStore(_mock_config())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await store.reconcile_companion_objects_async(driver)
+
+    catalog[(None, "adk_session")] = [{"index_name": "idx_adk_session_app_user", "table_name": "adk_session"}]
+    retry_driver = _mock_companion_driver(catalog)
+
+    await store.reconcile_companion_objects_async(retry_driver)
+
+    assert [call.args[0] for call in retry_driver.execute.call_args_list] == [
+        "CREATE INDEX idx_adk_session_update_time ON adk_session (update_time DESC)"
+    ]

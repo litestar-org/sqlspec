@@ -294,6 +294,7 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
     _default_statement_config = StatementConfig()
     __slots__ = (
         "_default_session_config",
+        "_explicit_statement_dialect",
         "_paradedb_available",
         "_pg_textsearch_available",
         "_pgvector_available",
@@ -337,6 +338,12 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         self._pg_textsearch_available: bool | None = None
 
         self._resolved_dialect = resolve_dialect_from_config(self.connection_config)
+        raw_explicit_dialect = statement_config.dialect if statement_config is not None else None
+        self._explicit_statement_dialect: str | None = (
+            raw_explicit_dialect.strip()
+            if isinstance(raw_explicit_dialect, str) and raw_explicit_dialect.strip()
+            else None
+        )
 
         if statement_config is None:
             statement_config = get_statement_config(self._resolved_dialect)
@@ -410,8 +417,11 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
 
     def derive_pool(self, **overrides: Any) -> Self:
         """Derive independent ownership while preserving explicit pool settings."""
+        has_explicit_statement = overrides.get("statement_config") is not None
         pool_config = overrides.pop("pool_config", self._pool_config)
         derived = super().derive_pool(**overrides)
+        if not has_explicit_statement:
+            derived._explicit_statement_dialect = self._explicit_statement_dialect
         derived._pool_config = cast("AdbcPoolConfig", dict(pool_config)) if pool_config is not None else None
         derived._validate_pool_settings(None)
         return derived
@@ -499,6 +509,11 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
     def supports_migration_schemas(self) -> bool:  # type: ignore[override]
         """Migration schema support is only available for PostgreSQL-backed ADBC drivers."""
         return is_postgres_dialect(self._resolved_dialect)
+
+    @property
+    def explicit_statement_dialect(self) -> str | None:
+        """Return the dialect of a caller-supplied statement_config, or None when the config filled it in."""
+        return self._explicit_statement_dialect
 
     @property
     def pg_textsearch_available(self) -> bool:

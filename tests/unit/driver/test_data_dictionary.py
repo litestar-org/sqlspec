@@ -24,7 +24,7 @@ from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary,
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.data_dictionary import IndexMetadata, VersionInfo
+from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.driver._common import DataDictionaryDialectMixin, DataDictionaryMixin
 from tests.conftest import requires_interpreted
@@ -446,7 +446,7 @@ def test_adbc_get_version_duckdb() -> None:
 
 
 def test_adbc_duckdb_indexes_use_parameterless_query() -> None:
-    """DuckDB ADBC index queries should not receive unused bind parameters."""
+    """DuckDB ADBC index queries pass schema and table bind parameters."""
     mock_driver = Mock()
     mock_driver.dialect = "duckdb"
     mock_driver.select.return_value = []
@@ -454,7 +454,7 @@ def test_adbc_duckdb_indexes_use_parameterless_query() -> None:
     indexes = AdbcDataDictionary().get_indexes(mock_driver, table="example", schema="main")
 
     assert indexes == []
-    assert mock_driver.select.call_args.kwargs == {"schema_type": IndexMetadata}
+    assert mock_driver.select.call_args.kwargs == {"schema_name": "main", "table_name": "example"}
 
 
 def test_adbc_get_version_bigquery() -> None:

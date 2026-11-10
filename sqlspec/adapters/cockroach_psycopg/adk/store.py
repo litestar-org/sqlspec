@@ -1,6 +1,7 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (psycopg)."""
 
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as Jsonb
@@ -55,15 +56,7 @@ _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2 = (
     "            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
     "        ){2};\n"
     "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{3}_app_user\n"
-    "            ON {4}(app_name, user_id){5};\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{6}_update_time\n"
-    "            ON {7}(update_time DESC){8};\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{9}_state\n"
-    "            ON {10} USING GIN (state)\n"
-    "            WHERE state != '{{}}'::jsonb;\n"
+    "        {3}\n"
     "        "
 )
 
@@ -80,14 +73,7 @@ _ADK_EVENTS_TABLE_DDL_TEMPLATE = (
     "            FOREIGN KEY (session_id) REFERENCES {1}(id) ON DELETE CASCADE\n"
     "        ){2};\n"
     "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{3}_session\n"
-    "            ON {4}(session_id, timestamp ASC){5}{6};\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{7}_event_data\n"
-    "            ON {8} USING GIN (event_data);\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{9}_app_timestamp\n"
-    "            ON {10}(app_name, timestamp ASC);\n"
+    "        {3}\n"
     "        "
 )
 
@@ -122,22 +108,7 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "        "
 )
 
-
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = (
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{0}_fts\n"
-    "            ON {1} USING GIN (to_tsvector('english', content_text));\n"
-    "            "
-)
-
-_ADK_MEMORY_TABLE_DDL_TEMPLATE_2 = (
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{0}_content_trgm\n"
-    "            ON {1} USING GIN (content_text gin_trgm_ops);\n"
-    "            "
-)
-
-_ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
     "            id VARCHAR(128) PRIMARY KEY,\n"
@@ -154,13 +125,7 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
     "        ){2};\n"
     "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{3}_app_user_time\n"
-    "            ON {4}(app_name, user_id, timestamp DESC){5};\n"
-    "\n"
-    "        CREATE INDEX IF NOT EXISTS idx_{6}_session\n"
-    "            ON {7}(session_id);\n"
-    "        {8}\n"
-    "        {9}\n"
+    "        {3}\n"
     "        "
 )
 
@@ -227,6 +192,15 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
             await driver.commit()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Ensure CockroachDB session and event companion indexes exist on the async migration driver."""
+        adk_config = _adk_config(self._config)
+        for statement in (
+            *_cockroach_session_index_statements(adk_config, self._session_table),
+            *_cockroach_event_index_statements(adk_config, self._events_table),
+        ):
+            await driver.execute_script(statement)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -621,43 +595,19 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
-        session_idx_name = self._session_table.replace(".", "_")
+        indexes_sql = "\n\n        ".join(_cockroach_session_index_statements(adk_config, self._session_table))
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
-            self._session_table,
-            owner_id_line,
-            session_locality,
-            session_idx_name,
-            self._session_table,
-            session_storing_clause,
-            session_idx_name,
-            self._session_table,
-            hash_shard_clause,
-            session_idx_name,
-            self._session_table,
+            self._session_table, owner_id_line, session_locality, indexes_sql
         )
 
     async def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
-        events_idx_name = self._events_table.replace(".", "_")
+        indexes_sql = "\n\n        ".join(_cockroach_event_index_statements(adk_config, self._events_table))
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
-            self._events_table,
-            self._session_table,
-            events_locality,
-            events_idx_name,
-            self._events_table,
-            hash_shard_clause,
-            events_storing_clause,
-            events_idx_name,
-            self._events_table,
-            events_idx_name,
-            self._events_table,
+            self._events_table, self._session_table, events_locality, indexes_sql
         )
 
     async def _app_states_table_ddl(self) -> str:
@@ -720,6 +670,15 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
             driver.commit()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Ensure CockroachDB session and event companion indexes exist on the sync migration driver."""
+        adk_config = _adk_config(self._config)
+        for statement in (
+            *_cockroach_session_index_statements(adk_config, self._session_table),
+            *_cockroach_event_index_statements(adk_config, self._events_table),
+        ):
+            driver.execute_script(statement)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1110,43 +1069,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
-        session_idx_name = self._session_table.replace(".", "_")
+        indexes_sql = "\n\n        ".join(_cockroach_session_index_statements(adk_config, self._session_table))
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
-            self._session_table,
-            owner_id_line,
-            session_locality,
-            session_idx_name,
-            self._session_table,
-            session_storing_clause,
-            session_idx_name,
-            self._session_table,
-            hash_shard_clause,
-            session_idx_name,
-            self._session_table,
+            self._session_table, owner_id_line, session_locality, indexes_sql
         )
 
     def _events_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
-        events_idx_name = self._events_table.replace(".", "_")
+        indexes_sql = "\n\n        ".join(_cockroach_event_index_statements(adk_config, self._events_table))
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
-            self._events_table,
-            self._session_table,
-            events_locality,
-            events_idx_name,
-            self._events_table,
-            hash_shard_clause,
-            events_storing_clause,
-            events_idx_name,
-            self._events_table,
-            events_idx_name,
-            self._events_table,
+            self._events_table, self._session_table, events_locality, indexes_sql
         )
 
     def _app_states_table_ddl(self) -> str:
@@ -1231,6 +1166,14 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
             await driver.commit()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Ensure CockroachDB memory companion indexes exist on the async migration driver."""
+        if not self._enabled:
+            return
+        adk_config = _adk_config(self._config)
+        for statement in _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts):
+            await driver.execute_script(statement)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -1416,28 +1359,11 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        memory_idx_name = self._memory_table.replace(".", "_")
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(memory_idx_name, self._memory_table)
-        trigram_index = ""
-        if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(memory_idx_name, self._memory_table)
-
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            self._memory_table,
-            owner_id_line,
-            memory_locality,
-            memory_idx_name,
-            self._memory_table,
-            hash_shard_clause,
-            memory_idx_name,
-            self._memory_table,
-            fts_index,
-            trigram_index,
+        indexes_sql = "\n\n        ".join(
+            _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts)
         )
+
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, owner_id_line, memory_locality, indexes_sql)
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
@@ -1465,6 +1391,14 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
             driver.commit()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Ensure CockroachDB memory companion indexes exist on the sync migration driver."""
+        if not self._enabled:
+            return
+        adk_config = _adk_config(self._config)
+        for statement in _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts):
+            driver.execute_script(statement)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -1652,31 +1586,57 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         if self._owner_id_column_ddl:
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
-        hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-        memory_idx_name = self._memory_table.replace(".", "_")
-
-        fts_index = ""
-        if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(memory_idx_name, self._memory_table)
-        trigram_index = ""
-        if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(memory_idx_name, self._memory_table)
-
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
-            self._memory_table,
-            owner_id_line,
-            memory_locality,
-            memory_idx_name,
-            self._memory_table,
-            hash_shard_clause,
-            memory_idx_name,
-            self._memory_table,
-            fts_index,
-            trigram_index,
+        indexes_sql = "\n\n        ".join(
+            _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts)
         )
+
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, owner_id_line, memory_locality, indexes_sql)
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def _cockroach_session_index_statements(adk_config: Mapping[str, Any], session_table: str) -> list[str]:
+    """Build guarded CockroachDB session companion index DDL statements."""
+    hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+    session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
+    session_idx_name = session_table.replace(".", "_")
+    return [
+        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_app_user ON {session_table}(app_name, user_id){session_storing_clause};",
+        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_update_time ON {session_table}(update_time DESC){hash_shard_clause};",
+        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_state ON {session_table} USING GIN (state) WHERE state != '{{}}'::jsonb;",
+    ]
+
+
+def _cockroach_event_index_statements(adk_config: Mapping[str, Any], events_table: str) -> list[str]:
+    """Build guarded CockroachDB event companion index DDL statements."""
+    hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+    events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+    events_idx_name = events_table.replace(".", "_")
+    return [
+        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_session ON {events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};",
+        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_event_data ON {events_table} USING GIN (event_data);",
+        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_app_timestamp ON {events_table}(app_name, timestamp ASC);",
+    ]
+
+
+def _cockroach_memory_index_statements(adk_config: Mapping[str, Any], memory_table: str, *, use_fts: bool) -> list[str]:
+    """Build guarded CockroachDB memory companion index DDL statements."""
+    hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+    memory_idx_name = memory_table.replace(".", "_")
+    statements = [
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_app_user_time ON {memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_session ON {memory_table}(session_id);",
+    ]
+    if use_fts:
+        statements.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_fts ON {memory_table} USING GIN (to_tsvector('english', content_text));"
+        )
+    if adk_config.get("enable_memory_trigram_index", False):
+        statements.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_content_trgm ON {memory_table} USING GIN (content_text gin_trgm_ops);"
+        )
+    return statements
 
 
 def _build_insert_params(entry: "StoredMemory") -> "tuple[object, ...]":
@@ -1746,7 +1706,7 @@ def _cockroach_table_locality_clause(adk_config: CockroachPsycopgADKConfig, tabl
     return f"\n        {clause}"
 
 
-def _cockroach_hash_shard_clause(adk_config: CockroachPsycopgADKConfig) -> str:
+def _cockroach_hash_shard_clause(adk_config: Mapping[str, Any]) -> str:
     if not adk_config.get("enable_hash_sharded_indexes", False):
         return ""
     bucket_count = adk_config.get("hash_shard_bucket_count")
@@ -1758,7 +1718,7 @@ def _cockroach_hash_shard_clause(adk_config: CockroachPsycopgADKConfig) -> str:
     return f" USING HASH WITH (bucket_count = {bucket_count})"
 
 
-def _cockroach_storing_clause(adk_config: CockroachPsycopgADKConfig, columns: tuple[str, ...]) -> str:
+def _cockroach_storing_clause(adk_config: Mapping[str, Any], columns: tuple[str, ...]) -> str:
     if not adk_config.get("enable_storing_indexes", False):
         return ""
     return f" STORING ({', '.join(columns)})"

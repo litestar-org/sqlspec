@@ -20,8 +20,13 @@ from sqlspec.adapters.spanner.adk import (
     SpannerSyncADKStore,
 )
 from sqlspec.adapters.spanner.adk.store import _spanner_drop_statement_table
-from sqlspec.config import ADKConfig
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.config import ADKConfig, ExtensionConfigs
+from sqlspec.exceptions import MigrationError
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
+from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.schema import ensure_schema_sync
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -802,3 +807,214 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
         deleted_old = await store.delete_entries_older_than(7, app_name="app")
         assert deleted_old == 2
         assert exec_update.await_count == 2
+
+
+def _spanner_sync_config(adk_settings: dict[str, Any]) -> SpannerSyncConfig:
+    ext: ExtensionConfigs = {"adk": adk_settings}
+    return SpannerSyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"}, extension_config=ext
+    )
+
+
+def _spanner_async_config(adk_settings: dict[str, Any]) -> SpannerAsyncConfig:
+    ext: ExtensionConfigs = {"adk": adk_settings}
+    return SpannerAsyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"}, extension_config=ext
+    )
+
+
+def test_spanner_adk_reconcile_memory_target_parses_vector_length_and_fts() -> None:
+    """Memory SchemaTarget parses vector_length=>768 and FTS DDL while preserving verbatim create_statement."""
+    config = _spanner_sync_config({
+        "migration_mode": "reconcile",
+        "memory_use_fts": True,
+        "vector_dimensions": 768,
+        "shard_count": 4,
+    })
+    store = SpannerSyncADKMemoryStore(config)
+    targets = store.get_schema_targets_sync(MagicMock())
+
+    assert len(targets) == 1
+    target = targets[0]
+    column_names = [col.name for col in target.create_table.columns]
+    assert "embedding" in column_names
+    assert "content_tokens" in column_names
+    assert "shard_id" in column_names
+    assert isinstance(target.create_statement, str)
+    assert "ARRAY<FLOAT32>(vector_length=>768)" in target.create_statement
+    assert "TOKENIZE_FULLTEXT(content_text)" in target.create_statement
+    assert "CREATE INDEX" not in target.create_statement
+    assert "shard_id" in target.constraint_columns
+    assert "content_tokens" in target.unsafe_add_columns
+    assert "shard_id" in target.unsafe_add_columns
+
+    disabled_store = SpannerSyncADKMemoryStore(_spanner_sync_config({"enable_memory": False}))
+    disabled_driver = MagicMock()
+    assert disabled_store.get_schema_targets_sync(disabled_driver) == []
+    disabled_store.reconcile_companion_objects_sync(disabled_driver)
+    assert disabled_driver.mock_calls == []
+
+
+def test_spanner_adk_reconcile_refuses_missing_generated_columns() -> None:
+    """Missing generated content_tokens or shard_id columns fail strict additive reconciliation with remedy."""
+    config = _spanner_sync_config({
+        "migration_mode": "reconcile",
+        "memory_table": "m",
+        "memory_use_fts": True,
+        "vector_dimensions": 768,
+        "shard_count": 4,
+    })
+    store = SpannerSyncADKMemoryStore(config)
+    targets = store.get_schema_targets_sync(MagicMock())
+
+    base_columns = [
+        {"column_name": "id", "data_type": "STRING(128)", "is_nullable": "NO"},
+        {"column_name": "session_id", "data_type": "STRING(128)", "is_nullable": "NO"},
+        {"column_name": "app_name", "data_type": "STRING(128)", "is_nullable": "NO"},
+        {"column_name": "user_id", "data_type": "STRING(128)", "is_nullable": "NO"},
+        {"column_name": "scope", "data_type": "STRING(16)", "is_nullable": "NO"},
+        {"column_name": "event_id", "data_type": "STRING(128)", "is_nullable": "NO"},
+        {"column_name": "author", "data_type": "STRING(256)", "is_nullable": "YES"},
+        {"column_name": "timestamp", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        {"column_name": "content_json", "data_type": "JSON", "is_nullable": "NO"},
+        {"column_name": "content_text", "data_type": "STRING(MAX)", "is_nullable": "NO"},
+        {"column_name": "embedding", "data_type": "ARRAY<FLOAT32>(vector_length=>768)", "is_nullable": "YES"},
+        {"column_name": "metadata_json", "data_type": "JSON", "is_nullable": "YES"},
+        {"column_name": "inserted_at", "data_type": "TIMESTAMP", "is_nullable": "NO"},
+        {"column_name": "shard_id", "data_type": "INT64", "is_nullable": "YES"},
+    ]
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = [{"table_name": "m"}]
+    driver.data_dictionary.get_columns.return_value = base_columns
+
+    with pytest.raises(MigrationError, match="content_tokens") as exc_info:
+        ensure_schema_sync(driver, targets, manage_schema=True, create_schema=True, commit=False, strict=True)
+    assert 'migration_mode="versioned"' in str(exc_info.value)
+
+    missing_shard_columns = [
+        *(row for row in base_columns if row["column_name"] != "shard_id"),
+        {"column_name": "content_tokens", "data_type": "TOKENLIST", "is_nullable": "YES"},
+    ]
+    driver.data_dictionary.get_columns.return_value = missing_shard_columns
+    with pytest.raises(MigrationError, match="shard_id") as shard_exc:
+        ensure_schema_sync(driver, targets, manage_schema=True, create_schema=True, commit=False, strict=True)
+    assert 'migration_mode="versioned"' in str(shard_exc.value)
+
+
+def test_spanner_adk_reconcile_memory_companions_search_vector_and_graph() -> None:
+    """Memory companion reconcile repairs missing search/vector indexes and runs property graph DDL."""
+    store = SpannerSyncADKMemoryStore(
+        _spanner_sync_config({
+            "migration_mode": "reconcile",
+            "memory_table": "m",
+            "memory_use_fts": True,
+            "vector_dimensions": 768,
+            "vector_index_enabled": True,
+            "enable_memory_graph": True,
+        })
+    )
+    driver = MagicMock()
+    driver.data_dictionary.get_indexes.return_value = [
+        {"index_name": "idx_m_app_scope_user_time", "table_name": "m"},
+        {"index_name": "idx_m_scope", "table_name": "m"},
+        {"index_name": "idx_m_session", "table_name": "m"},
+        {"index_name": "idx_m_event_id", "table_name": "m"},
+        {"index_name": "idx_m_embedding", "table_name": "m"},
+    ]
+
+    store.reconcile_companion_objects_sync(driver)
+
+    executed = [call.args[0] for call in driver.execute_script.call_args_list]
+    assert len(executed) == 2
+    assert executed[0] == "CREATE SEARCH INDEX idx_m_fts ON m(content_tokens)"
+    assert executed[1].startswith("CREATE OR REPLACE PROPERTY GRAPH m_graph ")
+    driver.commit.assert_not_called()
+
+    no_graph_store = SpannerSyncADKMemoryStore(
+        _spanner_sync_config({
+            "migration_mode": "reconcile",
+            "memory_table": "m",
+            "memory_use_fts": True,
+            "vector_dimensions": 768,
+            "vector_index_enabled": True,
+            "enable_memory_graph": False,
+        })
+    )
+    upper_driver = MagicMock()
+    upper_driver.data_dictionary.get_indexes.return_value = [
+        {"index_name": "IDX_M_APP_SCOPE_USER_TIME", "table_name": "M"},
+        {"index_name": "IDX_M_SCOPE", "table_name": "M"},
+        {"index_name": "IDX_M_SESSION", "table_name": "M"},
+        {"index_name": "IDX_M_EVENT_ID", "table_name": "M"},
+        {"index_name": "IDX_M_FTS", "table_name": "M"},
+        {"index_name": "IDX_M_EMBEDDING", "table_name": "M"},
+    ]
+
+    no_graph_store.reconcile_companion_objects_sync(upper_driver)
+
+    upper_driver.execute_script.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_spanner_adk_reconcile_sync_and_async_parity() -> None:
+    """Sync and async Spanner ADK stores emit identical targets and DDL order without committing."""
+    settings: dict[str, Any] = {
+        "migration_mode": "reconcile",
+        "enable_memory": True,
+        "memory_use_fts": True,
+        "vector_dimensions": 768,
+        "vector_index_enabled": True,
+        "enable_memory_graph": True,
+        "shard_count": 4,
+    }
+    sync_cfg = _spanner_sync_config(settings)
+    async_cfg = _spanner_async_config(settings)
+
+    sync_session_store = SpannerSyncADKStore(sync_cfg)
+    async_session_store = SpannerAsyncADKStore(async_cfg)
+    sync_memory_store = SpannerSyncADKMemoryStore(sync_cfg)
+    async_memory_store = SpannerAsyncADKMemoryStore(async_cfg)
+
+    sync_targets = [
+        *sync_session_store.get_schema_targets_sync(MagicMock()),
+        *sync_memory_store.get_schema_targets_sync(MagicMock()),
+    ]
+    async_targets = [
+        *(await async_session_store.get_schema_targets_async(MagicMock())),
+        *(await async_memory_store.get_schema_targets_async(MagicMock())),
+    ]
+    assert [t.table_name for t in sync_targets] == [
+        "adk_session",
+        "adk_event",
+        "adk_app_state",
+        "adk_user_state",
+        "adk_internal_metadata",
+        "adk_memory",
+    ]
+    assert [(t.table_name, t.create_statement, t.constraint_columns, t.unsafe_add_columns) for t in sync_targets] == [
+        (t.table_name, t.create_statement, t.constraint_columns, t.unsafe_add_columns) for t in async_targets
+    ]
+
+    sync_driver = MagicMock()
+    sync_driver.data_dictionary.get_tables.return_value = []
+    sync_driver.data_dictionary.get_indexes.return_value = []
+
+    async_driver = MagicMock()
+    async_driver.data_dictionary.get_tables = AsyncMock(return_value=[])
+    async_driver.data_dictionary.get_indexes = AsyncMock(return_value=[])
+    async_driver.execute_script = AsyncMock()
+    async_driver.commit = AsyncMock()
+
+    assert adk_reconcile(MigrationContext(config=sync_cfg, dialect="spanner", driver=sync_driver)) is None
+    coro = adk_reconcile(MigrationContext(config=async_cfg, dialect="spanner", driver=async_driver))
+    assert coro is not None
+    await coro
+
+    sync_scripts = [call.args[0] for call in sync_driver.execute_script.call_args_list]
+    async_scripts = [call.args[0] for call in async_driver.execute_script.call_args_list]
+    assert sync_scripts == async_scripts
+    assert len(sync_scripts) == 6 + 2 + 7
+    assert all("CREATE TABLE" in sql for sql in sync_scripts[:6])
+    assert all("CREATE " in sql and "CREATE TABLE" not in sql for sql in sync_scripts[6:])
+    sync_driver.commit.assert_not_called()
+    async_driver.commit.assert_not_called()

@@ -1,12 +1,12 @@
 """Base classes for adapter-specific event queue stores."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
-from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget
+from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, metadata_has_index
 from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 __all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
+_SQLGLOT_PARSE_DIALECTS: Final[dict[str, str]] = {"mariadb": "mysql", "mssql": "tsql", "postgresql": "postgres"}
 
 
 class BaseEventQueueStore(ABC, Generic[ConfigT]):
@@ -45,6 +46,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         "event_poll_interval",
         "lease_seconds",
         "manage_schema",
+        "migration_mode",
         "migrations_path",
         "poll_interval",
         "queue_table",
@@ -90,6 +92,57 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
+    def get_schema_targets(self) -> "list[SchemaTarget]":
+        """Return ordered SchemaTarget definitions for the event queue table."""
+        return [self._schema_target()]
+
+    def companion_index_statement(self) -> str | None:
+        """Return wrapped companion index DDL, or None when the dialect uses no index."""
+        index_statement = self._index_ddl()
+        if not index_statement:
+            return None
+        return self._wrap_create_statement(index_statement, "index")
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing companion queue index on a synchronous driver without committing."""
+        statement = self.companion_index_statement()
+        if statement is None:
+            return
+        target = self._index_existence_target()
+        if target is not None:
+            schema, table = target
+            rows = driver.data_dictionary.get_indexes(driver, table=table, schema=schema)
+            if metadata_has_index(rows, table, self._index_name(), schema_name=schema):
+                return
+        driver.execute_script(statement)
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing companion queue index on an asynchronous driver without committing."""
+        statement = self.companion_index_statement()
+        if statement is None:
+            return
+        target = self._index_existence_target()
+        if target is not None:
+            schema, table = target
+            rows = await driver.data_dictionary.get_indexes(driver, table=table, schema=schema)
+            if metadata_has_index(rows, table, self._index_name(), schema_name=schema):
+                return
+        await driver.execute_script(statement)
+
+    def native_backend_targets(self, backend_name: str) -> tuple[str, ...]:
+        """Return validated native object names, refusing invalid settings; the default returns none."""
+        return ()
+
+    def reconcile_native_backend_sync(
+        self, driver: Any, backend_name: str, targets: tuple[str, ...], *, create_schema: bool
+    ) -> None:
+        """Provision native backend objects; the default does nothing."""
+
+    async def reconcile_native_backend_async(
+        self, driver: Any, backend_name: str, targets: tuple[str, ...], *, create_schema: bool
+    ) -> None:
+        """Provision native backend objects; the default does nothing."""
+
     def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
         """Apply additive queue-table changes with a synchronous driver."""
         from sqlspec.migrations.schema import ensure_schema_sync
@@ -113,7 +166,12 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def _schema_target(self) -> SchemaTarget:
         """Build a schema target from the canonical queue table DDL."""
         statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
+        raw_dialect = getattr(self, "dialect", None) or getattr(statement_config, "dialect", None)
+        dialect = (
+            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
+            if isinstance(raw_dialect, str)
+            else raw_dialect
+        )
         return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=dialect)
 
     def _validate_extension_config(self) -> None:

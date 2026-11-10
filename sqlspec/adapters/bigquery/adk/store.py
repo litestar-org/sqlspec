@@ -19,9 +19,11 @@ from sqlspec.adapters.bigquery._typing import GoogleAPIError, GoogleCloudError
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception, resolve_dataset_id
+from sqlspec.adapters.bigquery.events.store import _bigquery_additive_target
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -237,9 +239,13 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     def _run_query(self, sql: str, parameters: "Iterable[Any] | None" = None) -> "list[dict[str, Any]]":
         client = self._config.create_connection()
         job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
+        retry_deadline = self._config.driver_features.get("job_retry_deadline")
+        result_kwargs: dict[str, Any] = {}
+        if retry_deadline is not None and float(retry_deadline) <= 0:
+            result_kwargs["job_retry"] = None
         try:
             job = client.query(sql, job_config=job_config)
-            rows = [dict(row) for row in job.result()]
+            rows = [dict(row) for row in job.result(**result_kwargs)]
         except (GoogleCloudError, GoogleAPIError) as exc:
             raise create_mapped_exception(exc) from exc
         self._last_dml_affected_rows = build_dml_rowcount(job, 0)
@@ -658,6 +664,24 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             self._metadata_table_ddl(),
         ):
             self._run_query(statement)
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        ddl_targets = (
+            (self._qualified(self._session_table), self._sessions_table_ddl()),
+            (self._qualified(self._events_table), self._events_table_ddl()),
+            (self._qualified(self._app_state_table), self._app_states_table_ddl()),
+            (self._qualified(self._user_state_table), self._user_states_table_ddl()),
+            (self._qualified(self._metadata_table), self._metadata_table_ddl()),
+        )
+        return [
+            _bigquery_additive_target(SchemaTarget.from_ddl(table, ddl, dialect="bigquery"))
+            for table, ddl in ddl_targets
+        ]
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered BigQuery ADK SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
 
     @staticmethod
     def _decode_json(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> "dict[str, Any] | None":

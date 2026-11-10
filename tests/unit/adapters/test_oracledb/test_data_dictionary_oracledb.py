@@ -777,6 +777,26 @@ async def test_oracle_default_schema_index_expression_uses_native_catalog_owner(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_get_indexes_by_schema_binds_table_name_none(is_async: bool) -> None:
+    connection = _CatalogConnection(is_async=is_async)
+    if is_async:
+        driver = OracleAsyncDriver(
+            cast("OracleAsyncConnection", connection), driver_features={"enable_lowercase_column_names": True}
+        )
+        indexes = await driver.data_dictionary.get_indexes(driver)
+    else:
+        sync_driver = OracleSyncDriver(
+            cast("OracleSyncConnection", connection), driver_features={"enable_lowercase_column_names": True}
+        )
+        indexes = sync_driver.data_dictionary.get_indexes(sync_driver)
+    assert len(indexes) == 1
+    assert indexes[0]["index_name"] == "IDX_EMAIL"
+    assert indexes[0]["table_name"] == "EMPLOYEES"
+    assert indexes[0]["expression"] == 'UPPER("EMAIL")'
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize(
     ("major", "sdk_version_present", "lowercase_columns"),
     [(12, True, True), (18, True, False), (23, True, True), (23, False, False)],

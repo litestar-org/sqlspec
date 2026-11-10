@@ -2,7 +2,7 @@
 
 import base64
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.adapters.arrow_odbc.core import (
     DB2_INDEX_EXISTS_SQL,
@@ -13,7 +13,13 @@ from sqlspec.adapters.arrow_odbc.core import (
 from sqlspec.adapters.arrow_odbc.core import atomic_store_write as _atomic_write
 from sqlspec.adapters.arrow_odbc.core import strip_bracket_quotes as _strip_tsql_quotes
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.store import (
+    MAX_TABLE_NAME_LENGTH,
+    VALID_TABLE_NAME_PATTERN,
+    BaseSQLSpecStore,
+    CompanionIndex,
+)
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -24,6 +30,62 @@ __all__ = ("ArrowOdbcStore",)
 
 _MAX_INLINE_DATA_LENGTH = 3500
 _QUALIFIED_PARTS_MIN = 2
+_MAX_QUALIFIED_PARTS: Final = 2
+_MIN_QUOTED_SEGMENT_LEN: Final = 2
+
+
+def _build_chunk_table_name(table_name: str) -> str:
+    """Append _chunks inside trailing bracket or double-quote delimiters, preserving any schema prefix."""
+    if table_name.endswith("]"):
+        return f"{table_name[:-1]}_chunks]"
+    if table_name.endswith('"'):
+        return f'{table_name[:-1]}_chunks"'
+    return f"{table_name}_chunks"
+
+
+def _unwrap_odbc_segment(segment: str) -> str | None:
+    if not segment or segment != segment.strip():
+        return None
+    if segment.startswith("["):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith("]"):
+            return None
+        inner = segment[1:-1]
+        if "[" in inner or "]" in inner.replace("]]", ""):
+            return None
+        return inner.replace("]]", "]")
+    if segment.startswith('"'):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith('"'):
+            return None
+        inner = segment[1:-1]
+        if '"' in inner.replace('""', ""):
+            return None
+        return inner.replace('""', '"')
+    return segment
+
+
+def _validate_arrow_odbc_table_name(table_name: str) -> None:
+    """Raise ValueError unless table_name is a valid 1- or 2-part ODBC table identifier."""
+    if not table_name or not table_name.strip():
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    raw_segments = table_name.split(".")
+    if len(raw_segments) > _MAX_QUALIFIED_PARTS:
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    unwrapped: list[str] = []
+    for raw_segment in raw_segments:
+        segment = _unwrap_odbc_segment(raw_segment)
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
+            msg = f"Invalid table name: {table_name!r}"
+            raise ValueError(msg)
+        unwrapped.append(segment)
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
+    if parts != tuple(unwrapped):
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
 
 
 class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
@@ -47,9 +109,14 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             msg = f"ArrowOdbcStore requires dialect 'mssql' or 'db2' (received {dialect!r})."
             raise ImproperConfigurationError(msg)
 
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part ODBC session table name."""
+        _validate_arrow_odbc_table_name(table_name)
+
     @property
     def _chunk_table_name(self) -> str:
-        return f"{self._table_name}_chunks"
+        return _build_chunk_table_name(self._table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -194,6 +261,14 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         """Get the CREATE TABLE DDL for the configured dialect."""
         return self._sql.table_ddl()
 
+    def get_schema_targets(self) -> list[SchemaTarget]:
+        """Return primary session table and overflow chunk table SchemaTargets in FK order."""
+        return self._sql.schema_targets()
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the companion session expiry index definition."""
+        return self._sql.companion_indexes()
+
     def _drop_table_sql(self) -> "list[str]":
         """Get the DROP TABLE statements for the configured dialect."""
         return self._sql.drop_statements()
@@ -206,7 +281,7 @@ class _TsqlSessionSql:
 
     def __init__(self, table_name: str) -> None:
         self._table_name = table_name
-        self._chunk_table_name = f"{table_name}_chunks"
+        self._chunk_table_name = _build_chunk_table_name(table_name)
         self._schema, self._bare_table = _split_tsql_table_name(table_name)
         self._bare_chunk_table = f"{self._bare_table}_chunks"
 
@@ -322,6 +397,72 @@ class _TsqlSessionSql:
         END;
         """
 
+    def _session_table_ddl(self) -> str:
+        """Get table-only SQL Server CREATE TABLE DDL for the primary session table."""
+        return f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.tables
+            WHERE name = N'{self._bare_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
+        )
+        BEGIN
+            CREATE TABLE {self._table_name} (
+                session_id NVARCHAR(255) PRIMARY KEY,
+                data NVARCHAR(MAX) NULL,
+                expires_at DATETIME2(6) NULL,
+                created_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()
+            );
+        END;
+        """
+
+    def _chunk_table_ddl(self) -> str:
+        """Get SQL Server CREATE TABLE DDL for the overflow chunks table."""
+        return f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.tables
+            WHERE name = N'{self._bare_chunk_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
+        )
+        BEGIN
+            CREATE TABLE {self._chunk_table_name} (
+                session_id NVARCHAR(255) NOT NULL,
+                chunk_index INT NOT NULL,
+                data NVARCHAR(3500) NOT NULL,
+                CONSTRAINT PK_{self._bare_chunk_table} PRIMARY KEY (session_id, chunk_index),
+                CONSTRAINT FK_{self._bare_chunk_table}_session FOREIGN KEY (session_id)
+                    REFERENCES {self._table_name}(session_id) ON DELETE CASCADE
+            );
+        END;
+        """
+
+    def schema_targets(self) -> list[SchemaTarget]:
+        """Build ordered SchemaTargets for the primary session and chunk tables."""
+        return [
+            SchemaTarget.from_ddl(self._bare_table, self._session_table_ddl(), schema=self._schema, dialect="tsql"),
+            SchemaTarget.from_ddl(self._bare_chunk_table, self._chunk_table_ddl(), schema=self._schema, dialect="tsql"),
+        ]
+
+    def companion_indexes(self) -> list[CompanionIndex]:
+        """Build the guarded T-SQL companion expiry index definition."""
+        index_name = f"IX_{self._bare_table}_expires_at"
+        ddl = f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = N'{index_name}'
+              AND object_id = OBJECT_ID(N'{self._schema}.{self._bare_table}')
+        )
+        BEGIN
+            CREATE INDEX {index_name}
+                ON {self._table_name}(expires_at)
+                WHERE expires_at IS NOT NULL;
+        END;
+        """
+        return [CompanionIndex(name=index_name, table=self._bare_table, schema=self._schema, ddl=ddl)]
+
     def drop_statements(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         chunk_target = f"{self._schema}.{self._bare_chunk_table}"
@@ -335,16 +476,35 @@ class _TsqlSessionSql:
 class _Db2SessionSql:
     """Db2 statements for the session store: bound UTC times and catalog-probed DDL."""
 
-    __slots__ = ("_catalog_table", "_chunk_table_name", "_schema", "_table_name")
+    __slots__ = ("_catalog_chunk_table", "_catalog_table", "_chunk_table_name", "_schema", "_table_name")
 
     def __init__(self, table_name: str) -> None:
         self._table_name = table_name
-        self._chunk_table_name = f"{table_name}_chunks"
+        self._chunk_table_name = _build_chunk_table_name(table_name)
         self._schema, self._catalog_table = split_db2_name(table_name)
+        _, self._catalog_chunk_table = split_db2_name(self._chunk_table_name)
 
     def table_ddl(self) -> str:
         """Get the session table, expiry index and chunk table DDL as one script."""
         return f"{self._session_table_ddl()};\n{self._index_ddl()};\n{self._chunk_table_ddl()}"
+
+    def schema_targets(self) -> list[SchemaTarget]:
+        """Build ordered Db2 SchemaTargets for the primary session and chunk tables."""
+        schema_name = self._schema or None
+        return [
+            SchemaTarget.from_ddl(self._catalog_table, self._session_table_ddl(), schema=schema_name, dialect="db2"),
+            SchemaTarget.from_ddl(
+                self._catalog_chunk_table, self._chunk_table_ddl(), schema=schema_name, dialect="db2"
+            ),
+        ]
+
+    def companion_indexes(self) -> list[CompanionIndex]:
+        """Build the Db2 companion expiry index definition."""
+        return [
+            CompanionIndex(
+                name=self._index_name(), table=self._catalog_table, schema=self._schema or None, ddl=self._index_ddl()
+            )
+        ]
 
     def drop_statements(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""
@@ -355,7 +515,7 @@ class _Db2SessionSql:
         probes = (
             (DB2_TABLE_EXISTS_SQL, self._catalog_table, self._session_table_ddl()),
             (DB2_INDEX_EXISTS_SQL, self._index_name(), self._index_ddl()),
-            (DB2_TABLE_EXISTS_SQL, f"{self._catalog_table}_CHUNKS", self._chunk_table_ddl()),
+            (DB2_TABLE_EXISTS_SQL, self._catalog_chunk_table, self._chunk_table_ddl()),
         )
         for probe_sql, catalog_name, ddl in probes:
             if driver.select_one_or_none(probe_sql, (self._schema, catalog_name)) is None:
@@ -408,7 +568,7 @@ class _Db2SessionSql:
         return (f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at < ?", (_db2_now(),))
 
     def _index_name(self) -> str:
-        return f"IX_{self._catalog_table}_EXP"
+        return f"IX_{self._catalog_table.upper()}_EXP"
 
     def _session_table_ddl(self) -> str:
         return (
@@ -421,16 +581,19 @@ class _Db2SessionSql:
         )
 
     def _index_ddl(self) -> str:
-        return f"CREATE INDEX {self._index_name()} ON {self._table_name}(expires_at)"
+        raw_schema, dot, _ = self._table_name.partition(".")
+        index_ref = f"{raw_schema}.{self._index_name()}" if dot else self._index_name()
+        return f"CREATE INDEX {index_ref} ON {self._table_name}(expires_at)"
 
     def _chunk_table_ddl(self) -> str:
+        upper_base = self._catalog_table.upper()
         return (
             f"CREATE TABLE {self._chunk_table_name} ("
             "session_id VARCHAR(255) NOT NULL, "
             "chunk_index INTEGER NOT NULL, "
             f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}) NOT NULL, "
-            f"CONSTRAINT PK_{self._catalog_table}_CHUNKS PRIMARY KEY (session_id, chunk_index), "
-            f"CONSTRAINT FK_{self._catalog_table}_CHUNKS FOREIGN KEY (session_id) "
+            f"CONSTRAINT PK_{upper_base}_CHUNKS PRIMARY KEY (session_id, chunk_index), "
+            f"CONSTRAINT FK_{upper_base}_CHUNKS FOREIGN KEY (session_id) "
             f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
         )
 

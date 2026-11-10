@@ -656,7 +656,11 @@ def _log_column_added(driver: Any, version_table: str, column_name: str) -> None
 
 def _finalize_current_version(driver: Any, result: Any) -> "str | None":
     """Extract, log, and return the current migration version from a query result."""
-    current = result.get_data()[0]["version_num"] if result.data else None
+    current: str | None = None
+    if result.data:
+        first_row = result.get_data()[0]
+        raw_version = first_row.get("version_num") if "version_num" in first_row else first_row.get("VERSION_NUM")
+        current = str(raw_version) if raw_version is not None else None
     log_with_context(
         logger,
         logging.DEBUG,
@@ -670,7 +674,10 @@ def _finalize_current_version(driver: Any, result: Any) -> "str | None":
 
 def _finalize_applied_migrations(driver: Any, result: Any) -> "list[AppliedMigrationRecord]":
     """Extract, log, and return applied migration records from a query result."""
-    applied = cast("list[AppliedMigrationRecord]", result.get_data())
+    rows = result.get_data()
+    if rows and isinstance(rows[0], dict) and "version_num" not in rows[0] and "VERSION_NUM" in rows[0]:
+        rows = [{str(key).lower(): value for key, value in row.items()} for row in rows]
+    applied = cast("list[AppliedMigrationRecord]", rows)
     log_with_context(
         logger,
         logging.DEBUG,

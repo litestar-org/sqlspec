@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.artifact._types import StoredArtifact
+    from sqlspec.migrations.schema import SchemaTarget
 
 __all__ = ("BaseAsyncADKArtifactStore", "BaseSyncADKArtifactStore")
 
@@ -56,6 +57,13 @@ class _ADKArtifactStoreCommon(Generic[ConfigT]):
         """Return the artifact versions table name."""
         return self._artifact_table
 
+    def _schema_management_flags(self) -> tuple[bool, bool]:
+        extension_config = getattr(self._config, "extension_config", {})
+        adk_config = extension_config.get("adk", {}) if isinstance(extension_config, dict) else {}
+        manage_schema = adk_config.get("manage_schema", True) if isinstance(adk_config, dict) else True
+        create_schema = adk_config.get("create_schema", True) if isinstance(adk_config, dict) else True
+        return bool(manage_schema), bool(create_schema)
+
 
 class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     """Base class for async SQLSpec-backed ADK artifact metadata stores.
@@ -71,6 +79,23 @@ class BaseAsyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     """
 
     __slots__ = ()
+
+    async def prepare_schema_async(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with an asynchronous driver."""
+
+    async def prepare_reconcile_async(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return artifact table targets, which is empty by default."""
+        del driver
+        return []
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Reconcile adapter-specific artifact companion objects; the default does nothing."""
+
+    async def finalize_reconcile_async(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
 
     @abstractmethod
     async def insert_artifact(self, record: "StoredArtifact") -> None:
@@ -220,6 +245,23 @@ class BaseSyncADKArtifactStore(_ADKArtifactStoreCommon[ConfigT], ABC):
     """
 
     __slots__ = ()
+
+    def prepare_schema_sync(self, driver: Any) -> None:
+        """Prepare adapter-specific schema decisions with a synchronous driver."""
+
+    def prepare_reconcile_sync(self, driver: Any) -> None:
+        """Run reconcile-only prerequisite DDL; the default does nothing."""
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return artifact table targets, which is empty by default."""
+        del driver
+        return []
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Reconcile adapter-specific artifact companion objects; the default does nothing."""
+
+    def finalize_reconcile_sync(self, driver: Any) -> None:
+        """Refresh config state after every DDL phase succeeds; the default does nothing."""
 
     @abstractmethod
     def insert_artifact(self, record: "StoredArtifact") -> None:

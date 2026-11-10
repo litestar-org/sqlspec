@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError, spanner_param_types
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
+from sqlspec.adapters.spanner.adk.store import _parse_spanner_target
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
     _DDL_TIMEOUT_SECONDS,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         SpannerDatabase,
         SpannerTransaction,
     )
+    from sqlspec.migrations.schema import SchemaTarget
 
 __all__ = ("USER_SCOPED_SESSION_ID", "SpannerAsyncADKArtifactStore", "SpannerSyncADKArtifactStore")
 
@@ -467,6 +469,11 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
     ) -> "list[Any]":
         return _run_read(self._config, sql, params, types)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return the SchemaTarget for the Spanner ADK artifact table."""
+        del driver
+        return [_parse_spanner_target(self._artifact_table, self._artifact_table_ddl()[0])]
+
 
 class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig], _SpannerADKArtifactStoreMixin):
     """Spanner ADK artifact store backed by asynchronous Spanner client."""
@@ -614,6 +621,11 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
         return await _run_read_async(await self._database(), sql, params, types)
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return the SchemaTarget for the Spanner ADK artifact table."""
+        del driver
+        return [_parse_spanner_target(self._artifact_table, self._artifact_table_ddl()[0])]
 
 
 class _SpannerSyncArtifactDeleteJob:

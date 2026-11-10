@@ -63,9 +63,13 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
+from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
+from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
 from sqlspec.migrations.commands import SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 
 
 class FakeSybaseError(Exception):
@@ -1110,3 +1114,225 @@ def test_sybase_rejects_migration_schema_directive(tmp_path: Path) -> None:
 
     with pytest.raises(MigrationError, match="does not support migration schema directives"):
         runner.execute_upgrade(Mock(), migration, use_transaction=False)
+
+
+def _recording_reconcile_driver(
+    *, tables: list[dict[str, Any]] | None = None, indexes: list[dict[str, Any]] | None = None
+) -> tuple[SimpleNamespace, list[str], list[str]]:
+    executed: list[str] = []
+    scripts: list[str] = []
+    table_rows = tables or []
+    index_rows = indexes or []
+    data_dictionary = SimpleNamespace(
+        get_tables=Mock(side_effect=lambda _drv, schema=None: list(table_rows)),
+        get_columns=Mock(side_effect=lambda _drv, table=None, schema=None: []),
+        get_indexes=Mock(side_effect=lambda _drv, table=None, schema=None: list(index_rows)),
+    )
+    driver = SimpleNamespace(
+        data_dictionary=data_dictionary,
+        execute=Mock(side_effect=lambda sql, *_args, **_kwargs: executed.append(str(sql))),
+        execute_script=Mock(side_effect=lambda sql, *_args, **_kwargs: scripts.append(str(sql))),
+        commit=Mock(),
+    )
+    return driver, executed, scripts
+
+
+def test_sybase_reconcile_guard_accepts_adapter() -> None:
+    """validate_builtin_reconcile_adapter accepts SybaseConfig unconditionally."""
+    config = SybaseConfig(connection_config={"user": "sa", "password": "secret", "database": "demo"})
+    assert validate_builtin_reconcile_adapter(config) == "sybase"
+
+
+def test_sybase_reconcile_litestar_target_and_table_ddl_unchanged() -> None:
+    """SybaseStore parses unwrapped DDL for SchemaTarget while preserving _table_ddl byte-for-byte."""
+    config = SybaseConfig(extension_config={"litestar": {"session_table": "litestar_session"}})
+    store = SybaseStore(config)
+
+    expected_ddl = (
+        "IF OBJECT_ID('[dbo].[litestar_session]') IS NULL EXECUTE('"
+        "CREATE TABLE [dbo].[litestar_session] ("
+        "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
+        "data IMAGE NOT NULL, "
+        "expires_at BIGDATETIME NULL, "
+        "created_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
+        "updated_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL"
+        ")');\n"
+        "IF NOT EXISTS (SELECT 1 FROM dbo.sysindexes WHERE name = 'IX_litestar_session_expires_at' "
+        "AND id = OBJECT_ID('[dbo].[litestar_session]')) EXECUTE('"
+        "CREATE INDEX [IX_litestar_session_expires_at] ON [dbo].[litestar_session](expires_at)');"
+    )
+    assert store._table_ddl() == expected_ddl
+
+    targets = store.get_schema_targets()
+    assert len(targets) == 1
+    target = targets[0]
+    assert target.table_name == "litestar_session"
+    assert target.schema == "dbo"
+    columns = {col.name: col.dtype for col in target.create_table.columns}
+    assert list(columns) == ["session_id", "data", "expires_at", "created_at", "updated_at"]
+    assert columns["data"] == "IMAGE"
+    assert columns["expires_at"] == "BIGDATETIME"
+    assert columns["created_at"] == "BIGDATETIME"
+    assert columns["updated_at"] == "BIGDATETIME"
+
+    companion_indexes = store.get_companion_indexes()
+    assert len(companion_indexes) == 1
+    companion = companion_indexes[0]
+    assert companion.name == "IX_litestar_session_expires_at"
+    assert companion.table == "litestar_session"
+    assert companion.schema == "dbo"
+    assert companion.ddl == (
+        "IF NOT EXISTS (SELECT 1 FROM dbo.sysindexes WHERE name = 'IX_litestar_session_expires_at' "
+        "AND id = OBJECT_ID('[dbo].[litestar_session]')) EXECUTE('"
+        "CREATE INDEX [IX_litestar_session_expires_at] ON [dbo].[litestar_session](expires_at)');"
+    )
+
+    missing_driver, executed, scripts = _recording_reconcile_driver(indexes=[])
+    store.reconcile_companion_objects_sync(missing_driver)
+    assert executed == []
+    assert scripts == [companion.ddl]
+    missing_driver.commit.assert_not_called()
+
+    present_driver, present_executed, present_scripts = _recording_reconcile_driver(
+        indexes=[
+            {"schema_name": "dbo", "table_name": "litestar_session", "index_name": "IX_litestar_session_expires_at"}
+        ]
+    )
+    store.reconcile_companion_objects_sync(present_driver)
+    assert present_executed == []
+    assert present_scripts == []
+
+
+def test_sybase_reconcile_event_queue_target_parses_columns() -> None:
+    """SybaseEventQueueStore parses unwrapped queue DDL without ValueError."""
+    config = SybaseConfig(extension_config={"events": {"queue_table": "event_queue"}})
+    store = SybaseEventQueueStore(config)
+
+    targets = store.get_schema_targets()
+    assert len(targets) == 1
+    target = targets[0]
+    assert target.table_name == "event_queue"
+    columns = {col.name: col.dtype for col in target.create_table.columns}
+    assert list(columns) == [
+        "event_id",
+        "channel",
+        "payload_json",
+        "metadata_json",
+        "status",
+        "available_at",
+        "lease_expires_at",
+        "attempts",
+        "created_at",
+        "acknowledged_at",
+    ]
+    assert columns["payload_json"] == "TEXT"
+    assert columns["available_at"] == "BIGDATETIME"
+    assert isinstance(target.create_statement, str)
+    assert target.create_statement == store.create_statements()[0]
+    assert target.create_statement.startswith("IF OBJECT_ID('[event_queue]') IS NULL EXECUTE(")
+
+
+def test_sybase_reconcile_adk_targets_ddl_unchanged_and_guarded_index_repair() -> None:
+    """SybaseADKStore and SybaseADKMemoryStore keep wrapped DDL unchanged and probe catalog before index creation."""
+    config = SybaseConfig(extension_config={"adk": {"enable_memory": True}})
+    adk_store = SybaseADKStore(config)
+    mem_store = SybaseADKMemoryStore(config)
+    disabled_mem_store = SybaseADKMemoryStore(SybaseConfig(extension_config={"adk": {"enable_memory": False}}))
+
+    expected_sessions_ddl = (
+        "IF OBJECT_ID('[dbo].[adk_session]') IS NULL EXECUTE('"
+        "CREATE TABLE [dbo].[adk_session] ("
+        "id VARCHAR(128) NOT NULL, "
+        "app_name VARCHAR(128) NOT NULL, "
+        "user_id VARCHAR(128) NOT NULL, "
+        "state TEXT NOT NULL, "
+        "create_time BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
+        "update_time BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
+        "CONSTRAINT [pk_adk_session_id] PRIMARY KEY (id)"
+        ")');"
+    )
+    expected_metadata_ddl = (
+        "IF OBJECT_ID('[dbo].[adk_internal_metadata]') IS NULL EXECUTE('"
+        "CREATE TABLE [dbo].[adk_internal_metadata] ("
+        "[key] VARCHAR(128) NOT NULL, "
+        "value VARCHAR(512) NOT NULL, "
+        "CONSTRAINT [pk_adk_internal_metadata_key] PRIMARY KEY ([key])"
+        ")');"
+    )
+    expected_memory_ddl = (
+        "IF OBJECT_ID('[dbo].[adk_memory]') IS NULL EXECUTE('"
+        "CREATE TABLE [dbo].[adk_memory] ("
+        "id VARCHAR(128) NOT NULL, "
+        "session_id VARCHAR(128) NOT NULL, "
+        "app_name VARCHAR(128) NOT NULL, "
+        "user_id VARCHAR(128) NOT NULL, "
+        "scope VARCHAR(16) DEFAULT ''user'' NOT NULL, "
+        "event_id VARCHAR(128) NOT NULL, "
+        "author VARCHAR(256) NULL, "
+        "timestamp BIGDATETIME NOT NULL, "
+        "content_json TEXT NOT NULL, "
+        "content_text TEXT NOT NULL, "
+        "metadata_json TEXT NULL, "
+        "inserted_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
+        "CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), "
+        "CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id)"
+        ")');"
+    )
+    assert adk_store._sessions_table_ddl() == expected_sessions_ddl
+    assert adk_store._metadata_table_ddl() == expected_metadata_ddl
+    assert mem_store._memory_table_ddl() == expected_memory_ddl
+
+    driver, executed, scripts = _recording_reconcile_driver(indexes=[])
+    adk_targets = adk_store.get_schema_targets_sync(driver)
+    assert [t.table_name for t in adk_targets] == [
+        "adk_session",
+        "adk_event",
+        "adk_app_state",
+        "adk_user_state",
+        "adk_internal_metadata",
+    ]
+    assert all(t.schema == "dbo" for t in adk_targets)
+    assert [col.name for col in adk_targets[-1].create_table.columns] == ["key", "value"]
+
+    assert disabled_mem_store.get_schema_targets_sync(driver) == []
+    mem_targets = mem_store.get_schema_targets_sync(driver)
+    assert [t.table_name for t in mem_targets] == ["adk_memory"]
+
+    adk_store.reconcile_companion_objects_sync(driver)
+    assert scripts == []
+    assert len(executed) == 7
+    assert executed[0] == "CREATE INDEX [idx_adk_session_app_user] ON [dbo].[adk_session] (app_name, user_id)"
+    driver.commit.assert_not_called()
+
+    mem_driver, mem_executed, _ = _recording_reconcile_driver(
+        indexes=[{"schema_name": "dbo", "table_name": "adk_memory", "index_name": "idx_adk_memory_session"}]
+    )
+    mem_store.reconcile_companion_objects_sync(mem_driver)
+    assert len(mem_executed) == 3
+    assert all("idx_adk_memory_session" not in stmt for stmt in mem_executed)
+    mem_driver.commit.assert_not_called()
+
+
+def test_sybase_reconcile_orchestrators_converge_litestar_events_and_adk() -> None:
+    """Built-in Litestar, events, and ADK reconcilers converge Sybase tables and indexes without committing."""
+    config = SybaseConfig(
+        connection_config={"user": "sa", "password": "secret", "database": "demo"},
+        extension_config={
+            "litestar": {"session_table": "litestar_session", "migration_mode": "reconcile"},
+            "events": {"queue_table": "event_queue", "migration_mode": "reconcile"},
+            "adk": {"enable_memory": True, "migration_mode": "reconcile"},
+        },
+    )
+    driver, executed, scripts = _recording_reconcile_driver(tables=[], indexes=[])
+    context = MigrationContext(config=config, driver=cast("Any", driver))
+
+    assert litestar_reconcile(context) is None
+    assert events_reconcile(context) is None
+    assert adk_reconcile(context) is None
+
+    assert any("CREATE TABLE [dbo].[litestar_session]" in stmt for stmt in scripts)
+    assert any("CREATE TABLE event_queue" in stmt for stmt in scripts)
+    assert any("CREATE TABLE [dbo].[adk_session]" in stmt for stmt in scripts)
+    assert any("CREATE TABLE [dbo].[adk_memory]" in stmt for stmt in scripts)
+    assert len(executed) == 11
+    driver.commit.assert_not_called()

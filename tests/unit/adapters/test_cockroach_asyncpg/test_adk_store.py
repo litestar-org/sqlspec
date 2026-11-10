@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for CockroachDB asyncpg ADK store extension configuration."""
 
 from datetime import UTC, datetime
@@ -15,6 +14,7 @@ from sqlspec.adapters.cockroach_asyncpg.adk import (
     CockroachAsyncpgADKStore,
 )
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -276,3 +276,116 @@ async def test_cockroach_asyncpg_memory_batch_preserves_owner_type(
     assert "author, $13, timestamp" in _normalized(sql)
     assert params[-1] == owner_id
     assert params[0] == ["mem-1"]
+
+
+async def test_cockroach_asyncpg_session_companions_use_qualified_identity() -> None:
+    """Session and event companion DDL uses schema-qualified index names without table DDL or commits."""
+    config = _mock_config({"session_table": "app.sessions", "events_table": "app.events"})
+    driver = MagicMock()
+    driver.execute_script = AsyncMock()
+    driver.commit = AsyncMock()
+    store = CockroachAsyncpgADKStore(config)
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert statements == [
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_app_user ON app.sessions(app_name, user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_update_time ON app.sessions(update_time DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_app_sessions_state ON app.sessions USING GIN (state) WHERE state != '{}'::jsonb;",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_session ON app.events(session_id, timestamp ASC);",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_event_data ON app.events USING GIN (event_data);",
+        "CREATE INDEX IF NOT EXISTS idx_app_events_app_timestamp ON app.events(app_name, timestamp ASC);",
+    ]
+    assert all("CREATE TABLE" not in sql for sql in statements)
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("adk_config", "expected_names"),
+    [
+        pytest.param({"enable_memory": False}, [], id="disabled"),
+        pytest.param(
+            {"enable_memory": True},
+            ["idx_adk_memory_app_scope_user_time", "idx_adk_memory_scope", "idx_adk_memory_session"],
+            id="default",
+        ),
+        pytest.param(
+            {"enable_memory": True, "memory_use_fts": True, "enable_memory_trigram_index": True},
+            [
+                "idx_adk_memory_app_scope_user_time",
+                "idx_adk_memory_scope",
+                "idx_adk_memory_session",
+                "idx_adk_memory_fts",
+                "idx_adk_memory_content_trgm",
+            ],
+            id="fts-and-trigram",
+        ),
+    ],
+)
+async def test_cockroach_asyncpg_memory_companions_follow_settings(
+    adk_config: dict[str, object], expected_names: list[str]
+) -> None:
+    """Memory companion indexes follow enable_memory, FTS, and trigram settings."""
+    driver = MagicMock()
+    driver.execute_script = AsyncMock()
+    driver.commit = AsyncMock()
+    store = CockroachAsyncpgADKMemoryStore(_mock_config(adk_config))
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert len(statements) == len(expected_names)
+    for statement, index_name in zip(statements, expected_names, strict=True):
+        assert f"CREATE INDEX IF NOT EXISTS {index_name} ON adk_memory" in statement
+    driver.commit.assert_not_called()
+
+
+async def test_cockroach_asyncpg_companions_carry_tuning_clauses() -> None:
+    """Hash-sharded and STORING clauses propagate into companion index statements."""
+    config = _mock_config({"enable_hash_sharded_indexes": True, "enable_storing_indexes": True})
+    driver = MagicMock()
+    driver.execute_script = AsyncMock()
+    store = CockroachAsyncpgADKStore(config)
+
+    await store.reconcile_companion_objects_async(driver)
+
+    statements = [_normalized(call.args[0]) for call in driver.execute_script.call_args_list]
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user "
+        "ON adk_session(app_name, user_id) STORING (state, create_time, update_time);"
+    ) in statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_session_update_time ON adk_session(update_time DESC) USING HASH;"
+    ) in statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_adk_event_session "
+        "ON adk_event(session_id, timestamp ASC) USING HASH STORING (invocation_id, event_data);"
+    ) in statements
+
+
+async def test_cockroach_asyncpg_prepare_installs_nothing() -> None:
+    """CockroachDB memory stores install zero PostgreSQL extensions during schema or reconcile prep."""
+    driver = MagicMock()
+    driver.execute_script = AsyncMock()
+    store = CockroachAsyncpgADKMemoryStore(_mock_config({"enable_memory": True}))
+
+    await store.prepare_schema_async(driver)
+    await store.prepare_reconcile_async(driver)
+
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("adk_config", "expected_key"),
+    [
+        pytest.param({"enable_bm25": True}, "enable_bm25", id="bm25"),
+        pytest.param({"vector_index_type": "hnsw"}, "vector_index_type", id="vector-index"),
+    ],
+)
+def test_cockroach_asyncpg_rejects_unsupported_search_settings(
+    adk_config: dict[str, object], expected_key: str
+) -> None:
+    """Unsupported PostgreSQL vector/BM25 settings raise ImproperConfigurationError before DDL."""
+    with pytest.raises(ImproperConfigurationError, match=expected_key):
+        CockroachAsyncpgConfig(extension_config={"adk": cast("Any", adk_config)})

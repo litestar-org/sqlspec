@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for mysql-connector ADK store extension configuration."""
 
 import asyncio
@@ -551,3 +550,191 @@ async def test_mysqlconnector_memory_store_missing_table_handling() -> None:
     assert await async_store.search_entries("test", "app", "u1") == []
     assert await async_store.delete_entries_by_session("sess-1") == 0
     assert await async_store.delete_entries_older_than(30) == 0
+
+
+def _make_mysqlconnector_companion_driver(
+    mode: str,
+    rows_by_lookup: dict[tuple[str | None, str | None], list[dict[str, Any]]],
+    *,
+    execute_side_effect: Any = None,
+) -> MagicMock:
+    from unittest.mock import AsyncMock
+
+    driver = MagicMock()
+    driver.data_dictionary = MagicMock()
+
+    def _lookup(_drv: Any, *, table: str | None = None, schema: str | None = None) -> list[dict[str, Any]]:
+        return list(rows_by_lookup.get((schema, table), []))
+
+    if mode == "async":
+
+        async def _get_indexes_async(
+            drv: Any, *, table: str | None = None, schema: str | None = None
+        ) -> list[dict[str, Any]]:
+            return _lookup(drv, table=table, schema=schema)
+
+        driver.data_dictionary.get_indexes = AsyncMock(side_effect=_get_indexes_async)
+        driver.execute = AsyncMock(side_effect=execute_side_effect)
+        driver.commit = AsyncMock()
+    else:
+        driver.data_dictionary.get_indexes = MagicMock(side_effect=_lookup)
+        driver.execute = MagicMock(side_effect=execute_side_effect)
+        driver.commit = MagicMock()
+    return driver
+
+
+async def _run_mysqlconnector_companion(mode: str, store: Any, driver: MagicMock) -> None:
+    if mode == "async":
+        await store.reconcile_companion_objects_async(driver)
+    else:
+        store.reconcile_companion_objects_sync(driver)
+
+
+def _build_mysqlconnector_session_store(mode: str, adk_config: dict[str, object]) -> Any:
+    config = _mock_config(adk_config)
+    if mode == "async":
+        return MysqlConnectorAsyncADKStore(config)
+    return MysqlConnectorSyncADKStore(config)
+
+
+def _build_mysqlconnector_memory_store(mode: str, adk_config: dict[str, object]) -> Any:
+    config = _mock_config(adk_config)
+    if mode == "async":
+        return MysqlConnectorAsyncADKMemoryStore(config)
+    return MysqlConnectorSyncADKMemoryStore(config)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_mysqlconnector_companions_create_only_missing_session_index(mode: str) -> None:
+    store = _build_mysqlconnector_session_store(
+        mode,
+        {
+            "session_table": "app.t",
+            "events_table": "app.e",
+            "enable_event_generated_columns": True,
+            "enable_covering_indexes": True,
+        },
+    )
+    driver = _make_mysqlconnector_companion_driver(
+        mode,
+        {
+            ("app", "t"): [
+                {"index_name": "idx_t_app_user", "table_name": "t"},
+                {"index_name": "idx_t_update_time", "table_name": "unrelated_table"},
+            ],
+            ("app", "e"): [
+                {"index_name": "idx_e_scope"},
+                {"index_name": "idx_e_session"},
+                {"index_name": "idx_e_app_timestamp"},
+                {"index_name": "idx_e_author_gc"},
+                {"index_name": "idx_e_node_path_gc"},
+            ],
+        },
+    )
+
+    await _run_mysqlconnector_companion(mode, store, driver)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert executed == ["CREATE INDEX idx_t_update_time ON `app`.`t` (update_time DESC)"]
+    assert driver.data_dictionary.get_indexes.call_args_list[0].kwargs == {"table": "t", "schema": "app"}
+    assert driver.data_dictionary.get_indexes.call_args_list[1].kwargs == {"table": "e", "schema": "app"}
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_mysqlconnector_companions_use_connection_database_for_bare_names(mode: str) -> None:
+    store = _build_mysqlconnector_session_store(
+        mode,
+        {
+            "session_table": "custom_sessions",
+            "events_table": "custom_events",
+            "enable_event_generated_columns": True,
+            "enable_covering_indexes": True,
+        },
+    )
+    driver = _make_mysqlconnector_companion_driver(mode, {})
+
+    await _run_mysqlconnector_companion(mode, store, driver)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert "CREATE INDEX idx_custom_sessions_app_user ON custom_sessions (app_name, user_id)" in executed
+    assert (
+        "CREATE INDEX idx_custom_events_scope ON custom_events (app_name, user_id, session_id, timestamp ASC, invocation_id)"
+        in executed
+    )
+    assert (
+        "CREATE INDEX idx_custom_events_author_gc ON custom_events (session_id, author_gc, timestamp ASC)" in executed
+    )
+    assert driver.data_dictionary.get_indexes.call_args_list[0].kwargs == {"table": "custom_sessions", "schema": None}
+    assert driver.data_dictionary.get_indexes.call_args_list[1].kwargs == {"table": "custom_events", "schema": None}
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_mysqlconnector_companions_repeat_is_noop(mode: str) -> None:
+    store = _build_mysqlconnector_session_store(mode, {"session_table": "app.t", "events_table": "app.e"})
+    driver = _make_mysqlconnector_companion_driver(
+        mode,
+        {
+            ("app", "t"): [{"index_name": "IDX_T_APP_USER"}, {"index_name": "idx_t_update_time"}],
+            ("app", "e"): [
+                {"index_name": "idx_e_scope"},
+                {"index_name": "idx_e_session"},
+                {"index_name": "idx_e_app_timestamp"},
+            ],
+        },
+    )
+
+    await _run_mysqlconnector_companion(mode, store, driver)
+
+    assert driver.data_dictionary.get_indexes.call_count == 2
+    driver.execute.assert_not_called()
+    driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_mysqlconnector_memory_companions_create_fulltext(mode: str) -> None:
+    memory_store = _build_mysqlconnector_memory_store(mode, {"memory_table": "app.m", "memory_use_fts": True})
+    driver = _make_mysqlconnector_companion_driver(mode, {})
+
+    await _run_mysqlconnector_companion(mode, memory_store, driver)
+
+    executed = [call.args[0] for call in driver.execute.call_args_list]
+    assert executed == [
+        "CREATE INDEX idx_m_app_scope_user_time ON `app`.`m` (app_name, scope, user_id, timestamp)",
+        "CREATE INDEX idx_m_scope ON `app`.`m` (app_name, scope)",
+        "CREATE INDEX idx_m_session ON `app`.`m` (session_id)",
+        "CREATE FULLTEXT INDEX idx_m_fts ON `app`.`m` (content_text)",
+    ]
+    assert driver.data_dictionary.get_indexes.call_args_list[0].kwargs == {"table": "m", "schema": "app"}
+    driver.commit.assert_not_called()
+
+    disabled_store = _build_mysqlconnector_memory_store(mode, {"enable_memory": False})
+    disabled_driver = _make_mysqlconnector_companion_driver(mode, {})
+    await _run_mysqlconnector_companion(mode, disabled_store, disabled_driver)
+    disabled_driver.data_dictionary.get_indexes.assert_not_called()
+    disabled_driver.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_mysqlconnector_companions_propagate_failure_and_retry(mode: str) -> None:
+    store = _build_mysqlconnector_session_store(mode, {"session_table": "app.t", "events_table": "app.e"})
+    failing_driver = _make_mysqlconnector_companion_driver(mode, {}, execute_side_effect=[None, RuntimeError("boom")])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _run_mysqlconnector_companion(mode, store, failing_driver)
+
+    failing_driver.commit.assert_not_called()
+
+    retry_driver = _make_mysqlconnector_companion_driver(
+        mode, {("app", "t"): [{"index_name": "idx_t_app_user"}], ("app", "e"): []}
+    )
+    await _run_mysqlconnector_companion(mode, store, retry_driver)
+
+    retry_executed = [call.args[0] for call in retry_driver.execute.call_args_list]
+    assert retry_executed == [
+        "CREATE INDEX idx_t_update_time ON `app`.`t` (update_time DESC)",
+        "CREATE INDEX idx_e_scope ON `app`.`e` (app_name, user_id, session_id, timestamp ASC)",
+        "CREATE INDEX idx_e_session ON `app`.`e` (session_id, timestamp ASC)",
+        "CREATE INDEX idx_e_app_timestamp ON `app`.`e` (app_name, timestamp ASC)",
+    ]
+    retry_driver.commit.assert_not_called()
