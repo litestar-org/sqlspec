@@ -12,9 +12,11 @@ from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
-    from litestar.types import Scope
+    from litestar.connection import ASGIConnection
+    from litestar.handlers import BaseRouteHandler
+    from litestar.types import Guard, Scope
 
-__all__ = ("TenantResolutionSettings", "resolve_litestar_tenant", "set_connection_tenant")
+__all__ = ("TenantResolutionSettings", "require_tenant", "resolve_litestar_tenant", "set_connection_tenant")
 
 _TENANT_SCOPE_KEY = "_sqlspec_tenant_context"
 
@@ -196,3 +198,62 @@ def resolve_litestar_tenant(
             return resolve_result()
         return coerce_tenant_payload(result)
     return _resolve_from_litestar_auth(scope, settings)
+
+
+def require_tenant(
+    *,
+    path_parameter: str | None = None,
+    header: str | None = None,
+    session_key: str | None = "tenant_id",
+    user_attr: str = "tenant_id",
+    memberships_attr: str = "tenant_ids",
+    variables_attr: str | None = "tenant_variables",
+) -> "Guard":
+    """Require authentication and an authorized tenant before route execution.
+
+    Path, session and optional header values select only verified memberships.
+    A successful guard stores a receipt consumed by later database acquisition.
+
+    Args:
+        path_parameter: Optional route parameter containing a tenant selector.
+        header: Optional request header containing a tenant selector.
+        session_key: Session key containing a tenant selector.
+        user_attr: Verified direct tenant attribute or mapping key.
+        memberships_attr: Verified membership attribute or mapping key.
+        variables_attr: Extra tenant session variables attribute or mapping key.
+
+    Returns:
+        An asynchronous Litestar authorization guard.
+    """
+    settings = TenantResolutionSettings(
+        path_parameter=path_parameter,
+        header=header,
+        session_key=session_key,
+        user_attr=user_attr,
+        memberships_attr=memberships_attr,
+        variables_attr=variables_attr,
+    )
+
+    async def guard(connection: "ASGIConnection[Any, Any, Any, Any]", route_handler: "BaseRouteHandler") -> None:
+        from litestar.exceptions import NotAuthorizedException, PermissionDeniedException, WebSocketException
+
+        scope = cast("MutableMapping[str, Any]", connection.scope)
+        user = scope.get("user")
+        authenticated = (user is not None or scope.get("auth") is not None) and bool(
+            getattr(user, "is_authenticated", True)
+        )
+        if not authenticated:
+            if scope.get("type") == "websocket":
+                raise WebSocketException(code=4001, detail="Authentication required")
+            raise NotAuthorizedException(detail="Authentication required")
+        scope.setdefault("route_handler", route_handler)
+        payload = resolve_litestar_tenant(scope, settings)
+        if inspect.isawaitable(payload):
+            payload = await payload
+        if payload is None:
+            if scope.get("type") == "websocket":
+                raise WebSocketException(code=4003, detail="An authorized tenant is required")
+            raise PermissionDeniedException(detail="An authorized tenant is required")
+        set_connection_tenant(connection, payload)
+
+    return guard

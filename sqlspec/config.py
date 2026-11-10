@@ -39,7 +39,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, MutableMapping
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.core import StatementConfig
@@ -375,6 +375,30 @@ class LitestarConfig(TypedDict):
     All fields are optional with sensible defaults.
     """
 
+    tenant_extractor: NotRequired["Callable[[MutableMapping[str, Any]], Any]"]
+    """Trusted scope callable returning a tenant identity, payload, None or an awaitable."""
+
+    tenant_user_attr: NotRequired[str]
+    """Verified direct tenant attribute or mapping key. Default: 'tenant_id'."""
+
+    tenant_memberships_attr: NotRequired[str]
+    """Verified membership attribute or mapping key. Default: 'tenant_ids'."""
+
+    tenant_variables_attr: NotRequired[str]
+    """Extra session variables attribute or mapping key. Default: 'tenant_variables'."""
+
+    tenant_jwt_claim: NotRequired[str]
+    """Direct tenant key in verified auth claims or extras. Default: 'tenant_id'."""
+
+    tenant_path_parameter: NotRequired[str | None]
+    """Route parameter checked against verified memberships. Default: 'tenant_id'."""
+
+    tenant_session_key: NotRequired[str | None]
+    """Session selector checked against verified memberships. Default: 'tenant_id'."""
+
+    tenant_header: NotRequired[str | None]
+    """Optional header selector checked against verified memberships. Default: None."""
+
     migrations_path: NotRequired[str | Path]
     """Directory containing this extension's migrations, or a ``'<dotted.module>:<subdir>'`` specification.
 
@@ -464,6 +488,9 @@ class StarletteConfig(TypedDict):
 
     All fields are optional with sensible defaults. Use in extension_config["starlette"]:
     """
+
+    tenant_extractor: NotRequired[Callable[[Any], Any]]
+    """Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in request.state. Default: 'db_connection'"""

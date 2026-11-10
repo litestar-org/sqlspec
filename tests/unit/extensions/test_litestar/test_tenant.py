@@ -139,3 +139,71 @@ async def test_tenant_snapshot_variables_and_membership_union() -> None:
         "path_params": {"tenant_id": "acme"},
     })
     assert result == TenantContextPayload("acme", variables={"region": "eu"})
+
+
+@pytest.mark.parametrize("scope_type", ["http", "websocket"])
+@pytest.mark.parametrize("failure", ["unauthenticated", "unauthorized"])
+async def test_tenant_guard_rejects_unverified_selection(scope_type: str, failure: str) -> None:
+    from litestar.exceptions import NotAuthorizedException, PermissionDeniedException, WebSocketException
+
+    from sqlspec.extensions.litestar.tenant import require_tenant
+
+    scope: dict[str, Any] = {"type": scope_type}
+    if failure == "unauthorized":
+        scope.update(user={"tenant_ids": ["acme"]}, path_params={"org_id": "evil"})
+    guard = require_tenant(path_parameter="org_id")
+    exception_type = (
+        WebSocketException
+        if scope_type == "websocket"
+        else (NotAuthorizedException if failure == "unauthenticated" else PermissionDeniedException)
+    )
+    with pytest.raises(exception_type) as raised:
+        await guard(SimpleNamespace(scope=scope), SimpleNamespace(opt={}))
+    if scope_type == "websocket":
+        assert raised.value.code == (4001 if failure == "unauthenticated" else 4003)
+    else:
+        assert raised.value.status_code == (401 if failure == "unauthenticated" else 403)
+
+
+async def test_tenant_guard_authorizes_configured_membership_and_binds_receipt() -> None:
+    from sqlspec.extensions.litestar.tenant import require_tenant
+
+    scope: dict[str, Any] = {
+        "type": "http",
+        "user": {"org_ids": ["acme", "globex"], "variables": {"region": "eu"}},
+        "headers": [(b"x-org-id", b"globex")],
+    }
+    guard = require_tenant(header="x-org-id", memberships_attr="org_ids", variables_attr="variables")
+    await guard(SimpleNamespace(scope=scope), SimpleNamespace(opt={}))
+    assert await _resolve(scope) == TenantContextPayload("globex", variables={"region": "eu"})
+
+
+def test_tenant_litestar_public_exports() -> None:
+    from sqlspec.extensions import litestar
+    from sqlspec.utils.tenant import SQLSpecTenantMiddleware
+
+    assert litestar.TenantResolutionSettings is TenantResolutionSettings
+    assert litestar.set_connection_tenant is set_connection_tenant
+    assert litestar.resolve_litestar_tenant is resolve_litestar_tenant
+    assert litestar.SQLSpecTenantMiddleware is SQLSpecTenantMiddleware
+    assert callable(litestar.require_tenant())
+
+
+@pytest.mark.parametrize("trusted_tenant", ["acme", None])
+def test_tenant_middleware_native_litestar_registration(trusted_tenant: str | None) -> None:
+    from litestar import Litestar, get
+    from litestar.middleware import DefineMiddleware
+    from litestar.testing import TestClient
+
+    from sqlspec.extensions.litestar import SQLSpecTenantMiddleware
+    from sqlspec.utils.tenant import TenantContext
+
+    @get("/")
+    async def handler() -> dict[str, str | None]:
+        return {"tenant": TenantContext.get_tenant_id()}
+
+    app = Litestar(
+        [handler], middleware=[DefineMiddleware(SQLSpecTenantMiddleware, extractor=lambda scope: trusted_tenant)]
+    )
+    with TestClient(app) as client:
+        assert client.get("/", headers={"x-tenant-id": "evil"}).json() == {"tenant": trusted_tenant}
