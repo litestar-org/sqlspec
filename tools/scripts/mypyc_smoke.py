@@ -40,6 +40,9 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
     SmokeImport("sync_driver", "sqlspec.driver._sync", "SyncDriverAdapterBase", True),
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
+    SmokeImport("tenant_lease_state", "sqlspec.core.tenant.base", "TenantLeaseState", True),
+    SmokeImport("tenant_lease", "sqlspec.driver._tenant", "AsyncTenantLease", True),
+    SmokeImport("tenant_context", "sqlspec.utils.tenant", "TenantContext"),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
     SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
     SmokeImport("storage_backend_local", "sqlspec.storage.backends.local", "LocalStore", True),
@@ -1639,6 +1642,126 @@ assert runner_compiled == base_compiled
     )
 
 
+async def _run_tenant_lease_case(
+    leases: Any, contracts: Any, context: Any, errors: Any, *, asynchronous: bool, scenario: str
+) -> None:
+    """Check one strategy and native-callback ordering scenario."""
+    events: list[str] = []
+    connection = object()
+
+    def checkout(conn: object, payload: Any) -> Any:
+        assert conn is connection
+        events.append("checkout")
+        return contracts.TenantLeaseState(payload=payload, baseline={})
+
+    def checkin(conn: object, state: Any) -> None:
+        assert conn is connection
+        assert state.payload.tenant_id == "a"
+        events.append("checkin")
+        if scenario == "checkin_failure":
+            raise RuntimeError("injected reset failure")
+
+    class SyncStrategy:
+        __slots__ = ()
+
+        def checkout(self, conn: object, payload: Any) -> Any:
+            return checkout(conn, payload)
+
+        def checkin(self, conn: object, state: Any) -> None:
+            checkin(conn, state)
+
+    class AsyncStrategy:
+        __slots__ = ()
+
+        async def checkout(self, conn: object, payload: Any) -> Any:
+            return checkout(conn, payload)
+
+        async def checkin(self, conn: object, state: Any) -> None:
+            checkin(conn, state)
+
+    def acquire() -> object:
+        events.append("acquire")
+        return connection
+
+    def release(conn: object) -> None:
+        assert conn is connection
+        events.append("release")
+
+    def invalidate(conn: object) -> None:
+        assert conn is connection
+        events.append("invalidate")
+
+    def finish(conn: object, exc_type: type[BaseException] | None) -> None:
+        assert conn is connection
+        assert exc_type is None
+        events.append("finish")
+
+    def as_async(callback: Any) -> Any:
+        async def call(*args: Any) -> Any:
+            return callback(*args)
+
+        return call
+
+    callbacks = {"acquire": acquire, "release": release, "invalidate": invalidate, "finish_transaction": finish}
+    if asynchronous:
+        lease = leases.AsyncTenantLease(AsyncStrategy(), **{key: as_async(value) for key, value in callbacks.items()})
+    else:
+        lease = leases.SyncTenantLease(SyncStrategy(), **callbacks)
+    scope = context.TenantContext.bypass() if scenario == "bypass" else context.TenantContext.scope("a")
+    with scope:
+        acquired = lease.acquire()
+        if asynchronous:
+            acquired = await acquired
+        assert acquired is connection
+        try:
+            cleanup = lease.release(connection)
+            if asynchronous:
+                await cleanup
+        except errors.TenantCleanupError:
+            if scenario != "checkin_failure":
+                raise
+        else:
+            assert scenario != "checkin_failure", "reset failure must propagate"
+    expected = ["acquire", "finish", "release"]
+    if scenario != "bypass":
+        expected = ["acquire", "checkout", "finish", "checkin"]
+        expected.append("invalidate" if scenario == "checkin_failure" else "release")
+    assert events == expected, (asynchronous, scenario, events)
+
+
+def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise compiled leases calling structurally compatible Python strategies."""
+    result = _new_smoke_result(
+        name="tenant_lease_boundary",
+        module="sqlspec.driver._tenant",
+        attribute="AsyncTenantLease",
+        compiled_required=require_compiled,
+    )
+    try:
+        leases = importlib.import_module("sqlspec.driver._tenant")
+        contracts = importlib.import_module("sqlspec.core.tenant.base")
+        context = importlib.import_module("sqlspec.utils.tenant")
+        errors = importlib.import_module("sqlspec.exceptions")
+        result["imported"] = True
+        result["compiled"] = is_compiled_module(leases)
+        if require_compiled and not result["compiled"]:
+            raise AssertionError("tenant leases must import from compiled extensions")
+        if is_compiled_module(context):
+            raise AssertionError("tenant context must remain interpreted")
+
+        async def run_cases() -> None:
+            for asynchronous in (False, True):
+                for scenario in ("normal", "bypass", "checkin_failure"):
+                    await _run_tenant_lease_case(
+                        leases, contracts, context, errors, asynchronous=asynchronous, scenario=scenario
+                    )
+
+        asyncio.run(run_cases())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -1652,6 +1775,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_extension_reconciliation(require_compiled=require_compiled),
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
+        _check_tenant_lease_boundary(require_compiled=require_compiled),
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
