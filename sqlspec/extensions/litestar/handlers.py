@@ -24,7 +24,9 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
+from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, resolve_litestar_tenant
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Coroutine
@@ -61,8 +63,49 @@ async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
     set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, exc)
 
 
+def _resolve_connection_tenant(
+    config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
+) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
+    if (
+        config.supports_tenant_strategy
+        and config.driver_features.get("tenant_strategy") is not None
+        and TenantContext.get() is None
+    ):
+        return resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
+    return None
+
+
+def _store_tenant_token(scope: "Scope", connection_key: str, payload: TenantContextPayload | None) -> None:
+    if payload is not None:
+        set_sqlspec_scope_state(scope, f"{connection_key}_tenant_token", TenantContext.set(payload))
+
+
+def _reset_tenant_token(scope: "Scope", connection_key: str | None) -> None:
+    if connection_key is not None:
+        token = get_sqlspec_scope_state(scope, f"{connection_key}_tenant_token", pop=True)
+        if token is not None:
+            TenantContext.reset(token)
+
+
+async def _bind_connection_tenant(
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
+    scope: "Scope",
+    connection_key: str,
+    settings: TenantResolutionSettings | None,
+) -> None:
+    payload = _resolve_connection_tenant(config, scope, settings)
+    if inspect.isawaitable(payload):
+        payload = await payload
+    _store_tenant_token(scope, connection_key, payload)
+
+
 async def _exit_connection_context(
-    connection_cm: Any, connection: Any, scope: "Scope", exc_override: BaseException | None = None
+    connection_cm: Any,
+    connection: Any,
+    scope: "Scope",
+    exc_override: BaseException | None = None,
+    *,
+    connection_key: str | None = None,
 ) -> None:
     """Exit connection context manager forwarding recorded or override exception if any.
 
@@ -71,22 +114,29 @@ async def _exit_connection_context(
         connection: The database connection instance.
         scope: The ASGI connection scope.
         exc_override: Optional exception overriding any scope-recorded exception.
+        connection_key: Connection scope key whose tenant token is reset after exit.
     """
     exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
-    if isinstance(connection_cm, AbstractAsyncContextManager):
-        await connection_cm.__aexit__(*exit_args)
-    elif isinstance(connection_cm, AbstractContextManager):
-        await with_ensure_async_(connection_cm).__aexit__(*exit_args)
-    else:
-        await ensure_async_(connection.close)()
+    try:
+        if isinstance(connection_cm, AbstractAsyncContextManager):
+            await connection_cm.__aexit__(*exit_args)
+        elif isinstance(connection_cm, AbstractContextManager):
+            await with_ensure_async_(connection_cm).__aexit__(*exit_args)
+        else:
+            await ensure_async_(connection.close)()
+    finally:
+        _reset_tenant_token(scope, connection_key)
 
 
-def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
+def manual_handler_maker(
+    connection_scope_key: str, *, tenant_settings: TenantResolutionSettings | None = None
+) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for manual connection management.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
+        tenant_settings: Tenant settings paired with the connection provider.
 
     Returns:
         The handler callable.
@@ -107,7 +157,7 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
                 return
             connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
             try:
-                await _exit_connection_context(connection_cm, connection, scope)
+                await _exit_connection_context(connection_cm, connection, scope, connection_key=connection_scope_key)
             finally:
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
@@ -119,11 +169,14 @@ def autocommit_handler_maker(
     commit_on_redirect: bool = False,
     extra_commit_statuses: "set[int] | None" = None,
     extra_rollback_statuses: "set[int] | None" = None,
+    *,
+    tenant_settings: TenantResolutionSettings | None = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for automatic transaction commit/rollback based on response status.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
+        tenant_settings: Tenant settings paired with the connection provider.
         commit_on_redirect: Issue a commit when the response status is a redirect (3XX).
         extra_commit_statuses: A set of additional status codes that trigger a commit.
         extra_rollback_statuses: A set of additional status codes that trigger a rollback.
@@ -184,7 +237,9 @@ def autocommit_handler_maker(
             ):
                 connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
                 try:
-                    await _exit_connection_context(connection_cm, connection, scope, exc_override=exc_override)
+                    await _exit_connection_context(
+                        connection_cm, connection, scope, exc_override=exc_override, connection_key=connection_scope_key
+                    )
                 finally:
                     delete_sqlspec_scope_state(scope, connection_scope_key)
 
@@ -267,7 +322,11 @@ def pool_provider_maker(
 
 
 def connection_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
+    pool_key: str,
+    connection_key: str,
+    *,
+    tenant_settings: TenantResolutionSettings | None = None,
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
     """Create provider for database connections with proper lifecycle management.
 
@@ -275,6 +334,7 @@ def connection_provider_maker(
         config: The database configuration object.
         pool_key: The key used to retrieve the connection pool from `app.state`.
         connection_key: The key used to store the connection in the ASGI scope.
+        tenant_settings: Tenant resolution settings for this connection.
 
     Returns:
         The connection provider function.
@@ -286,41 +346,55 @@ def connection_provider_maker(
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
-        connection_cm: Any = config.provide_connection(db_pool)
-        context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
-
-        if isinstance(connection_cm, AbstractAsyncContextManager):
-            context_manager = connection_cm
-        elif isinstance(connection_cm, AbstractContextManager):
-            context_manager = with_ensure_async_(connection_cm)
-
-        if context_manager is None:
-            conn_instance: ConnectionT
-            if inspect.isawaitable(connection_cm):
-                conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
-            else:
-                conn_instance = cast("ConnectionT", connection_cm)
-            set_sqlspec_scope_state(scope, connection_key, conn_instance)
-            yield conn_instance
-            return
-
-        entered_connection = await context_manager.__aenter__()
-        ctx_scope_key = f"{connection_key}_ctx"
+        await _bind_connection_tenant(config, scope, connection_key, tenant_settings)
         try:
-            set_sqlspec_scope_state(scope, provider_owned_key, True)
-            set_sqlspec_scope_state(scope, connection_key, entered_connection)
-            yield entered_connection
-        except BaseException as exc:
+            connection_cm: Any = config.provide_connection(db_pool)
+            context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
+
+            if isinstance(connection_cm, AbstractAsyncContextManager):
+                context_manager = connection_cm
+            elif isinstance(connection_cm, AbstractContextManager):
+                context_manager = with_ensure_async_(connection_cm)
+
+            if context_manager is None:
+                conn_instance: ConnectionT
+                if inspect.isawaitable(connection_cm):
+                    conn_instance = await cast("Awaitable[ConnectionT]", connection_cm)
+                else:
+                    conn_instance = cast("ConnectionT", connection_cm)
+                set_sqlspec_scope_state(scope, connection_key, conn_instance)
+                try:
+                    yield conn_instance
+                except BaseException as exc:
+                    delete_sqlspec_scope_state(scope, connection_key)
+                    await _exit_connection_context(
+                        None, conn_instance, scope, exc_override=exc, connection_key=connection_key
+                    )
+                    raise
+                return
+
+            entered_connection = await context_manager.__aenter__()
+            ctx_scope_key = f"{connection_key}_ctx"
+            try:
+                set_sqlspec_scope_state(scope, provider_owned_key, True)
+                set_sqlspec_scope_state(scope, connection_key, entered_connection)
+                yield entered_connection
+            except BaseException as exc:
+                delete_sqlspec_scope_state(scope, provider_owned_key)
+                delete_sqlspec_scope_state(scope, connection_key)
+                await _exit_connection_context(
+                    context_manager, entered_connection, scope, exc_override=exc, connection_key=connection_key
+                )
+                raise
             delete_sqlspec_scope_state(scope, provider_owned_key)
+            if scope.get("type") == ScopeType.HTTP and not ScopeState.from_scope(scope).response_started:
+                set_sqlspec_scope_state(scope, ctx_scope_key, context_manager)
+                return
             delete_sqlspec_scope_state(scope, connection_key)
-            await context_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            await _exit_connection_context(context_manager, entered_connection, scope, connection_key=connection_key)
+        except BaseException:
+            _reset_tenant_token(scope, connection_key)
             raise
-        delete_sqlspec_scope_state(scope, provider_owned_key)
-        if scope.get("type") == ScopeType.HTTP and not ScopeState.from_scope(scope).response_started:
-            set_sqlspec_scope_state(scope, ctx_scope_key, context_manager)
-            return
-        delete_sqlspec_scope_state(scope, connection_key)
-        await context_manager.__aexit__(None, None, None)
 
     return provide_connection
 

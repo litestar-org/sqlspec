@@ -980,3 +980,188 @@ async def test_connection_cleanup_middleware_isolates_multi_db_teardown() -> Non
     assert cm2_b.exit_args[0] is asyncio.CancelledError
     assert get_sqlspec_scope_state(scope_b, "db1_connection") is None
     assert get_sqlspec_scope_state(scope_b, "db2_connection") is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("failure", [None, "enter", "exit", "body"])
+async def test_tenant_provider_retains_context_through_checkin(is_async: bool, failure: str | None) -> None:
+    from contextlib import asynccontextmanager, contextmanager
+    from types import SimpleNamespace
+
+    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
+    from sqlspec.utils.tenant import TenantContext
+
+    events: list[tuple[str, str | None]] = []
+    connection = SimpleNamespace()
+
+    @contextmanager
+    def sync_connection(pool: object) -> Any:
+        events.append(("enter", TenantContext.get_tenant_id()))
+        if failure == "enter":
+            raise RuntimeError("entry")
+        try:
+            yield connection
+        finally:
+            events.append(("exit", TenantContext.get_tenant_id()))
+            if failure == "exit":
+                raise RuntimeError("checkin")
+
+    @asynccontextmanager
+    async def async_connection(pool: object) -> Any:
+        with sync_connection(pool) as conn:
+            yield conn
+
+    async def extractor(scope: object) -> str:
+        return "acme"
+
+    config = SimpleNamespace(
+        supports_tenant_strategy=True,
+        driver_features={"tenant_strategy": object()},
+        provide_connection=async_connection if is_async else sync_connection,
+    )
+    scope = cast("Scope", {"type": "http"})
+    provider = connection_provider_maker(
+        config, "pool", "tenant_conn", tenant_settings=TenantResolutionSettings(tenant_extractor=extractor)
+    )
+    iterator = provider({"pool": object()}, scope)
+    assert TenantContext.get() is None
+    if failure == "enter":
+        with pytest.raises(RuntimeError, match="entry"):
+            await anext(iterator)
+        assert events == [("enter", "acme")]
+    else:
+        assert await anext(iterator) is connection
+        assert TenantContext.get_tenant_id() == "acme"
+        if failure == "body":
+            error = ValueError("body")
+            with pytest.raises(ValueError) as raised:
+                await iterator.athrow(error)
+            assert raised.value is error
+        else:
+            with pytest.raises(StopAsyncIteration):
+                await anext(iterator)
+            handler = manual_handler_maker("tenant_conn")
+            if failure == "exit":
+                with pytest.raises(RuntimeError, match="checkin"):
+                    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+            else:
+                await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+        assert events == [("enter", "acme"), ("exit", "acme")]
+    assert TenantContext.get() is None
+    assert get_sqlspec_scope_state(scope, "tenant_conn_tenant_token") is None
+
+
+async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
+    from sqlspec.utils.tenant import TenantContext
+
+    @asynccontextmanager
+    async def connection(pool: object) -> Any:
+        assert TenantContext.get_tenant_id() == "outer"
+        yield object()
+
+    def extractor(scope: object) -> None:
+        raise AssertionError("ambient scope must skip resolution")
+
+    config = SimpleNamespace(
+        supports_tenant_strategy=True, driver_features={"tenant_strategy": object()}, provide_connection=connection
+    )
+    scope = cast("Scope", {"type": "http"})
+    provider = connection_provider_maker(
+        config, "pool", "tenant_conn", tenant_settings=TenantResolutionSettings(tenant_extractor=extractor)
+    )
+    with TenantContext.scope("outer"):
+        iterator = provider({"pool": object()}, scope)
+        await anext(iterator)
+        await iterator.aclose()
+        assert TenantContext.get_tenant_id() == "outer"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litestar.datastructures import State
+
+    from sqlspec.base import SQLSpec
+    from sqlspec.extensions.litestar import SQLSpecPlugin
+    from sqlspec.utils.tenant import TenantContext
+
+    async def async_checkout(connection: object, payload: object) -> None:
+        pass
+
+    async def async_checkin(connection: object, state: object) -> None:
+        pass
+
+    from types import SimpleNamespace
+
+    strategy = (
+        SimpleNamespace(checkout=async_checkout, checkin=async_checkin)
+        if is_async
+        else SimpleNamespace(checkout=lambda connection, payload: None, checkin=lambda connection, state: None)
+    )
+    config_type = AiosqliteConfig if is_async else SqliteConfig
+    monkeypatch.setattr(config_type, "supports_tenant_strategy", True)
+    config = config_type(
+        driver_features={"tenant_strategy": strategy},
+        extension_config={"litestar": {"tenant_extractor": lambda scope: "acme"}},
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+    pool = await config.create_pool() if is_async else config.create_pool()
+    scope = cast("Scope", {"type": "http"})
+    state = State({"db_pool": pool})
+    try:
+        if is_async:
+            connection = await plugin.provide_request_connection_async("db_connection", state, scope)
+        else:
+            connection = plugin.provide_request_connection_sync("db_connection", state, scope)
+        assert TenantContext.get_tenant_id() == "acme"
+        assert get_sqlspec_scope_state(scope, "db_connection") is connection
+        await manual_handler_maker("db_connection")(
+            cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
+        )
+        assert TenantContext.get() is None
+    finally:
+        if is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()
+
+
+async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+    from types import SimpleNamespace
+
+    from litestar.datastructures import State
+
+    from sqlspec.base import SQLSpec
+    from sqlspec.extensions.litestar import SQLSpecPlugin
+    from sqlspec.utils.tenant import TenantContext
+
+    async def extract() -> str:
+        return "acme"
+
+    coroutine = extract()
+    monkeypatch.setattr(SqliteConfig, "supports_tenant_strategy", True)
+    strategy = SimpleNamespace(checkout=lambda connection, payload: None, checkin=lambda connection, state: None)
+    config = SqliteConfig(
+        driver_features={"tenant_strategy": strategy},
+        extension_config={"litestar": {"tenant_extractor": lambda scope: coroutine}},
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+    pool = config.create_pool()
+    try:
+        with pytest.raises(ImproperConfigurationError, match="synchronous tenant_extractor"):
+            plugin.provide_request_connection_sync(
+                "db_connection", State({"db_pool": pool}), cast("Scope", {"type": "http"})
+            )
+        assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
+        assert TenantContext.get() is None
+    finally:
+        coroutine.close()
+        config.close_pool()

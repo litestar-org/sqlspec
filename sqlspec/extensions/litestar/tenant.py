@@ -10,7 +10,7 @@ from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqls
 from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Generator
 
     from litestar.connection import ASGIConnection
     from litestar.handlers import BaseRouteHandler
@@ -191,13 +191,29 @@ def resolve_litestar_tenant(
     if settings.tenant_extractor is not None:
         result = settings.tenant_extractor(scope)
         if inspect.isawaitable(result):
-
-            async def resolve_result() -> TenantContextPayload | None:
-                return coerce_tenant_payload(await result)
-
-            return resolve_result()
+            return _TenantPayloadAwaitable(result)
         return coerce_tenant_payload(result)
     return _resolve_from_litestar_auth(scope, settings)
+
+
+class _TenantPayloadAwaitable:
+    """Normalize asynchronous extraction while allowing unused coroutines to close."""
+
+    __slots__ = ("_result",)
+
+    def __init__(self, result: "Awaitable[Any]") -> None:
+        self._result = result
+
+    def __await__(self) -> "Generator[Any, None, TenantContextPayload | None]":
+        return self._resolve().__await__()
+
+    async def _resolve(self) -> TenantContextPayload | None:
+        return coerce_tenant_payload(await self._result)
+
+    def close(self) -> None:
+        close = getattr(self._result, "close", None)
+        if callable(close):
+            close()
 
 
 def require_tenant(
