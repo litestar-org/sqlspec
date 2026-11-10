@@ -74,11 +74,15 @@ class CockroachAsyncpgSessionContext:
     async def __aenter__(self) -> "CockroachAsyncpgDriver":
         driver_cls = _resolve_cockroach_asyncpg_driver()
         self._connection = await self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

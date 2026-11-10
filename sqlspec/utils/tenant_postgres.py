@@ -17,7 +17,9 @@ def build_setting_query(count: int, *, restore: bool = False) -> str:
     """Build one management statement with an explicit evaluation dependency."""
     if restore:
         applied = ", ".join(f"set_config(${2 * i + 1}, ${2 * i + 2}, false) AS v{i}" for i in range(count))
-        output = ", ".join(f"applied.v{i}, current_setting(${2 * i + 1}, true)" for i in range(count))
+        output = ", ".join(
+            f"applied.v{i}, current_setting(${2 * i + 1} || substring(applied.v{i}, 1, 0), true)" for i in range(count)
+        )
         return f"WITH applied AS MATERIALIZED (SELECT {applied}) SELECT {output} FROM applied"
     captured = ", ".join(f"current_setting(${2 * i + 1}, true) AS b{i}" for i in range(count))
     output = ", ".join(f"captured.b{i}, set_config(${2 * i + 1}, ${2 * i + 2}, false)" for i in range(count))

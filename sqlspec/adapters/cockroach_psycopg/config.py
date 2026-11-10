@@ -30,9 +30,17 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgSyncDriver,
     CockroachPsycopgSyncExceptionHandler,
 )
+from sqlspec.adapters.cockroach_psycopg.tenant import (
+    CockroachPsycopgAsyncRLSStrategy,
+    CockroachPsycopgSyncRLSStrategy,
+    build_cockroach_psycopg_async_tenant_lease,
+    build_cockroach_psycopg_sync_tenant_lease,
+)
+from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
+from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy, TenantStrategyShorthand, require_session_pooler
 from sqlspec.driver import (
     AsyncPoolConnectionContext,
     AsyncPoolSessionFactory,
@@ -164,6 +172,11 @@ class _NativeStorageCSVOptions(TypedDict):
 class CockroachPsycopgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB Psycopg retries, follower reads, and native storage."""
 
+    tenant_strategy: NotRequired[SyncTenantStrategy | AsyncTenantStrategy | TenantStrategyShorthand | None]
+    """Strategy or shorthand for session-scoped tenant identity."""
+    pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
+    """Tenant connections require session affinity."""
+
     enable_native_storage: NotRequired[bool]
     """Opt in to server-side CockroachDB ``EXPORT`` and ``IMPORT INTO`` storage operations."""
     native_storage_csv_options: NotRequired[_NativeStorageCSVOptions]
@@ -195,36 +208,63 @@ class CockroachPsycopgDriverFeatures(TypedDict):
 
 
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
-    """Context manager for CockroachDB psycopg connections."""
+    """Context manager for Psycopg connections."""
 
-    __slots__ = ()
+    __slots__ = ("_lease",)
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)
+        self._lease = (
+            build_cockroach_psycopg_sync_tenant_lease(config)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     def __enter__(self) -> "CockroachSyncConnection":
+        if self._lease is not None:
+            return cast("CockroachSyncConnection", self._lease.acquire())
         self._ctx = self._config.provide_pool().connection()
         return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
+        if self._lease is not None:
+            self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         if self._ctx is None:
             return None
-        return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
+        try:
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
+        finally:
+            self._ctx = None
 
 
 class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_lease",)
+
+    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
+        super().__init__(config)
+        self._lease = (
+            build_cockroach_psycopg_sync_tenant_lease(config, rollback_on_exit=True)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     def acquire_connection(self) -> "CockroachSyncConnection":
+        if self._lease is not None:
+            return cast("CockroachSyncConnection", self._lease.acquire())
         self._ctx = self._config.provide_pool().connection()
         return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
-        if self._ctx is not None:
-            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-            self._ctx = None
+        if self._lease is not None:
+            self._lease.release(_conn, **kwargs)
+        elif self._ctx is not None:
+            try:
+                self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+            finally:
+                self._ctx = None
 
 
 class CockroachPsycopgSyncConfig(
@@ -234,6 +274,7 @@ class CockroachPsycopgSyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgSyncDriver]]" = CockroachPsycopgSyncDriver
     connection_type: "ClassVar[type[CockroachSyncConnection]]" = CockroachSyncConnection
+    supports_tenant_strategy: ClassVar[bool] = True
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -266,6 +307,9 @@ class CockroachPsycopgSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        raw_strategy = (driver_features or {}).get("tenant_strategy")
+        if raw_strategy is not None and raw_strategy is not False:
+            require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
@@ -295,6 +339,24 @@ class CockroachPsycopgSyncConfig(
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+        strategy = self.driver_features.get("tenant_strategy")
+        if strategy is not None:
+            if isinstance(strategy, (PsycopgSyncRLSStrategy, PsycopgAsyncRLSStrategy)) and not isinstance(
+                strategy, (CockroachPsycopgSyncRLSStrategy, CockroachPsycopgAsyncRLSStrategy)
+            ):
+                msg = "CockroachDB requires its CockroachPsycopg tenant strategy"
+                raise ImproperConfigurationError(msg)
+            if self.connection_config.get("close_returns") or getattr(connection_instance, "close_returns", False):
+                msg = "Tenant configurations require close_returns=False"
+                raise ImproperConfigurationError(msg)
+            self.driver_features["pooler_mode"] = require_session_pooler(
+                self.driver_features.get("pooler_mode"), type(self).__name__
+            )
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
+            return CockroachPsycopgSyncRLSStrategy()
+        return super()._resolve_tenant_strategy(strategy)
 
     def create_connection(self) -> "CockroachSyncConnection":
         """Open a standalone connection owned by the caller.
@@ -302,6 +364,9 @@ class CockroachPsycopgSyncConfig(
         Returns:
             A connection that is not bound to the pool and can be closed directly.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Use provide_connection() for tenant configurations"
+            raise ImproperConfigurationError(msg)
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
         try:
@@ -430,15 +495,22 @@ class CockroachPsycopgSyncConfig(
 
 
 class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
-    """Async context manager for CockroachDB psycopg connections."""
+    """Async context manager for Psycopg connections."""
 
-    __slots__ = ("_ctx",)
+    __slots__ = ("_ctx", "_lease")
 
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
         self._ctx: Any = None
+        self._lease = (
+            build_cockroach_psycopg_async_tenant_lease(config)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     async def __aenter__(self) -> "CockroachAsyncConnection":
+        if self._lease is not None:
+            return cast("CockroachAsyncConnection", await self._lease.acquire())
         pool = await self._config.provide_pool()
         self._ctx = pool.connection()
         return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
@@ -446,28 +518,44 @@ class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._ctx:
-            return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
+        if self._lease is not None:
+            await self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
+        if self._ctx is not None:
+            try:
+                return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
+            finally:
+                self._ctx = None
         return None
 
 
 class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ("_ctx",)
+    __slots__ = ("_ctx", "_lease")
 
     def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
         super().__init__(config)
         self._ctx: Any = None
+        self._lease = (
+            build_cockroach_psycopg_async_tenant_lease(config, rollback_on_exit=True)
+            if config.driver_features.get("tenant_strategy") is not None
+            else None
+        )
 
     async def acquire_connection(self) -> "CockroachAsyncConnection":
+        if self._lease is not None:
+            return cast("CockroachAsyncConnection", await self._lease.acquire())
         pool = await self._config.provide_pool()
-        ctx = pool.connection()
-        self._ctx = ctx
-        return cast("CockroachAsyncConnection", await ctx.__aenter__())
+        self._ctx = pool.connection()
+        return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
 
     async def release_connection(self, _conn: "CockroachAsyncConnection", **kwargs: Any) -> None:
-        if self._ctx is not None:
-            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-            self._ctx = None
+        if self._lease is not None:
+            await self._lease.release(_conn, **kwargs)
+        elif self._ctx is not None:
+            try:
+                await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+            finally:
+                self._ctx = None
 
 
 class CockroachPsycopgAsyncConfig(
@@ -477,6 +565,7 @@ class CockroachPsycopgAsyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgAsyncDriver]]" = CockroachPsycopgAsyncDriver
     connection_type: "ClassVar[type[CockroachAsyncConnection]]" = CockroachAsyncConnection
+    supports_tenant_strategy: ClassVar[bool] = True
     supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -509,6 +598,9 @@ class CockroachPsycopgAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        raw_strategy = (driver_features or {}).get("tenant_strategy")
+        if raw_strategy is not None and raw_strategy is not False:
+            require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
@@ -538,6 +630,24 @@ class CockroachPsycopgAsyncConfig(
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+        strategy = self.driver_features.get("tenant_strategy")
+        if strategy is not None:
+            if isinstance(strategy, (PsycopgSyncRLSStrategy, PsycopgAsyncRLSStrategy)) and not isinstance(
+                strategy, (CockroachPsycopgSyncRLSStrategy, CockroachPsycopgAsyncRLSStrategy)
+            ):
+                msg = "CockroachDB requires its CockroachPsycopg tenant strategy"
+                raise ImproperConfigurationError(msg)
+            if self.connection_config.get("close_returns") or getattr(connection_instance, "close_returns", False):
+                msg = "Tenant configurations require close_returns=False"
+                raise ImproperConfigurationError(msg)
+            self.driver_features["pooler_mode"] = require_session_pooler(
+                self.driver_features.get("pooler_mode"), type(self).__name__
+            )
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
+            return CockroachPsycopgAsyncRLSStrategy()
+        return super()._resolve_tenant_strategy(strategy)
 
     async def create_connection(self) -> "CockroachAsyncConnection":
         """Open a standalone connection owned by the caller.
@@ -545,6 +655,9 @@ class CockroachPsycopgAsyncConfig(
         Returns:
             A connection that is not bound to the pool and can be closed directly.
         """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = "Use provide_connection() for tenant configurations"
+            raise ImproperConfigurationError(msg)
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
         try:

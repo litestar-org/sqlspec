@@ -14,6 +14,7 @@ from sqlspec.adapters.cockroach_asyncpg.config import (
 )
 from sqlspec.adapters.cockroach_asyncpg.core import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
+from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy
 
 __all__ = (
     "CockroachAsyncpgConfig",
@@ -24,6 +25,7 @@ __all__ = (
     "CockroachAsyncpgExceptionHandler",
     "CockroachAsyncpgPool",
     "CockroachAsyncpgPoolConfig",
+    "CockroachAsyncpgRLSStrategy",
     "CockroachAsyncpgRetryConfig",
     "CockroachAsyncpgSessionContext",
     "build_connection_config",
