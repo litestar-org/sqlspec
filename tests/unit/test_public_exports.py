@@ -25,6 +25,44 @@ def test_top_level_exports_resolve() -> None:
         getattr(sqlspec, name)
 
 
+@pytest.mark.parametrize("defining_first", [False, True])
+@pytest.mark.parametrize(
+    ("name", "defining_module"),
+    [
+        ("TenantContext", "sqlspec.utils.tenant"),
+        ("TenantContextPayload", "sqlspec.utils.tenant"),
+        ("async_tenant_scope", "sqlspec.utils.tenant"),
+        ("async_tenant_bypass", "sqlspec.utils.tenant"),
+        ("TenantContextError", "sqlspec.exceptions"),
+        ("TenantCleanupError", "sqlspec.exceptions"),
+    ],
+)
+def test_tenant_exports_retain_defining_objects(name: str, defining_module: str, defining_first: bool) -> None:
+    script = f"""
+import importlib
+if {defining_first!r}:
+    importlib.import_module({defining_module!r})
+from sqlspec import {name}
+defining_object = getattr(importlib.import_module({defining_module!r}), {name!r})
+assert {name} is defining_object
+namespace = {{}}
+exec('from sqlspec import *', namespace)
+assert namespace[{name!r}] is defining_object
+"""
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+
+def test_root_tenant_scope_and_validation() -> None:
+    from sqlspec import TenantContext, TenantContextError, TenantContextPayload
+
+    with TenantContext.scope("tenant-a") as payload:
+        assert payload.tenant_id == "tenant-a"
+        assert TenantContext.get() is payload
+    with pytest.raises(TenantContextError) as exc_info:
+        TenantContextPayload("")
+    assert isinstance(exc_info.value, ValueError)
+
+
 def test_builder_exports_retain_defining_objects() -> None:
     """All builder exports remain real objects through normal and star imports."""
     from sqlspec import builder
