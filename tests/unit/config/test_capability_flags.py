@@ -1,5 +1,7 @@
 """Tests for adapter configuration capability flags."""
 
+from dataclasses import dataclass
+
 import pytest
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -54,10 +56,8 @@ def test_each_adapter_reliable_rowcount_flag(module_path: str, class_name: str) 
     assert config_cls.supports_reliable_rowcount is expected
 
 
+@dataclass(slots=True)
 class _SyncTenantStrategy:
-    __slots__ = ()
-    __hash__ = None
-
     def checkout(self, connection: object, payload: TenantContextPayload) -> TenantLeaseState:
         return TenantLeaseState(payload)
 
@@ -124,17 +124,20 @@ def test_tenant_strategy_execution_mode(
 
 @pytest.mark.parametrize("shorthand", ["default", True])
 def test_supporting_config_resolves_tenant_shorthand(shorthand: object) -> None:
-    strategy = _SyncTenantStrategy()
+    resolved_strategy = _SyncTenantStrategy()
 
     class TenantConfig(SqliteConfig):
         __slots__ = ()
         supports_tenant_strategy = True
 
-        def _resolve_tenant_strategy(self, value: object) -> _SyncTenantStrategy:
-            assert value is shorthand
-            return strategy
+        def _resolve_tenant_strategy(self, strategy: object) -> _SyncTenantStrategy:
+            assert strategy is shorthand
+            return resolved_strategy
 
-    assert TenantConfig(driver_features={"tenant_strategy": shorthand}).driver_features["tenant_strategy"] is strategy
+    assert (
+        TenantConfig(driver_features={"tenant_strategy": shorthand}).driver_features["tenant_strategy"]
+        is resolved_strategy
+    )
 
 
 def test_unsupported_tenant_baseline_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

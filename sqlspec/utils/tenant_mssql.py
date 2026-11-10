@@ -5,6 +5,9 @@ from typing import Any, Final
 
 from sqlspec.exceptions import ImproperConfigurationError
 
+__all__ = ("build_checkin_sql", "build_checkout_sql", "read_batch_result", "validate_session_key")
+
+
 _MAX_SESSION_KEY_LENGTH: Final = 128
 
 

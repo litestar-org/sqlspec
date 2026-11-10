@@ -4,6 +4,13 @@ from typing import Any, ClassVar
 
 from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
 
+__all__ = (
+    "CockroachPsycopgAsyncRLSStrategy",
+    "CockroachPsycopgSyncRLSStrategy",
+    "build_cockroach_psycopg_async_tenant_lease",
+    "build_cockroach_psycopg_sync_tenant_lease",
+)
+
 
 class CockroachPsycopgSyncRLSStrategy(PsycopgSyncRLSStrategy):
     """Apply and restore synchronous CockroachDB session settings."""

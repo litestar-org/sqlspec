@@ -9,6 +9,9 @@ from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, T
 from sqlspec.utils.tenant import TenantContextPayload
 from sqlspec.utils.text import quote_identifier
 
+__all__ = ("PostgresTenantSettings", "build_setting_query", "psycopg_setting_query")
+
+
 DEFAULT_TENANT_KEY = "app.current_tenant_id"
 DEFAULT_SEARCH_PATH_RESTORE = '"$user", public'
 

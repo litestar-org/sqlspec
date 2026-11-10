@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from sqlspec.adapters.pymssql.config import PymssqlConfig
     from sqlspec.driver._tenant import SyncTenantLease
 
+__all__ = ("PymssqlSessionContextStrategy", "build_pymssql_tenant_lease")
+
+
 DEFAULT_MSSQL_TENANT_KEY: Final = "tenant_id"
 
 

@@ -4,6 +4,8 @@ from typing import Any, ClassVar
 
 from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
 
+__all__ = ("CockroachAsyncpgRLSStrategy", "build_cockroach_asyncpg_tenant_lease")
+
 
 class CockroachAsyncpgRLSStrategy(AsyncpgRLSStrategy):
     """Apply tenant settings and clear unset CockroachDB values with empty strings."""
