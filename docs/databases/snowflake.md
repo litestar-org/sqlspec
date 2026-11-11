@@ -42,7 +42,7 @@ finally:
     config.close_pool()
 ```
 
-Output: `42`. Session contexts release their connection; close the pool when the application stops. Commit DML explicitly or use `session.transaction()`. DDL commits independently, and savepoint methods raise `NotImplementedError`.
+Output: `42`. Session contexts release their connection; close the pool when the application stops. Commit DML explicitly or use `session.transaction()`. `execute_many()` follows the connection's transaction settings; wrap it in `session.transaction()` when a batch must be atomic. DDL commits independently, and savepoint methods raise `NotImplementedError`.
 
 ## Choosing a Snowflake Adapter
 

@@ -229,7 +229,9 @@ def test_script_parameters_compile_statically_in_configured_modes(snowflake_conn
 
 
 @pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
-def test_execute_many_insert_select_uses_atomic_scalar_bindings(snowflake_connection: Any, paramstyle: str) -> None:
+def test_execute_many_insert_select_uses_scalar_bindings_without_transaction_control(
+    snowflake_connection: Any, paramstyle: str
+) -> None:
     from sqlspec.adapters.snowflake.core import build_statement_config
 
     snowflake_connection.paramstyle = paramstyle
@@ -241,7 +243,8 @@ def test_execute_many_insert_select_uses_atomic_scalar_bindings(snowflake_connec
     assert result.rows_affected == 2
     assert snowflake_connection.batch_calls == 0
     assert len(snowflake_connection.committed_rows) == 2
-    assert snowflake_connection.commits == 1
+    assert snowflake_connection.commits == 0
+    assert all(call[0].startswith("INSERT") for call in snowflake_connection.calls)
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
 
 
@@ -258,8 +261,8 @@ def test_execute_many_insert_select_failure_respects_transaction_owner(
     snowflake_connection.failure = ProgrammingError(msg="second row rejected", errno=1003, sqlstate="42000")
     with pytest.raises(SQLParsingError, match="second row rejected"):
         driver.execute_many("INSERT INTO orders (id) SELECT :id", [{"id": 1}, {"id": 2}])
-    assert snowflake_connection.committed_rows == []
-    assert snowflake_connection.rollbacks == (0 if caller_transaction else 1)
+    assert len(snowflake_connection.committed_rows) == (0 if caller_transaction else 1)
+    assert snowflake_connection.rollbacks == 0
     assert len(snowflake_connection.pending_rows) == (1 if caller_transaction else 0)
     assert snowflake_connection.commits == 0
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
@@ -272,3 +275,22 @@ def test_execute_many_values_retains_fast_batch_with_quoted_select_column(snowfl
     assert result.rows_affected == 2
     assert snowflake_connection.batch_calls == 1
     assert len(snowflake_connection.calls) == 1
+
+
+@pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
+def test_execute_many_insert_select_leaves_fresh_autocommit_false_rows_pending(
+    snowflake_connection: Any, paramstyle: str
+) -> None:
+    from sqlspec.adapters.snowflake.core import build_statement_config
+
+    snowflake_connection.paramstyle = paramstyle
+    snowflake_connection.autocommit_enabled = False
+    driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
+    result = driver.execute_many("INSERT INTO orders (id) SELECT :id", [{"id": 1}, {"id": 2}])
+    assert result.rows_affected == 2
+    assert len(snowflake_connection.pending_rows) == 2
+    assert snowflake_connection.committed_rows == []
+    assert snowflake_connection.commits == 0
+    driver.rollback()
+    assert snowflake_connection.pending_rows == []
+    assert snowflake_connection.committed_rows == []

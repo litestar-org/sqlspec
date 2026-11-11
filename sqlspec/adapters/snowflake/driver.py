@@ -316,30 +316,19 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Batch VALUES inserts and execute SELECT-source inserts with scalar binds."""
+        """Batch VALUES inserts and scalar-bind SELECT inserts under caller transaction control."""
         sql, params = self._compiled_sql(statement, self.statement_config)
         rows = normalize_many_parameters(params, paramstyle=self._binding_mode(statement.statement_config))
         affected = 0
         if rows and _insert_uses_select(sql):
-            owns_transaction = not self._connection_in_transaction()
-            if owns_transaction:
-                self.begin()
-            try:
-                known_count = True
-                for parameters in rows:
-                    self._execute_cursor(cursor, sql, parameters, statement.statement_config)
-                    count = resolve_rowcount(cursor)
-                    known_count = known_count and count >= 0
-                    affected += max(count, 0)
-                if not known_count:
-                    affected = -1
-                if owns_transaction:
-                    self.commit()
-            except BaseException:
-                if owns_transaction:
-                    with contextlib.suppress(Exception):
-                        self.rollback()
-                raise
+            known_count = True
+            for parameters in rows:
+                self._execute_cursor(cursor, sql, parameters, statement.statement_config)
+                count = resolve_rowcount(cursor)
+                known_count = known_count and count >= 0
+                affected += max(count, 0)
+            if not known_count:
+                affected = -1
         elif rows:
             cursor.executemany(sql, rows)
             affected = resolve_rowcount(cursor)

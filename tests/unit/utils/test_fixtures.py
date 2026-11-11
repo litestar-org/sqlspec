@@ -3220,13 +3220,22 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
 
         def execute(self, sql: str, parameters: Any = None, **kwargs: Any) -> None:
             self.connection.calls.append((sql, parameters))
+            if sql.startswith("INSERT"):
+                identifier, payload, items, object_value = parameters
+                self.connection.rows.append({
+                    "id": identifier,
+                    "payload": json.loads(payload) if payload is not None else None,
+                    "items": json.loads(items) if items is not None else None,
+                    "object": json.loads(object_value) if object_value is not None else None,
+                })
 
         def fetchall(self) -> list[tuple[Any, ...]]:
             return [("id", "NUMBER", 1), ("payload", "VARIANT", 2), ("items", "ARRAY", 3), ("object", "OBJECT", 4)]
 
         def executemany(self, sql: str, parameters: Any) -> None:
-            self.connection.calls.append((sql, parameters))
-            self.rowcount = len(parameters)
+            from snowflake.connector.errors import NotSupportedError
+
+            raise NotSupportedError(msg="Snowflake INSERT SELECT does not support array binding")
 
         def close(self) -> None:
             return None
@@ -3234,14 +3243,22 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
     class Connection:
         def __init__(self) -> None:
             self.calls: list[tuple[str, Any]] = []
+            self.rows: list[dict[str, Any]] = []
 
         def cursor(self) -> Cursor:
             return Cursor(self)
 
-    (tmp_path / "records.json").write_text('[{"id":1,"payload":{"k":1},"items":["a"],"object":null}]', encoding="utf-8")
+    expected_rows = [
+        {"id": 1, "payload": {"k": 1}, "items": ["a"], "object": None},
+        {"id": 2, "payload": None, "items": [], "object": {"ok": True}},
+    ]
+    (tmp_path / "records.json").write_text(json.dumps(expected_rows), encoding="utf-8")
     connection = Connection()
     loaded = load_table_fixtures_sync(SnowflakeDriver(connection), tmp_path, tables=["records"])
-    assert loaded == {"records": 1}
-    insert, parameters = connection.calls[-1]
-    assert "SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)" in insert
-    assert parameters == [(1, '{"k":1}', '["a"]', None)]
+    assert loaded == {"records": 2}
+    assert connection.rows == expected_rows
+    inserts = [statement for statement, _ in connection.calls if statement.startswith("INSERT")]
+    assert inserts == [
+        'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
+        'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
+    ]
