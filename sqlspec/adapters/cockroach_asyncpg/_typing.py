@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg as cockroach_asyncpg_module
+from asyncpg import InterfaceError as CockroachAsyncpgInterfaceError
 from asyncpg import Pool
 from asyncpg import PostgresError as CockroachAsyncpgPostgresError
 from asyncpg import Record as CockroachAsyncpgRecord
@@ -30,6 +31,7 @@ else:
 
 __all__ = (
     "CockroachAsyncpgConnection",
+    "CockroachAsyncpgInterfaceError",
     "CockroachAsyncpgPool",
     "CockroachAsyncpgPostgresError",
     "CockroachAsyncpgRecord",

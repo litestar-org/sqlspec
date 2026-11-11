@@ -30,7 +30,7 @@
 
 ## Basic Setup
 
-Configure `extension_config["sanic"]` (`SanicConfig`), attach the plugin via `db_plugin.init_app(app)`, and retrieve the session with `db_plugin.get_session(request, "db")`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), configure `extension_config["sanic"]` (`SanicConfig`), and retrieve the session with `db_plugin.get_session(request, "db")`:
 
 ```{ .python title="docs/examples/frameworks/sanic/basic_setup.py" }
 --8<-- "docs/examples/frameworks/sanic/basic_setup.py:example"
@@ -88,40 +88,42 @@ For high-throughput endpoints that only acquire connections on demand rather tha
 
 ## Tenant-Aware Requests
 
-A Sanic config with `tenant_strategy` requires a trusted `tenant_extractor`. Install `sqlspec[sanic,asyncpg]` and create the role and policy in [Multi-Tenancy](../learn/recipes/multi-tenancy.md). Run your auth middleware before SQLSpec's request middleware so it can read the trusted user from `request.ctx.user`.
+Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (such as `asyncpg`, `psqlpy`, `psycopg`, `cockroach_asyncpg`, or `oracledb`; see [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for database role and policy setup).
+
+When no `tenant_extractor` is set, Sanic defers checking out the tenant connection until an authentication middleware or route verifies membership, calls `set_request_tenant(request, org_id)` (accepting `key=...` for multi-database setups), and awaits `db_plugin.get_session_async(request)`. Public and login routes never check out a tenant connection and can look up users via a separate auth bind or `config.provide_session(bypass_tenant=True)`:
 
 ```python
 from typing import Any
-
+from sanic import Sanic, json
+from sanic.exceptions import Forbidden
 from sqlspec.adapters.asyncpg import AsyncpgConfig
+from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
 
-
-async def verified_tenant(request: Any) -> str | None:
-    user = getattr(request.ctx, "user", None)
-    if user is None:
-        return None
-    tenant = getattr(user, "tenant_id", None)
-    return tenant if tenant in getattr(user, "tenant_ids", ()) else None
-
-
-def tenant_config(dsn: str) -> AsyncpgConfig:
-    return AsyncpgConfig(
-        connection_config={"dsn": dsn},
+db_plugin = SQLSpecPlugin(
+    AsyncpgConfig(
+        connection_config={"dsn": "postgresql://app_user@localhost/app"},
         driver_features={"tenant_strategy": "rls"},
-        extension_config={"sanic": {
-            "tenant_extractor": verified_tenant,
-            "commit_mode": "autocommit",
-        }},
+        extension_config={"sanic": {"commit_mode": "autocommit"}},
     )
+)
+
+
+def register_routes(app: Sanic[Any, Any]) -> None:
+    db_plugin.init_app(app)
+
+    @app.get("/orgs/<org_id:str>/projects")
+    async def list_projects(request: Any, org_id: str) -> Any:
+        user = getattr(request.ctx, "user", None)
+        if user is None or org_id not in user.org_ids:
+            raise Forbidden("Forbidden organization")
+        set_request_tenant(request, org_id)
+        session = await db_plugin.get_session_async(request)
+        return json(await session.select("SELECT id, name FROM projects"))
 ```
 
-Register this config with the plugin shown above. Use `db_plugin.get_session(request)` in handlers. Sanic accepts sync and async extractors and awaits their result before taking a connection. Results can be `TenantContextPayload`, `str`, `UUID`, or `None`.
+When your authentication middleware runs before SQLSpec's request hook and populates `request.ctx.user`, you can instead configure a sync or async `tenant_extractor` per bind in `extension_config["sanic"]` (returning `TenantContextPayload`, `str`, `UUID`, or `None`) so handlers can read `db_plugin.get_session(request)` directly. Multiple binds on one plugin can each define their own extractor or use deferred `set_request_tenant(...)` independently.
 
-The request hook binds the tenant before acquisition. Response cleanup exits the lease before it restores the outer scope. Setup errors and cancellation also restore the scope; the request-complete listener cleans up residual leases. `None` clears the tenant, so missing identity cannot reuse an outer tenant. A tenant-enabled config with no extractor fails at `init_app`. All managed configs in one plugin must share the same extractor object.
-
-Tenant-enabled leases roll back open transactions at cleanup, including in manual mode. Commit explicitly or choose an autocommit mode to save writes. The manual-mode table above describes configs with tenant mode disabled.
-
-A raw header or path grants no tenant access. Check the chosen value against trusted user memberships. A bypass payload skips SQLSpec's identity setup and keeps RLS in force. Use a separate config for admin work. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+Response cleanup and the `http.lifecycle.complete` signal listener exit every open tenant lease and restore outer scopes on normal responses, mapped exceptions, and cancellations. Tenant-enabled leases roll back open transactions at cleanup (including in `"manual"` mode), so commit explicitly or set `commit_mode="autocommit"` to persist writes. Always verify requested header or path selectors against trusted user memberships; explicit bypass payloads skip SQLSpec's session identity setup while keeping database RLS policies active. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
 
 ## Configuration Options
 
@@ -130,7 +132,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 <!-- GENERATED:START config-table:sqlspec.config.SanicConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Required with a tenant strategy. |
+| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Optional when handlers call set_request_tenant() before get_session_async() or wrap work in TenantContext.scope(). |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.ctx. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |

@@ -9,9 +9,14 @@ Pass an authorized tenant directly to a tenant-enabled config:
 ```python
 async with config.provide_session(tenant="tenant-a") as session:
     rows = await session.select("SELECT id, name FROM projects")
+
+async with config.provide_session(bypass_tenant=True) as lookup:
+    user = await lookup.select_one_or_none(
+        "SELECT id FROM users WHERE email = :email", email="a@example.com"
+    )
 ```
 
-Sync configs accept the same keyword with `with`. `SQLSpec.provide_session(config, tenant=...)` also forwards it. The value can be a string, UUID, or `TenantContextPayload`, including `TenantContextPayload.bypass()` for explicit bypass. Use a payload to supply session variables. The tenant stays bound through session cleanup and the prior context is restored on every exit. `tenant=None`, like omitting the argument, inherits the ambient scope. An explicit tenant requires a configured strategy; unsupported adapters reject it.
+Sync configs accept the same keywords with `with`, and `SQLSpec.provide_session(config, ..., tenant=..., bypass_tenant=...)` forwards both arguments. `tenant` accepts a string, UUID, or `TenantContextPayload` (use a payload to supply extra session variables); `bypass_tenant=True` binds `TenantContextPayload.bypass()` for a single pre-tenant lookup or health check and cannot be combined with `tenant`. The tenant or bypass state stays bound through session cleanup and restores the prior context on every exit. `tenant=None` with `bypass_tenant=False` inherits the ambient scope. Both keywords require a configured `tenant_strategy`; unsupported adapters reject them.
 
 All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="default"`. Adapter-specific shorthands select the same built-in strategy:
 
@@ -41,16 +46,16 @@ This prints `tenant-a`, `True`, `None`, and `tenant-a` in order.
 
 `get()` returns the payload or `None` when unset. `get_tenant_id()` returns `None` for both unset and bypassed contexts; use `is_bypassed()` to distinguish explicit bypass. A bypass payload contains no identity or variables.
 
-Synchronous and asynchronous scopes restore the preceding payload on normal exit, exceptions, and cancellation. The async equivalents use the same context state:
+Synchronous and asynchronous scopes restore the preceding payload on normal exit, exceptions, and cancellation. Both `TenantContext.scope(...)` and `TenantContext.bypass()` implement the synchronous and asynchronous context-manager protocols directly:
 
 ```python
-from sqlspec import TenantContext, async_tenant_bypass, async_tenant_scope
+from sqlspec import TenantContext
 
 
 async def read_tenant_context() -> tuple[str | None, bool]:
-    async with async_tenant_scope("tenant-a"):
+    async with TenantContext.scope("tenant-a"):
         tenant_id = TenantContext.get_tenant_id()
-        async with async_tenant_bypass():
+        async with TenantContext.bypass():
             bypassed = TenantContext.is_bypassed()
         return tenant_id, bypassed
 ```
@@ -83,16 +88,6 @@ All `TenantContext` methods are class methods:
     options:
       heading_level: 4
       members: false
-
-::: sqlspec.utils.tenant.async_tenant_scope
-    options:
-      heading_level: 4
-      separate_signature: false
-
-::: sqlspec.utils.tenant.async_tenant_bypass
-    options:
-      heading_level: 4
-      separate_signature: false
 
 ::: sqlspec.exceptions.TenantContextError
     options:
@@ -142,23 +137,27 @@ A strategy returns `TenantLeaseState` or a baseline `Mapping[str, str | None]` f
 
 ## Litestar Tenant Resolution
 
-Configure the plugin or use `require_tenant()` to bind an authorized tenant. An unverified header, path value, or guard declaration alone does not prove membership. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete examples.
+Configure `extension_config["litestar"]` on `SQLSpecPlugin(config)` or attach `require_tenant()`, which inherits the registered plugin's `TenantResolutionSettings` automatically unless overridden per route. `resolve_litestar_tenant` also integrates `litestar-security` `Principal`, `SecurityContext`, `AuthorizationSnapshot` (`tenant_ids` and `tenant_roles`), `CredentialRestrictions`, `SessionHandle`, `requires_tenant`, and `requires_tenant_role`. Other frameworks expose `set_request_tenant(...)` from `sqlspec.extensions.{fastapi,starlette,flask,sanic}` to bind a deferred request lease after route-level authentication. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete examples.
 
 ::: sqlspec.extensions.litestar.tenant.TenantResolutionSettings
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.extensions.litestar.tenant.require_tenant
     options:
-      heading_level: 3
+      heading_level: 4
+
+::: sqlspec.extensions.litestar.tenant.is_scope_authenticated
+    options:
+      heading_level: 4
 
 ::: sqlspec.extensions.litestar.tenant.set_connection_tenant
     options:
-      heading_level: 3
+      heading_level: 4
 
 ::: sqlspec.extensions.litestar.tenant.resolve_litestar_tenant
     options:
-      heading_level: 3
+      heading_level: 4
 
 See [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for policy setup and [adapter references](adapters/index.md) for concrete strategies.

@@ -143,14 +143,21 @@ def test_tenant_config_requires_session_affinity(mode: str) -> None:
         validate_asyncpg_tenant_config({"pooler_mode": mode}, {})
 
 
-@pytest.mark.parametrize("source", ["hook", "init", "setup"])
-def test_tenant_callbacks_require_explicit_baseline(source: str) -> None:
+@pytest.mark.parametrize("source", ["init", "setup"])
+def test_tenant_pool_callbacks_require_explicit_baseline(source: str) -> None:
     callback = object()
-    features = {"on_connection_create": callback} if source == "hook" else {}
-    connection = {source: callback} if source != "hook" else {}
+    connection = {source: callback}
     with pytest.raises(ImproperConfigurationError, match="tenant_session_baseline"):
-        validate_asyncpg_tenant_config(features, connection)
-    assert validate_asyncpg_tenant_config({**features, "tenant_session_baseline": {}}, connection) == {}
+        validate_asyncpg_tenant_config({}, connection)
+    assert validate_asyncpg_tenant_config({"tenant_session_baseline": {}}, connection) == {}
+
+
+def test_tenant_on_connection_create_defaults_baseline_to_empty() -> None:
+    callback = object()
+    assert validate_asyncpg_tenant_config({"on_connection_create": callback}, {}) == {}
+    assert validate_asyncpg_tenant_config(
+        {"on_connection_create": callback, "tenant_session_baseline": {"timezone": "UTC"}}, {}
+    ) == {"timezone": "UTC"}
 
 
 def test_tenant_baseline_validates_values_and_conflicts() -> None:

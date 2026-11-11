@@ -4,9 +4,9 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
-from psycopg import pq
-from psycopg.rows import tuple_row
 
+from sqlspec.adapters.psycopg._typing import psycopg_pq as pq
+from sqlspec.adapters.psycopg._typing import psycopg_tuple_row as tuple_row
 from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError

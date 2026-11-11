@@ -3,32 +3,41 @@
 import asyncio
 import contextlib
 import logging
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast, overload
 
-from sqlspec.base import SQLSpec
+from sqlspec.base import SQLSpec, coerce_sqlspec
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
     get_or_create_session,
+    get_request_tenant,
     has_context_value,
     pop_context_value,
     set_context_value,
+    set_request_tenant,
 )
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
-from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload, shared_tenant_extractor
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, coerce_tenant_payload
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Sequence
+    from uuid import UUID
 
     from sanic import Sanic
+
+    from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, NoPoolSyncConfig, SyncConfigT, SyncDatabaseConfig
+    from sqlspec.loader import SQLFileLoader
 
 __all__ = ("SQLSpecPlugin",)
 
@@ -44,15 +53,6 @@ DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
 
 
-def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
-    """Select the primary teardown exception to re-raise after completing all targets."""
-    if current is None:
-        return candidate
-    if isinstance(current, Exception) and not isinstance(candidate, Exception):
-        return candidate
-    return current
-
-
 class SQLSpecPlugin:
     """SQLSpec integration for Sanic applications.
 
@@ -60,27 +60,27 @@ class SQLSpecPlugin:
     Runtime listener and middleware behavior is registered by ``init_app``.
     """
 
-    __slots__ = (
-        "_config_states",
-        "_extractor",
-        "_lifecycle_listeners_added",
-        "_request_middleware_added",
-        "_sqlspec",
-        "_tenant_extractor",
-    )
+    __slots__ = ("_config_states", "_extractor", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
 
-    def __init__(self, sqlspec: SQLSpec, app: "Sanic[Any, Any] | None" = None) -> None:
+    def __init__(
+        self,
+        sqlspec: "SQLSpec | DatabaseConfigProtocol[Any, Any, Any] | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
+        app: "Sanic[Any, Any] | None" = None,
+        *,
+        loader: "SQLFileLoader | None" = None,
+    ) -> None:
         """Initialize SQLSpec Sanic extension.
 
         Args:
-            sqlspec: Pre-configured SQLSpec instance with registered configs.
+            sqlspec: Pre-configured SQLSpec registry, a single database
+                configuration, or a sequence of database configurations.
             app: Optional Sanic application to initialize immediately.
+            loader: Optional SQL file loader attached to the registry.
         """
-        self._sqlspec = sqlspec
+        self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[SanicConfigState] = []
         self._lifecycle_listeners_added = False
         self._request_middleware_added = False
-        self._tenant_extractor: Callable[[Any], Any] | None = None
 
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_extension_settings(cfg)
@@ -110,6 +110,16 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
+    @property
+    def sqlspec(self) -> SQLSpec:
+        """Return the underlying SQLSpec registry."""
+        return self._sqlspec
+
+    @property
+    def config(self) -> "list[DatabaseConfigProtocol[Any, Any, Any]]":
+        """Return the registered database configurations."""
+        return [state.config for state in self._config_states]
+
     def init_app(self, app: "Sanic[Any, Any]") -> None:
         """Initialize Sanic application with SQLSpec.
 
@@ -117,35 +127,125 @@ class SQLSpecPlugin:
             app: Sanic application instance.
         """
         self._ensure_unique_keys()
-        self._configure_tenant_extractor()
         setattr(app.ctx, "sqlspec_plugin", self)
         self._add_lifecycle_listeners(app)
         self._add_request_middleware(app)
 
-    def get_session(self, request: Any, key: "str | None" = None) -> Any:
+    @overload
+    def get_config(self, name: None = None) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
+    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
+    ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
+    @overload
+    def get_config(self, name: "SyncConfigT") -> "SyncConfigT": ...
+    @overload
+    def get_config(self, name: "AsyncConfigT") -> "AsyncConfigT": ...
+    @overload
+    def get_config(self, name: str) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    def get_config(
+        self,
+        name: "str | type[DatabaseConfigProtocol[Any, Any, Any]] | DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> "DatabaseConfigProtocol[Any, Any, Any]":
+        """Return a registered database configuration by identifier, or the sole configuration when omitted."""
+        if name is None:
+            if len(self._config_states) == 1:
+                return self._config_states[0].config
+            if not self._config_states:
+                msg = "No database configurations are registered on SQLSpecPlugin."
+                raise KeyError(msg)
+            msg = "Multiple database configurations are registered on SQLSpecPlugin; specify a key, type, or instance."
+            raise KeyError(msg)
+        if isinstance(name, str):
+            for state in self._config_states:
+                if getattr(state.config, "bind_key", None) == name:
+                    return state.config
+            for state in self._config_states:
+                if name in {state.session_key, state.connection_key, state.pool_key}:
+                    return state.config
+            msg = f"No configuration found for key '{name}'."
+            raise KeyError(msg)
+        if isinstance(name, type):
+            matches = [state.config for state in self._config_states if type(state.config) is name]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{name.__name__}'; look up by session_key or bind_key."
+                raise KeyError(msg)
+            msg = f"No configuration found for type '{name.__name__}'."
+            raise KeyError(msg)
+        for state in self._config_states:
+            if state.config is name:
+                return state.config
+        msg = f"No configuration found for '{name!r}'."
+        raise KeyError(msg)
+
+    @staticmethod
+    def set_request_tenant(
+        request: Any,
+        tenant_id: "str | UUID | TenantContextPayload",
+        *,
+        variables: "Mapping[str, str] | None" = None,
+        key: str | None = None,
+    ) -> TenantContextPayload:
+        """Store an authorized tenant receipt on a Sanic ``request.ctx``."""
+        return set_request_tenant(request, tenant_id, variables=variables, key=key)
+
+    def get_session(self, request: Any, key: Any = None) -> Any:
         """Get or create database session for request.
 
         Args:
             request: Sanic request instance.
-            key: Optional session key to retrieve a specific database session.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Database session driver instance.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_context_value(request.ctx, config_state.connection_key) and has_context_value(
+            request.ctx, self._deferred_key(config_state)
+        ):
+            self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def get_connection(self, request: Any, key: "str | None" = None) -> Any:
+    async def get_session_async(self, request: Any, key: Any = None) -> Any:
+        """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        await self.get_connection_async(request, key)
+        return get_or_create_session(request, config_state)
+
+    def get_connection(self, request: Any, key: Any = None) -> Any:
         """Get database connection from request context.
 
         Args:
             request: Sanic request instance.
-            key: Optional session key to retrieve a specific database connection.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Database connection object.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_context_value(request.ctx, config_state.connection_key) and has_context_value(
+            request.ctx, self._deferred_key(config_state)
+        ):
+            return self._acquire_deferred_connection_sync(request, config_state)
+        return get_context_value(request.ctx, config_state.connection_key)
+
+    async def get_connection_async(self, request: Any, key: Any = None) -> Any:
+        """Get database connection asynchronously, acquiring deferred tenant leases on demand."""
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_context_value(request.ctx, config_state.connection_key):
+            lock = get_context_value(request.ctx, self._deferred_key(config_state), None)
+            if isinstance(lock, asyncio.Lock):
+                async with lock:
+                    if not has_context_value(request.ctx, config_state.connection_key):
+                        payload = await self._resolve_request_tenant(request, config_state)
+                        await self._acquire_request_connection(request, config_state, payload, bind_payload=True)
+                        pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
 
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
@@ -207,17 +307,68 @@ class SQLSpecPlugin:
             sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
 
-    def _configure_tenant_extractor(self) -> None:
-        self._tenant_extractor = shared_tenant_extractor(self._config_states, framework="Sanic")
-
-    async def _bind_tenant(self, request: Any) -> None:
-        if self._tenant_extractor is None:
-            return
-        raw = self._tenant_extractor(request)
+    async def _invoke_extractor(self, request: Any, config_state: SanicConfigState) -> TenantContextPayload | None:
+        extractor = config_state.tenant_extractor
+        if extractor is None:
+            return None
+        raw = extractor(request)
         if isawaitable(raw):
             raw = await raw
-        payload = coerce_tenant_payload(raw)
-        set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
+        return coerce_tenant_payload(raw)
+
+    async def _resolve_request_tenant(
+        self, request: Any, config_state: SanicConfigState
+    ) -> TenantContextPayload | None:
+        receipt = get_request_tenant(request, config_state)
+        if receipt is not None:
+            return coerce_tenant_payload(receipt)
+        if config_state.tenant_extractor is not None:
+            return await self._invoke_extractor(request, config_state)
+        return TenantContext.get()
+
+    def _acquire_deferred_connection_sync(self, request: Any, config_state: SanicConfigState) -> Any:
+        config = config_state.config
+        if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
+            msg = (
+                "Async tenant-scoped Sanic connections require an upfront tenant_extractor "
+                "or await plugin.get_session_async(request) after set_request_tenant(request, ...)."
+            )
+            raise TenantContextError(msg)
+        receipt = get_request_tenant(request, config_state)
+        if receipt is not None:
+            payload = coerce_tenant_payload(receipt)
+        elif config_state.tenant_extractor is not None:
+            raw = config_state.tenant_extractor(request)
+            if isawaitable(raw):
+                close = getattr(raw, "close", None)
+                if callable(close):
+                    close()
+                msg = "Synchronous Sanic session acquisition requires a synchronous tenant_extractor"
+                raise ImproperConfigurationError(msg)
+            payload = coerce_tenant_payload(raw)
+        else:
+            payload = TenantContext.get()
+        payload_key = self._tenant_payload_key(config_state)
+        set_context_value(request.ctx, payload_key, payload)
+        try:
+            with TenantContext.bind(payload):
+                if config.supports_connection_pooling:
+                    pool = get_context_value(request.app.ctx, config_state.pool_key)
+                    cm = cast("AbstractContextManager[Any]", config.provide_connection(pool))
+                    connection = cm.__enter__()
+                    set_context_value(request.ctx, self._connection_manager_key(config_state), with_ensure_async_(cm))
+                elif _has_tenant_strategy(config):
+                    cm = cast("AbstractContextManager[Any]", config.provide_connection())
+                    connection = cm.__enter__()
+                    set_context_value(request.ctx, self._connection_manager_key(config_state), with_ensure_async_(cm))
+                else:
+                    connection = config.create_connection()
+        except BaseException:
+            pop_context_value(request.ctx, payload_key)
+            raise
+        pop_context_value(request.ctx, self._deferred_key(config_state))
+        set_context_value(request.ctx, config_state.connection_key, connection)
+        return connection
 
     def _reset_tenant(self, request: Any) -> None:
         token = pop_context_value(request.ctx, _TENANT_SCOPE_KEY)
@@ -356,11 +507,28 @@ class SQLSpecPlugin:
         self._set_observability_contexts(request)
         acquired_states: list[SanicConfigState] = []
         try:
-            await self._bind_tenant(request)
             for config_state in self._config_states:
                 if config_state.disable_di:
                     continue
-                await self._acquire_request_connection(request, config_state)
+                if not _has_tenant_strategy(config_state.config):
+                    has_payload = False
+                    payload: TenantContextPayload | None = None
+                    if config_state.tenant_extractor is not None:
+                        payload = await self._invoke_extractor(request, config_state)
+                        has_payload = True
+                        if not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                            set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
+                    await self._acquire_request_connection(request, config_state, payload, bind_payload=has_payload)
+                    acquired_states.append(config_state)
+                    continue
+
+                payload = await self._resolve_request_tenant(request, config_state)
+                if payload is None:
+                    set_context_value(request.ctx, self._deferred_key(config_state), asyncio.Lock())
+                    continue
+                if not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                    set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
+                await self._acquire_request_connection(request, config_state, payload, bind_payload=True)
                 acquired_states.append(config_state)
         except BaseException as exc:
             try:
@@ -573,22 +741,50 @@ class SQLSpecPlugin:
             return name.rsplit(".", 1)[-1]
         return None
 
-    async def _acquire_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
+    async def _acquire_request_connection(
+        self,
+        request: Any,
+        config_state: SanicConfigState,
+        payload: TenantContextPayload | None = None,
+        *,
+        bind_payload: bool = False,
+    ) -> None:
         """Acquire and store a connection for one config state.
 
         Args:
             request: Sanic request instance.
             config_state: Configuration state.
+            payload: Optional immutable tenant payload bound around lease acquisition.
+            bind_payload: Whether ``payload`` was explicitly resolved for this connection.
         """
         config = config_state.config
-
-        if config.supports_connection_pooling:
-            pool = get_context_value(request.app.ctx, config_state.pool_key)
-            connection_manager = with_ensure_async_(config.provide_connection(pool))
-            connection = await connection_manager.__aenter__()
-            set_context_value(request.ctx, self._connection_manager_key(config_state), connection_manager)
-        else:
-            connection = await ensure_async_(config.create_connection)()
+        payload_key = self._tenant_payload_key(config_state)
+        if bind_payload:
+            set_context_value(request.ctx, payload_key, payload)
+        try:
+            if config.supports_connection_pooling:
+                pool = get_context_value(request.app.ctx, config_state.pool_key)
+                if bind_payload:
+                    with TenantContext.bind(payload):
+                        connection_manager = with_ensure_async_(config.provide_connection(pool))
+                        connection = await connection_manager.__aenter__()
+                else:
+                    connection_manager = with_ensure_async_(config.provide_connection(pool))
+                    connection = await connection_manager.__aenter__()
+                set_context_value(request.ctx, self._connection_manager_key(config_state), connection_manager)
+            elif _has_tenant_strategy(config):
+                with TenantContext.bind(payload) if bind_payload else contextlib.nullcontext():
+                    connection_manager = with_ensure_async_(config.provide_connection())
+                    connection = await connection_manager.__aenter__()
+                set_context_value(request.ctx, self._connection_manager_key(config_state), connection_manager)
+            elif bind_payload:
+                with TenantContext.bind(payload):
+                    connection = await ensure_async_(config.create_connection)()
+            else:
+                connection = await ensure_async_(config.create_connection)()
+        except BaseException:
+            pop_context_value(request.ctx, payload_key)
+            raise
 
         set_context_value(request.ctx, config_state.connection_key, connection)
 
@@ -600,6 +796,7 @@ class SQLSpecPlugin:
             response: Sanic response instance.
             config_state: Configuration state.
         """
+        pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = get_context_value(request.ctx, config_state.connection_key, None)
         if connection is None:
             if has_context_value(request.ctx, self._connection_manager_key(config_state)):
@@ -650,9 +847,13 @@ class SQLSpecPlugin:
             config_state: Configuration state.
             exc_override: Optional exception overriding any request-recorded exception.
         """
+        pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = pop_context_value(request.ctx, config_state.connection_key)
         pop_context_value(request.ctx, f"{config_state.session_key}_instance")
         connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
+        payload_key = self._tenant_payload_key(config_state)
+        has_payload = has_context_value(request.ctx, payload_key)
+        captured_payload = pop_context_value(request.ctx, payload_key)
 
         if connection is None and connection_manager is None:
             return
@@ -660,13 +861,20 @@ class SQLSpecPlugin:
         exc = exc_override if exc_override is not None else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
         exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
 
-        if config_state.config.supports_connection_pooling:
-            if connection_manager is not None:
+        if connection_manager is not None:
+            if has_payload:
+                with TenantContext.bind(captured_payload):
+                    await connection_manager.__aexit__(*exit_args)
+            else:
                 await connection_manager.__aexit__(*exit_args)
             return
 
         if connection is not None:
-            await ensure_async_(connection.close)()
+            if has_payload:
+                with TenantContext.bind(captured_payload):
+                    await ensure_async_(connection.close)()
+            else:
+                await ensure_async_(connection.close)()
 
     def _should_commit(self, config_state: SanicConfigState, status_code: int) -> bool:
         """Determine whether a response status should commit.
@@ -701,6 +909,12 @@ class SQLSpecPlugin:
             Request context key.
         """
         return f"{config_state.connection_key}_context_manager"
+
+    def _tenant_payload_key(self, config_state: SanicConfigState) -> str:
+        return f"{config_state.connection_key}_tenant_payload"
+
+    def _deferred_key(self, config_state: SanicConfigState) -> str:
+        return f"{config_state.connection_key}_deferred_tenant"
 
     async def _before_server_start(self, app: Any, *_: Any) -> None:
         """Create configured connection pools before the worker starts.
@@ -789,20 +1003,52 @@ class SQLSpecPlugin:
                 raise ImproperConfigurationError(msg)
             all_keys.update(keys)
 
-    def _config_state_by_key(self, key: str) -> SanicConfigState:
-        """Get configuration state by session key.
+    def _config_state_by_key(self, key: Any) -> SanicConfigState:
+        """Get configuration state by session/connection/pool/bind key, unique type, or instance.
 
         Args:
-            key: Session key to search for.
+            key: Configuration identifier to search for.
 
         Returns:
-            Configuration state matching the key.
+            Configuration state matching the identifier.
 
         Raises:
-            ValueError: If no configuration is found with the specified key.
+            ValueError: If no unique configuration matches the identifier.
         """
+        if isinstance(key, str):
+            for state in self._config_states:
+                if state.session_key == key:
+                    return state
+            for state in self._config_states:
+                if key in {state.connection_key, state.pool_key, getattr(state.config, "bind_key", None)}:
+                    return state
+            msg = f"No configuration found with session_key: {key}"
+            raise ValueError(msg)
+        if isinstance(key, type):
+            matches = [state for state in self._config_states if type(state.config) is key]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{key.__name__}'; specify a session_key or bind_key."
+                raise ValueError(msg)
+            msg = f"No configuration found with type: {key.__name__}"
+            raise ValueError(msg)
         for state in self._config_states:
-            if state.session_key == key:
+            if state.config is key:
                 return state
-        msg = f"No configuration found with session_key: {key}"
+        msg = f"No configuration found for: {key!r}"
         raise ValueError(msg)
+
+
+def _has_tenant_strategy(config: Any) -> bool:
+    features = getattr(config, "driver_features", None)
+    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
+
+
+def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
+    """Select the primary teardown exception to re-raise after completing all targets."""
+    if current is None:
+        return candidate
+    if isinstance(current, Exception) and not isinstance(candidate, Exception):
+        return candidate
+    return current

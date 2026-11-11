@@ -1201,8 +1201,14 @@ def test_oracle_tenant_hook_configuration_must_match_strategy(mode: str) -> None
     config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
     strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
     hook = {"module": "billing"}
+    unattached = strategy_cls()
+    auto_bound = config_cls(driver_features={"tenant_strategy": unattached, "session_context_hook": hook})
+    assert unattached.source_hook is None
+    assert auto_bound.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(
+        module=hook["module"]
+    )
     with pytest.raises(ImproperConfigurationError, match="session_context_hook"):
-        config_cls(driver_features={"tenant_strategy": strategy_cls(), "session_context_hook": hook})
+        config_cls(driver_features={"tenant_strategy": strategy_cls({"module": "other"}), "session_context_hook": hook})
     config = config_cls(driver_features={"tenant_strategy": strategy_cls(hook), "session_context_hook": hook})
     assert config.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(module=hook["module"])
 

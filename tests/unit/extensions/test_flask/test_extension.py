@@ -2,6 +2,7 @@
 """Tests for Flask SQLSpec plugin lifecycle and configuration."""
 
 import tempfile
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -11,9 +12,10 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin
+from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -216,31 +218,147 @@ def test_tenant_extractor_binds_before_flask_acquisition(
         plugin.shutdown()
 
 
-@pytest.mark.parametrize("invalid", ["missing", "async", "conflict"])
-def test_flask_rejects_invalid_tenant_extractors(monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
-    from types import SimpleNamespace
+class _AsyncExtractorCallable:
+    async def __call__(self) -> str:
+        return "a"
 
-    monkeypatch.setattr(SqliteConfig, "supports_tenant_strategy", True)
 
+@pytest.mark.parametrize("invalid", ["async_fn", "async_callable", "non_callable"])
+def test_flask_rejects_invalid_tenant_extractors(invalid: str) -> None:
     async def async_extractor() -> str:
         return "a"
 
-    spec = SQLSpec()
-    first_extractor = (lambda: "a") if invalid == "conflict" else async_extractor if invalid == "async" else None
-    cfg = SqliteConfig(
-        connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": first_extractor}}
+    extractor: Any = (
+        async_extractor
+        if invalid == "async_fn"
+        else _AsyncExtractorCallable()
+        if invalid == "async_callable"
+        else "untrusted"
     )
-    cfg.driver_features["tenant_strategy"] = SimpleNamespace(checkout=lambda *args: None, checkin=lambda *args: None)
-    spec.add_config(cfg)
-    if invalid == "conflict":
-        spec.add_config(
-            SqliteConfig(
-                connection_config={"database": ":memory:"},
-                extension_config={"flask": {"session_key": "other", "tenant_extractor": lambda: "b"}},
-            )
-        )
+    cfg = SqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"flask": {"tenant_extractor": extractor}}
+    )
     with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
-        SQLSpecPlugin(spec, Flask(__name__))
+        SQLSpecPlugin(cfg, Flask(__name__))
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_flask_defers_tenant_connection_and_supports_set_request_tenant(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    seen: list[tuple[str, TenantContextPayload | None]] = []
+
+    @contextmanager
+    def sync_conn(self: Any, pool: Any = None) -> "Iterator[object]":
+        seen.append(("enter", TenantContext.get()))
+        try:
+            yield self.create_connection()
+        finally:
+            seen.append(("exit", TenantContext.get()))
+
+    @asynccontextmanager
+    async def async_conn(self: Any, pool: Any = None) -> "AsyncIterator[object]":
+        seen.append(("enter", TenantContext.get()))
+        conn = await self.create_connection()
+        try:
+            yield conn
+        finally:
+            seen.append(("exit", TenantContext.get()))
+            await conn.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        config: Any = (
+            AiosqliteConfig(connection_config={"database": tmp.name})
+            if asynchronous
+            else SqliteConfig(connection_config={"database": ":memory:"})
+        )
+        config.driver_features["tenant_strategy"] = object()
+        monkeypatch.setattr(type(config), "provide_connection", async_conn if asynchronous else sync_conn)
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+        assert plugin.config == [config]
+        assert plugin.get_config() is config
+
+        @app.get("/health")
+        def health() -> str:
+            return "ok"
+
+        @app.get("/projects/<org_id>")
+        def projects(org_id: str) -> str:
+            set_request_tenant(org_id)
+            session = plugin.get_session()
+            if asynchronous:
+                assert plugin._portal is not None
+                value = plugin._portal.portal.call(session.select_value, "SELECT 1")
+            else:
+                value = session.select_value("SELECT 1")
+            return f"{org_id}:{value}"
+
+        try:
+            client = app.test_client()
+            assert client.get("/health").status_code == 200
+            assert seen == []
+            resp = client.get("/projects/acme")
+            assert resp.status_code == 200
+            assert resp.get_data(as_text=True) == "acme:1"
+            assert seen == [("enter", TenantContextPayload("acme")), ("exit", TenantContextPayload("acme"))]
+        finally:
+            plugin.shutdown()
+
+
+def test_flask_supports_multi_config_auth_and_deferred_tenant_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_tenant: list[str | None] = []
+    auth_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"session_key": "auth_db", "commit_mode": "autocommit"}},
+    )
+    tenant_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"session_key": "tenant_db", "commit_mode": "autocommit"}},
+    )
+    tenant_cfg.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
+    original_provide = SqliteConfig.provide_connection
+
+    @contextmanager
+    def tracked_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Iterator[Any]":
+        if self is tenant_cfg:
+            seen_tenant.append(TenantContext.get_tenant_id())
+            conn = self.create_connection()
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+        with original_provide(self, *args, **kwargs) as conn:
+            yield conn
+
+    monkeypatch.setattr(SqliteConfig, "provide_connection", tracked_provide)
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
+    assert plugin.get_config("auth_db") is auth_cfg
+    assert plugin.get_config("tenant_db") is tenant_cfg
+
+    @app.get("/login")
+    def login() -> str:
+        val = plugin.get_session("auth_db").select_value("SELECT 1")
+        return f"auth:{val}"
+
+    @app.get("/tenant")
+    def tenant_route() -> str:
+        auth_session = plugin.get_session("auth_db")
+        assert auth_session.select_value("SELECT 1") == 1
+        set_request_tenant("globex", key="tenant_db")
+        tenant_session = plugin.get_session(tenant_cfg)
+        return f"tenant:{tenant_session.select_value('SELECT 2')}"
+
+    try:
+        client = app.test_client()
+        assert client.get("/login").get_data(as_text=True) == "auth:1"
+        assert seen_tenant == []
+        assert client.get("/tenant").get_data(as_text=True) == "tenant:2"
+        assert seen_tenant == ["globex"]
+    finally:
+        plugin.shutdown()
 
 
 def test_flask_tenant_resets_after_handler_error_and_short_circuit() -> None:

@@ -3,7 +3,7 @@
 import asyncio
 import atexit
 import weakref
-from collections.abc import Awaitable, Coroutine
+from collections.abc import Awaitable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeGuard, cast, overload
 
@@ -37,17 +37,19 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from pathlib import Path
     from types import TracebackType
+    from uuid import UUID
 
-    from sqlspec.core import SQL, ParameterDeclaration
+    from sqlspec.core import SQL, ParameterDeclaration, StatementConfig
     from sqlspec.typing import PoolT
+    from sqlspec.utils.tenant import TenantContextPayload
 
 
-__all__ = ("SQLSpec",)
+__all__ = ("SQLSpec", "coerce_sqlspec")
 
 logger = get_logger()
+ContextValueT = TypeVar("ContextValueT")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -227,6 +229,9 @@ class SQLSpec:
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]": ...
     @overload
@@ -234,12 +239,18 @@ class SQLSpec:
         self,
         config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]": ...
     def provide_session(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
         *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
         """Create and provide a database session from the specified configuration.
@@ -247,6 +258,9 @@ class SQLSpec:
         Args:
             config: The configuration instance.
             *args: Positional arguments to pass to the config's provide_session.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload; None inherits the current scope.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
             **kwargs: Keyword arguments to pass to the config's provide_session.
 
         Returns:
@@ -254,7 +268,15 @@ class SQLSpec:
         """
         self._ensure_registered(config)
 
-        session_context = config.provide_session(*args, **kwargs)
+        call_kwargs = dict(kwargs)
+        if statement_config is not None:
+            call_kwargs["statement_config"] = statement_config
+        if tenant is not None:
+            call_kwargs["tenant"] = tenant
+        if bypass_tenant:
+            call_kwargs["bypass_tenant"] = True
+
+        session_context = config.provide_session(*args, **call_kwargs)
         runtime = config.get_observability_runtime()
 
         if _is_async_context_manager(session_context):
@@ -676,7 +698,48 @@ class SQLSpec:
         return type(obj).__name__
 
 
-ContextValueT = TypeVar("ContextValueT")
+def coerce_sqlspec(
+    sqlspec: "SQLSpec | DatabaseConfigProtocol[Any, Any, Any] | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
+    *,
+    loader: "SQLFileLoader | None" = None,
+) -> SQLSpec:
+    """Normalize a SQLSpec registry, single config, or config sequence into SQLSpec.
+
+    Args:
+        sqlspec: Existing SQLSpec registry, a single database configuration, or a
+            sequence of database configurations.
+        loader: Optional SQL file loader attached when creating a registry or when
+            an existing registry has not initialized a loader yet.
+
+    Returns:
+        Normalized SQLSpec registry containing the provided configurations.
+
+    Raises:
+        ImproperConfigurationError: ``sqlspec`` is not a SQLSpec registry, database
+            configuration, or sequence of database configurations.
+    """
+    if isinstance(sqlspec, SQLSpec):
+        if loader is not None and sqlspec._loader is None:
+            loader.set_observability_runtime(sqlspec._loader_runtime)
+            sqlspec._loader = loader
+        return sqlspec
+    if isinstance(sqlspec, DatabaseConfigProtocol):
+        registry = SQLSpec(loader=loader)
+        registry.add_config(cast("Any", sqlspec))
+        return registry
+    if isinstance(sqlspec, Sequence) and not isinstance(sqlspec, (str, bytes, bytearray)):
+        registry = SQLSpec(loader=loader)
+        for item in sqlspec:
+            if not isinstance(item, DatabaseConfigProtocol):
+                msg = (
+                    "SQLSpecPlugin expects a SQLSpec instance, a database configuration, "
+                    "or a sequence of database configurations"
+                )
+                raise ImproperConfigurationError(msg)
+            registry.add_config(cast("Any", item))
+        return registry
+    msg = "SQLSpecPlugin expects a SQLSpec instance, a database configuration, or a sequence of database configurations"
+    raise ImproperConfigurationError(msg)
 
 
 def _is_async_context_manager(obj: Any) -> TypeGuard[AbstractAsyncContextManager[Any]]:

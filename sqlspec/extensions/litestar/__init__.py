@@ -17,6 +17,7 @@ from sqlspec.extensions.litestar.plugin import (
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.extensions.litestar.tenant import (
     TenantResolutionSettings,
+    is_scope_authenticated,
     require_tenant,
     resolve_litestar_tenant,
     set_connection_tenant,
@@ -42,6 +43,7 @@ __all__ = (
     "TenantResolutionSettings",
     "database_group",
     "get_sqlspec_scope_state",
+    "is_scope_authenticated",
     "require_tenant",
     "resolve_litestar_tenant",
     "set_connection_tenant",

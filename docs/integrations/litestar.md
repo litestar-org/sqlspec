@@ -38,13 +38,13 @@ flowchart LR
     Handler --> Commit["Commit Mode (manual / autocommit)"]
 ```
 
-Register one or more database configurations on a `SQLSpec` instance, configure `extension_config["litestar"]`, and pass `SQLSpecPlugin(sqlspec=spec)` to `Litestar(plugins=[...])`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin` and register it in `Litestar(plugins=[...])`:
 
 ```python
 --8<-- "docs/examples/extensions/litestar/plugin_setup.py:example"
 ```
 
-By default, a single configuration registers `db_session`, `db_connection`, and `db_pool` in Litestar's dependency graph. Override `session_key`, `connection_key`, or `pool_key` inside `extension_config["litestar"]` to customize parameter names.
+By default, a single configuration registers `db_session`, `db_connection`, and `db_pool` in Litestar's dependency graph, and `plugin.get_config()` returns that configuration. Override `session_key`, `connection_key`, or `pool_key` inside `extension_config["litestar"]` to customize parameter names.
 
 ## Configuration Options
 
@@ -83,7 +83,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 
 ## Multi-Database Dependency Keys
 
-When an application connects to multiple databases (for example, a transactional primary database and a read-heavy analytics database), assign a distinct `bind_key` and `session_key` to each configuration:
+When an application connects to multiple databases (for example, a transactional primary database and a read-heavy analytics database), pass the list of configurations to `SQLSpecPlugin([...])` with a distinct `bind_key` and `session_key` on each configuration:
 
 ```python
 --8<-- "docs/examples/extensions/litestar/dependency_keys.py:example"
@@ -96,6 +96,18 @@ In custom guards, middleware, streaming iterators, or event hooks where standard
 - `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope).
 - `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`).
 - `await plugin.provide_request_session_async(key, state, scope)` and `await plugin.provide_request_connection_async(key, state, scope)` (acquires an async connection on demand if not yet present in `scope`).
+
+## Tenant-Aware Requests
+
+Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`, `mssql_python`, `pymssql`) and configure tenant selector and user attribute names once in `extension_config["litestar"]`. Both injected sessions and `guards=[require_tenant()]` inherit those settings automatically from `app.state.sqlspec`:
+
+```python
+--8<-- "docs/examples/extensions/litestar/tenant_resolution.py:example"
+```
+
+- Mark public or login routes under guarded controllers with `opt={"tenant_bypass": True}`, and query user credentials before a tenant exists with `config.provide_session(bypass_tenant=True)` (database RLS policies remain enforced unless linked to an explicit restricted auth lookup policy or separate auth bind).
+- In custom authorization guards or dependencies, verify membership and bind the selected organization via `set_connection_tenant(connection, org_id)`.
+- Applications using `litestar-security` resolve principals and tenant selections directly from `scope["state"]["security_context"]` (including `Principal.tenant_id`, `tenant_roles`, and `CredentialRestrictions.allowed_tenants`) without extra wiring. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete JWT, server-side session, and `litestar-security` guides.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 
@@ -219,38 +231,33 @@ extension_config = {
 
 ### Litestar Channels Backend
 
-`SQLSpecChannelsBackend` implements Litestar's `ChannelsBackend` on top of `spec.event_channel(config)`, allowing `ChannelsPlugin` to broadcast WebSocket and SSE messages through PostgreSQL `LISTEN`/`NOTIFY`, hybrid `notify_queue`, Oracle AQ, or portable `poll_queue` tables without a separate Redis broker:
+`SQLSpecChannelsBackend` implements Litestar's `ChannelsBackend` on top of `plugin.sqlspec.event_channel(config)`, allowing `ChannelsPlugin` to broadcast WebSocket and SSE messages through PostgreSQL `LISTEN`/`NOTIFY`, hybrid `notify_queue`, Oracle AQ, or portable `poll_queue` tables without a separate Redis broker:
 
 ```python
 from litestar import Litestar
 from litestar.channels import ChannelsPlugin
-from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.extensions.litestar import SQLSpecChannelsBackend, SQLSpecPlugin
 
-spec = SQLSpec()
-config = spec.add_config(
-    AsyncpgConfig(
-        connection_config={"dsn": "postgresql://localhost/app"},
-        extension_config={"events": {"backend": "notify_queue"}},
-    )
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://localhost/app"},
+    extension_config={"events": {"backend": "notify_queue"}},
 )
+plugin = SQLSpecPlugin(config)
 channels_backend = SQLSpecChannelsBackend(
-    spec.event_channel(config),
+    plugin.sqlspec.event_channel(config),
     channel_prefix="litestar",
     poll_interval=0.2,
 )
 app = Litestar(
     plugins=[
-        SQLSpecPlugin(sqlspec=spec),
+        plugin,
         ChannelsPlugin(backend=channels_backend, channels=["notifications"]),
     ]
 )
 ```
 
-### Litestar CLI Commands
-
-Registering `SQLSpecPlugin` mounts SQLSpec's migration commands under `litestar db` (aliased as `litestar database`) and adds a `delete-expired` maintenance command under Litestar's `sessions` CLI group:
+**Litestar CLI Commands** — Registering `SQLSpecPlugin` mounts SQLSpec's migration commands under `litestar db` (aliased as `litestar database`) and adds a `delete-expired` maintenance command under Litestar's `sessions` CLI group:
 
 ```bash
 litestar db show-current-revision
@@ -270,7 +277,6 @@ from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import FromDishka, inject, setup_dishka
 from litestar import Controller, Litestar, get
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
@@ -281,16 +287,15 @@ class Account(msgspec.Struct):
 
 
 class DatabaseProvider(Provider):
-    """Provide request-scoped drivers from the shared SQLSpec registry."""
+    """Provide request-scoped drivers from the shared database configuration."""
 
-    def __init__(self, spec: SQLSpec, config: AsyncpgConfig) -> None:
+    def __init__(self, config: AsyncpgConfig) -> None:
         super().__init__()
-        self._spec = spec
         self._config = config
 
     @provide(scope=Scope.REQUEST)
     async def provide_driver(self) -> AsyncIterator[AsyncpgDriver]:
-        async with self._spec.provide_session(self._config) as session:
+        async with self._config.provide_session() as session:
             yield session
 
 
@@ -310,25 +315,22 @@ class AccountController(Controller):
 
 
 def create_app() -> Litestar:
-    spec = SQLSpec()
-    config = spec.add_config(
-        AsyncpgConfig(
-            connection_config={"dsn": "postgresql://localhost/app"},
-            extension_config={
-                "litestar": {"disable_di": True, "manage_lifespan": True}
-            },
-        )
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/app"},
+        extension_config={
+            "litestar": {"disable_di": True, "manage_lifespan": True}
+        },
     )
-    container = make_async_container(DatabaseProvider(spec, config))
+    container = make_async_container(DatabaseProvider(config))
     app = Litestar(
         route_handlers=[AccountController],
-        plugins=[SQLSpecPlugin(sqlspec=spec)],
+        plugins=[SQLSpecPlugin(config)],
     )
     setup_dishka(container, app)
     return app
 ```
 
-Create the `SQLSpec` registry once and hand the same instance to both `SQLSpecPlugin` and the Dishka provider. If the provider built its own registry, Dishka sessions would draw from a second pool that the plugin never opens or closes.
+Create the `AsyncpgConfig` once and pass that same instance to both `SQLSpecPlugin(config)` and `DatabaseProvider(config)` so Dishka sessions draw from the pool managed by Litestar's lifespan.
 
 ## Recap
 

@@ -1,23 +1,30 @@
 # pyright: reportArgumentType=false
 """Tests for Starlette SQLSpec plugin."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+
+pytest.importorskip("starlette")
+
 from starlette.applications import Starlette
+from starlette.background import BackgroundTask
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.starlette import SQLSpecPlugin
+from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
+from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
+from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -26,8 +33,6 @@ if TYPE_CHECKING:
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.starlette._state import CommitMode
-
-pytest.importorskip("starlette")
 
 
 def test_default_session_key_is_db_session() -> None:
@@ -80,9 +85,6 @@ def test_get_session_works_in_route() -> None:
         response = client.get("/test")
         assert response.status_code == 200
         assert response.json() == {"value": 1}
-
-
-pytest.importorskip("starlette")
 
 
 class _Connection:
@@ -248,32 +250,30 @@ def test_config_state_by_key_unknown_key_raises_value_error() -> None:
 
 @pytest.mark.parametrize("framework", ["starlette", "fastapi"])
 def test_plugin_tenant_extractor_state_and_validation(framework: str) -> None:
-    from sqlspec.extensions.fastapi import SQLSpecPlugin as FastAPIPlugin
+    plugin_cls: Any = SQLSpecPlugin
+    if framework == "fastapi":
+        pytest.importorskip("fastapi")
+        from sqlspec.extensions.fastapi import SQLSpecPlugin as FastAPIPlugin
+
+        plugin_cls = FastAPIPlugin
 
     def extractor(scope: Any) -> str:
         return "a"
 
     config = AiosqliteConfig(extension_config={framework: {"tenant_extractor": extractor}})
-    sqlspec = SQLSpec()
-    sqlspec.add_config(config)
-    plugin = (FastAPIPlugin if framework == "fastapi" else SQLSpecPlugin)(sqlspec)
+    plugin = plugin_cls(config)
     assert plugin._config_states[0].tenant_extractor is extractor
+    assert plugin.get_config() is config
 
     invalid = AiosqliteConfig(extension_config={framework: {"tenant_extractor": 123}})
-    invalid_sqlspec = SQLSpec()
-    invalid_sqlspec.add_config(invalid)
     with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
-        (FastAPIPlugin if framework == "fastapi" else SQLSpecPlugin)(invalid_sqlspec)
+        plugin_cls(invalid)
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
 @pytest.mark.parametrize("value", ["inner", None])
 async def test_tenant_extractor_binds_connection_entry_and_exit(middleware_type: Any, value: str | None) -> None:
-    from contextlib import asynccontextmanager
-
-    from sqlspec.utils.tenant import TenantContext
-
     seen = []
     connection = _Connection()
 
@@ -301,8 +301,6 @@ async def test_tenant_extractor_binds_connection_entry_and_exit(middleware_type:
 @pytest.mark.anyio
 @pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
 async def test_tenant_extractor_rejection_prevents_acquisition(middleware_type: Any) -> None:
-    from sqlspec.exceptions import TenantContextError
-
     config = _Config(pooled=False, connection=_Connection())
     state = _make_state(config)
     state.tenant_extractor = lambda scope: 123
@@ -322,14 +320,6 @@ async def test_tenant_extractor_rejection_prevents_acquisition(middleware_type: 
 async def test_tenant_stream_keeps_connection_through_body_and_background(
     framework: str, mode: str, failure: str | None
 ) -> None:
-    import asyncio
-    from contextlib import asynccontextmanager
-
-    from starlette.background import BackgroundTask
-    from starlette.responses import StreamingResponse
-
-    from sqlspec.utils.tenant import TenantContext
-
     events: list[str] = []
     first_sent = asyncio.Event()
     gate = asyncio.Event()
@@ -458,8 +448,6 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
 
 @pytest.mark.anyio
 async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
-    from contextlib import asynccontextmanager
-
     connection = _Connection()
 
     @asynccontextmanager
@@ -491,10 +479,6 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
 async def test_tenant_nonpooled_connection_uses_lease_context_with_async_extractor(middleware_type: Any) -> None:
-    from contextlib import asynccontextmanager
-
-    from sqlspec.utils.tenant import TenantContext
-
     events = []
     connection = _Connection()
 
@@ -529,8 +513,6 @@ async def test_tenant_nonpooled_connection_uses_lease_context_with_async_extract
 @pytest.mark.parametrize("scope_type", ["lifespan", "websocket"])
 @pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
 async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str, middleware_type: Any) -> None:
-    from sqlspec.utils.tenant import TenantContext
-
     events = []
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
@@ -548,10 +530,6 @@ async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str
 
 @pytest.mark.anyio
 async def test_tenant_response_error_retains_identity_when_rollback_fails() -> None:
-    from contextlib import asynccontextmanager
-
-    from sqlspec.utils.tenant import TenantContext
-
     body_error = ValueError("body failed")
     events = []
 
@@ -590,3 +568,126 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
         assert TenantContext.get_tenant_id() == "outer"
     assert events == ["rollback", "body_forwarded", "release"]
     assert body_error.__notes__ == ["Request transaction rollback failed (RuntimeError)"]
+
+
+def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
+    """Deferred tenant configs wait for set_request_tenant + get_session_async without false extractor conflicts."""
+    checkouts: list[tuple[str | None, dict[str, str]]] = []
+    teardown_tenants: list[str | None] = []
+    commits: list[str | None] = []
+    rollbacks: list[str | None] = []
+
+    class _SessionDriver:
+        def __init__(self, connection: Any, **_kwargs: Any) -> None:
+            self.connection = connection
+
+    class _DeferredTenantConfig(AiosqliteConfig):
+        driver_type: Any = _SessionDriver
+
+        async def create_pool(self) -> Any:
+            return object()
+
+        async def close_pool(self) -> None:
+            return None
+
+        @asynccontextmanager
+        async def provide_connection(self, *args: Any, **kwargs: Any) -> "AsyncIterator[Any]":
+            payload = TenantContext.get()
+            if payload is None:
+                raise TenantContextError("Tenant context required")
+            checkouts.append((payload.tenant_id, dict(payload.variables)))
+
+            async def commit() -> None:
+                commits.append(TenantContext.get_tenant_id())
+
+            async def rollback() -> None:
+                rollbacks.append(TenantContext.get_tenant_id())
+
+            try:
+                yield SimpleNamespace(tenant_id=payload.tenant_id, commit=commit, rollback=rollback)
+            finally:
+                teardown_tenants.append(TenantContext.get_tenant_id())
+
+    auth_cfg = AiosqliteConfig(
+        bind_key="auth",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "starlette": {
+                "session_key": "auth_session",
+                "connection_key": "auth_conn",
+                "pool_key": "auth_pool",
+                "enable_correlation_middleware": False,
+                "enable_sqlcommenter_middleware": False,
+            }
+        },
+    )
+    raw_tenant_cfg = _DeferredTenantConfig(
+        bind_key="tenant_db",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "starlette": {
+                "session_key": "tenant_session",
+                "connection_key": "tenant_conn",
+                "pool_key": "tenant_pool",
+                "commit_mode": "autocommit",
+                "enable_correlation_middleware": False,
+                "enable_sqlcommenter_middleware": False,
+            }
+        },
+    )
+    raw_tenant_cfg.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
+    tenant_cfg = cast("DatabaseConfigProtocol[Any, Any, Any]", raw_tenant_cfg)
+    plugin_ref: SQLSpecPlugin | None = None
+
+    async def health(_request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    async def projects(request: Request) -> JSONResponse:
+        assert plugin_ref is not None
+        auth_db = await plugin_ref.get_session_async(request, auth_cfg)
+        probe = await auth_db.execute("SELECT 1 AS ok")
+        assert probe.scalar() == 1
+        org_id = request.path_params["org_id"]
+        if request.headers.get("authorization") != "Bearer valid":
+            return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+        if org_id not in {"acme", "globex"}:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        set_request_tenant(request, org_id, variables={"tier": "enterprise"})
+        session = await plugin_ref.get_session_async(request, "tenant_session")
+        cached = await plugin_ref.get_session_async(request, tenant_cfg)
+        conn = await plugin_ref.get_connection_async(request, "tenant_db")
+        assert session is cached
+        assert session.connection is conn
+        return JSONResponse({"tenant": session.connection.tenant_id})
+
+    async def fail_route(request: Request) -> JSONResponse:
+        assert plugin_ref is not None
+        set_request_tenant(request, "acme")
+        await plugin_ref.get_session_async(request, tenant_cfg)
+        raise RuntimeError("boom")
+
+    app = Starlette(
+        routes=[Route("/health", health), Route("/orgs/{org_id}/projects", projects), Route("/fail", fail_route)]
+    )
+    plugin_ref = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
+    assert plugin_ref.config == [auth_cfg, tenant_cfg]
+    assert plugin_ref.get_config("tenant_db") is tenant_cfg
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/health").json() == {"ok": True}
+        assert client.get("/orgs/acme/projects").status_code == 401
+        assert client.get("/orgs/evil/projects", headers={"authorization": "Bearer valid"}).status_code == 403
+        assert checkouts == []
+
+        ok = client.get("/orgs/globex/projects", headers={"authorization": "Bearer valid"})
+        assert ok.status_code == 200
+        assert ok.json() == {"tenant": "globex"}
+        assert checkouts == [("globex", {"tier": "enterprise"})]
+        assert commits == ["globex"]
+        assert teardown_tenants == ["globex"]
+
+        err = client.get("/fail")
+        assert err.status_code == 500
+        assert rollbacks == ["acme"]
+        assert teardown_tenants == ["globex", "acme"]
+    assert TenantContext.get() is None

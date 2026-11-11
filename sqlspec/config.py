@@ -38,7 +38,7 @@ from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.tenant import TenantContext
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, MutableMapping
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
-    from sqlspec.utils.tenant import TenantContextPayload, TenantExtractorValue
+    from sqlspec.utils.tenant import TenantExtractorValue
 
 
 __all__ = (
@@ -328,7 +328,7 @@ class FlaskConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[..., "TenantExtractorValue"]]
-    """Return the authorized tenant payload, string, UUID, or None for the request. Required with a tenant strategy. Accepts zero arguments or the Flask request."""
+    """Return the authorized tenant payload, string, UUID, or None for the request. Optional when routes call set_request_tenant() or wrap work in TenantContext.scope(); evaluated lazily on first session or connection access. Accepts zero arguments or the Flask request."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
@@ -497,7 +497,7 @@ class StarletteConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[[Any], Any]]
-    """Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable."""
+    """Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable. Optional when handlers or dependencies call set_request_tenant() before acquiring a session."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in request.state. Default: 'db_connection'"""
@@ -569,7 +569,7 @@ class SanicConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[[Any], "TenantExtractorValue | Awaitable[TenantExtractorValue]"]]
-    """Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Required with a tenant strategy."""
+    """Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Optional when handlers call set_request_tenant() before get_session_async() or wrap work in TenantContext.scope()."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in request.ctx. Default: 'db_connection'"""
@@ -1870,7 +1870,12 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -1928,7 +1933,12 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -2022,19 +2032,28 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
-        """Provide a session, optionally binding a tenant until cleanup completes.
+        """Provide a session, optionally binding or bypassing a tenant until cleanup completes.
 
         Args:
             *args: Adapter-specific session arguments.
             statement_config: Statement configuration override.
             tenant: Tenant identity or payload; None inherits the current scope.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
             **kwargs: Adapter-specific session options.
 
         Returns:
             A driver session context manager.
         """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_sync_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
         if tenant is not None:
             return self._provide_sync_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(
@@ -2177,19 +2196,28 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide a session, optionally binding a tenant until cleanup completes.
+        """Provide a session, optionally binding or bypassing a tenant until cleanup completes.
 
         Args:
             *args: Adapter-specific session arguments.
             statement_config: Statement configuration override.
             tenant: Tenant identity or payload; None inherits the current scope.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
             **kwargs: Adapter-specific session options.
 
         Returns:
             A driver session context manager.
         """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_async_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
         if tenant is not None:
             return self._provide_async_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(

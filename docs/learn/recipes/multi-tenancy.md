@@ -14,7 +14,31 @@ This guide uses shared tables. For request auth, see [Tenant Framework Integrati
 
 ## Create the Policy and Application Role
 
-Install the driver with `uv add 'sqlspec[asyncpg]'`. Use an admin connection to create the role, table, and policy. Set the role's login password through your secret store.
+=== "uv"
+
+    ```bash
+    uv add "sqlspec[asyncpg]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "sqlspec[asyncpg]"
+    ```
+
+=== "pdm"
+
+    ```bash
+    pdm add "sqlspec[asyncpg]"
+    ```
+
+=== "poetry"
+
+    ```bash
+    poetry add "sqlspec[asyncpg]"
+    ```
+
+Use an admin connection to create the role, table, and policy. Set the role's login password through your secret store.
 
 ```sql
 CREATE ROLE tenant_app LOGIN NOSUPERUSER NOBYPASSRLS;
@@ -70,31 +94,31 @@ Choose a tenant only after the app has checked the user's right to access it. Do
 
 Sync configs use `with config.provide_session(tenant="acme") as session`. The `tenant` argument accepts a string, UUID, or `TenantContextPayload` with session variables. It binds the tenant through acquisition, application work, and cleanup, then restores the caller's context, including on failure or cancellation. It requires a configured `tenant_strategy`.
 
-Use `TenantContext.scope("acme")` or `async_tenant_scope("acme")` around several sessions when they share one tenant. Calling `provide_session()` or passing `tenant=None` inherits that scope. The lease takes one snapshot of the tenant. A later scope change does not change an open session. Call `session.commit()` to save writes. The lease rolls back any open transaction before cleanup.
+Use `TenantContext.scope("acme")` (supports both `with` and `async with`) around several sessions when they share one tenant, or pass `bypass_tenant=True` to `provide_session(bypass_tenant=True)` for a pre-tenant login lookup or health probe. Calling `provide_session()` or passing `tenant=None` inherits the ambient scope. The lease takes one snapshot of the tenant; a later scope change does not alter an open session. Call `session.commit()` to save writes. The lease rolls back any open transaction before cleanup.
 
 ## Preserve Pool Settings
 
 Tenant mode sets `pooler_mode` to `"session"` when you omit it or pass `None`. It rejects `"transaction"`, `"statement"`, and `"auto"`. The lease needs the same server connection for its whole lifetime.
 
-At checkout, one PostgreSQL query saves the old settings and sets the tenant. At checkin, one query restores those settings and checks the result. The strategy changes only keys it owns. Ending a transaction, resetting the native pool, and replaying a baseline each take their own steps.
+At checkout, one PostgreSQL query saves the old settings and sets the tenant. At checkin, one query restores those settings and checks the result. The strategy changes only keys it owns.
 
-Asyncpg's pool resets settings on release. List the values to restore before each new tenant checkout:
+Prefer startup `server_settings` inside `connection_config` for connection-wide PostgreSQL defaults; PostgreSQL applies them at connection startup and retains them across `asyncpg` pool resets with zero per-checkout SQL:
 
 ```python
 config = AsyncpgConfig(
-    connection_config={"dsn": os.environ["DATABASE_URL"]},
-    driver_features={
-        "tenant_strategy": "rls",
-        "tenant_session_baseline": {
+    connection_config={
+        "dsn": os.environ["DATABASE_URL"],
+        "server_settings": {
             "TimeZone": "UTC",
             "statement_timeout": "5000",
             "search_path": "public",
         },
     },
+    driver_features={"tenant_strategy": "rls"},
 )
 ```
 
-If you use `init`, `setup`, or `on_connection_create` hooks, pass `tenant_session_baseline` too. Use `{}` if the hook sets no lasting values. A baseline value must agree with the same key in `server_settings`. See the [asyncpg reference](../../reference/adapters/asyncpg.md) for details.
+Reserve `driver_features["tenant_session_baseline"]` for settings introduced dynamically inside `init` or `setup` pool hooks that `asyncpg`'s `RESET ALL` clears on release. Pure codec hooks registered via `on_connection_create` default `tenant_session_baseline` to `{}` automatically, whereas `init` and `setup` require an explicit `tenant_session_baseline` (`{}` when they set no lasting GUCs). A baseline value must agree with the same key in `server_settings`. See the [asyncpg reference](../../reference/adapters/asyncpg.md) for details.
 
 ## Transaction-Mode Pooler Alternative
 

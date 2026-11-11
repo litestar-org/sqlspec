@@ -14,10 +14,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.extensions.starlette import SQLSpecPlugin
-from sqlspec.utils.tenant import TenantContext, async_tenant_scope
+from sqlspec.utils.tenant import TenantContext
 from sqlspec.utils.text import quote_identifier
 
 pytestmark = [pytest.mark.anyio, pytest.mark.xdist_group("postgres")]
@@ -80,8 +79,6 @@ def _tenant_app(
             }
         },
     )
-    sqlspec = SQLSpec()
-    sqlspec.add_config(config)
     if framework == "fastapi":
         from fastapi import FastAPI
 
@@ -89,10 +86,10 @@ def _tenant_app(
 
         app = FastAPI()
         app.add_api_route("/", endpoint)
-        plugin = FastAPIPlugin(sqlspec, app)
+        plugin = FastAPIPlugin(config, app)
     else:
         app = Starlette(routes=[Route("/", endpoint)])
-        plugin = SQLSpecPlugin(sqlspec, app)
+        plugin = SQLSpecPlugin(config, app)
     return app, plugin, config
 
 
@@ -120,7 +117,7 @@ async def test_tenant_request_isolation_missing_identity_and_worker(tenant_datab
                 assert (await client.get("/", headers={"authorization": "bob"})).json() == [2]
 
         async def worker() -> list[dict[str, Any]]:
-            async with async_tenant_scope("a"), config.provide_session() as session:
+            async with TenantContext.scope("a"), config.provide_session() as session:
                 return await session.select(f"SELECT value FROM {table}")
 
         assert await asyncio.create_task(worker()) == [{"value": 1}]
@@ -205,7 +202,7 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
                 events.append("final_sent")
 
     async def competitor() -> None:
-        async with async_tenant_scope("b"), config.provide_session() as session:
+        async with TenantContext.scope("b"), config.provide_session() as session:
             competitor_acquired.set()
             assert await session.select_value(f"SELECT value FROM {table}") == 2
             assert await session.select_value("SELECT current_setting('app.current_tenant_id', true)") == "b"
@@ -236,7 +233,7 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
         assert events.count("generator_exit") == 1
         if failure is None:
             assert events.index("final_sent") < events.index("background_query")
-        async with async_tenant_scope("a"), config.provide_session() as session:
+        async with TenantContext.scope("a"), config.provide_session() as session:
             expected = 1 if failure is None and mode == "autocommit" else 0
             assert await session.select_value(f"SELECT count(*) FROM {table} WHERE value = $1", (99,)) == expected
         assert (await config.provide_pool()).get_idle_size() == 1

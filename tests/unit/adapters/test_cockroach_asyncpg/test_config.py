@@ -6,6 +6,8 @@ Tests cover:
 - Connection config normalization
 """
 
+import ast
+from pathlib import Path
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +24,7 @@ from sqlspec.adapters.cockroach_asyncpg import (
 )
 from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemoryStore, CockroachAsyncpgADKStore
 from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
+from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy, CockroachAsyncpgTenantLease
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -852,3 +855,37 @@ async def test_tenant_session_entry_failure_releases_once(stage: str) -> None:
     release.assert_awaited_once()
     assert release.call_args.args == (connection,)
     assert release.call_args.kwargs["exc_val"] is error
+
+
+@pytest.mark.parametrize("source", ["init", "setup"])
+def test_cockroach_asyncpg_tenant_pool_callbacks_require_baseline(source: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="tenant_session_baseline"):
+        CockroachAsyncpgConfig(connection_config={source: object()}, driver_features={"tenant_strategy": True})
+    cfg = CockroachAsyncpgConfig(
+        connection_config={source: object()},
+        driver_features={"tenant_strategy": True, "tenant_session_baseline": {"timezone": "UTC"}},
+    )
+    assert cfg.driver_features["tenant_session_baseline"] == {"timezone": "UTC"}
+
+
+def test_cockroach_asyncpg_tenant_on_connection_create_defaults_baseline_and_has_local_module() -> None:
+    async def hook(_conn: Any) -> None:
+        return None
+
+    cfg = CockroachAsyncpgConfig(driver_features={"tenant_strategy": True, "on_connection_create": hook})
+    assert cfg.driver_features["tenant_session_baseline"] == {}
+    assert CockroachAsyncpgConfig.tenant_lease_type is CockroachAsyncpgTenantLease
+    assert CockroachAsyncpgRLSStrategy.__module__ == "sqlspec.adapters.cockroach_asyncpg.tenant"
+    assert CockroachAsyncpgTenantLease.__module__ == "sqlspec.adapters.cockroach_asyncpg.tenant"
+
+    adapters_root = Path(__file__).resolve().parents[4] / "sqlspec" / "adapters"
+    violations: list[str] = []
+    for path in sorted(adapters_root.rglob("*.py")):
+        adapter_name = path.relative_to(adapters_root).parts[0]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("sqlspec.adapters."):
+                parts = node.module.split(".")
+                if len(parts) >= 4 and parts[2] != adapter_name and parts[3] == "tenant":
+                    violations.append(f"{path}:{node.module}")
+    assert violations == []

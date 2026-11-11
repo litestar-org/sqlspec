@@ -102,7 +102,7 @@ if TYPE_CHECKING:
         format_statement_event,
     )
     from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
-    from sqlspec.utils.tenant import TenantContext, TenantContextPayload, async_tenant_bypass, async_tenant_scope
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
     from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 __all__ = (
@@ -167,8 +167,6 @@ __all__ = (
     "Update",
     "__version__",
     "adapters",
-    "async_tenant_bypass",
-    "async_tenant_scope",
     "base",
     "builder",
     "config",
@@ -261,8 +259,6 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "TenantContextPayload": ("sqlspec.utils.tenant", "TenantContextPayload"),
     "Update": ("sqlspec.builder", "Update"),
     "adapters": ("sqlspec.adapters", None),
-    "async_tenant_bypass": ("sqlspec.utils.tenant", "async_tenant_bypass"),
-    "async_tenant_scope": ("sqlspec.utils.tenant", "async_tenant_scope"),
     "base": ("sqlspec.base", None),
     "builder": ("sqlspec.builder", None),
     "config": ("sqlspec.config", None),

@@ -30,8 +30,6 @@ def test_tenant_exports_retain_defining_objects(defining_first: bool) -> None:
     exports = {
         "TenantContext": "sqlspec.utils.tenant",
         "TenantContextPayload": "sqlspec.utils.tenant",
-        "async_tenant_scope": "sqlspec.utils.tenant",
-        "async_tenant_bypass": "sqlspec.utils.tenant",
         "TenantContextError": "sqlspec.exceptions",
         "TenantCleanupError": "sqlspec.exceptions",
     }

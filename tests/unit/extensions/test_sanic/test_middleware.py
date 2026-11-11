@@ -11,8 +11,12 @@ pytest.importorskip("sanic")
 
 from sanic import Sanic
 
-from sqlspec.extensions.sanic import SQLSpecPlugin
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.base import SQLSpec
+from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
+from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.sanic._utils import has_context_value
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 pytestmark = pytest.mark.anyio
 
@@ -22,7 +26,7 @@ async def test_request_middleware_acquires_pooled_connection() -> None:
     connection = _make_connection()
     pool = object()
     config = _make_config(connection=connection)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=pool)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -35,7 +39,7 @@ async def test_manual_response_middleware_cleans_connection_without_transaction(
     """Manual mode should release connection state without commit or rollback."""
     connection = _make_connection()
     config = _make_config(connection=connection)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -51,7 +55,7 @@ async def test_autocommit_response_commits_success_status() -> None:
     """Autocommit mode should commit 2xx responses."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -65,7 +69,7 @@ async def test_autocommit_response_rolls_back_error_status() -> None:
     """Autocommit mode should rollback non-success responses."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -79,7 +83,7 @@ async def test_autocommit_include_redirect_commits_redirect_status() -> None:
     """autocommit_include_redirect should commit 3xx responses."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit_include_redirect")
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -93,7 +97,7 @@ async def test_non_pooled_response_closes_connection() -> None:
     """Non-pooled configs should create and close one connection per request."""
     connection = _make_connection()
     config = _make_config(connection=connection, supports_connection_pooling=False)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=None)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -110,7 +114,7 @@ async def test_request_middleware_wraps_sync_connection_manager() -> None:
     config = _make_config(connection=connection)
     manager = _SyncConnectionManager(connection)
     config.provide_connection = MagicMock(return_value=manager)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
@@ -124,7 +128,7 @@ def test_init_app_registers_request_middleware() -> None:
     """init_app should register request and response middleware when DI is enabled."""
     app = Sanic(f"SQLSpecMiddleware{uuid4().hex}")
     config = _make_config(connection=_make_connection())
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
 
@@ -136,7 +140,7 @@ def test_disable_di_skips_request_middleware_registration() -> None:
     """disable_di should leave pool lifecycle intact but skip request management."""
     app = Sanic(f"SQLSpecMiddlewareDisabled{uuid4().hex}")
     config = _make_config(connection=_make_connection(), disable_di=True)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
 
@@ -239,7 +243,7 @@ async def test_tenant_extractor_binds_and_resets_sanic_request(identity: str) ->
         return original(pool)
 
     config.provide_connection = provide_connection
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     plugin.init_app(Sanic("tenant_" + uuid4().hex))
     request = _make_request(pool=object())
     with TenantContext.scope("outer"):
@@ -266,7 +270,7 @@ async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None
         config.provide_connection.side_effect = ValueError("acquire")
     if failure == "release":
         config.provide_connection.return_value.__aexit__ = AsyncMock(side_effect=ValueError("release"))
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     plugin.init_app(Sanic("failure_" + uuid4().hex))
     request = _make_request(pool=object())
     with TenantContext.scope("outer"):
@@ -283,44 +287,127 @@ async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None
         assert TenantContext.get_tenant_id() == "outer"
 
 
-@pytest.mark.parametrize("disable_di", [False, True])
-async def test_sanic_tenant_extractor_required_for_injected_config(disable_di: bool) -> None:
-    from sqlspec.exceptions import ImproperConfigurationError
-
-    config = _make_config(connection=_make_connection(), disable_di=disable_di)
+@pytest.mark.parametrize("status", [200, 500])
+async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: int) -> None:
+    seen: list[TenantContextPayload | None] = []
+    connection = _make_connection()
+    config = _make_config(connection=connection, commit_mode="autocommit")
     config.driver_features["tenant_strategy"] = object()
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
-    app = Sanic("validation_" + uuid4().hex)
-    if disable_di:
-        plugin.init_app(app)
+    config.driver_type = lambda *, connection, statement_config, driver_features: SimpleNamespace(
+        connection=connection, statement_config=statement_config, driver_features=driver_features
+    )
+    original = config.provide_connection
+
+    def provide_connection(pool: object) -> object:
+        seen.append(TenantContext.get())
+        return original(pool)
+
+    config.provide_connection = provide_connection
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
+    plugin.init_app(Sanic("deferred_" + uuid4().hex))
+
+    untouched = _make_request(pool=object())
+    await plugin._on_request(untouched)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(untouched, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    assert seen == []
+    connection.commit.assert_not_awaited()
+    connection.rollback.assert_not_awaited()
+
+    active = _make_request(pool=object())
+    active.ctx = SimpleNamespace()
+    await plugin._on_request(active)  # pyright: ignore[reportPrivateUsage]
+    assert seen == []
+    set_request_tenant(active, "acme", variables={"role": "editor"})
+    session = await plugin.get_session_async(active)
+    assert session.connection is connection
+    assert seen == [TenantContextPayload("acme", {"role": "editor"})]
+    await plugin._on_response(active, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    if status == 200:
+        connection.commit.assert_awaited_once_with()
+        connection.rollback.assert_not_awaited()
     else:
-        with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
-            plugin.init_app(app)
+        connection.commit.assert_not_awaited()
+        connection.rollback.assert_awaited_once_with()
 
 
-async def test_sanic_rejects_conflicting_tenant_extractors() -> None:
-    from sqlspec.exceptions import ImproperConfigurationError
+async def test_sanic_supports_independent_per_config_tenant_extractors_and_direct_configs() -> None:
+    seen: dict[str, TenantContextPayload | None] = {}
+    conn_a = _make_connection()
+    conn_b = _make_connection()
+    cfg_a = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "sanic": {
+                "session_key": "alpha_db",
+                "connection_key": "alpha_conn",
+                "pool_key": "alpha_pool",
+                "tenant_extractor": lambda request: request.headers.get("x-alpha"),
+            }
+        },
+    )
+    cfg_b = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "sanic": {
+                "session_key": "beta_db",
+                "connection_key": "beta_conn",
+                "pool_key": "beta_pool",
+                "tenant_extractor": lambda request: request.headers.get("x-beta"),
+            }
+        },
+    )
+    cfg_b.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
 
-    configs = []
-    for index in range(2):
-        config = _make_config(connection=_make_connection())
-        config.extension_config["sanic"].update({
-            "session_key": f"session{index}",
-            "connection_key": f"connection{index}",
-            "pool_key": f"pool{index}",
-            "tenant_extractor": lambda request: "a",
-        })
-        configs.append(config)
-    plugin = SQLSpecPlugin(MagicMock(configs=dict(enumerate(configs))))
-    with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
-        plugin.init_app(Sanic("conflict_" + uuid4().hex))
+    def provide_a(_pool: object) -> object:
+        seen["a"] = TenantContext.get()
+        return _AsyncConnectionManager(conn_a)
+
+    def provide_b(_pool: object) -> object:
+        seen["b"] = TenantContext.get()
+        return _AsyncConnectionManager(conn_b)
+
+    cfg_a.provide_connection = provide_a  # type: ignore[method-assign]
+    cfg_b.provide_connection = provide_b  # type: ignore[method-assign]
+
+    single = SQLSpecPlugin(cfg_a)
+    assert single.config == [cfg_a]
+    assert single.get_config() is cfg_a
+
+    plugin = SQLSpecPlugin([cfg_a, cfg_b])
+    assert plugin.get_config("alpha_db") is cfg_a
+    assert plugin.get_config("beta_db") is cfg_b
+    with pytest.raises(KeyError):
+        plugin.get_config()
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(ctx=SimpleNamespace(alpha_pool=object(), beta_pool=object())),
+        ctx=SimpleNamespace(),
+        headers={"x-alpha": "org-a"},
+    )
+    await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+    assert seen == {"a": TenantContextPayload("org-a")}
+    set_request_tenant(request, "org-b", key="beta_db")
+    resolved_conn = await plugin.get_connection_async(request, "beta_db")
+    assert resolved_conn is conn_b
+    assert seen["b"] == TenantContextPayload("org-b")
+    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_sanic_rejects_non_callable_tenant_extractor() -> None:
-    from sqlspec.exceptions import ImproperConfigurationError
-
     config = _make_config(connection=_make_connection())
     config.extension_config["sanic"]["tenant_extractor"] = "untrusted"
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
     with pytest.raises(ImproperConfigurationError, match="must be callable"):
-        plugin.init_app(Sanic("invalid_" + uuid4().hex))
+        SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
+
+
+async def test_sanic_sync_get_connection_raises_when_tenant_connection_is_deferred() -> None:
+    config = _make_config(connection=_make_connection())
+    config.driver_features["tenant_strategy"] = object()
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
+    request = SimpleNamespace(
+        app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())), ctx=SimpleNamespace(), headers={}
+    )
+    await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(TenantContextError, match="get_session_async"):
+        plugin.get_connection(request)
+    await plugin._on_response(request, SimpleNamespace(status=401))  # pyright: ignore[reportPrivateUsage]

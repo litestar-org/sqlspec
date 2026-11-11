@@ -59,6 +59,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -79,7 +80,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgRowFactory as RowFactory
     from sqlspec.core import StatementConfig
     from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy, TenantStrategyShorthand
-    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "PsycopgAsyncConfig",
@@ -473,38 +473,53 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
     @overload
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, tenant: None = None, **_kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: None = None,
+        bypass_tenant: Literal[False] = False,
+        **kwargs: Any,
     ) -> "PsycopgSyncSessionContext": ...
 
     @overload
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractContextManager[PsycopgSyncDriver]": ...
 
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "PsycopgSyncSessionContext | AbstractContextManager[PsycopgSyncDriver]":
         """Provide a driver session context manager.
 
         Args:
-            *_args: Additional arguments.
+            *args: Additional arguments.
             statement_config: Optional statement configuration override.
             tenant: Tenant identity or payload bound until session cleanup; None inherits the current scope.
-            **_kwargs: Additional keyword arguments.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             A PsycopgSyncDriver session context manager.
         """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_sync_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
         if tenant is not None:
-            return self._provide_sync_tenant_session(tenant, *_args, statement_config=statement_config, **_kwargs)
+            return self._provide_sync_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         handler = _PsycopgSyncSessionConnectionHandler(self)
 
         return PsycopgSyncSessionContext(
@@ -1005,38 +1020,53 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
     @overload
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, tenant: None = None, **_kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: None = None,
+        bypass_tenant: Literal[False] = False,
+        **kwargs: Any,
     ) -> "PsycopgAsyncSessionContext": ...
 
     @overload
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractAsyncContextManager[PsycopgAsyncDriver]": ...
 
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "PsycopgAsyncSessionContext | AbstractAsyncContextManager[PsycopgAsyncDriver]":
         """Provide an async driver session context manager.
 
         Args:
-            *_args: Additional arguments.
+            *args: Additional arguments.
             statement_config: Optional statement configuration override.
             tenant: Tenant identity or payload bound until session cleanup; None inherits the current scope.
-            **_kwargs: Additional keyword arguments.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             A PsycopgAsyncDriver session context manager.
         """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_async_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
         if tenant is not None:
-            return self._provide_async_tenant_session(tenant, *_args, statement_config=statement_config, **_kwargs)
+            return self._provide_async_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         handler = _PsycopgAsyncSessionConnectionHandler(self)
 
         return PsycopgAsyncSessionContext(

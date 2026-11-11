@@ -9,12 +9,20 @@ Start with the [PostgreSQL setup recipe](multi-tenancy.md) and use [Tenant Frame
 A worker must check access to the chosen tenant before opening a session:
 
 ```python
-from sqlspec import async_tenant_scope
+from sqlspec import TenantContext, TenantContextPayload
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 
 async def count_projects(config: AsyncpgConfig, tenant_id: str) -> int:
-    async with async_tenant_scope(tenant_id, variables={"region": "west"}):
+    payload = TenantContextPayload(tenant_id, variables={"region": "west"})
+    async with config.provide_session(tenant=payload) as session:
+        return await session.select_value(
+            "SELECT count(*) FROM public.projects", value_type=int
+        )
+
+
+async def run_batch(config: AsyncpgConfig, tenant_id: str) -> int:
+    with TenantContext.scope(tenant_id, variables={"region": "west"}):
         async with config.provide_session() as session:
             return await session.select_value(
                 "SELECT count(*) FROM public.projects", value_type=int
@@ -45,21 +53,20 @@ For a direct executor submission, wrap the call with `contextvars.copy_context()
 Use bypass for a pre-tenant user lookup or a health probe that cannot yet select a tenant:
 
 ```python
-from sqlspec import TenantContext, async_tenant_bypass
+from sqlspec import TenantContext
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 
 async def probe(config: AsyncpgConfig) -> int:
-    async with async_tenant_bypass():
-        async with config.provide_session() as session:
-            return await session.select_value("SELECT 1", value_type=int)
+    async with config.provide_session(bypass_tenant=True) as session:
+        return await session.select_value("SELECT 1", value_type=int)
 
 
 with TenantContext.bypass() as payload:
     assert payload.is_bypass
 ```
 
-`TenantContextPayload.bypass()` gives an extractor the same explicit state. Bypass skips strategy checkout and checkin. It still finishes transactions and releases or discards the connection. It does **not** disable RLS, grant admin rights, or clear an existing database policy. A lookup must use a table the app role can read under that policy.
+`provide_session(bypass_tenant=True)` scopes bypass to that single session without mutating outer tasks, while `TenantContext.bypass()` (for `with` or `async with`) wraps multiple sessions and `TenantContextPayload.bypass()` gives an extractor the same explicit state. Bypass skips strategy checkout and checkin. It still finishes transactions and releases or discards the connection. It does **not** disable RLS, grant admin rights, or clear an existing database policy. A lookup must use a table the app role can read under that policy.
 
 ## Administrative Pools
 
@@ -88,9 +95,9 @@ Async cleanup owns a shielded task with a five-second default deadline. At the d
 
 PostgreSQL and SQL Server batch capture/apply and restore/verify into one strategy query or batch per boundary. Finishing a transaction and native pool reset are separate operations. Oracle composes existing Python hooks and verifies state through server reads; those steps can require multiple round trips.
 
-For Oracle, `"default"`, `"identifier"`, and `True` select the client-identifier strategy. A client identifier alone does not enforce row access. VPD uses explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` instances and an admin-provisioned trusted package that sets and clears the context. Have your DBA confirm policy design, edition, and licensing for your deployment. See the [Oracle reference](../../reference/adapters/oracledb.md).
+For Oracle, `"default"`, `"identifier"`, and `True` select the client-identifier strategy, and any `driver_features["session_context_hook"]` is attached to the built-in strategy automatically when the strategy omits a hook. A client identifier alone does not enforce row access. VPD uses explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` instances and an admin-provisioned trusted package that sets and clears the context. Have your DBA confirm policy design, edition, and licensing for your deployment. See the [Oracle reference](../../reference/adapters/oracledb.md).
 
-For mssql-python, select `"session_context"` and set `connection_config={"pool_enabled": False, ...}`. Tenant mode disables SDK pooling before the first connection. Admin and tenant configs may be constructed in either order only if both are unpooled. An established pooled mode is rejected with an error naming `pool_enabled=False`. Owned keys use mutable values (`@read_only=0`) so checkin can restore them. See the [mssql-python reference](../../reference/adapters/mssql-python.md) and [pymssql reference](../../reference/adapters/pymssql.md).
+For mssql-python, `"rls"` and `"session_context"` default `pool_enabled` to `False` automatically when omitted from `connection_config` (rejecting explicit `pool_enabled=True`). Because `mssql-python` sets pooling process-wide before the first connection, set `connection_config={"pool_enabled": False, ...}` on any non-tenant administrative `MssqlPythonConfig` created in the same process. Owned keys use mutable values (`@read_only=0`) so checkin can restore them. See the [mssql-python reference](../../reference/adapters/mssql-python.md) and [pymssql reference](../../reference/adapters/pymssql.md).
 
 ## Verify a Deployment
 

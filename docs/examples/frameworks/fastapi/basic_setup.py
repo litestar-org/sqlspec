@@ -5,15 +5,11 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 
-spec = SQLSpec()
-spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-
 app = FastAPI()
-db_ext = SQLSpecPlugin(spec, app)
+db_ext = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}), app)
 
 
 @app.get("/teams")
@@ -23,7 +19,7 @@ async def list_teams(db: Annotated[AiosqliteDriver, Depends(db_ext.provide_sessi
 
 # --8<-- [end:example]
 
-__all__ = ("app", "db_ext", "list_teams", "main", "spec")
+__all__ = ("app", "db_ext", "list_teams", "main")
 
 
 def main() -> FastAPI:

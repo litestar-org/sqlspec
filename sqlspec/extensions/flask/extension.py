@@ -3,9 +3,10 @@
 import atexit
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
-from sqlspec.base import SQLSpec
+from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
@@ -14,26 +15,25 @@ from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
     get_context_value,
     get_or_create_session,
+    get_request_tenant,
     has_context_value,
     pop_context_value,
     set_context_value,
+    set_request_tenant,
 )
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
-from sqlspec.utils.tenant import (
-    TenantContext,
-    TenantContextPayload,
-    TenantExtractorValue,
-    coerce_tenant_payload,
-    shared_tenant_extractor,
-)
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, coerce_tenant_payload
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
+    from collections.abc import Sequence
+    from uuid import UUID
 
     from flask import Flask, Response
+
+    from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, NoPoolSyncConfig, SyncConfigT, SyncDatabaseConfig
+    from sqlspec.loader import SQLFileLoader
 
 __all__ = ("SQLSpecPlugin",)
 
@@ -44,11 +44,6 @@ DEFAULT_SESSION_KEY = "db_session"
 _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 
 
-async def _enter_tenant_connection(conn_ctx: Any, payload: TenantContextPayload | None) -> Any:
-    with TenantContext.bind(payload):
-        return await conn_ctx.__aenter__()
-
-
 class SQLSpecPlugin:
     """Flask extension for SQLSpec database integration.
 
@@ -56,14 +51,22 @@ class SQLSpecPlugin:
     and async adapter support via portal pattern.
     """
 
-    def __init__(self, sqlspec: SQLSpec, app: "Flask | None" = None) -> None:
-        """Initialize Flask extension with SQLSpec instance.
+    def __init__(
+        self,
+        sqlspec: "SQLSpec | DatabaseConfigProtocol[Any, Any, Any] | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
+        app: "Flask | None" = None,
+        *,
+        loader: "SQLFileLoader | None" = None,
+    ) -> None:
+        """Initialize Flask extension with a SQLSpec registry or database configuration(s).
 
         Args:
-            sqlspec: SQLSpec instance with registered configs.
+            sqlspec: SQLSpec registry, a single database configuration, or a
+                sequence of database configurations.
             app: Optional Flask application to initialize immediately.
+            loader: Optional SQL file loader attached to the registry.
         """
-        self._sqlspec = sqlspec
+        self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[FlaskConfigState] = []
         self._portal: PortalProvider | None = None
         self._has_async_configs = False
@@ -72,8 +75,6 @@ class SQLSpecPlugin:
         self._enable_correlation = False
         self._enable_sqlcommenter = False
         self._extractor: CorrelationExtractor | None = None
-        self._tenant_extractor: Callable[..., TenantExtractorValue] | None = None
-        self._tenant_extractor_takes_request = False
 
         for cfg in self._sqlspec.configs.values():
             state = self._config_state(cfg)
@@ -99,6 +100,16 @@ class SQLSpecPlugin:
         if app is not None:
             self.init_app(app)
 
+    @property
+    def sqlspec(self) -> SQLSpec:
+        """Return the underlying SQLSpec registry."""
+        return self._sqlspec
+
+    @property
+    def config(self) -> "list[DatabaseConfigProtocol[Any, Any, Any]]":
+        """Return the registered database configurations."""
+        return [state.config for state in self._config_states]
+
     def init_app(self, app: "Flask") -> None:
         """Initialize Flask application with SQLSpec.
 
@@ -116,7 +127,6 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
 
         self._ensure_unique_keys()
-        self._configure_tenant_extractor()
 
         if self._has_async_configs:
             self._portal = PortalProvider()
@@ -159,38 +169,96 @@ class SQLSpecPlugin:
             async_enabled=self._has_async_configs,
         )
 
-    def get_session(self, key: "str | None" = None) -> Any:
+    @overload
+    def get_config(self, name: None = None) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
+    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
+    ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
+    @overload
+    def get_config(self, name: "SyncConfigT") -> "SyncConfigT": ...
+    @overload
+    def get_config(self, name: "AsyncConfigT") -> "AsyncConfigT": ...
+    @overload
+    def get_config(self, name: str) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    def get_config(
+        self,
+        name: "str | type[DatabaseConfigProtocol[Any, Any, Any]] | DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> "DatabaseConfigProtocol[Any, Any, Any]":
+        """Return a registered database configuration by identifier, or the sole configuration when omitted."""
+        if name is None:
+            if len(self._config_states) == 1:
+                return self._config_states[0].config
+            if not self._config_states:
+                msg = "No database configurations are registered on SQLSpecPlugin."
+                raise KeyError(msg)
+            msg = "Multiple database configurations are registered on SQLSpecPlugin; specify a key, type, or instance."
+            raise KeyError(msg)
+        if isinstance(name, str):
+            for state in self._config_states:
+                if getattr(state.config, "bind_key", None) == name:
+                    return state.config
+            for state in self._config_states:
+                if name in {state.session_key, state.connection_key}:
+                    return state.config
+            msg = f"No configuration found for key '{name}'."
+            raise KeyError(msg)
+        if isinstance(name, type):
+            matches = [state.config for state in self._config_states if type(state.config) is name]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{name.__name__}'; look up by session_key or bind_key."
+                raise KeyError(msg)
+            msg = f"No configuration found for type '{name.__name__}'."
+            raise KeyError(msg)
+        for state in self._config_states:
+            if state.config is name:
+                return state.config
+        msg = f"No configuration found for '{name!r}'."
+        raise KeyError(msg)
+
+    @staticmethod
+    def set_request_tenant(
+        tenant_id: "str | UUID | TenantContextPayload",
+        *,
+        variables: "Mapping[str, str] | None" = None,
+        key: str | None = None,
+    ) -> TenantContextPayload:
+        """Store an authorized tenant receipt on ``flask.g`` for the active request."""
+        return set_request_tenant(tenant_id, variables=variables, key=key)
+
+    def get_session(self, key: Any = None) -> Any:
         """Get or create database session for current request.
 
-        Sessions are cached per request for consistency.
+        Sessions are cached per request for consistency, and tenant-enforced
+        connections are acquired lazily on first access.
 
         Args:
-            key: Session key for multi-database configs. Defaults to first config if None.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Database session (driver instance).
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
+        self._ensure_request_connection(config_state)
         return get_or_create_session(config_state, self._portal.portal if self._portal else None)
 
-    def get_connection(self, key: "str | None" = None) -> Any:
-        """Get database connection for current request.
-
-        Note:
-            Imports flask components dynamically at runtime to avoid hard dependency.
+    def get_connection(self, key: Any = None) -> Any:
+        """Get database connection for current request, acquiring deferred tenant leases on demand.
 
         Args:
-            key: Session key for multi-database configs. Defaults to first config if None.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Raw database connection.
         """
-        from flask import g
-
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
-        return get_context_value(g, config_state.connection_key)
+        return self._ensure_request_connection(config_state)
 
     def shutdown(self) -> None:
         """Dispose connection pools and stop async portal."""
@@ -265,20 +333,6 @@ class SQLSpecPlugin:
             enable_sqlcommenter_middleware=enable_sqlcommenter,
         )
 
-    def _configure_tenant_extractor(self) -> None:
-        self._tenant_extractor = shared_tenant_extractor(self._config_states, framework="Flask", synchronous=True)
-        if self._tenant_extractor is not None:
-            extractor_signature = inspect.signature(self._tenant_extractor)
-            try:
-                extractor_signature.bind()
-            except TypeError:
-                try:
-                    extractor_signature.bind(object())
-                except TypeError as exc:
-                    msg = "Flask tenant_extractor must accept zero arguments or one request"
-                    raise ImproperConfigurationError(msg) from exc
-                self._tenant_extractor_takes_request = True
-
     def _ensure_unique_keys(self) -> None:
         """Validate that all state keys are unique across configs.
 
@@ -327,37 +381,20 @@ class SQLSpecPlugin:
                 attrs["action"] = endpoint
             SQLCommenterContext.set(attrs)
 
-        if self._tenant_extractor is not None:
-            raw = self._tenant_extractor(request) if self._tenant_extractor_takes_request else self._tenant_extractor()
-            payload = coerce_tenant_payload(raw)
-            set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.set(payload))
-
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
+            if _has_tenant_strategy(config_state.config):
+                continue
 
-            if config_state.config.supports_connection_pooling:
-                pool = current_app.extensions["sqlspec"]["pools"][config_state.session_key]
-                conn_ctx = config_state.config.provide_connection(pool)
-
-                if config_state.is_async:
-                    assert self._portal is not None
-                    if self._tenant_extractor is not None:
-                        connection = self._portal.portal.call(_enter_tenant_connection, conn_ctx, TenantContext.get())
-                    else:
-                        connection = self._portal.portal.call(
-                            cast("AbstractAsyncContextManager[Any]", conn_ctx).__aenter__
-                        )
-                else:
-                    connection = conn_ctx.__enter__()  # type: ignore[union-attr]
-
-                set_context_value(g, f"{config_state.connection_key}_ctx", conn_ctx)
-            elif config_state.is_async:
-                connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr,arg-type]
-            else:
-                connection = config_state.config.create_connection()
-
-            set_context_value(g, config_state.connection_key, connection)
+            payload: TenantContextPayload | None = None
+            has_payload = False
+            if config_state.tenant_extractor is not None:
+                payload = self._invoke_extractor(config_state, request)
+                has_payload = True
+                if not has_context_value(g, _TENANT_SCOPE_KEY):
+                    set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.set(payload))
+            self._acquire_config_connection(current_app, g, config_state, payload, bind_payload=has_payload)
 
     def _after_request_handler(self, response: "Response") -> "Response":
         """Handle transaction after request based on response status.
@@ -450,11 +487,23 @@ class SQLSpecPlugin:
             ):
                 self._execute_rollback(session, config_state)
 
+            payload_key = f"{config_state.connection_key}_tenant_payload"
+            has_captured_payload = has_context_value(g, payload_key)
+            captured_payload = pop_context_value(g, payload_key)
+
             if connection is not None:
                 try:
                     if conn_ctx is not None:
                         if config_state.is_async:
-                            self._portal.portal.call(conn_ctx.__aexit__, *exc_info)  # type: ignore[union-attr]
+                            if has_captured_payload:
+                                self._portal.portal.call(  # type: ignore[union-attr]
+                                    _exit_tenant_connection, conn_ctx, captured_payload, exc_info
+                                )
+                            else:
+                                self._portal.portal.call(conn_ctx.__aexit__, *exc_info)  # type: ignore[union-attr]
+                        elif has_captured_payload:
+                            with TenantContext.bind(captured_payload):
+                                conn_ctx.__exit__(*exc_info)
                         else:
                             conn_ctx.__exit__(*exc_info)
                     elif config_state.is_async:
@@ -481,22 +530,117 @@ class SQLSpecPlugin:
             if has_context_value(g, cache_key):
                 pop_context_value(g, cache_key)
 
-    def _config_state_by_key(self, key: str) -> FlaskConfigState:
-        """Get config state by session key.
+    def _invoke_extractor(self, config_state: FlaskConfigState, request: Any) -> TenantContextPayload | None:
+        extractor = config_state.tenant_extractor
+        if extractor is None:
+            return None
+        raw = extractor(request) if config_state.extractor_takes_request else extractor()
+        if inspect.isawaitable(raw):
+            close = getattr(raw, "close", None)
+            if callable(close):
+                close()
+            msg = "Flask tenant_extractor must be a synchronous callable"
+            raise ImproperConfigurationError(msg)
+        return coerce_tenant_payload(raw)
+
+    def _resolve_request_tenant(self, config_state: FlaskConfigState, request: Any) -> TenantContextPayload | None:
+        receipt = get_request_tenant(config_state)
+        if receipt is not None:
+            return coerce_tenant_payload(receipt)
+        if config_state.tenant_extractor is not None:
+            return self._invoke_extractor(config_state, request)
+        return TenantContext.get()
+
+    def _ensure_request_connection(self, config_state: FlaskConfigState) -> Any:
+        from flask import current_app, g, request
+
+        if has_context_value(g, config_state.connection_key):
+            return get_context_value(g, config_state.connection_key)
+        if not _has_tenant_strategy(config_state.config):
+            return get_context_value(g, config_state.connection_key)
+        payload = self._resolve_request_tenant(config_state, request)
+        return self._acquire_config_connection(current_app, g, config_state, payload, bind_payload=True)
+
+    def _acquire_config_connection(
+        self,
+        app: "Flask",
+        g_obj: Any,
+        config_state: FlaskConfigState,
+        payload: TenantContextPayload | None,
+        *,
+        bind_payload: bool,
+    ) -> Any:
+        payload_key = f"{config_state.connection_key}_tenant_payload"
+        if bind_payload:
+            set_context_value(g_obj, payload_key, payload)
+        try:
+            conn_ctx: Any = None
+            if config_state.config.supports_connection_pooling:
+                pool = app.extensions["sqlspec"]["pools"][config_state.session_key]
+                with TenantContext.bind(payload) if bind_payload else _null_bind():
+                    conn_ctx = config_state.config.provide_connection(pool)
+            elif _has_tenant_strategy(config_state.config):
+                with TenantContext.bind(payload) if bind_payload else _null_bind():
+                    conn_ctx = config_state.config.provide_connection()
+
+            if conn_ctx is not None:
+                if config_state.is_async:
+                    assert self._portal is not None
+                    if bind_payload:
+                        connection = self._portal.portal.call(_enter_tenant_connection, conn_ctx, payload)
+                    else:
+                        connection = self._portal.portal.call(conn_ctx.__aenter__)
+                elif bind_payload:
+                    with TenantContext.bind(payload):
+                        connection = conn_ctx.__enter__()
+                else:
+                    connection = conn_ctx.__enter__()
+                set_context_value(g_obj, f"{config_state.connection_key}_ctx", conn_ctx)
+            elif config_state.is_async:
+                connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr,arg-type]
+            else:
+                connection = config_state.config.create_connection()
+        except BaseException:
+            pop_context_value(g_obj, payload_key)
+            raise
+
+        set_context_value(g_obj, config_state.connection_key, connection)
+        return connection
+
+    def _config_state_by_key(self, key: Any) -> FlaskConfigState:
+        """Get config state by session/connection/bind key, unique type, or instance.
 
         Args:
-            key: Session key to look up.
+            key: Configuration identifier to look up.
 
         Returns:
-            FlaskConfigState for the key.
+            FlaskConfigState for the identifier.
 
         Raises:
-            ImproperConfigurationError: If key not found.
+            ImproperConfigurationError: If identifier is not found or ambiguous.
         """
+        if isinstance(key, str):
+            for state in self._config_states:
+                if state.session_key == key:
+                    return state
+            for state in self._config_states:
+                if key in {state.connection_key, getattr(state.config, "bind_key", None)}:
+                    return state
+            msg = f"No configuration found for key: {key}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(key, type):
+            matches = [state for state in self._config_states if type(state.config) is key]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{key.__name__}'; specify a session_key or bind_key."
+                raise ImproperConfigurationError(msg)
+            msg = f"No configuration found for type: {key.__name__}"
+            raise ImproperConfigurationError(msg)
         for state in self._config_states:
-            if state.session_key == key:
+            if state.config is key:
                 return state
-        msg = f"No configuration found for key: {key}"
+        msg = f"No configuration found for key: {key!r}"
         raise ImproperConfigurationError(msg)
 
     def _close_pool_state(self, config_state: FlaskConfigState) -> None:
@@ -599,3 +743,37 @@ class SQLSpecPlugin:
                 status="failed",
                 error_type=type(exc).__name__,
             )
+
+
+def _has_tenant_strategy(config: Any) -> bool:
+    features = getattr(config, "driver_features", None)
+    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
+
+
+class _NullContext:
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+_NULL_CONTEXT: Final = _NullContext()
+
+
+def _null_bind() -> _NullContext:
+    return _NULL_CONTEXT
+
+
+async def _enter_tenant_connection(conn_ctx: Any, payload: TenantContextPayload | None) -> Any:
+    with TenantContext.bind(payload):
+        return await conn_ctx.__aenter__()
+
+
+async def _exit_tenant_connection(
+    conn_ctx: Any, payload: TenantContextPayload | None, exc_info: tuple[Any, ...]
+) -> Any:
+    with TenantContext.bind(payload):
+        return await conn_ctx.__aexit__(*exc_info)

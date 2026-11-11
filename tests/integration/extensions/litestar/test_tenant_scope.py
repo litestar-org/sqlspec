@@ -6,21 +6,21 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from litestar import Litestar, get
+from litestar import Litestar, Request, get
 from litestar.di import NamedDependency
 from litestar.middleware import DefineMiddleware
 from litestar.middleware.authentication import AbstractAuthenticationMiddleware, AuthenticationResult
+from litestar.middleware.session.client_side import CookieBackendConfig
 from litestar.params import FromPath
-from litestar.testing import AsyncTestClient
+from litestar.testing import AsyncTestClient, TestClient
 from psycopg.conninfo import make_conninfo
 from pytest_databases.docker.postgres import PostgresService
 
 from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.adapters.psycopg import PsycopgAsyncConfig
-from sqlspec.base import SQLSpec
+from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.driver import AsyncDriverAdapterBase
 from sqlspec.extensions.litestar import SQLSpecPlugin, require_tenant
-from sqlspec.utils.tenant import TenantContext, async_tenant_bypass, async_tenant_scope
+from sqlspec.utils.tenant import TenantContext
 from sqlspec.utils.text import quote_identifier
 
 pytestmark = pytest.mark.xdist_group("postgres")
@@ -82,12 +82,6 @@ async def tenant_database(
         await admin.close()
 
 
-def _plugin(config: Any) -> SQLSpecPlugin:
-    sqlspec = SQLSpec()
-    sqlspec.add_config(config)
-    return SQLSpecPlugin(sqlspec=sqlspec)
-
-
 async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database: Any) -> None:
     config, table = tenant_database
     lookup_scopes: list[bool] = []
@@ -97,7 +91,7 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
             identity = connection.headers.get("authorization")
             if identity not in {"acme", "globex"}:
                 return AuthenticationResult(user=None, auth=None)
-            async with async_tenant_bypass(), config.provide_session() as session:
+            async with config.provide_session(bypass_tenant=True) as session:
                 assert await session.select_value("SELECT 1") == 1
                 lookup_scopes.append(TenantContext.is_bypassed())
             return AuthenticationResult(user={"tenant_id": identity, "tenant_ids": ["acme", "globex"]}, auth={})
@@ -128,20 +122,21 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
     @get("/worker")
     async def worker() -> list[int]:
         async def work() -> list[int]:
-            async with async_tenant_scope("acme"), config.provide_session() as session:
+            async with TenantContext.scope("acme"), config.provide_session() as session:
                 return [row["value"] for row in await session.select(f"SELECT value FROM {table}")]
 
         return await asyncio.create_task(work())
 
     app = Litestar(
         [items, switch, selected, health, failure, worker],
-        plugins=[_plugin(config)],
+        plugins=[SQLSpecPlugin(config)],
         middleware=[DefineMiddleware(Authentication)],
     )
     async with AsyncTestClient(app=app, raise_server_exceptions=False) as client:
         assert (await client.get("/health")).json() is True
         assert (await client.get("/items")).status_code == 401
         assert (await client.get("/items", headers={"x-tenant-id": "evil"})).status_code == 401
+        assert (await client.get("/tenants/acme")).status_code == 401
         for tenant, expected in [("acme", [1]), ("globex", [2])]:
             assert (await client.get("/items", headers={"authorization": tenant})).json() == expected
         assert (
@@ -150,7 +145,7 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
         assert (
             await client.get("/switch", headers={"authorization": "acme", "x-tenant-id": "evil"})
         ).status_code == 403
-        assert (await client.get("/tenants/evil", headers={"authorization": "acme"})).status_code == 500
+        assert (await client.get("/tenants/evil", headers={"authorization": "acme"})).status_code == 403
         assert (await client.get("/failure", headers={"authorization": "acme"})).status_code == 500
         assert (await client.get("/items", headers={"authorization": "acme"})).json() == [1]
         assert (await client.get("/worker")).json() == [1]
@@ -164,7 +159,6 @@ async def test_tenant_native_auth_bypass_switching_and_rollback(tenant_database:
 
 async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(tenant_database: Any) -> None:
     security = pytest.importorskip("litestar_security")
-    from litestar.middleware.session.client_side import CookieBackendConfig
 
     config, table = tenant_database
     config.extension_config["litestar"] = {"tenant_header": "x-tenant-id"}
@@ -217,7 +211,7 @@ async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(ten
     session_config = CookieBackendConfig(secret=b"0123456789abcdef")
     app = Litestar(
         [membership, unrelated_or, role, switch],
-        plugins=[_plugin(config)],
+        plugins=[SQLSpecPlugin(config)],
         middleware=[session_config.middleware, DefineMiddleware(Authentication)],
     )
     async with AsyncTestClient(app=app, raise_server_exceptions=False, session_config=session_config) as client:
@@ -233,7 +227,7 @@ async def test_tenant_security_composites_cannot_authorize_unrelated_tenants(ten
         await client.set_session_data({"tenant_id": "evil"})
         assert (await client.get("/switch", headers={"x-tenant-id": "acme"})).status_code == 403
         await client.set_session_data({})
-        assert (await client.get("/or/evil")).status_code == 500
+        assert (await client.get("/or/evil")).status_code == 403
         assert (await client.get("/or/acme")).json() == [1]
     assert TenantContext.get() is None
 
@@ -261,9 +255,6 @@ async def test_tenant_parallel_database_dependencies_capture_distinct_payloads(
             }
         },
     )
-    sqlspec = SQLSpec()
-    sqlspec.add_config(config)
-    sqlspec.add_config(second)
 
     @get("/parallel")
     async def parallel(
@@ -273,7 +264,7 @@ async def test_tenant_parallel_database_dependencies_capture_distinct_payloads(
         second_rows = await second_session.select(f"SELECT value FROM {table}")
         return [[row["value"] for row in first_rows], [row["value"] for row in second_rows]]
 
-    app = Litestar([parallel], plugins=[SQLSpecPlugin(sqlspec=sqlspec)])
+    app = Litestar([parallel], plugins=[SQLSpecPlugin([config, second])])
     async with AsyncTestClient(app=app, raise_server_exceptions=True) as client:
         for _ in range(2):
             response = await client.get("/parallel")
@@ -283,11 +274,6 @@ async def test_tenant_parallel_database_dependencies_capture_distinct_payloads(
 
 
 async def test_tenant_threaded_sync_on_demand_restores_its_context(tenant_database: Any) -> None:
-    from litestar import Request
-    from litestar.testing import TestClient
-
-    from sqlspec.adapters.psycopg import PsycopgSyncConfig
-
     config, table = tenant_database
     if isinstance(config, AsyncpgConfig):
         parameters = config.connection_config
@@ -305,7 +291,7 @@ async def test_tenant_threaded_sync_on_demand_restores_its_context(tenant_databa
         driver_features={"tenant_strategy": True},
         extension_config={"litestar": {"tenant_extractor": lambda scope: "acme"}},
     )
-    plugin = _plugin(sync_config)
+    plugin = SQLSpecPlugin(sync_config)
 
     @get("/threaded", sync_to_thread=True)
     def threaded(request: Request) -> list[int]:

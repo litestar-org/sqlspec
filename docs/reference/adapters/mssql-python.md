@@ -43,7 +43,7 @@ Microsoft SQL Server and Azure SQL adapter built on Microsoft's official `mssql-
 
 ## Tenant Strategies
 
-Set `driver_features={"tenant_strategy": "rls"}` and `connection_config={"pool_enabled": False, ...}`. `"session_context"`, `"default"`, and `True` select the same strategy. Every mssql-python config in the process, including administrative configs, must disable pooling before the first connection. Both creation orders are supported when unpooled; conflicting established pooling modes fail construction.
+Set `driver_features={"tenant_strategy": "rls"}` (`"session_context"`, `"default"`, and `True` select the same strategy). Enabling a tenant strategy automatically defaults `pool_enabled` to `False` when omitted from `connection_config` and rejects explicit `pool_enabled=True`. Because `mssql-python` sets driver pooling process-wide, any non-tenant administrative `MssqlPythonConfig` in the same process must still pass `connection_config={"pool_enabled": False, ...}` before opening its first connection; conflicting process-wide pooling modes fail construction.
 
 Checkout captures and applies mutable owned keys, then verifies their values in one SQL batch. Checkin restores and verifies them in one batch. Keys use `@read_only=0`; values are bound. Strategies do not commit, roll back, or toggle autocommit. Both providers run the lease; cleanup failure physically closes the unpooled connection.
 

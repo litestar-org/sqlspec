@@ -7,10 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import OracleSessionContextConfig, apply_oracle_session_trace_attributes
 from sqlspec.adapters.oracledb.tenant import (
     OracleAsyncIdentifierStrategy,
+    OracleAsyncVPDStrategy,
     OracleSyncIdentifierStrategy,
+    OracleSyncVPDStrategy,
     compose_tenant_session_hook,
     tenant_client_identifier,
 )
@@ -406,3 +409,71 @@ def test_tenant_hook_keeps_deferred_options_and_context_alias() -> None:
     assert composed.nls_parameters is deferred_nls
     assert composed.contexts is deferred_contexts
     assert composed.context_attributes is deferred_contexts
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("kind", ["identifier", "vpd"])
+async def test_oracle_config_auto_attaches_session_context_hook_to_tenant_strategy(mode: str, kind: str) -> None:
+    if mode == "sync":
+        base: Any = (
+            OracleSyncVPDStrategy(
+                set_procedure="app.ctx.set_tenant",
+                clear_procedure="app.ctx.clear_tenant",
+                namespace="tenant_ctx",
+                attribute="tenant_id",
+            )
+            if kind == "vpd"
+            else OracleSyncIdentifierStrategy()
+        )
+        cfg_cls: Any = OracleSyncConfig
+    else:
+        base = (
+            OracleAsyncVPDStrategy(
+                set_procedure="app.ctx.set_tenant",
+                clear_procedure="app.ctx.clear_tenant",
+                namespace="tenant_ctx",
+                attribute="tenant_id",
+            )
+            if kind == "vpd"
+            else OracleAsyncIdentifierStrategy()
+        )
+        cfg_cls = OracleAsyncConfig
+
+    cfg_one = cfg_cls(driver_features={"tenant_strategy": base, "session_context_hook": {"module": "billing"}})
+    cfg_two = cfg_cls(driver_features={"tenant_strategy": base, "session_context_hook": {"module": "audit"}})
+
+    assert base.source_hook is None
+    resolved_one = cfg_one.driver_features["tenant_strategy"]
+    resolved_two = cfg_two.driver_features["tenant_strategy"]
+    assert resolved_one is not base
+    assert resolved_two is not base
+    assert cfg_one.driver_features["session_context_hook"].module == "billing"
+    assert cfg_two.driver_features["session_context_hook"].module == "audit"
+    assert resolved_one.source_hook == cfg_one.driver_features["session_context_hook"]
+    assert resolved_one._hook.client_identifier is tenant_client_identifier
+
+    conn = _vpd_connection(mode) if kind == "vpd" else _connection(mode)
+    state = await _invoke(resolved_one.checkout, conn, TenantContextPayload("acme"))
+    assert conn.module == "billing"
+    await _invoke(resolved_one.checkin, conn, state)
+    assert conn.module == ""
+
+    explicit = (
+        OracleSyncVPDStrategy(
+            set_procedure="app.ctx.set_tenant",
+            clear_procedure="app.ctx.clear_tenant",
+            namespace="tenant_ctx",
+            attribute="tenant_id",
+            hook={"module": "billing"},
+        )
+        if mode == "sync"
+        else OracleAsyncVPDStrategy(
+            set_procedure="app.ctx.set_tenant",
+            clear_procedure="app.ctx.clear_tenant",
+            namespace="tenant_ctx",
+            attribute="tenant_id",
+            hook={"module": "billing"},
+        )
+    )
+    with pytest.raises(ImproperConfigurationError, match="session_context_hook"):
+        cfg_cls(driver_features={"tenant_strategy": explicit, "session_context_hook": {"module": "other"}})

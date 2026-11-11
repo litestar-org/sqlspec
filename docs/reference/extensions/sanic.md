@@ -6,10 +6,11 @@ from sqlspec.extensions.sanic import (
     SQLSpecPlugin,
     get_connection_from_request,
     get_or_create_session,
+    set_request_tenant,
 )
 ```
 
-Sanic server listener and request/response middleware extension for pool lifecycle management and `request.ctx` session injection (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). See the [Sanic Integration Guide](../../integrations/sanic.md) for usage examples.
+Sanic server listener and request/response middleware extension for pool lifecycle management, deferred tenant leases, and `request.ctx` session injection (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). See the [Sanic Integration Guide](../../integrations/sanic.md) for usage examples.
 
 ## Plugin & Configuration State
 
@@ -28,5 +29,9 @@ Sanic server listener and request/response middleware extension for pool lifecyc
       heading_level: 3
 
 ::: sqlspec.extensions.sanic._utils.get_connection_from_request
+    options:
+      heading_level: 3
+
+::: sqlspec.extensions.sanic._utils.set_request_tenant
     options:
       heading_level: 3

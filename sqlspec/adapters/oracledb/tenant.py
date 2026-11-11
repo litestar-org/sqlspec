@@ -31,6 +31,7 @@ __all__ = (
     "OracleSyncIdentifierStrategy",
     "OracleSyncTenantLease",
     "OracleSyncVPDStrategy",
+    "bind_oracle_tenant_hook",
     "compose_tenant_session_hook",
     "tenant_client_identifier",
     "validate_oracle_tenant_hook",
@@ -104,15 +105,6 @@ class OracleSyncIdentifierStrategy:
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
         self._hook = compose_tenant_session_hook(self.source_hook)
 
-    def _apply_identifier(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> None:
-        with TenantContext.bind(payload):
-            tenant_client_identifier()
-            execute_session_checkout_sync(connection, self._hook)
-
-    def _clear_identifier(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
-        with TenantContext.bind(state.payload):
-            execute_session_release_sync(connection, self._hook)
-
     def checkout(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Apply the captured payload and verify the identifier on the server."""
         self._apply_identifier(connection, payload)
@@ -134,6 +126,15 @@ class OracleSyncIdentifierStrategy:
             msg = "Oracle tenant identifier cleanup verification failed"
             raise TenantCleanupError(msg)
 
+    def _apply_identifier(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> None:
+        with TenantContext.bind(payload):
+            tenant_client_identifier()
+            execute_session_checkout_sync(connection, self._hook)
+
+    def _clear_identifier(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
+        with TenantContext.bind(state.payload):
+            execute_session_release_sync(connection, self._hook)
+
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class OracleAsyncIdentifierStrategy:
@@ -144,15 +145,6 @@ class OracleAsyncIdentifierStrategy:
     def __init__(self, hook: OracleSessionContextConfig | Mapping[str, Any] | None = None) -> None:
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
         self._hook = compose_tenant_session_hook(self.source_hook)
-
-    async def _apply_identifier(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> None:
-        with TenantContext.bind(payload):
-            tenant_client_identifier()
-            await execute_session_checkout_async(connection, self._hook)
-
-    async def _clear_identifier(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
-        with TenantContext.bind(state.payload):
-            await execute_session_release_async(connection, self._hook)
 
     async def checkout(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Apply the captured payload and verify the identifier on the server."""
@@ -175,12 +167,62 @@ class OracleAsyncIdentifierStrategy:
             msg = "Oracle tenant identifier cleanup verification failed"
             raise TenantCleanupError(msg)
 
+    async def _apply_identifier(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> None:
+        with TenantContext.bind(payload):
+            tenant_client_identifier()
+            await execute_session_checkout_async(connection, self._hook)
 
-def validate_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | None) -> None:
+    async def _clear_identifier(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
+        with TenantContext.bind(state.payload):
+            await execute_session_release_async(connection, self._hook)
+
+
+def validate_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | Mapping[str, Any] | None) -> None:
     """Reject a hook that a tenant strategy would silently bypass."""
-    if strategy is not None and hook is not None and getattr(strategy, "source_hook", None) != hook:
+    normalized_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
+    if (
+        strategy is not None
+        and normalized_hook is not None
+        and getattr(strategy, "source_hook", None) != normalized_hook
+    ):
         msg = "Oracle tenant strategy must be constructed with the configured session_context_hook"
         raise ImproperConfigurationError(msg)
+
+
+def bind_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | Mapping[str, Any] | None) -> Any:
+    """Attach ``session_context_hook`` to built-in Oracle strategies when unset and validate consistency."""
+    normalized_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
+    if strategy is None or normalized_hook is None:
+        return strategy
+    if (
+        isinstance(strategy, (OracleSyncIdentifierStrategy, OracleAsyncIdentifierStrategy))
+        and strategy.source_hook is None
+    ):
+        if type(strategy) is OracleSyncIdentifierStrategy:
+            return OracleSyncIdentifierStrategy(normalized_hook)
+        if type(strategy) is OracleAsyncIdentifierStrategy:
+            return OracleAsyncIdentifierStrategy(normalized_hook)
+        if type(strategy) is OracleSyncVPDStrategy:
+            return OracleSyncVPDStrategy(
+                set_procedure=strategy._set_procedure,
+                clear_procedure=strategy._clear_procedure,
+                namespace=strategy._namespace,
+                attribute=strategy._context_attribute,
+                hook=normalized_hook,
+            )
+        if type(strategy) is OracleAsyncVPDStrategy:
+            return OracleAsyncVPDStrategy(
+                set_procedure=strategy._set_procedure,
+                clear_procedure=strategy._clear_procedure,
+                namespace=strategy._namespace,
+                attribute=strategy._context_attribute,
+                hook=normalized_hook,
+            )
+        strategy.source_hook = normalized_hook
+        strategy._hook = compose_tenant_session_hook(normalized_hook)
+        return strategy
+    validate_oracle_tenant_hook(strategy, normalized_hook)
+    return strategy
 
 
 class OracleSyncTenantLease(SyncTenantLease):
@@ -229,25 +271,6 @@ class OracleAsyncTenantLease(AsyncTenantLease):
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         await connection.rollback()
-
-
-def _validate_vpd_procedure(value: object, label: str) -> str:
-    if not isinstance(value, str):
-        msg = f"Oracle tenant {label} must be an identifier"
-        raise ImproperConfigurationError(msg)
-    for segment in value.split("."):
-        _validate_oracle_identifier(segment, label)
-    return value
-
-
-def _validate_vpd_settings(
-    set_procedure: object, clear_procedure: object, namespace: str, attribute: str
-) -> tuple[str, str]:
-    set_procedure = _validate_vpd_procedure(set_procedure, "set_procedure")
-    clear_procedure = _validate_vpd_procedure(clear_procedure, "clear_procedure")
-    _validate_oracle_identifier(namespace, "namespace")
-    _validate_oracle_identifier(attribute, "attribute")
-    return set_procedure, clear_procedure
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -384,3 +407,22 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
 
     def _context_binds(self) -> dict[str, str]:
         return {"namespace": self._namespace, "attribute": self._context_attribute}
+
+
+def _validate_vpd_procedure(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        msg = f"Oracle tenant {label} must be an identifier"
+        raise ImproperConfigurationError(msg)
+    for segment in value.split("."):
+        _validate_oracle_identifier(segment, label)
+    return value
+
+
+def _validate_vpd_settings(
+    set_procedure: object, clear_procedure: object, namespace: str, attribute: str
+) -> tuple[str, str]:
+    set_procedure = _validate_vpd_procedure(set_procedure, "set_procedure")
+    clear_procedure = _validate_vpd_procedure(clear_procedure, "clear_procedure")
+    _validate_oracle_identifier(namespace, "namespace")
+    _validate_oracle_identifier(attribute, "attribute")
+    return set_procedure, clear_procedure

@@ -9,10 +9,7 @@ from sqlspec.utils.tenant._context import (
     TenantExtractor,
     TenantExtractorValue,
     TenantScope,
-    async_tenant_bypass,
-    async_tenant_scope,
     coerce_tenant_payload,
-    shared_tenant_extractor,
     single_membership_tenant_extractor,
     tenant_context_var,
 )
@@ -26,10 +23,7 @@ __all__ = (
     "TenantExtractor",
     "TenantExtractorValue",
     "TenantScope",
-    "async_tenant_bypass",
-    "async_tenant_scope",
     "coerce_tenant_payload",
-    "shared_tenant_extractor",
     "single_membership_tenant_extractor",
     "tenant_context_var",
 )

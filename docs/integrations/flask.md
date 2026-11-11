@@ -30,7 +30,7 @@
 
 ## Application Factory Setup
 
-Create a `SQLSpecPlugin(spec)` instance, initialize it inside your `create_app` factory with `plugin.init_app(app)`, and retrieve the active request session via `plugin.get_session()`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(...)`, initialize it inside your `create_app` factory with `plugin.init_app(app)` (or `SQLSpecPlugin(config, app)`), and retrieve the active request session via `plugin.get_session()`:
 
 ```{ .python title="docs/examples/frameworks/flask/basic_setup.py" }
 --8<-- "docs/examples/frameworks/flask/basic_setup.py:example"
@@ -48,49 +48,48 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 
 ## Tenant-Aware Requests
 
-Use `tenant_extractor` when a Flask config enables `tenant_strategy`. Install the matching driver, for example `uv add "sqlspec[flask,psycopg]"`. Start with the role and policy in [Multi-Tenancy](../learn/recipes/multi-tenancy.md).
+Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`psycopg`, `asyncpg`, `psqlpy`, `cockroach_psycopg`, `cockroach_asyncpg`, `oracledb`, `mssql_python`, `pymssql`; start with the role and policy setup in [Multi-Tenancy](../learn/recipes/multi-tenancy.md)).
 
-Your login hook must set the trusted `g.user` before SQLSpec's request hook runs. Register the login hook before `plugin.init_app(app)`. The extractor checks that the chosen tenant belongs to that user:
+When no `tenant_extractor` is configured, Flask defers checking out the tenant connection until your view or `@app.before_request` hook verifies membership, calls `set_request_tenant(org_id)` (accepting `key=...` for multi-database binds), and calls `plugin.get_session()`. Unauthenticated endpoints such as `/login` or `/health` skip tenant checkout completely and can query user memberships through a dedicated auth bind or `config.provide_session(bypass_tenant=True)`:
 
 ```python
-from flask import Request, g
-
+from typing import Any
+from flask import Flask, abort, g, jsonify
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
+from sqlspec.extensions.flask import SQLSpecPlugin, set_request_tenant
 
-
-def verified_tenant(request: Request) -> str | None:
-    user = getattr(g, "user", None)
-    if user is None:
-        return None
-    tenant = getattr(user, "tenant_id", None)
-    return tenant if tenant in getattr(user, "tenant_ids", ()) else None
-
-
-def tenant_config(dsn: str) -> PsycopgSyncConfig:
-    return PsycopgSyncConfig(
-        connection_config={"conninfo": dsn},
+plugin = SQLSpecPlugin(
+    PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://app_user@localhost/app"},
         driver_features={"tenant_strategy": "rls"},
-        extension_config={"flask": {
-            "tenant_extractor": verified_tenant,
-            "commit_mode": "autocommit",
-        }},
+        extension_config={"flask": {"commit_mode": "autocommit"}},
     )
+)
+
+
+def register_routes(app: Flask) -> None:
+    plugin.init_app(app)
+
+    @app.get("/orgs/<org_id>/projects")
+    def list_projects(org_id: str) -> Any:
+        user = getattr(g, "user", None)
+        if user is None or org_id not in user.org_ids:
+            abort(403)
+        set_request_tenant(org_id)
+        session = plugin.get_session()
+        return jsonify(session.select("SELECT id, name FROM projects"))
 ```
 
-Add the returned config to your `SQLSpec` instance, then use the factory and `plugin.get_session()` shown above. The extractor can take the Flask request or take no arguments and read `g`. It must be a sync callable; Flask rejects async extractors. The result can be a `TenantContextPayload`, `str`, `UUID`, or `None`.
+When an upstream authentication hook registered before `plugin.init_app(app)` already sets `g.user`, you can instead configure a synchronous `tenant_extractor` per bind in `extension_config["flask"]` (taking either zero arguments or the Flask `Request` and returning a `TenantContextPayload`, `str`, `UUID`, or `None`; Flask rejects async extractors). Multiple database binds on one plugin can each configure their own extractor or use deferred `set_request_tenant(...)` independently.
 
-SQLSpec sets the tenant before it opens a connection. Teardown exits the lease, then restores the outer tenant scope, even when setup or the handler fails. `None` clears the current tenant; a tenant-enabled config then fails before taking a pool slot. A config with tenant mode and no extractor fails at `init_app`. All managed configs in one plugin must share the same extractor object.
-
-For async drivers, Flask passes the captured payload into its portal's async acquisition call. The lease keeps that identity until cleanup. Request code must use the request session rather than share it with worker threads. Workers open their own leases in explicit tenant scopes.
-
-A raw header never proves tenant access. To switch tenants, check the requested value against the user's trusted memberships. An explicit bypass payload skips tenant setup but keeps database policies in force. Use a separate config for privileged global work. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+SQLSpec binds the verified tenant before opening a connection, forwards that captured payload into its portal for async drivers, and exits the lease during `teardown_appcontext` before restoring any outer scope. Calling `plugin.get_session()` on a tenant-enabled bind without an active tenant raises `TenantContextError` before taking a pool slot. Request sessions belong to the handling request; background threads should open independent leases via `config.provide_session(tenant=...)`. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
 
 ## Configuration Options
 
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None for the request. Required with a tenant strategy. Accepts zero arguments or the Flask request. |
+| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None for the request. Optional when routes call set_request_tenant() or wrap work in TenantContext.scope(); evaluated lazily on first session or connection access. Accepts zero arguments or the Flask request. |
 | `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |

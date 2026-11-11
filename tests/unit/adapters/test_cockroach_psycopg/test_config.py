@@ -1378,11 +1378,17 @@ def test_tenant_async_strategy_facade() -> None:
     import sqlspec.adapters.cockroach_psycopg as package
     from sqlspec.adapters.cockroach_psycopg.tenant import (
         CockroachPsycopgAsyncRLSStrategy,
+        CockroachPsycopgAsyncTenantLease,
         CockroachPsycopgSyncRLSStrategy,
+        CockroachPsycopgSyncTenantLease,
     )
 
     assert package.CockroachPsycopgAsyncRLSStrategy is CockroachPsycopgAsyncRLSStrategy
     assert package.CockroachPsycopgSyncRLSStrategy is CockroachPsycopgSyncRLSStrategy
+    assert CockroachPsycopgAsyncRLSStrategy.__module__ == "sqlspec.adapters.cockroach_psycopg.tenant"
+    assert CockroachPsycopgSyncRLSStrategy.__module__ == "sqlspec.adapters.cockroach_psycopg.tenant"
+    assert CockroachPsycopgAsyncConfig.tenant_lease_type is CockroachPsycopgAsyncTenantLease
+    assert CockroachPsycopgSyncConfig.tenant_lease_type is CockroachPsycopgSyncTenantLease
     assert isinstance(
         CockroachPsycopgAsyncConfig(driver_features={"tenant_strategy": True}).driver_features["tenant_strategy"],
         CockroachPsycopgAsyncRLSStrategy,

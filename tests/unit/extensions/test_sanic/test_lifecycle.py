@@ -11,6 +11,7 @@ pytest.importorskip("sanic")
 
 from sanic import Sanic
 
+from sqlspec.base import SQLSpec
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.extensions.sanic._utils import has_context_value
 
@@ -21,7 +22,7 @@ async def test_startup_creates_pool_on_app_context() -> None:
     """before_server_start should create configured pools on app.ctx."""
     pool = object()
     config = _make_config(pool=pool)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     app = SimpleNamespace(ctx=SimpleNamespace())
 
     await plugin._before_server_start(app)  # pyright: ignore[reportPrivateUsage]
@@ -34,7 +35,7 @@ async def test_startup_is_idempotent_for_existing_pool() -> None:
     """before_server_start should not recreate a pool already present on app.ctx."""
     pool = object()
     config = _make_config(pool=pool)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     app = SimpleNamespace(ctx=SimpleNamespace(db_pool=pool))
 
     await plugin._before_server_start(app)  # pyright: ignore[reportPrivateUsage]
@@ -47,7 +48,7 @@ async def test_shutdown_closes_pool_and_removes_app_context_value() -> None:
     """after_server_stop should close configured pools and remove app.ctx storage."""
     pool = object()
     config = _make_config(pool=pool)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     app = SimpleNamespace(ctx=SimpleNamespace(db_pool=pool))
 
     await plugin._after_server_stop(app)  # pyright: ignore[reportPrivateUsage]
@@ -62,7 +63,7 @@ async def test_lifecycle_wraps_sync_pool_hooks() -> None:
     config = _make_config(pool=pool)
     config.create_pool = MagicMock(return_value=pool)
     config.close_pool = MagicMock()
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     app = SimpleNamespace(ctx=SimpleNamespace())
 
     await plugin._before_server_start(app)  # pyright: ignore[reportPrivateUsage]
@@ -76,7 +77,7 @@ async def test_lifecycle_wraps_sync_pool_hooks() -> None:
 def test_init_app_registers_server_lifecycle_listeners() -> None:
     """init_app should register Sanic startup and shutdown listeners."""
     app = Sanic(f"SQLSpecLifecycle{uuid4().hex}")
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
 
     plugin.init_app(app)
 
@@ -115,7 +116,7 @@ def test_init_app_registers_lifecycle_exception_signal() -> None:
     """init_app should register http.lifecycle.exception signal listener."""
     app = Sanic(f"SQLSpecLifecycleSignal{uuid4().hex}")
     config = _make_config(pool=object())
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
 
@@ -124,7 +125,7 @@ def test_init_app_registers_lifecycle_exception_signal() -> None:
 
 async def test_on_lifecycle_exception_ignores_none_request() -> None:
     """_on_lifecycle_exception should handle None request without error."""
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
     await plugin._on_lifecycle_exception(None, ValueError("test"))
 
 
@@ -132,7 +133,7 @@ async def test_on_lifecycle_exception_records_exception() -> None:
     """_on_lifecycle_exception should store the exception in request context."""
     from sqlspec.extensions.sanic._utils import get_context_value
 
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
     request = SimpleNamespace(ctx=SimpleNamespace())
     exc = ValueError("boom")
 
@@ -147,7 +148,7 @@ async def test_release_request_connection_forwards_exception() -> None:
 
     pool = object()
     config = _make_config(pool=pool)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     config_state = plugin._config_states[0]
 
     conn = MagicMock()
@@ -177,7 +178,7 @@ async def test_release_request_connection_clean_exit_without_exception() -> None
 
     pool = object()
     config = _make_config(pool=pool)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     config_state = plugin._config_states[0]
 
     conn = MagicMock()
@@ -207,7 +208,7 @@ async def test_on_request_acquisition_failure_records_exception_and_releases() -
     config2.provide_connection = MagicMock(side_effect=RuntimeError("pool 2 acquire failed"))
     config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
 
     request = SimpleNamespace(
         ctx=SimpleNamespace(), app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object())), headers={}
@@ -227,7 +228,7 @@ def test_init_app_registers_lifecycle_complete_signal() -> None:
     """init_app should register http.lifecycle.complete signal listener."""
     app = Sanic(f"SQLSpecLifecycleCompleteSignal{uuid4().hex}")
     config = _make_config(pool=object())
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
 
@@ -263,7 +264,7 @@ async def test_on_request_cancelled_error_mid_acquisition_releases_and_restores(
     config2.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
     CorrelationContext.set("outer-cid")
     SQLCommenterContext.set({"framework": "outer"})
     try:
@@ -305,7 +306,7 @@ async def test_on_request_complete_releases_residual_connection_on_cancellation_
     config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config.extension_config = {"sanic": {"commit_mode": "autocommit", "enable_correlation_middleware": True}}
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     CorrelationContext.set("before-req")
     try:
         conn_info = SimpleNamespace(ctx=SimpleNamespace())
@@ -363,7 +364,7 @@ async def test_finalize_request_connection_rolls_back_when_exception_mapped_to_2
     config = _make_config(pool=object())
     config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config.extension_config = {"sanic": {"commit_mode": "autocommit"}}
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     config_state = plugin._config_states[0]
 
     request = SimpleNamespace(ctx=SimpleNamespace())
@@ -397,7 +398,7 @@ async def test_finalize_request_connection_commit_failure_rolls_back_and_forward
     config = _make_config(pool=object())
     config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config.extension_config = {"sanic": {"commit_mode": "autocommit"}}
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     config_state = plugin._config_states[0]
 
     request = SimpleNamespace(ctx=SimpleNamespace())
@@ -433,7 +434,7 @@ async def test_finalize_request_connection_rollback_cancellation_forwards_to_exi
     config = _make_config(pool=object())
     config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config.extension_config = {"sanic": {"commit_mode": "autocommit"}}
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     config_state = plugin._config_states[0]
 
     request = SimpleNamespace(ctx=SimpleNamespace())
@@ -485,7 +486,7 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
         "sanic": {"commit_mode": "autocommit", "connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}
     }
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
     CorrelationContext.set("outer-cid")
     SQLCommenterContext.set({"framework": "outer"})
     try:
@@ -572,7 +573,7 @@ async def test_on_request_multi_db_release_failure_still_releases_sibling_and_re
     config3.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config3.extension_config = {"sanic": {"connection_key": "conn3", "session_key": "sess3", "pool_key": "pool3"}}
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2, "db3": config3}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2, "db3": config3}))
     CorrelationContext.set("outer-cid")
     SQLCommenterContext.set({"framework": "outer"})
     try:
@@ -633,7 +634,7 @@ async def test_on_request_complete_multi_db_isolates_release_failure_and_restore
         "sanic": {"commit_mode": "autocommit", "connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}
     }
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
     CorrelationContext.set("outer-cid")
     try:
         conn_info = SimpleNamespace(ctx=SimpleNamespace())
@@ -675,7 +676,7 @@ async def test_on_request_complete_prefers_task_contextvar_over_shared_conn_info
     config.statement_config = SimpleNamespace(enable_sqlcommenter=False)
     config.extension_config = {"sanic": {"commit_mode": "manual", "enable_correlation_middleware": False}}
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": config}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     shared_conn_info = SimpleNamespace(ctx=SimpleNamespace())
     app_ns = SimpleNamespace(ctx=SimpleNamespace(db_pool=object()))
 
@@ -730,7 +731,7 @@ async def test_on_request_complete_rollback_cancellation_still_releases_target_a
         "sanic": {"commit_mode": "autocommit", "connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}
     }
 
-    plugin = SQLSpecPlugin(MagicMock(configs={"db1": config1, "db2": config2}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
     conn_info = SimpleNamespace(ctx=SimpleNamespace())
     request = SimpleNamespace(
         ctx=SimpleNamespace(),

@@ -17,8 +17,6 @@ from sqlspec import (
     TenantContext,
     TenantContextError,
     TenantContextPayload,
-    async_tenant_bypass,
-    async_tenant_scope,
     sql,
 )
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -64,9 +62,9 @@ def tenant_exports() -> TenantContextPayload:
 
 
 async def async_tenant_exports() -> TenantContextPayload:
-    async with async_tenant_scope("tenant-a") as payload:
+    async with TenantContext.scope("tenant-a") as payload:
         assert_type(payload, TenantContextPayload)
-    async with async_tenant_bypass() as bypassed:
+    async with TenantContext.bypass() as bypassed:
         assert_type(bypassed, TenantContextPayload)
         assert_type(TenantContext.is_bypassed(), bool)
     return payload

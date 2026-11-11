@@ -10,10 +10,12 @@ import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as cockroach_psycopg_crdb
 from psycopg import errors as cockroach_psycopg_errors
+from psycopg import pq as cockroach_psycopg_pq
 from psycopg import sql as cockroach_psycopg_sql
 from psycopg.adapt import AdaptersMap as CockroachPsycopgAdaptersMap
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
+from psycopg.rows import tuple_row as cockroach_psycopg_tuple_row
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
 from psycopg.types.json import set_json_dumps as cockroach_psycopg_set_json_dumps
 from psycopg.types.json import set_json_loads as cockroach_psycopg_set_json_loads
@@ -58,9 +60,11 @@ __all__ = (
     "cockroach_psycopg_dict_row",
     "cockroach_psycopg_errors",
     "cockroach_psycopg_module",
+    "cockroach_psycopg_pq",
     "cockroach_psycopg_set_json_dumps",
     "cockroach_psycopg_set_json_loads",
     "cockroach_psycopg_sql",
+    "cockroach_psycopg_tuple_row",
 )
 
 _COCKROACH_PSYCOPG_SYNC_DRIVER_CLS: "type[CockroachPsycopgSyncDriver] | None" = None

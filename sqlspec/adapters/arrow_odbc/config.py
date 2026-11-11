@@ -262,13 +262,14 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
 
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "ArrowOdbcSessionContext":
         """Provide a driver session context manager."""
-        if tenant is not None:
+        if tenant is not None or bypass_tenant:
             msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
             raise ImproperConfigurationError(msg)
         handler = _ArrowOdbcSessionConnectionHandler(self)

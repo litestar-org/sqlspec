@@ -90,6 +90,7 @@ def test_flask_config_state_field_order() -> None:
         "is_async",
         "disable_di",
         "tenant_extractor",
+        "extractor_takes_request",
         "enable_correlation_middleware",
         "correlation_header",
         "correlation_headers",

@@ -44,7 +44,7 @@ Asynchronous PostgreSQL adapter built on `asyncpg`. Inherited execution methods 
 
 Set `driver_features={"tenant_strategy": "rls"}` to protect both `provide_session()` and `provide_connection()`. `"default"` and `True` select the same strategy. Missing scope raises `TenantContextError` before acquisition; failed cleanup invalidates the connection and raises `TenantCleanupError` when no body exception is pending.
 
-Tenant mode defaults `pooler_mode` to `"session"` and rejects transaction, statement, and auto modes. `tenant_session_baseline` declares settings replayed before each checkout after the native pool reset. Hooks that change session settings require an explicit baseline declaration. Capturing and applying tenant settings uses one query; restoring and verifying them uses one query. Baseline replay and pool reset are separate operations.
+Tenant mode defaults `pooler_mode` to `"session"` and rejects transaction, statement, and auto modes. Prefer passing static session parameters via `connection_config={"server_settings": ...}` so PostgreSQL sets them once on startup and preserves them across `RESET ALL`. Reserve `tenant_session_baseline` for settings altered inside raw `asyncpg` `init` or `setup` pool hooks (`on_connection_create` defaults `tenant_session_baseline` to `{}` automatically when omitted, whereas raw `init` and `setup` hooks require an explicit `tenant_session_baseline` declaration). Capturing and applying tenant settings uses one query; restoring and verifying them uses one query. Baseline replay and pool reset are separate operations.
 
 See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) for database policy setup and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md) for workers and cleanup.
 

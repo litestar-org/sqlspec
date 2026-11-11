@@ -58,7 +58,7 @@ from sqlspec.adapters.oracledb.tenant import (
     OracleAsyncTenantLease,
     OracleSyncIdentifierStrategy,
     OracleSyncTenantLease,
-    validate_oracle_tenant_hook,
+    bind_oracle_tenant_hook,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -586,9 +586,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config=extension_config,
             **kwargs,
         )
-        validate_oracle_tenant_hook(
+        bound_strategy = bind_oracle_tenant_hook(
             self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
         )
+        if bound_strategy is not None:
+            self.driver_features["tenant_strategy"] = bound_strategy
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
@@ -916,9 +918,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config=extension_config,
             **kwargs,
         )
-        validate_oracle_tenant_hook(
+        bound_strategy = bind_oracle_tenant_hook(
             self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
         )
+        if bound_strategy is not None:
+            self.driver_features["tenant_strategy"] = bound_strategy
         if pending_wallet_dir is not None:
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)

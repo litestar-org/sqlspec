@@ -6,7 +6,6 @@ from typing import Any
 from litestar import Litestar, get
 from litestar.di import NamedDependency
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
@@ -17,16 +16,15 @@ def health_check(db_session: NamedDependency[SqliteDriver]) -> dict[str, Any]:
     return db_session.select_one("SELECT 'ok' AS status")
 
 
-spec = SQLSpec()
-spec.add_config(
+plugin = SQLSpecPlugin(
     SqliteConfig(
         connection_config={"database": ":memory:"}, extension_config={"litestar": {"session_key": "db_session"}}
     )
 )
-app = Litestar(route_handlers=[health_check], plugins=[SQLSpecPlugin(sqlspec=spec)])
+app = Litestar(route_handlers=[health_check], plugins=[plugin])
 # --8<-- [end:example]
 
-__all__ = ("app", "health_check", "main")
+__all__ = ("app", "health_check", "main", "plugin")
 
 
 def main() -> Litestar:

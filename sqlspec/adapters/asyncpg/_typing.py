@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg as asyncpg_module
 from asyncpg import Connection as AsyncpgRawConnection
+from asyncpg import InterfaceError as AsyncpgInterfaceError
 from asyncpg import Pool
 from asyncpg import PostgresError as AsyncpgPostgresError
 from asyncpg import Record as AsyncpgRecord
@@ -49,6 +50,7 @@ __all__ = (
     "AsyncpgConnection",
     "AsyncpgConnectionMeta",
     "AsyncpgCursor",
+    "AsyncpgInterfaceError",
     "AsyncpgNativePool",
     "AsyncpgNativePoolConnectionProxy",
     "AsyncpgPool",

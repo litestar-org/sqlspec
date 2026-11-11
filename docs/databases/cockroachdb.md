@@ -140,6 +140,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
     | `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Strategy or shorthand for session-scoped tenant identity. |
+    | `tenant_session_baseline` | `Mapping[str, str]` | - | Declared session settings replayed before each tenant checkout. |
     | `pooler_mode` | `Literal['session', 'transaction', 'statement', 'auto'] or None` | - | Tenant connections require session affinity. |
     | `enable_native_storage` | `bool` | - | Opt in to server-side CockroachDB `EXPORT` and `IMPORT INTO` storage operations. |
     | `native_storage_csv_options` | `_NativeStorageCSVOptions` | - | Explicit CSV markers mapping supporting `nullas` (export NULL string), `nullif` (import NULL string), and `skip` (header line count to skip on import). |

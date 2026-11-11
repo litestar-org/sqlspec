@@ -191,6 +191,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
     ),
     "cockroach_asyncpg": (
         "tenant_strategy",
+        "tenant_session_baseline",
         "pooler_mode",
         "enable_native_storage",
         "native_storage_csv_options",

@@ -8,7 +8,12 @@ from sqlspec.extensions.litestar import (
     LitestarConfig,
     SQLSpecChannelsBackend,
     SQLSpecPlugin,
+    TenantResolutionSettings,
     get_sqlspec_scope_state,
+    is_scope_authenticated,
+    require_tenant,
+    resolve_litestar_tenant,
+    set_connection_tenant,
     set_sqlspec_scope_state,
 )
 from sqlspec.extensions.litestar.plugin import (
@@ -17,7 +22,7 @@ from sqlspec.extensions.litestar.plugin import (
 )
 ```
 
-Litestar plugin, ASGI transaction and correlation middlewares, automatic HTTP `404`/`409` exception handlers, server-side session store base class, and Litestar Channels backend (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md)). Adapter-specific `LitestarConfig` TypedDicts and `BaseSQLSpecStore` subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
+Litestar plugin, ASGI transaction and correlation middlewares, automatic HTTP `404`/`409` exception handlers, server-side session store base class, and Litestar Channels backend (`SQLSpecSyncService` and `SQLSpecAsyncService` are documented in [Service Layer](../service.md); `TenantResolutionSettings`, `require_tenant`, `set_connection_tenant`, `resolve_litestar_tenant`, and `is_scope_authenticated` are documented in [Tenant APIs](../tenant.md#litestar-tenant-resolution)). Adapter-specific `LitestarConfig` TypedDicts and `BaseSQLSpecStore` subclasses are documented on each [Database Adapter](../adapters/index.md) page. See the [Litestar Integration Guide](../../integrations/litestar.md) for usage examples.
 
 ## Plugin & Configuration
 
@@ -25,10 +30,12 @@ Litestar plugin, ASGI transaction and correlation middlewares, automatic HTTP `4
     options:
       heading_level: 3
       members:
+        - sqlspec
         - config
         - on_app_init
         - on_cli_init
         - get_config
+        - resolve_tenant_settings
         - get_annotations
         - provide_request_session
         - provide_request_session_sync

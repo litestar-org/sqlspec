@@ -574,10 +574,11 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
 
     def provide_session(
         self,
-        *_args: Any,
+        *args: Any,
         statement_config: "StatementConfig | None" = None,
         tenant: "str | UUID | TenantContextPayload | None" = None,
-        **_kwargs: Any,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AdbcSessionContext":
         """Provide a driver session context manager.
 
@@ -585,15 +586,16 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         extensions and updates the dialect accordingly.
 
         Args:
-            *_args: Additional arguments.
+            *args: Additional arguments.
             statement_config: Optional statement configuration override.
             tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
-            **_kwargs: Additional keyword arguments.
+            bypass_tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
-        if tenant is not None:
+        if tenant is not None or bypass_tenant:
             msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
             raise ImproperConfigurationError(msg)
         if self._pool_config is not None:

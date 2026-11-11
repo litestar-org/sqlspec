@@ -18,7 +18,7 @@ from litestar.plugins import CLIPlugin, InitPluginProtocol, OpenAPISchemaPlugin
 from litestar.status_codes import HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
 from litestar.utils.scope.state import ScopeState
 
-from sqlspec.base import SQLSpec
+from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.config import (
     AsyncConfigT,
     AsyncDatabaseConfig,
@@ -45,6 +45,7 @@ from sqlspec.extensions.litestar.handlers import (
     _resolve_connection_tenant,
     autocommit_handler_maker,
     connection_provider_maker,
+    has_tenant_strategy,
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
@@ -52,7 +53,7 @@ from sqlspec.extensions.litestar.handlers import (
     session_provider_maker,
     tenant_payload_key,
 )
-from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
+from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, raise_missing_tenant_http_exception
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -61,7 +62,7 @@ from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from litestar import Litestar, Request, Response
@@ -217,26 +218,6 @@ class CorrelationMiddleware:
             with suppress(KeyError):
                 delete_sqlspec_scope_state(scope, CORRELATION_STATE_KEY)
             CorrelationContext.set(previous_correlation_id)
-
-
-@dataclass(frozen=True, slots=True)
-class _ConnectionCleanupTarget:
-    """Configuration descriptor for ASGI residual connection cleanup."""
-
-    connection_key: str
-    session_key: str
-    commit_mode: CommitMode
-    extra_commit_statuses: frozenset[int]
-    extra_rollback_statuses: frozenset[int]
-
-
-def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
-    """Select the primary teardown exception to re-raise after completing all targets."""
-    if current is None:
-        return candidate
-    if isinstance(current, Exception) and not isinstance(candidate, Exception):
-        return candidate
-    return current
 
 
 class ConnectionCleanupMiddleware:
@@ -401,14 +382,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     __slots__ = ("_correlation_headers", "_enable_sqlcommenter_middleware", "_plugin_configs", "_sqlspec")
 
-    def __init__(self, sqlspec: SQLSpec, *, loader: "SQLFileLoader | None" = None) -> None:
+    def __init__(
+        self,
+        sqlspec: "SQLSpec | AnyDatabaseConfig | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
+        *,
+        loader: "SQLFileLoader | None" = None,
+    ) -> None:
         """Initialize SQLSpec plugin.
 
         Args:
-            sqlspec: Pre-configured SQLSpec instance with registered database configs.
-            loader: Optional SQL file loader instance (SQLSpec may already have one).
+            sqlspec: Pre-configured SQLSpec registry, a single database
+                configuration, or a sequence of database configurations.
+            loader: Optional SQL file loader instance attached to the registry.
         """
-        self._sqlspec = sqlspec
+        self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
 
         self._plugin_configs: list[PluginConfigState] = []
         for cfg in self._sqlspec.configs.values():
@@ -440,6 +427,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         )
 
     @property
+    def sqlspec(self) -> SQLSpec:
+        """Return the underlying SQLSpec registry."""
+        return self._sqlspec
+
+    @property
     def config(self) -> "list[AnyDatabaseConfig]":
         """Return the plugin configurations.
 
@@ -468,11 +460,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             The updated application configuration instance.
         """
         self._ensure_dependency_keys()
-
-        def store_sqlspec_in_state() -> None:
-            app_config.state.sqlspec = self
-
-        app_config.on_startup.append(store_sqlspec_in_state)
+        app_config.state.sqlspec = self
+        existing_plugins = cast("tuple[SQLSpecPlugin, ...]", getattr(app_config.state, "_sqlspec_plugins", ()))
+        if self not in existing_plugins:
+            app_config.state._sqlspec_plugins = (*existing_plugins, self)
         app_config.signature_types.extend([SQLSpec, DatabaseConfigProtocol, SyncConfigT, AsyncConfigT])
 
         signature_namespace = {"ConnectionT": ConnectionT, "PoolT": PoolT, "DriverT": DriverT, "SchemaT": SchemaT}
@@ -625,6 +616,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         return cast("type[AnyDatabaseConfig]", state.annotation)
 
     @overload
+    def get_config(self, name: None = None) -> "AnyDatabaseConfig": ...
+    @overload
     def get_config(
         self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
     ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
@@ -639,9 +632,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     @overload
     def get_config(self, name: str) -> "AnyDatabaseConfig": ...
     def get_config(
-        self, name: "type[DatabaseConfigProtocol[Any, Any, Any]] | str | Any"
+        self, name: "type[DatabaseConfigProtocol[Any, Any, Any]] | str | Any" = None
     ) -> "DatabaseConfigProtocol[Any, Any, Any]":
-        """Get a configuration instance by name.
+        """Get a configuration instance by name, or the sole configuration when omitted.
 
         Registry identifiers are available as soon as the plugin is constructed: a
         config instance, its concrete config type when exactly one configuration has
@@ -651,17 +644,72 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         plugin is registered with a Litestar application.
 
         Args:
-            name: The configuration identifier.
+            name: Optional configuration identifier. Defaults to the sole registered
+                configuration when ``None``.
 
         Raises:
-            KeyError: If no configuration is found for the given name, or if several
-                configurations share the requested concrete type.
+            KeyError: If no configuration is found for ``name``, if ``name`` is
+                ``None`` when zero or multiple configurations are registered, or if
+                several configurations share the requested concrete type.
 
         Returns:
-            The configuration instance for the specified name.
+            The configuration instance for the specified identifier.
         """
+        if name is None:
+            if len(self._plugin_configs) == 1:
+                return self._plugin_configs[0].config
+            if not self._plugin_configs:
+                msg = "No database configurations are registered on SQLSpecPlugin."
+                raise KeyError(msg)
+            msg = (
+                "Multiple database configurations are registered on SQLSpecPlugin; "
+                f"pass a configuration key, type, or instance. Available keys: {self._get_available_keys()}"
+            )
+            raise KeyError(msg)
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
+
+    def resolve_tenant_settings(
+        self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig] | None" = None
+    ) -> TenantResolutionSettings:
+        """Resolve tenant extraction settings for a registered Litestar configuration.
+
+        Args:
+            key: Optional configuration key, concrete type, or instance. When
+                omitted, prefers the sole tenant-enforced configuration, then the
+                sole configuration, or raises when multiple tenant databases define
+                distinct settings.
+
+        Returns:
+            The active ``TenantResolutionSettings`` for ``key``.
+
+        Raises:
+            KeyError: ``key`` does not match any registered configuration.
+            ImproperConfigurationError: ``key`` is omitted and multiple tenant
+                databases configure distinct ``TenantResolutionSettings``.
+        """
+        if key is not None:
+            state = self._registry_state(key) or self._dependency_state(key)
+            return state.tenant_settings
+        tenant_states = [state for state in self._plugin_configs if has_tenant_strategy(state.config)]
+        if len(tenant_states) == 1:
+            return tenant_states[0].tenant_settings
+        if tenant_states:
+            first = tenant_states[0].tenant_settings
+            if any(state.tenant_settings != first for state in tenant_states[1:]):
+                msg = (
+                    "Multiple tenant-scoped Litestar configurations have distinct tenant resolution settings; "
+                    "pass config_key=... to require_tenant()."
+                )
+                raise ImproperConfigurationError(msg)
+            return first
+        if len(self._plugin_configs) == 1:
+            return self._plugin_configs[0].tenant_settings
+        if self._plugin_configs and all(
+            state.tenant_settings == self._plugin_configs[0].tenant_settings for state in self._plugin_configs[1:]
+        ):
+            return self._plugin_configs[0].tenant_settings
+        return TenantResolutionSettings()
 
     @overload
     def provide_request_session(
@@ -1006,6 +1054,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 close()
             msg = "Synchronous on-demand connections require a synchronous tenant_extractor"
             raise ImproperConfigurationError(msg)
+        if (
+            payload is None
+            and has_tenant_strategy(plugin_state.config)
+            and scope.get("type") in {ScopeType.HTTP, ScopeType.WEBSOCKET, "http", "websocket"}
+        ):
+            raise_missing_tenant_http_exception(cast("Mapping[str, Any]", scope))
         payload_key = tenant_payload_key(plugin_state.connection_key)
         set_sqlspec_scope_state(scope, payload_key, payload)
         try:
@@ -1247,6 +1301,17 @@ class SQLCommenterMiddleware:
             SQLCommenterContext.set(previous)
 
 
+@dataclass(frozen=True, slots=True)
+class _ConnectionCleanupTarget:
+    """Configuration descriptor for ASGI residual connection cleanup."""
+
+    connection_key: str
+    session_key: str
+    commit_mode: CommitMode
+    extra_commit_statuses: frozenset[int]
+    extra_rollback_statuses: frozenset[int]
+
+
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
     """OpenAPI schema plugin expanding OffsetPagination[T] into a concrete schema.
 
@@ -1293,6 +1358,15 @@ class _NumpySignatureNamespace:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._numpy, name)
+
+
+def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
+    """Select the primary teardown exception to re-raise after completing all targets."""
+    if current is None:
+        return candidate
+    if isinstance(current, Exception) and not isinstance(candidate, Exception):
+        return candidate
+    return current
 
 
 def _normalize_header_list(headers: Any) -> list[str]:

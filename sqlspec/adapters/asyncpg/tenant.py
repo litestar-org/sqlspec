@@ -4,9 +4,9 @@ import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from asyncpg import InterfaceError
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.asyncpg._typing import AsyncpgInterfaceError
 from sqlspec.core.tenant.base import (
     TenantLeaseState,
     require_session_pooler,
@@ -65,12 +65,10 @@ async def apply_session_baseline(connection: "AsyncpgConnection", baseline: Mapp
 def validate_asyncpg_tenant_config(
     driver_features: Mapping[str, Any], connection_config: Mapping[str, Any]
 ) -> dict[str, str]:
-    """Validate affinity and the explicit declaration required by setup hooks."""
+    """Validate affinity and the explicit declaration required by pool setup hooks."""
     require_session_pooler(driver_features.get("pooler_mode"), "AsyncpgConfig")
     if (
-        driver_features.get("on_connection_create") is not None
-        or connection_config.get("init") is not None
-        or connection_config.get("setup") is not None
+        connection_config.get("init") is not None or connection_config.get("setup") is not None
     ) and "tenant_session_baseline" not in driver_features:
         msg = "Tenant connection callbacks require an explicit tenant_session_baseline"
         raise ImproperConfigurationError(msg)
@@ -123,7 +121,7 @@ class AsyncpgTenantLease(AsyncTenantLease):
     async def _invalidate(self, connection: Any) -> None:
         try:
             connection.terminate()
-        except InterfaceError:
+        except AsyncpgInterfaceError:
             pass
         finally:
             await self._release(connection)

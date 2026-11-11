@@ -18,7 +18,7 @@ from sqlspec.core.tenant import (
     validate_tenant_session_baseline,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, async_tenant_bypass, async_tenant_scope
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 
 def test_lease_state_snapshots_baseline_and_captures_payload() -> None:
@@ -254,13 +254,13 @@ def test_thread_propagation_requires_copied_context() -> None:
 @pytest.mark.anyio
 async def test_async_nested_scopes_restore_after_return() -> None:
     tenant_id = UUID("fd46b755-cdef-43d8-a0a1-32b97ee847fa")
-    async with async_tenant_scope(tenant_id) as outer:
+    async with TenantContext.scope(tenant_id) as outer:
         assert TenantContext.get_tenant_id() == str(tenant_id)
-        async with async_tenant_bypass() as bypass:
+        async with TenantContext.bypass() as bypass:
             assert bypass == TenantContextPayload.bypass()
             assert TenantContext.is_bypassed() is True
             assert TenantContext.get_tenant_id() is None
-            async with async_tenant_scope("inner"):
+            async with TenantContext.scope("inner"):
                 assert TenantContext.get_tenant_id() == "inner"
             assert TenantContext.get() is bypass
         assert TenantContext.get() is outer
@@ -270,11 +270,11 @@ async def test_async_nested_scopes_restore_after_return() -> None:
 @pytest.mark.anyio
 async def test_async_tasks_are_isolated_and_to_thread_propagates() -> None:
     async def worker(tenant_id: str) -> tuple[str | None, str | None]:
-        async with async_tenant_scope(tenant_id):
+        async with TenantContext.scope(tenant_id):
             await asyncio.sleep(0)
             return TenantContext.get_tenant_id(), await asyncio.to_thread(TenantContext.get_tenant_id)
 
-    async with async_tenant_scope("parent"):
+    async with TenantContext.scope("parent"):
         first, second = await asyncio.gather(worker("a"), worker("b"))
         assert first == ("a", "a")
         assert second == ("b", "b")
@@ -287,10 +287,10 @@ async def test_async_tasks_are_isolated_and_to_thread_propagates() -> None:
 async def test_async_exception_restores_context(bypass: bool) -> None:
     payload = TenantContextPayload(UUID("fd46b755-cdef-43d8-a0a1-32b97ee847fa"), {"role": "reader"})
     error = RuntimeError("body failed")
-    async with async_tenant_scope(payload, variables={"role": "writer"}) as outer:
+    async with TenantContext.scope(payload, variables={"role": "writer"}) as outer:
         assert outer.variables == {"role": "writer"}
         with pytest.raises(RuntimeError) as exc_info:
-            async with async_tenant_bypass() if bypass else async_tenant_scope("inner"):
+            async with TenantContext.bypass() if bypass else TenantContext.scope("inner"):
                 assert TenantContext.is_bypassed() is bypass
                 raise error
         assert exc_info.value is error
@@ -306,9 +306,9 @@ async def test_cancellation_restores_context_in_cancelled_task(bypass: bool) -> 
 
     async def child() -> None:
         try:
-            async with async_tenant_scope("outer"):
+            async with TenantContext.scope("outer"):
                 try:
-                    async with async_tenant_bypass() if bypass else async_tenant_scope("inner"):
+                    async with TenantContext.bypass() if bypass else TenantContext.scope("inner"):
                         assert TenantContext.is_bypassed() is bypass
                         ready.set()
                         await asyncio.Event().wait()
@@ -318,7 +318,7 @@ async def test_cancellation_restores_context_in_cancelled_task(bypass: bool) -> 
             restored.append(TenantContext.get_tenant_id())
 
     task = asyncio.create_task(child())
-    async with async_tenant_scope("parent"):
+    async with TenantContext.scope("parent"):
         await ready.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.base import SQLSpec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SanicConfigState, SQLSpecPlugin
@@ -52,7 +53,7 @@ def test_config_state_rejects_conflicting_extra_statuses() -> None:
 def test_duplicate_context_keys_are_rejected() -> None:
     """Each configured Sanic context key should be unique across configs."""
     mock_config = MagicMock()
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
     state_one = SanicConfigState(
         config=mock_config,
         connection_key="db_connection",
@@ -86,7 +87,7 @@ def test_pool_key_defaults_handle_pooled_and_non_pooled_configs(
     supports_connection_pooling: bool, expected_pool_key_prefix: str
 ) -> None:
     """Non-pooled configs should get isolated pool keys for duplicate-key validation."""
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
     config = MagicMock()
     config.supports_connection_pooling = supports_connection_pooling
     config.extension_config = {"sanic": {}}
@@ -122,17 +123,17 @@ def _make_request(correlation_id: str) -> SimpleNamespace:
 
 
 def test_extractor_init_sanic_plugin_extractor_is_none_when_correlation_disabled() -> None:
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_correlation=False)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_correlation=False)}))
     assert plugin._extractor is None
 
 
 def test_extractor_init_sanic_plugin_builds_extractor_when_correlation_enabled() -> None:
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_correlation=True)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_correlation=True)}))
     assert isinstance(plugin._extractor, CorrelationExtractor)
 
 
 async def test_extractor_init_sanic_plugin_reuses_same_extractor_across_requests() -> None:
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_correlation=True)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_correlation=True)}))
     extractor_id = id(plugin._extractor)
     try:
         for index in range(5):
@@ -147,6 +148,6 @@ async def test_extractor_init_sanic_plugin_reuses_same_extractor_across_requests
 
 def test_config_state_by_key_unknown_key_raises_value_error() -> None:
     """Unknown session keys should raise ValueError with the Sanic message."""
-    plugin = SQLSpecPlugin(MagicMock(configs={}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={}))
     with pytest.raises(ValueError, match="No configuration found with session_key: missing"):
         plugin._config_state_by_key("missing")

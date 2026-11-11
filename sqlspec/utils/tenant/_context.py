@@ -1,9 +1,9 @@
 """Immutable tenant identities and explicit context scopes."""
 
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Collection, Mapping, MutableMapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from inspect import isawaitable, iscoroutinefunction
+from inspect import isawaitable
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, cast, overload
 from uuid import UUID
@@ -19,10 +19,7 @@ __all__ = (
     "TenantExtractor",
     "TenantExtractorValue",
     "TenantScope",
-    "async_tenant_bypass",
-    "async_tenant_scope",
     "coerce_tenant_payload",
-    "shared_tenant_extractor",
     "single_membership_tenant_extractor",
     "tenant_context_var",
 )
@@ -225,30 +222,6 @@ class TenantBinding:
             TenantContext.reset(token)
 
 
-def async_tenant_scope(
-    tenant_id: "str | UUID | TenantContextPayload", *, variables: Mapping[str, str] | None = None
-) -> TenantScope:
-    """Bind tenant state across awaits and restore it on cancellation.
-
-    Args:
-        tenant_id: Tenant identity or an existing immutable payload.
-        variables: Session variables overriding values in an existing payload.
-
-    Returns:
-        An asynchronous context manager yielding the active payload.
-    """
-    return TenantContext.scope(tenant_id, variables=variables)
-
-
-def async_tenant_bypass() -> TenantScope:
-    """Bind explicit bypass state across awaits and restore it on exit.
-
-    Returns:
-        An asynchronous context manager yielding the bypass payload.
-    """
-    return TenantContext.bypass()
-
-
 TenantExtractorValue: TypeAlias = TenantContextPayload | str | UUID | None
 TenantExtractor: TypeAlias = Callable[
     [MutableMapping[str, Any]], TenantExtractorValue | Awaitable[TenantExtractorValue]
@@ -320,48 +293,3 @@ def single_membership_tenant_extractor(
         return TenantContextPayload(next(iter(values))) if len(values) == 1 else None
 
     return extract
-
-
-def shared_tenant_extractor(
-    states: Iterable[Any], *, framework: str, synchronous: bool = False
-) -> Callable[..., Any] | None:
-    """Select the one tenant extractor shared by a framework plugin's injected configurations.
-
-    Args:
-        states: Per-configuration plugin states exposing ``disable_di``, ``tenant_extractor``,
-            ``session_key`` and ``config``.
-        framework: Framework name used in error messages.
-        synchronous: Reject coroutine extractors.
-
-    Returns:
-        The shared extractor, or None when no configuration declares one.
-
-    Raises:
-        ImproperConfigurationError: A tenant configuration lacks an extractor, an extractor
-            is not callable, or configurations declare different extractors.
-    """
-    selected: Callable[..., Any] | None = None
-    for state in states:
-        if state.disable_di:
-            continue
-        extractor = state.tenant_extractor
-        if extractor is None:
-            if state.config.driver_features.get("tenant_strategy") is not None:
-                msg = f"{framework} session {state.session_key!r} requires tenant_extractor for tenant strategy"
-                raise ImproperConfigurationError(msg)
-            continue
-        if not callable(extractor):
-            msg = (
-                f"{framework} tenant_extractor must be a synchronous callable"
-                if synchronous
-                else f"{framework} tenant_extractor must be callable"
-            )
-            raise ImproperConfigurationError(msg)
-        if synchronous and (iscoroutinefunction(extractor) or iscoroutinefunction(type(extractor).__call__)):
-            msg = f"{framework} tenant_extractor must be a synchronous callable"
-            raise ImproperConfigurationError(msg)
-        if selected is not None and selected is not extractor:
-            msg = f"{framework} configurations must share the same tenant_extractor"
-            raise ImproperConfigurationError(msg)
-        selected = extractor
-    return selected

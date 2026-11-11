@@ -40,7 +40,10 @@ class SanicConfigState:
     sqlcommenter_framework: str = "sanic"
 
     def __post_init__(self) -> None:
-        """Validate transaction status overrides."""
+        """Validate transaction status overrides and tenant extractor callability."""
+        if self.tenant_extractor is not None and not callable(self.tenant_extractor):
+            msg = "Sanic tenant_extractor must be callable"
+            raise ImproperConfigurationError(msg)
         if (self.extra_commit_statuses or set()) & (self.extra_rollback_statuses or set()):
             msg = "Extra rollback statuses and commit statuses must not share any status codes"
             raise ImproperConfigurationError(msg)

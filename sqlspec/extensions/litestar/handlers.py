@@ -8,7 +8,7 @@ __signature__/__annotations__ at runtime for dependency injection.
 
 import contextlib
 import inspect
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -24,7 +24,11 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
-from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, resolve_litestar_tenant
+from sqlspec.extensions.litestar.tenant import (
+    TenantResolutionSettings,
+    raise_missing_tenant_http_exception,
+    resolve_litestar_tenant,
+)
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -42,15 +46,18 @@ __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
     "autocommit_handler_maker",
     "connection_provider_maker",
+    "has_tenant_strategy",
     "lifespan_handler_maker",
     "manual_handler_maker",
     "pool_provider_maker",
     "record_request_exception",
     "session_provider_maker",
+    "tenant_payload_key",
 )
 
 _REQUEST_EXCEPTION_KEY: Final = "request_exception"
-SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, WEBSOCKET_DISCONNECT, WEBSOCKET_CLOSE}
+SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT}
+_REQUEST_SCOPE_TYPES: Final = {ScopeType.HTTP, ScopeType.WEBSOCKET, "http", "websocket"}
 
 
 async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
@@ -63,68 +70,9 @@ async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
     set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, exc)
 
 
-def _resolve_connection_tenant(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
-) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
-    if config.driver_features.get("tenant_strategy") is not None:
-        ambient = TenantContext.get()
-        return (
-            ambient
-            if ambient is not None
-            else resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
-        )
-    return None
-
-
 def tenant_payload_key(connection_key: str) -> str:
     """Return the scope-state key holding a connection's captured tenant payload."""
     return f"{connection_key}_tenant_payload"
-
-
-async def _capture_connection_tenant(
-    config: "DatabaseConfigProtocol[Any, Any, Any]",
-    scope: "Scope",
-    connection_key: str,
-    settings: TenantResolutionSettings | None,
-) -> TenantContextPayload | None:
-    payload = _resolve_connection_tenant(config, scope, settings)
-    if inspect.isawaitable(payload):
-        payload = await payload
-    set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
-    return payload
-
-
-async def _exit_connection_context(
-    connection_cm: Any,
-    connection: Any,
-    scope: "Scope",
-    exc_override: BaseException | None = None,
-    *,
-    connection_key: str | None = None,
-) -> None:
-    """Exit connection context manager forwarding recorded or override exception if any.
-
-    Args:
-        connection_cm: The context manager or None.
-        connection: The database connection instance.
-        scope: The ASGI connection scope.
-        exc_override: Optional exception overriding any scope-recorded exception.
-        connection_key: Connection scope key holding its captured immutable tenant payload.
-    """
-    exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
-    exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
-    payload = (
-        get_sqlspec_scope_state(scope, tenant_payload_key(connection_key), pop=True)
-        if connection_key is not None
-        else None
-    )
-    with TenantContext.bind(payload):
-        if isinstance(connection_cm, AbstractAsyncContextManager):
-            await connection_cm.__aexit__(*exit_args)
-        elif isinstance(connection_cm, AbstractContextManager):
-            await with_ensure_async_(connection_cm).__aexit__(*exit_args)
-        else:
-            await ensure_async_(connection.close)()
 
 
 def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
@@ -438,3 +386,70 @@ def session_provider_maker(
     provide_session.__annotations__["return"] = AsyncGenerator[config.driver_type, None]  # type: ignore[name-defined]
 
     return provide_session
+
+
+def has_tenant_strategy(config: Any) -> bool:
+    """Return whether a database configuration enables an active tenant strategy."""
+    features = getattr(config, "driver_features", None)
+    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
+
+
+def _resolve_connection_tenant(
+    config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
+) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
+    if has_tenant_strategy(config):
+        ambient = TenantContext.get()
+        return (
+            ambient
+            if ambient is not None
+            else resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
+        )
+    return None
+
+
+async def _capture_connection_tenant(
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
+    scope: "Scope",
+    connection_key: str,
+    settings: TenantResolutionSettings | None,
+) -> TenantContextPayload | None:
+    payload = _resolve_connection_tenant(config, scope, settings)
+    if inspect.isawaitable(payload):
+        payload = await payload
+    if payload is None and has_tenant_strategy(config) and scope.get("type") in _REQUEST_SCOPE_TYPES:
+        raise_missing_tenant_http_exception(cast("Mapping[str, Any]", scope))
+    set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
+    return payload
+
+
+async def _exit_connection_context(
+    connection_cm: Any,
+    connection: Any,
+    scope: "Scope",
+    exc_override: BaseException | None = None,
+    *,
+    connection_key: str | None = None,
+) -> None:
+    """Exit connection context manager forwarding recorded or override exception if any.
+
+    Args:
+        connection_cm: The context manager or None.
+        connection: The database connection instance.
+        scope: The ASGI connection scope.
+        exc_override: Optional exception overriding any scope-recorded exception.
+        connection_key: Connection scope key holding its captured immutable tenant payload.
+    """
+    exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
+    exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
+    payload = (
+        get_sqlspec_scope_state(scope, tenant_payload_key(connection_key), pop=True)
+        if connection_key is not None
+        else None
+    )
+    with TenantContext.bind(payload):
+        if isinstance(connection_cm, AbstractAsyncContextManager):
+            await connection_cm.__aexit__(*exit_args)
+        elif isinstance(connection_cm, AbstractContextManager):
+            await with_ensure_async_(connection_cm).__aexit__(*exit_args)
+        else:
+            await ensure_async_(connection.close)()
