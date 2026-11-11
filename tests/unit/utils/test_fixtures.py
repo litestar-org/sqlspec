@@ -3171,3 +3171,16 @@ class _FakeSparseVector:
     def to_text(self) -> str:
         nonzero = [f"{idx}:{val}" for idx, val in enumerate(self._values, start=1) if val != 0.0]
         return f"{{{','.join(nonzero)}}}/{len(self._values)}"
+
+
+@pytest.mark.parametrize("dialect", ["teradata", "vantage"])
+def test_teradata_lob_export_ordering(tmp_path: Path, dialect: str) -> None:
+    driver = MagicMock()
+    driver.statement_config.dialect = dialect
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": name, "data_type": kind, "is_primary": False}
+        for name, kind in [("id", "INTEGER"), ("doc", "JSON"), ("raw", "BLOB"), ("win", "PERIOD(DATE)")]
+    ]
+    driver.select.return_value = []
+    export_table_fixtures_sync(driver, tmp_path, ["docs"], compress=False)
+    assert driver.select.call_args.args[0].partition("ORDER BY")[2].strip() == '"id"'

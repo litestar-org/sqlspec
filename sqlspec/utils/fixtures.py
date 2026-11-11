@@ -115,6 +115,7 @@ _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "xml",
 })
 _UNORDERABLE_FAMILY_TYPES: Final["Mapping[str, frozenset[str]]"] = {
+    "teradata": frozenset({"blob", "clob", "json", "xml", "st_geometry", "mbr", "mbb", "period"}),
     "bigquery": frozenset({"geography", "json"}),
     "db2": frozenset({"blob", "clob", "dbclob", "long varchar", "long vargraphic", "xml"}),
     "mysql": frozenset({"blob", "geometry", "json", "longblob", "mediumblob", "point", "tinyblob", "vector"}),
@@ -709,6 +710,9 @@ def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
     postgresql, mariadb, or mssql, so dialect families are mapped to standard
     SQLGlot identifiers.
     """
+    if family == "teradata":
+        importlib.import_module("sqlspec.dialects.teradata")
+        return "teradata"
     if family in {"postgres", "mysql", "tsql"}:
         return family
     if family in {"sybase", "sqlanywhere"} and family not in Dialect.classes:
@@ -925,6 +929,8 @@ def _dialect_family(dialect_name: str) -> str:
         return "postgres"
     if dialect_name in _MYSQL_DIALECTS:
         return "mysql"
+    if dialect_name in {"teradata", "vantage"}:
+        return "teradata"
     if dialect_name == "ase":
         return "sybase"
     if dialect_name == "sa":

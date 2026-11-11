@@ -255,6 +255,13 @@ def init_spawn_worker_thread_budget(max_workers: int, cpu_count: int | None = No
 def build_checkpoint_table_ddl(dialect: str, checkpoint_table: str) -> str:
     """Build DDL to create a multi-shard ingestion checkpoint table if it does not exist."""
     norm = (dialect or "").lower().strip()
+    if norm == "teradata":
+        return (
+            f"CREATE MULTISET TABLE {checkpoint_table} ("
+            "phase VARCHAR(128) NOT NULL, shard_uri VARCHAR(1024) NOT NULL, "
+            "rows_loaded BIGINT NOT NULL, bytes_processed BIGINT NOT NULL, duration_s DOUBLE PRECISION NOT NULL, "
+            "completed_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (phase, shard_uri))"
+        )
     if norm == "sybase":
         create_sql = (
             f"CREATE TABLE {checkpoint_table} ("
@@ -293,6 +300,26 @@ def build_checkpoint_table_ddl(dialect: str, checkpoint_table: str) -> str:
     )
 
 
+def _ensure_checkpoint_table_sync(driver: Any, dialect: str, checkpoint_table: str) -> None:
+    """Create checkpoint storage, tolerating an existing Teradata table."""
+    try:
+        driver.execute(build_checkpoint_table_ddl(dialect, checkpoint_table))
+    except Exception as exc:
+        message = str(exc).lower()
+        if dialect.strip().lower() != "teradata" or ("[error 3803]" not in message and "already exists" not in message):
+            raise
+
+
+async def _ensure_checkpoint_table_async(driver: Any, dialect: str, checkpoint_table: str) -> None:
+    """Create checkpoint storage, tolerating an existing Teradata table."""
+    try:
+        await driver.execute(build_checkpoint_table_ddl(dialect, checkpoint_table))
+    except Exception as exc:
+        message = str(exc).lower()
+        if dialect.strip().lower() != "teradata" or ("[error 3803]" not in message and "already exists" not in message):
+            raise
+
+
 def build_checkpoint_select_sql(checkpoint_table: str) -> str:
     """Build SQL to select already-completed shard URIs for a given checkpoint phase."""
     return f"SELECT shard_uri FROM {checkpoint_table} WHERE phase = :phase"
@@ -301,6 +328,18 @@ def build_checkpoint_select_sql(checkpoint_table: str) -> str:
 def build_checkpoint_insert_sql(dialect: str, checkpoint_table: str) -> str:
     """Build SQL to record a completed shard in the checkpoint table."""
     norm = (dialect or "").lower().strip()
+    if norm == "teradata":
+        return (
+            f"MERGE INTO {checkpoint_table} AS tgt USING (SELECT "
+            "CAST(:phase AS VARCHAR(128)) AS phase, CAST(:shard_uri AS VARCHAR(1024)) AS shard_uri, "
+            "CAST(:rows_loaded AS BIGINT) AS rows_loaded, CAST(:bytes_processed AS BIGINT) AS bytes_processed, "
+            "CAST(:duration_s AS DOUBLE PRECISION) AS duration_s) AS src "
+            "ON (tgt.phase = src.phase AND tgt.shard_uri = src.shard_uri) "
+            "WHEN MATCHED THEN UPDATE SET rows_loaded = src.rows_loaded, bytes_processed = src.bytes_processed, "
+            "duration_s = src.duration_s, completed_at = CURRENT_TIMESTAMP(6) "
+            "WHEN NOT MATCHED THEN INSERT (phase, shard_uri, rows_loaded, bytes_processed, duration_s) "
+            "VALUES (src.phase, src.shard_uri, src.rows_loaded, src.bytes_processed, src.duration_s)"
+        )
     if norm in _ON_CONFLICT_DIALECTS:
         return (
             f"INSERT INTO {checkpoint_table} (phase, shard_uri, rows_loaded, bytes_processed, duration_s) "
@@ -357,6 +396,8 @@ def build_stage_table_ddl(
 ) -> "list[str]":
     """Build dialect-specific DDL statements to create an empty staging table matching target_table."""
     norm = (dialect or "").lower().strip()
+    if norm == "teradata":
+        return [f"CREATE MULTISET TABLE {stage_table} AS {target_table} WITH NO DATA"]
     if norm in _PG_FAMILY_DIALECTS:
         return [f"CREATE UNLOGGED TABLE IF NOT EXISTS {stage_table} (LIKE {target_table} INCLUDING DEFAULTS)"]
     if norm in {"duckdb", "sqlite", "aiosqlite"}:
@@ -430,7 +471,7 @@ def build_stage_merge_sql(
         )
 
     on_clause = " AND ".join(f"tgt.{key} = stg.{key}" for key in conflict_keys)
-    if norm == "sybase":
+    if norm in {"sybase", "teradata"}:
         stage_values = ", ".join(
             f"CAST(stg.{col} AS {type_casts[col]})" if (type_casts and col in type_casts) else f"stg.{col}"
             for col in columns
@@ -447,6 +488,9 @@ def build_stage_merge_sql(
             else f"{col} = stg.{col}"
             for col in update_columns
         )
+        if norm == "teradata":
+            where_clause = " AND ".join(f"{target_table}.{key} = stg.{key}" for key in conflict_keys)
+            return f"UPDATE {target_table} FROM {stage_table} stg SET {assignments} WHERE {where_clause}; {insert_sql}"
         return (
             f"UPDATE {target_table} SET {assignments} "
             f"FROM {target_table} tgt, {stage_table} stg WHERE {on_clause}; {insert_sql}"
@@ -472,7 +516,7 @@ def build_stage_merge_sql(
 def build_drop_stage_table_sql(dialect: str, stage_table: str) -> str:
     """Build SQL statement to drop a staging table."""
     norm = (dialect or "").lower().strip()
-    if norm in (_ORACLE_FAMILY_DIALECTS | {"db2", "sybase"}):
+    if norm in (_ORACLE_FAMILY_DIALECTS | {"db2", "sybase", "teradata"}):
         return f"DROP TABLE {stage_table}"
     return f"DROP TABLE IF EXISTS {stage_table}"
 
@@ -518,6 +562,12 @@ def build_drop_index_sql(
     if not idx_name:
         return None
     resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
+    if norm == "teradata":
+        parts = split_qualified_identifier(table)
+        if len(parts) == 1 and resolved_schema:
+            parts = (*split_qualified_identifier(resolved_schema), *parts)
+        qualified_table = ".".join(quote_identifier(part) for part in parts)
+        return f"DROP INDEX {quote_identifier(idx_name)} ON {qualified_table}"
     if norm in _SAP_DIALECTS:
         table_parts = split_qualified_identifier(table)
         if len(table_parts) == 1 and resolved_schema:
@@ -577,6 +627,13 @@ def build_create_index_sql(
         resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
         is_unique = bool(index_meta.get("is_unique") or index_meta.get("unique"))
         unique_kw = "UNIQUE " if is_unique else ""
+        if norm == "teradata":
+            parts = split_qualified_identifier(table)
+            if len(parts) == 1 and resolved_schema:
+                parts = (*split_qualified_identifier(resolved_schema), *parts)
+            qualified_table = ".".join(quote_identifier(part) for part in parts)
+            clean_cols = re.sub(r"\s+(?:ASC|DESC)(?=\s*(?:,|$))", "", col_list, flags=re.IGNORECASE)
+            return f"CREATE {unique_kw}INDEX {quote_identifier(idx_name)} ({clean_cols}) ON {qualified_table}"
         if norm in _SAP_DIALECTS:
             table_parts = split_qualified_identifier(table)
             if len(table_parts) == 1 and resolved_schema:
@@ -818,7 +875,7 @@ def execute_staged_load_sync(
                 exclude_update_columns=exclude_update_columns,
                 type_casts=type_casts,
             )
-            if dialect == "sybase" and conflict_keys:
+            if dialect in {"sybase", "teradata"} and conflict_keys:
                 driver.execute_script(merge_sql)
             else:
                 driver.execute(merge_sql)
@@ -904,7 +961,7 @@ async def execute_staged_load_async(
                 exclude_update_columns=exclude_update_columns,
                 type_casts=type_casts,
             )
-            if dialect == "sybase" and conflict_keys:
+            if dialect in {"sybase", "teradata"} and conflict_keys:
                 await driver.execute_script(merge_sql)
             else:
                 await driver.execute(merge_sql)
@@ -1008,7 +1065,7 @@ def execute_load_from_storage_sync(
     dialect = str(getattr(driver, "dialect", "") or "").lower().strip()
     completed_uris: set[str] = set()
     if checkpoint_table:
-        driver.execute(build_checkpoint_table_ddl(dialect, checkpoint_table))
+        _ensure_checkpoint_table_sync(driver, dialect, checkpoint_table)
         res = driver.execute(build_checkpoint_select_sql(checkpoint_table), {"phase": checkpoint_phase})
         for row in res.data or []:
             uri_val = row.get("shard_uri") if isinstance(row, Mapping) else row[0]
@@ -1096,7 +1153,7 @@ def execute_load_from_storage_sync(
                 type_casts=type_casts,
             )
             w0 = perf_counter()
-            if dialect == "sybase" and conflict_keys:
+            if dialect in {"sybase", "teradata"} and conflict_keys:
                 driver.execute_script(merge_sql)
             else:
                 driver.execute(merge_sql)
@@ -1207,7 +1264,7 @@ async def execute_load_from_storage_async(
     dialect = str(getattr(driver, "dialect", "") or "").lower().strip()
     completed_uris: set[str] = set()
     if checkpoint_table:
-        await driver.execute(build_checkpoint_table_ddl(dialect, checkpoint_table))
+        await _ensure_checkpoint_table_async(driver, dialect, checkpoint_table)
         res = await driver.execute(build_checkpoint_select_sql(checkpoint_table), {"phase": checkpoint_phase})
         for row in res.data or []:
             uri_val = row.get("shard_uri") if isinstance(row, Mapping) else row[0]
@@ -1285,7 +1342,7 @@ async def execute_load_from_storage_async(
                 type_casts=type_casts,
             )
             w0 = perf_counter()
-            if dialect == "sybase" and conflict_keys:
+            if dialect in {"sybase", "teradata"} and conflict_keys:
                 await driver.execute_script(merge_sql)
             else:
                 await driver.execute(merge_sql)
