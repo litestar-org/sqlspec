@@ -1633,7 +1633,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         delete_sessions_sql = f"DELETE FROM {self._session_table} {where}"
 
         try:
-            with self._config.provide_connection() as conn:
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, count_sql, params)

@@ -1201,7 +1201,14 @@ def test_teradata_adk_schema_targets() -> None:
 
 @pytest.mark.parametrize(
     "operation",
-    ["upsert_app_state", "upsert_user_state", "set_metadata", "delete_session", "append_event_and_update_state"],
+    [
+        "upsert_app_state",
+        "upsert_user_state",
+        "set_metadata",
+        "delete_session",
+        "delete_idle_sessions",
+        "append_event_and_update_state",
+    ],
 )
 def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, operation: str) -> None:
     from contextlib import nullcontext
@@ -1232,6 +1239,7 @@ def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, ope
         "upsert_user_state": ("app", "user", {}),
         "set_metadata": ("key", "value"),
         "delete_session": ("app", "user", "session"),
+        "delete_idle_sessions": (now, "app"),
         "append_event_and_update_state": (event, "app", "user", "session", {}),
     }
     with pytest.raises(TransactionError, match="autocommit-only"):
