@@ -642,7 +642,7 @@ async def test_tenant_pool_enforces_rls_and_restores_after_failures(postgres_ser
     from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
     from sqlspec.exceptions import MigrationError, TenantCleanupError, TenantContextError
     from sqlspec.migrations.commands import AsyncMigrationCommands
-    from sqlspec.utils.tenant import TenantContext
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
     from sqlspec.utils.text import quote_identifier
 
     suffix = uuid4().hex[:12]
@@ -688,17 +688,17 @@ async def test_tenant_pool_enforces_rls_and_restores_after_failures(postgres_ser
         await admin.execute(f"GRANT SELECT, INSERT ON {quoted_table} TO {quoted_role}")
         first_pid = 0
         for tenant, value in [("a", 1), ("b", 2)]:
-            with TenantContext.scope(tenant, variables={"region": "eu"} if tenant == "a" else None):
-                async with config.provide_session() as session:
-                    pid = await session.select_value("SELECT pg_backend_pid()")
-                    if first_pid:
-                        assert pid == first_pid
-                    first_pid = pid
-                    await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", (tenant, value))
-                    assert await session.select_value(f"SELECT value FROM {quoted_table}") == value
-                    assert await session.select_value("SHOW timezone") == "UTC"
-                    if tenant == "b":
-                        assert await session.select_value("SELECT current_setting('app.region', true)") in {None, ""}
+            payload = TenantContextPayload(tenant, variables={"region": "eu"} if tenant == "a" else None)
+            async with config.provide_session(tenant=payload) as session:
+                pid = await session.select_value("SELECT pg_backend_pid()")
+                if first_pid:
+                    assert pid == first_pid
+                first_pid = pid
+                await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", (tenant, value))
+                assert await session.select_value(f"SELECT value FROM {quoted_table}") == value
+                assert await session.select_value("SHOW timezone") == "UTC"
+                if tenant == "b":
+                    assert await session.select_value("SELECT current_setting('app.region', true)") in {None, ""}
         with TenantContext.scope("a"):
             async with config.provide_session() as session:
                 with pytest.raises(SQLSpecError):
@@ -725,10 +725,9 @@ async def test_tenant_pool_enforces_rls_and_restores_after_failures(postgres_ser
         ready = asyncio.Event()
 
         async def cancelled_body() -> None:
-            with TenantContext.scope("a"):
-                async with config.provide_session():
-                    ready.set()
-                    await asyncio.Event().wait()
+            async with config.provide_session(tenant="a"):
+                ready.set()
+                await asyncio.Event().wait()
 
         task = asyncio.create_task(cancelled_body())
         await ready.wait()

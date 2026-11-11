@@ -42,7 +42,7 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
 
 ## Tenant Strategies
 
-Set `driver_features={"tenant_strategy": "session_context"}`; `"default"` and `True` select the same strategy. Both providers use one standalone connection per lease rather than the normal thread-local connection. Cleanup or setup failure physically closes that connection. Standalone `create_connection()` is rejected in tenant mode.
+Set `driver_features={"tenant_strategy": "rls"}`; `"session_context"`, `"default"`, and `True` select the same strategy. Both providers use one standalone connection per lease rather than the normal thread-local connection. Cleanup or setup failure physically closes that connection. Standalone `create_connection()` is rejected in tenant mode.
 
 Each boundary uses one bound SQL batch: capture/apply/verify at checkout, restore/verify at checkin. Owned keys remain mutable (`@read_only=0`). The strategy neither commits nor rolls back nor changes autocommit. The lease rolls back unfinished work before cleanup and closes its standalone connection after release.
 

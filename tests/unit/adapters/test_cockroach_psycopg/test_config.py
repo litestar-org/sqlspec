@@ -295,7 +295,8 @@ def test_cockroach_psycopg_sync_session_context_resolves_callable_statement_conf
         prepare_driver=lambda driver: driver,
     )
 
-    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgSyncDriver") as driver_type:
+    with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_sync_driver") as resolver:
+        driver_type = resolver.return_value
         with ctx:
             pass
 
@@ -392,7 +393,8 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
         prepare_driver=lambda driver: driver,
     )
 
-    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgAsyncDriver") as driver_type:
+    with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_async_driver") as resolver:
+        driver_type = resolver.return_value
         async with ctx:
             pass
 

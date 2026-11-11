@@ -119,7 +119,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     connection_type: "ClassVar[type[PymssqlConnection]]" = cast("type[PymssqlConnection]", PymssqlConnection)
     migration_tracker_type: "ClassVar[type[PymssqlSyncMigrationTracker]]" = PymssqlSyncMigrationTracker
     supports_tenant_strategy: "ClassVar[bool]" = True
-    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "session_context"})
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls", "session_context"})
     tenant_strategy_type: "ClassVar[type[Any] | None]" = PymssqlSessionContextStrategy
     tenant_lease_type: "ClassVar[type[Any] | None]" = PymssqlTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True

@@ -4,7 +4,7 @@ import contextlib
 import inspect
 import sys
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
 
 from mypy_extensions import mypyc_attr
 
@@ -29,10 +29,13 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.core.tenant import AsyncTenantStrategy, TenantStrategyShorthand
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
@@ -374,19 +377,40 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         await self._ensure_connection(connection)
         return connection
 
+    @overload
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PsqlpySessionContext":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, tenant: None = None, **_kwargs: Any
+    ) -> "PsqlpySessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "AbstractAsyncContextManager[PsqlpyDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "PsqlpySessionContext | AbstractAsyncContextManager[PsqlpyDriver]":
         """Provide an async driver session context manager.
 
         Args:
             *_args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Tenant identity or payload bound until session cleanup; None inherits the current scope.
             **_kwargs: Additional keyword arguments.
 
         Returns:
             A PsqlpyDriver session context manager.
         """
+        if tenant is not None:
+            return self._provide_async_tenant_session(tenant, *_args, statement_config=statement_config, **_kwargs)
         factory = _PsqlpySessionFactory(self)
         return PsqlpySessionContext(
             acquire_connection=factory.acquire_connection,

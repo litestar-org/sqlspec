@@ -1,7 +1,7 @@
 """CockroachDB AsyncPG configuration."""
 
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
 from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs, register_pgvector_support
 from sqlspec.adapters.asyncpg.tenant import AsyncpgTenantLease
@@ -33,9 +33,12 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "CockroachAsyncpgConfig",
@@ -310,14 +313,46 @@ class CockroachAsyncpgConfig(
             raise
         return cast("CockroachAsyncpgConnection", connection)
 
+    @overload
     def provide_session(
         self,
         *_args: Any,
         statement_config: "StatementConfig | None" = None,
+        tenant: None = None,
         follower_reads: bool | None = None,
         staleness: str | None = None,
         **_kwargs: Any,
-    ) -> "CockroachAsyncpgSessionContext":
+    ) -> "CockroachAsyncpgSessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "AbstractAsyncContextManager[CockroachAsyncpgDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "CockroachAsyncpgSessionContext | AbstractAsyncContextManager[CockroachAsyncpgDriver]":
+        if tenant is not None:
+            return self._provide_async_tenant_session(
+                tenant,
+                *_args,
+                statement_config=statement_config,
+                follower_reads=follower_reads,
+                staleness=staleness,
+                **_kwargs,
+            )
         factory = _CockroachAsyncpgSessionFactory(self)
         driver_features = dict(self.driver_features)
         if follower_reads is not None:

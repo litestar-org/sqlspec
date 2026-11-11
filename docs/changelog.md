@@ -7,7 +7,7 @@ important operational fixes.
 
 ## Recent Updates
 
-* Added tenant leases for PostgreSQL, Oracle, SQL Server, and CockroachDB. Request hooks bind each lease to a tenant scope. Failed cleanup keeps the connection out of the pool. Migrations use a separate config and pool. See [Multi-Tenancy](learn/recipes/multi-tenancy.md).
+* Added tenant leases for PostgreSQL, Oracle, SQL Server, and CockroachDB. Pass `provide_session(tenant="tenant-a")` to bind a tenant for one session, or use request hooks and tenant scopes for several sessions. SQL Server accepts `"rls"` alongside `"session_context"`. Failed cleanup keeps the connection out of the pool. Migrations use a separate config and pool. See [Multi-Tenancy](learn/recipes/multi-tenancy.md).
 
 ### v0.72.0
 

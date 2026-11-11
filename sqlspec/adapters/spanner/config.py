@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
     from logging import Logger
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.adapters.spanner._typing import SpannerAsyncDatabase as AsyncDatabase
     from sqlspec.adapters.spanner._typing import SpannerClientInfo as ClientInfo
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
     from sqlspec.storage import StorageCapabilities
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "SpannerAsyncConfig",
@@ -498,6 +500,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         self,
         *args: Any,
         statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
@@ -515,6 +518,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         Args:
             *args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
             transaction: Whether to use a Transaction (True, default) or
                 Snapshot (False).
             request_options: Session-scoped RequestOptions for Spanner statements.
@@ -527,6 +531,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         Returns:
             A Spanner driver session context manager.
         """
+        if tenant is not None:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         handler = _SpannerSyncSessionConnectionHandler(self, transaction=transaction)
         return SpannerSyncSessionContext(
             acquire_connection=handler.acquire_connection,
@@ -918,6 +925,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         self,
         *args: Any,
         statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
@@ -935,6 +943,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         Args:
             *args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
             transaction: Whether to use a Transaction (True, default) or
                 Snapshot (False).
             request_options: Session-scoped RequestOptions for Spanner statements.
@@ -947,6 +956,9 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         Returns:
             An async Spanner driver session context manager.
         """
+        if tenant is not None:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         handler = _SpannerAsyncSessionConnectionHandler(self, transaction=transaction)
         return SpannerAsyncSessionContext(
             acquire_connection=handler.acquire_connection,

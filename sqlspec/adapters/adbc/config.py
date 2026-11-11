@@ -42,8 +42,10 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures", "AdbcPoolConfig")
@@ -571,7 +573,11 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         return AdbcConnectionContext(self)
 
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
     ) -> "AdbcSessionContext":
         """Provide a driver session context manager.
 
@@ -581,11 +587,15 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         Args:
             *_args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
             **_kwargs: Additional keyword arguments.
 
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
+        if tenant is not None:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         if self._pool_config is not None:
             self.create_pool()
         self._detect_extensions_if_needed()

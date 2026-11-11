@@ -2,6 +2,27 @@
 
 Tenant scopes store an immutable identity in the current Python context. The context helpers perform no database I/O. Configured adapter strategies apply the captured payload to a connection lease; database policies enforce row access.
 
+## Session Providers
+
+Pass an authorized tenant directly to a tenant-enabled config:
+
+```python
+async with config.provide_session(tenant="tenant-a") as session:
+    rows = await session.select("SELECT id, name FROM projects")
+```
+
+Sync configs accept the same keyword with `with`. `SQLSpec.provide_session(config, tenant=...)` also forwards it. The value can be a string, UUID, or `TenantContextPayload`, including `TenantContextPayload.bypass()` for explicit bypass. Use a payload to supply session variables. The tenant stays bound through session cleanup and the prior context is restored on every exit. `tenant=None`, like omitting the argument, inherits the ambient scope. An explicit tenant requires a configured strategy; unsupported adapters reject it.
+
+All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="default"`. Adapter-specific shorthands select the same built-in strategy:
+
+| Database | Shorthand | Built-in behavior |
+| --- | --- | --- |
+| PostgreSQL and CockroachDB | `"rls"` | Sets session variables for database row policies. |
+| SQL Server | `"rls"` or `"session_context"` | Sets mutable `SESSION_CONTEXT` keys for database row policies. |
+| Oracle | `"identifier"` | Sets client-identifier metadata. |
+
+Oracle VPD requires an explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` with trusted setter, clearer, namespace, and attribute names. There is no parameter-free `"vpd"` shorthand. See the [Oracle reference](adapters/oracledb.md#tenant-strategies).
+
 ```python
 from sqlspec import TenantContext, TenantContextPayload
 

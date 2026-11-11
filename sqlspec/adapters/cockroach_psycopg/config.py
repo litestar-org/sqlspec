@@ -3,7 +3,7 @@
 import inspect
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
@@ -47,10 +47,13 @@ from sqlspec.extensions.events import EventRuntimeHints
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "CockroachPsycopgAsyncConfig",
@@ -347,14 +350,46 @@ class CockroachPsycopgSyncConfig(
             raise
         return connection
 
+    @overload
     def provide_session(
         self,
         *_args: Any,
         statement_config: "StatementConfig | None" = None,
+        tenant: None = None,
         follower_reads: bool | None = None,
         staleness: str | None = None,
         **_kwargs: Any,
-    ) -> "CockroachPsycopgSyncSessionContext":
+    ) -> "CockroachPsycopgSyncSessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "AbstractContextManager[CockroachPsycopgSyncDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "CockroachPsycopgSyncSessionContext | AbstractContextManager[CockroachPsycopgSyncDriver]":
+        if tenant is not None:
+            return self._provide_sync_tenant_session(
+                tenant,
+                *_args,
+                statement_config=statement_config,
+                follower_reads=follower_reads,
+                staleness=staleness,
+                **_kwargs,
+            )
         handler = _CockroachPsycopgSyncSessionConnectionHandler(self)
         driver_features = dict(self.driver_features)
         if follower_reads is not None:
@@ -619,14 +654,46 @@ class CockroachPsycopgAsyncConfig(
             raise
         return connection
 
+    @overload
     def provide_session(
         self,
         *_args: Any,
         statement_config: "StatementConfig | None" = None,
+        tenant: None = None,
         follower_reads: bool | None = None,
         staleness: str | None = None,
         **_kwargs: Any,
-    ) -> "CockroachPsycopgAsyncSessionContext":
+    ) -> "CockroachPsycopgAsyncSessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        follower_reads: bool | None = None,
+        staleness: str | None = None,
+        **_kwargs: Any,
+    ) -> "CockroachPsycopgAsyncSessionContext | AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]":
+        if tenant is not None:
+            return self._provide_async_tenant_session(
+                tenant,
+                *_args,
+                statement_config=statement_config,
+                follower_reads=follower_reads,
+                staleness=staleness,
+                **_kwargs,
+            )
         handler = _CockroachPsycopgAsyncSessionConnectionHandler(self)
         driver_features = dict(self.driver_features)
         if follower_reads is not None:

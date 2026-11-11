@@ -45,7 +45,6 @@ Set `DATABASE_URL` to the app role's DSN, then run:
 import asyncio
 import os
 
-from sqlspec import async_tenant_scope
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 
 
@@ -55,12 +54,11 @@ async def main() -> None:
         driver_features={"tenant_strategy": "rls"},
     )
     try:
-        async with async_tenant_scope("acme"):
-            async with config.provide_session() as session:
-                rows = await session.select(
-                    "SELECT id, name FROM public.projects ORDER BY id"
-                )
-                assert rows == [{"id": 1, "name": "Billing"}]
+        async with config.provide_session(tenant="acme") as session:
+            rows = await session.select(
+                "SELECT id, name FROM public.projects ORDER BY id"
+            )
+            assert rows == [{"id": 1, "name": "Billing"}]
     finally:
         await config.close_pool()
 
@@ -68,9 +66,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Choose a tenant only after the app has checked the user's right to access it. Do not trust a raw header. Without a tenant scope, SQLSpec raises `TenantContextError` before it takes a pool slot. An insert for `globex` in the `acme` scope fails the write check.
+Choose a tenant only after the app has checked the user's right to access it. Do not trust a raw header. Without an explicit tenant or an active tenant scope, SQLSpec raises `TenantContextError` before it takes a pool slot. An insert for `globex` in the `acme` session fails the write check.
 
-You can also use `TenantContext.scope("acme")` in sync or async code. The lease takes one snapshot of the tenant. A later scope change does not change an open session. Call `session.commit()` to save writes. The lease rolls back any open transaction before cleanup.
+Sync configs use `with config.provide_session(tenant="acme") as session`. The `tenant` argument accepts a string, UUID, or `TenantContextPayload` with session variables. It binds the tenant through acquisition, application work, and cleanup, then restores the caller's context, including on failure or cancellation. It requires a configured `tenant_strategy`.
+
+Use `TenantContext.scope("acme")` or `async_tenant_scope("acme")` around several sessions when they share one tenant. Calling `provide_session()` or passing `tenant=None` inherits that scope. The lease takes one snapshot of the tenant. A later scope change does not change an open session. Call `session.commit()` to save writes. The lease rolls back any open transaction before cleanup.
 
 ## Preserve Pool Settings
 

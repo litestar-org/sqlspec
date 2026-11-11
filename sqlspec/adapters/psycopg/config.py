@@ -5,7 +5,7 @@ import inspect
 import threading
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
 
 from mypy_extensions import mypyc_attr
 from psycopg.adapt import AdaptersMap
@@ -62,7 +62,9 @@ from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.adapters.psycopg._typing import PsycopgAdaptContext as AdaptContext
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectFailedCB as AsyncConnectFailedCB
@@ -77,6 +79,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgRowFactory as RowFactory
     from sqlspec.core import StatementConfig
     from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy, TenantStrategyShorthand
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "PsycopgAsyncConfig",
@@ -468,19 +471,40 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             raise
         return cast("PsycopgSyncConnection", connection)
 
+    @overload
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PsycopgSyncSessionContext":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, tenant: None = None, **_kwargs: Any
+    ) -> "PsycopgSyncSessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "AbstractContextManager[PsycopgSyncDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "PsycopgSyncSessionContext | AbstractContextManager[PsycopgSyncDriver]":
         """Provide a driver session context manager.
 
         Args:
             *_args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Tenant identity or payload bound until session cleanup; None inherits the current scope.
             **_kwargs: Additional keyword arguments.
 
         Returns:
             A PsycopgSyncDriver session context manager.
         """
+        if tenant is not None:
+            return self._provide_sync_tenant_session(tenant, *_args, statement_config=statement_config, **_kwargs)
         handler = _PsycopgSyncSessionConnectionHandler(self)
 
         return PsycopgSyncSessionContext(
@@ -979,19 +1003,40 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         })
         return namespace
 
+    @overload
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PsycopgAsyncSessionContext":
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, tenant: None = None, **_kwargs: Any
+    ) -> "PsycopgAsyncSessionContext": ...
+
+    @overload
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "AbstractAsyncContextManager[PsycopgAsyncDriver]": ...
+
+    def provide_session(
+        self,
+        *_args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **_kwargs: Any,
+    ) -> "PsycopgAsyncSessionContext | AbstractAsyncContextManager[PsycopgAsyncDriver]":
         """Provide an async driver session context manager.
 
         Args:
             *_args: Additional arguments.
             statement_config: Optional statement configuration override.
+            tenant: Tenant identity or payload bound until session cleanup; None inherits the current scope.
             **_kwargs: Additional keyword arguments.
 
         Returns:
             A PsycopgAsyncDriver session context manager.
         """
+        if tenant is not None:
+            return self._provide_async_tenant_session(tenant, *_args, statement_config=statement_config, **_kwargs)
         handler = _PsycopgAsyncSessionConnectionHandler(self)
 
         return PsycopgAsyncSessionContext(

@@ -17,7 +17,7 @@ from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, Generator
 
     from starlette.responses import Response
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -38,7 +38,7 @@ def _completes_response(message: "Message") -> bool:
 
 
 @contextmanager
-def _published_connection(request: "Request", config_state: "SQLSpecConfigState", connection: Any) -> "Iterator[None]":
+def _published_connection(request: "Request", config_state: "SQLSpecConfigState", connection: Any) -> "Generator[None]":
     """Expose a connection on request state and clear every derived entry on exit.
 
     Yields:
@@ -54,7 +54,7 @@ def _published_connection(request: "Request", config_state: "SQLSpecConfigState"
 
 
 @asynccontextmanager
-async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncIterator[Any]":
+async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
     """Bind an optional extractor around connection entry and verified cleanup.
 
     Yields:
@@ -127,7 +127,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
     @asynccontextmanager
-    async def _connection_cm(self, request: "Request") -> "AsyncIterator[Any]":
+    async def _connection_cm(self, request: "Request") -> "AsyncGenerator[Any]":
         """Yield a request-scoped connection for manual transaction mode."""
         async with _request_connection_cm(self.config_state, request) as connection:
             yield connection
@@ -189,7 +189,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                 return response
 
     @asynccontextmanager
-    async def _connection_cm(self, request: "Request") -> "AsyncIterator[Any]":
+    async def _connection_cm(self, request: "Request") -> "AsyncGenerator[Any]":
         """Yield a request-scoped connection for autocommit transaction mode."""
         async with _request_connection_cm(self.config_state, request) as connection:
             yield connection

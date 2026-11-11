@@ -262,13 +262,13 @@ def test_tenant_config_rejects_missing_context_before_connect(monkeypatch: pytes
         config.create_connection()
 
 
-@pytest.mark.parametrize("shorthand", [True, "default", "session_context"])
+@pytest.mark.parametrize("shorthand", [True, "default", "rls", "session_context"])
 def test_tenant_config_shorthand(shorthand: Any) -> None:
     config = PymssqlConfig(driver_features={"tenant_strategy": shorthand})
     assert isinstance(config.driver_features["tenant_strategy"], PymssqlSessionContextStrategy)
 
 
-@pytest.mark.parametrize("shorthand", ["rls", "identifier"])
+@pytest.mark.parametrize("shorthand", ["vpd", "identifier"])
 def test_tenant_config_invalid_shorthand(shorthand: str) -> None:
     with pytest.raises(ImproperConfigurationError):
         PymssqlConfig(driver_features={"tenant_strategy": shorthand})

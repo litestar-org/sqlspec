@@ -12,6 +12,7 @@ import asyncio
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from difflib import get_close_matches
 from inspect import Signature, iscoroutinefunction, signature
 from pathlib import Path
@@ -37,17 +38,19 @@ from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, MutableMapping
+    from collections.abc import AsyncGenerator, Awaitable, Generator, MutableMapping
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.core.tenant import TenantStrategy
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
-    from sqlspec.utils.tenant import TenantExtractorValue
+    from sqlspec.utils.tenant import TenantContextPayload, TenantExtractorValue
 
 
 __all__ = (
@@ -1589,6 +1592,40 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             )
             raise ImproperConfigurationError(msg)
 
+    @contextmanager
+    def _provide_sync_tenant_session(
+        self, tenant: "str | UUID | TenantContextPayload", *args: Any, **kwargs: Any
+    ) -> "Generator[DriverT]":
+        """Keep an explicit tenant bound until the session finishes cleanup.
+
+        Yields:
+            The driver session with the explicit tenant active.
+        """
+        if self.driver_features.get("tenant_strategy") is None:
+            msg = "provide_session(tenant=...) requires a configured tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        with TenantContext.scope(tenant):
+            context = cast("AbstractContextManager[DriverT]", self.provide_session(*args, **kwargs))
+            with context as session:
+                yield session
+
+    @asynccontextmanager
+    async def _provide_async_tenant_session(
+        self, tenant: "str | UUID | TenantContextPayload", *args: Any, **kwargs: Any
+    ) -> "AsyncGenerator[DriverT]":
+        """Keep an explicit tenant bound through asynchronous session cleanup.
+
+        Yields:
+            The driver session with the explicit tenant active.
+        """
+        if self.driver_features.get("tenant_strategy") is None:
+            msg = "provide_session(tenant=...) requires a configured tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        with TenantContext.scope(tenant):
+            context = cast("AbstractAsyncContextManager[DriverT]", self.provide_session(*args, **kwargs))
+            async with context as session:
+                yield session
+
     def _init_config_state(
         self,
         *,
@@ -1981,9 +2018,25 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
-        """Provide a database session context manager."""
+        """Provide a session, optionally binding a tenant until cleanup completes.
+
+        Args:
+            *args: Adapter-specific session arguments.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload; None inherits the current scope.
+            **kwargs: Adapter-specific session options.
+
+        Returns:
+            A driver session context manager.
+        """
+        if tenant is not None:
+            return self._provide_sync_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(
             "AbstractContextManager[DriverT]",
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
@@ -2120,9 +2173,25 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide a database session context manager."""
+        """Provide a session, optionally binding a tenant until cleanup completes.
+
+        Args:
+            *args: Adapter-specific session arguments.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload; None inherits the current scope.
+            **kwargs: Adapter-specific session options.
+
+        Returns:
+            A driver session context manager.
+        """
+        if tenant is not None:
+            return self._provide_async_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(
             "AbstractAsyncContextManager[DriverT]",
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
