@@ -22,7 +22,7 @@ from sqlspec.extensions.sanic._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
-from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload
+from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload, shared_tenant_extractor
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.sanic")
+_TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 
 _REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
 _ACTIVE_REQUEST_KEY: Final = "_sqlspec_active_request"
@@ -207,22 +208,7 @@ class SQLSpecPlugin:
         )
 
     def _configure_tenant_extractor(self) -> None:
-        for state in self._config_states:
-            if state.disable_di:
-                continue
-            extractor = state.tenant_extractor
-            if state.config.driver_features.get("tenant_strategy") is not None and extractor is None:
-                msg = f"Sanic session {state.session_key!r} requires tenant_extractor for tenant strategy"
-                raise ImproperConfigurationError(msg)
-            if extractor is None:
-                continue
-            if not callable(extractor):
-                msg = "Sanic tenant_extractor must be callable"
-                raise ImproperConfigurationError(msg)
-            if self._tenant_extractor is not None and self._tenant_extractor is not extractor:
-                msg = "Sanic configurations must share the same tenant_extractor"
-                raise ImproperConfigurationError(msg)
-            self._tenant_extractor = extractor
+        self._tenant_extractor = shared_tenant_extractor(self._config_states, framework="Sanic")
 
     async def _bind_tenant(self, request: Any) -> None:
         if self._tenant_extractor is None:
@@ -231,10 +217,10 @@ class SQLSpecPlugin:
         if isawaitable(raw):
             raw = await raw
         payload = coerce_tenant_payload(raw)
-        set_context_value(request.ctx, "sqlspec_tenant_token", TenantContext.set(payload))
+        set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
 
     def _reset_tenant(self, request: Any) -> None:
-        token = pop_context_value(request.ctx, "sqlspec_tenant_token")
+        token = pop_context_value(request.ctx, _TENANT_SCOPE_KEY)
         if token is not None:
             TenantContext.reset(token)
 

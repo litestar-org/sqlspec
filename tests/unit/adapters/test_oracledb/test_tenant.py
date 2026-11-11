@@ -202,7 +202,7 @@ def _vpd_connection(mode: str) -> Any:
             if not connection.ignore_context_clear:
                 connection.context_value = None
         elif "SYS_CONTEXT(:namespace" in statement:
-            cursor.fetchone.return_value = (connection.context_value,)
+            cursor.fetchone.return_value = (connection.client_identifier or None, connection.context_value)
 
     cursor.execute.side_effect = execute
     return connection
@@ -262,6 +262,32 @@ async def test_vpd_strategy_detects_setter_and_clear_failures(mode: str, failure
             await _invoke(strategy.checkin, connection, state)
         if failure == "fail_context_clear":
             assert isinstance(checkin_error.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_vpd_strategy_verifies_identifier_with_context(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncVPDStrategy, OracleSyncVPDStrategy
+
+    strategy_cls = OracleSyncVPDStrategy if mode == "sync" else OracleAsyncVPDStrategy
+    strategy = strategy_cls(
+        set_procedure="app.ctx.set_tenant",
+        clear_procedure="app.ctx.clear_tenant",
+        namespace="tenant_ctx",
+        attribute="tenant_id",
+    )
+    unapplied = _vpd_connection(mode)
+    unapplied.ignore_identifier = True
+    with pytest.raises(TenantContextError, match="identifier verification"):
+        await _invoke(strategy.checkout, unapplied, TenantContextPayload("a"))
+
+    connection = _vpd_connection(mode)
+    state = await _invoke(strategy.checkout, connection, TenantContextPayload("a"))
+    verification_reads = sum("SYS_CONTEXT" in statement for statement, _ in connection.calls)
+    assert verification_reads == 1
+    connection.dirty = True
+    with pytest.raises(TenantCleanupError, match="identifier cleanup verification"):
+        await _invoke(strategy.checkin, connection, state)
+    assert sum("SYS_CONTEXT" in statement for statement, _ in connection.calls) == 2
 
 
 @pytest.mark.parametrize("strategy_cls_name", ["OracleSyncVPDStrategy", "OracleAsyncVPDStrategy"])

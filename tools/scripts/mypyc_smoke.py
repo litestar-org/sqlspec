@@ -42,10 +42,9 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("tenant_lease_state", "sqlspec.core.tenant.base", "TenantLeaseState", True),
     SmokeImport("tenant_lease", "sqlspec.driver._tenant", "AsyncTenantLease", True),
-    SmokeImport("tenant_context", "sqlspec.utils.tenant", "TenantContext"),
-    SmokeImport("tenant_asyncpg_release", "sqlspec.utils.tenant_asyncpg", "await_owned_release", True),
-    SmokeImport("tenant_mssql_batches", "sqlspec.utils.tenant_mssql", "build_checkout_sql", True),
-    SmokeImport("tenant_postgres_settings", "sqlspec.utils.tenant_postgres", "PostgresTenantSettings", True),
+    SmokeImport("tenant_context", "sqlspec.utils.tenant._context", "TenantContext", True),
+    SmokeImport("tenant_mssql_batches", "sqlspec.utils.tenant._mssql", "MssqlTenantSettings", True),
+    SmokeImport("tenant_postgres_settings", "sqlspec.utils.tenant._postgres", "PostgresTenantSettings", True),
     *(
         SmokeImport(f"{adapter}_tenant", f"sqlspec.adapters.{adapter}.tenant", None, True, dependency)
         for adapter, dependency in (
@@ -1677,10 +1676,47 @@ assert runner_compiled == base_compiled
     )
 
 
+def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, Any], *, asynchronous: bool) -> Any:
+    """Build an interpreted subclass of a compiled lease that routes its hooks to callables."""
+    acquire, release, invalidate, finish = hooks
+
+    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc,name-defined]
+        __slots__ = ()
+
+        def _acquire(self) -> object:
+            return acquire()
+
+        def _release(self, conn: object) -> None:
+            release(conn)
+
+        def _invalidate(self, conn: object) -> None:
+            invalidate(conn)
+
+        def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
+            finish(conn, exc_type)
+
+    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc,name-defined]
+        __slots__ = ()
+
+        async def _acquire(self) -> object:
+            return acquire()
+
+        async def _release(self, conn: object) -> None:
+            release(conn)
+
+        async def _invalidate(self, conn: object) -> None:
+            invalidate(conn)
+
+        async def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
+            finish(conn, exc_type)
+
+    return AsyncLease(strategy) if asynchronous else SyncLease(strategy)
+
+
 async def _run_tenant_lease_case(
     leases: Any, contracts: Any, context: Any, errors: Any, *, asynchronous: bool, scenario: str
 ) -> None:
-    """Check one strategy and native-callback ordering scenario."""
+    """Check one strategy and lease-hook ordering scenario."""
     events: list[str] = []
     connection = object()
     setup_error = ValueError("injected checkout failure")
@@ -1742,17 +1778,12 @@ async def _run_tenant_lease_case(
         assert exc_type is None
         events.append("finish")
 
-    def as_async(callback: Any) -> Any:
-        async def call(*args: Any) -> Any:
-            return callback(*args)
-
-        return call
-
-    callbacks = {"acquire": acquire, "release": release, "invalidate": invalidate, "finish_transaction": finish}
-    if asynchronous:
-        lease = leases.AsyncTenantLease(AsyncStrategy(), **{key: as_async(value) for key, value in callbacks.items()})
-    else:
-        lease = leases.SyncTenantLease(SyncStrategy(), **callbacks)
+    lease = _smoke_tenant_lease(
+        leases,
+        AsyncStrategy() if asynchronous else SyncStrategy(),
+        (acquire, release, invalidate, finish),
+        asynchronous=asynchronous,
+    )
     scope = context.TenantContext.bypass() if scenario == "bypass" else context.TenantContext.scope("a")
     with scope:
         try:
@@ -1787,7 +1818,7 @@ async def _run_tenant_lease_case(
 
 
 def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
-    """Exercise compiled leases calling structurally compatible Python strategies."""
+    """Exercise compiled leases through interpreted subclasses and structural Python strategies."""
     result = _new_smoke_result(
         name="tenant_lease_boundary",
         module="sqlspec.driver._tenant",
@@ -1797,14 +1828,12 @@ def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str,
     try:
         leases = importlib.import_module("sqlspec.driver._tenant")
         contracts = importlib.import_module("sqlspec.core.tenant.base")
-        context = importlib.import_module("sqlspec.utils.tenant")
+        context = importlib.import_module("sqlspec.utils.tenant._context")
         errors = importlib.import_module("sqlspec.exceptions")
         result["imported"] = True
-        result["compiled"] = is_compiled_module(leases)
+        result["compiled"] = is_compiled_module(leases) and is_compiled_module(context)
         if require_compiled and not result["compiled"]:
-            raise AssertionError("tenant leases must import from compiled extensions")
-        if is_compiled_module(context):
-            raise AssertionError("tenant context must remain interpreted")
+            raise AssertionError("tenant leases and tenant context must import from compiled extensions")
 
         async def run_cases() -> None:
             for asynchronous in (False, True):

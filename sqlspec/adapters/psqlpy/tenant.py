@@ -6,17 +6,19 @@ from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.tenant.base import TenantLeaseState
+from sqlspec.core.tenant.base import TenantLeaseState, with_cause
+from sqlspec.driver._tenant import AsyncTenantLease, _await_owned
 from sqlspec.exceptions import TenantCleanupError
-from sqlspec.utils.tenant_postgres import PostgresTenantSettings
+from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
+    from sqlspec.core.tenant.base import AsyncTenantStrategy
     from sqlspec.utils.tenant import TenantContextPayload
 
 PSQLPY_DISPOSAL_TIMEOUT_S: Final = 2.0
 
-__all__ = ("PsqlpyRLSStrategy",)
+__all__ = ("PsqlpyRLSStrategy", "PsqlpyTenantLease")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -39,79 +41,63 @@ class PsqlpyRLSStrategy(PostgresTenantSettings):
         try:
             result = await connection.fetch_row(sql, list(params))
             self.verify_checkin(params, result.result(as_tuple=True))
+        except TenantCleanupError:
+            raise
         except Exception as exc:
-            if isinstance(exc, TenantCleanupError):
-                raise
             msg = "Tenant session restoration failed"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantCleanupError(msg), exc)
 
 
-def build_psqlpy_tenant_lease(config: Any) -> Any:
+async def _terminate_and_confirm(connection: Any) -> bool:
+    with suppress(Exception):
+        await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
+    try:
+        await connection.execute("SELECT 1")
+    except Exception:
+        return bool(connection.is_closed())
+    return False
+
+
+class PsqlpyTenantLease(AsyncTenantLease):
     """Own one pool context, transaction finish, and verified disposal."""
-    from sqlspec.driver._tenant import AsyncTenantLease
 
-    context: Any = None
+    __slots__ = ("_config", "_context")
 
-    async def acquire() -> Any:
-        nonlocal context
-        pool = await config.provide_pool()
-        context = pool.acquire()
-        connection = await context.__aenter__()
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+        self._context: Any = None
+
+    async def _acquire(self) -> Any:
+        pool = await self._config.provide_pool()
+        self._context = pool.acquire()
+        connection = await self._context.__aenter__()
         setup_error: BaseException | None = None
         try:
-            await config._ensure_connection(connection)
+            await self._config._ensure_connection(connection)
         except BaseException as exc:
             setup_error = exc
         if setup_error is not None:
-            cleanup = asyncio.create_task(invalidate(connection))
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    continue
-                except BaseException:
-                    break
-            try:
-                cleanup.result()
-            except BaseException as disposal_error:
+            disposal_error, _ = await _await_owned(asyncio.create_task(self._invalidate(connection)))
+            if disposal_error is not None:
                 setup_error.add_note(f"Tenant acquire connection disposal failed: {type(disposal_error).__name__}")
             raise setup_error
         return connection
 
-    async def release(_connection: Any) -> None:
-        nonlocal context
-        current, context = context, None
+    async def _release(self, connection: Any) -> None:
+        current, self._context = self._context, None
         if current is not None:
             await current.__aexit__(None, None, None)
 
-    async def invalidate(connection: Any) -> None:
-        async def terminate_and_confirm() -> bool:
-            with suppress(Exception):
-                await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
-            try:
-                await connection.execute("SELECT 1")
-            except Exception:
-                return bool(connection.is_closed())
-            return False
-
+    async def _invalidate(self, connection: Any) -> None:
         try:
-            closed = await asyncio.wait_for(terminate_and_confirm(), PSQLPY_DISPOSAL_TIMEOUT_S)
+            closed = await asyncio.wait_for(_terminate_and_confirm(connection), PSQLPY_DISPOSAL_TIMEOUT_S)
         except Exception:
             closed = False
         if not closed:
-            await config._close_pool()
+            await self._config._close_pool()
         with suppress(Exception):
-            await release(connection)
+            await self._release(connection)
 
-    async def finish_transaction(connection: Any, _exc_type: type[BaseException] | None) -> None:
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         await connection.execute("ROLLBACK")
-
-    return AsyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish_transaction,
-    )

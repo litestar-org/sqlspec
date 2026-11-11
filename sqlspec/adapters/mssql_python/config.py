@@ -8,7 +8,7 @@ from sqlspec.adapters.mssql_python.core import apply_driver_features, build_conn
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
-from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy, build_mssql_python_tenant_lease
+from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy, MssqlPythonTenantLease
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
@@ -162,20 +162,15 @@ class MssqlPythonDriverFeatures(TypedDict):
 class MssqlPythonConnectionContext(SyncPoolConnectionContext):
     """Context manager for mssql-python sync connections."""
 
-    __slots__ = ("_conn", "_lease")
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         self._conn: MssqlPythonConnection | None = None
-        self._lease = (
-            build_mssql_python_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
 
     def __enter__(self) -> "MssqlPythonConnection":
-        if self._lease is not None:
-            return cast("MssqlPythonConnection", self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
@@ -184,8 +179,8 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._lease is not None:
-            self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             return None
         if self._conn is not None:
             if exc_type is not None:
@@ -197,28 +192,23 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
 
 
 class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_conn", "_lease")
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         self._conn: MssqlPythonConnection | None = None
-        self._lease = (
-            build_mssql_python_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
 
     def acquire_connection(self) -> "MssqlPythonConnection":
-        if self._lease is not None:
-            return cast("MssqlPythonConnection", self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
     def release_connection(self, _conn: "MssqlPythonConnection", **kwargs: Any) -> None:
-        if self._lease is not None:
-            self._lease.release(_conn, **kwargs)
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
             return
         if self._conn is None:
             return
@@ -234,7 +224,10 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     driver_type: "ClassVar[type[MssqlPythonDriver]]" = MssqlPythonDriver
     connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
     migration_tracker_type: "ClassVar[type[MssqlPythonSyncMigrationTracker]]" = MssqlPythonSyncMigrationTracker
-    supports_tenant_strategy: ClassVar[bool] = True
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "session_context"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = MssqlPythonSessionContextStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = MssqlPythonTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -293,15 +286,8 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
                 msg = "Tenant connection_instance must require verified unpooled operation"
                 raise ImproperConfigurationError(msg)
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "session_context"}):
-            return MssqlPythonSessionContextStrategy()
-        return super()._resolve_tenant_strategy(strategy)
-
     def create_connection(self) -> "MssqlPythonConnection":
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Use provide_connection() for tenant configurations"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         pool = self.provide_pool()
         return pool.acquire()
 

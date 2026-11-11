@@ -280,6 +280,7 @@ include = [
   "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
   "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers
   "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider helpers
+  "sqlspec/extensions/litestar/_tenant_resolution.py", # Litestar tenant resolution over verified auth values
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
@@ -292,14 +293,7 @@ include = [
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
-  "sqlspec/adapters/asyncpg/tenant.py",            # PostgreSQL-family tenant strategies and leases
-  "sqlspec/adapters/cockroach_asyncpg/tenant.py",
-  "sqlspec/adapters/cockroach_psycopg/tenant.py",
-  "sqlspec/adapters/psqlpy/tenant.py",
-  "sqlspec/adapters/psycopg/tenant.py",
-  "sqlspec/adapters/mssql_python/tenant.py",        # SQL Server tenant strategies
-  "sqlspec/adapters/pymssql/tenant.py",
-  "sqlspec/adapters/oracledb/tenant.py",            # Oracle tenant strategies and hooks
+  "sqlspec/adapters/**/tenant.py",                 # Adapter tenant strategies and leases
   "sqlspec/adapters/asyncpg/events/_hub.py",       # Native event listener runtimes
   "sqlspec/adapters/oracledb/events/_hub.py",
   "sqlspec/adapters/psqlpy/events/_hub.py",
@@ -323,9 +317,7 @@ include = [
   "sqlspec/utils/serializers/**/*.py",             # Serialization helpers package
   "sqlspec/utils/type_converters.py",              # Adapter type converters
   "sqlspec/utils/correlation.py",                  # Correlation context helpers
-  "sqlspec/utils/tenant_asyncpg.py",               # Asyncpg release ownership
-  "sqlspec/utils/tenant_mssql.py",                 # SQL Server tenant batch helpers
-  "sqlspec/utils/tenant_postgres.py",              # PostgreSQL tenant batch helpers
+  "sqlspec/utils/tenant/**/*.py",                  # Tenant context, scopes, and shared session-setting helpers
   "sqlspec/utils/portal.py",                       # Thread portal utilities
   "sqlspec/utils/schema.py",                       # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                        # UUID utilities

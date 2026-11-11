@@ -161,16 +161,11 @@ async def test_tenant_checkin_preserves_driver_error(asynchronous: bool, monkeyp
     assert caught.value.__suppress_context__
 
 
-@pytest.mark.parametrize("adapter", ["postgres", "cockroach"])
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_tenant_close_failure_never_returns_unverified_connection(adapter: str, asynchronous: bool) -> None:
+async def test_tenant_close_failure_never_returns_unverified_connection(asynchronous: bool) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
-    from sqlspec.adapters.cockroach_psycopg.tenant import (
-        build_cockroach_psycopg_async_tenant_lease,
-        build_cockroach_psycopg_sync_tenant_lease,
-    )
-    from sqlspec.adapters.psycopg.tenant import build_psycopg_async_tenant_lease, build_psycopg_sync_tenant_lease
+    from sqlspec.adapters.psycopg.tenant import PsycopgAsyncTenantLease, PsycopgSyncTenantLease
     from sqlspec.utils.tenant import TenantContext
 
     payload = TenantContextPayload("a")
@@ -194,13 +189,8 @@ async def test_tenant_close_failure_never_returns_unverified_connection(adapter:
         provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
         driver_features={"tenant_strategy": strategy},
     )
-    if adapter == "cockroach":
-        builder = (
-            build_cockroach_psycopg_async_tenant_lease if asynchronous else build_cockroach_psycopg_sync_tenant_lease
-        )
-    else:
-        builder = build_psycopg_async_tenant_lease if asynchronous else build_psycopg_sync_tenant_lease
-    lease = builder(config)
+    lease_type: Any = PsycopgAsyncTenantLease if asynchronous else PsycopgSyncTenantLease
+    lease = lease_type(config, strategy)
     with TenantContext.scope(payload):
         if asynchronous:
             await lease.acquire()
@@ -220,21 +210,16 @@ async def test_tenant_close_failure_never_returns_unverified_connection(adapter:
         context.__exit__.assert_not_called()
 
 
-@pytest.mark.parametrize("adapter", ["postgres", "cockroach"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_tenant_failed_close_quarantines_native_pool_before_context_gc(
-    adapter: str, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import gc
     from unittest.mock import AsyncMock, MagicMock
 
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.adapters.cockroach_psycopg.tenant import (
-        build_cockroach_psycopg_async_tenant_lease,
-        build_cockroach_psycopg_sync_tenant_lease,
-    )
-    from sqlspec.adapters.psycopg.tenant import build_psycopg_async_tenant_lease, build_psycopg_sync_tenant_lease
+    from sqlspec.adapters.psycopg.tenant import PsycopgAsyncTenantLease, PsycopgSyncTenantLease
     from sqlspec.utils.tenant import TenantContext
 
     payload = TenantContextPayload("a")
@@ -264,18 +249,13 @@ async def test_tenant_failed_close_quarantines_native_pool_before_context_gc(
         provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
         driver_features={"tenant_strategy": strategy},
     )
-    if adapter == "cockroach":
-        builder = (
-            build_cockroach_psycopg_async_tenant_lease if asynchronous else build_cockroach_psycopg_sync_tenant_lease
-        )
-    else:
-        builder = build_psycopg_async_tenant_lease if asynchronous else build_psycopg_sync_tenant_lease
+    lease_type: Any = PsycopgAsyncTenantLease if asynchronous else PsycopgSyncTenantLease
     if asynchronous:
         await pool.open()
     else:
         pool.open()
     try:
-        lease = builder(config)
+        lease = lease_type(config, strategy)
         with TenantContext.scope(payload):
             if asynchronous:
                 await lease.acquire()

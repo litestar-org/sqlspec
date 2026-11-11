@@ -142,6 +142,7 @@ def test_connection_context_rolls_back_on_block_exception() -> None:
 
     conn = MagicMock()
     config = MagicMock()
+    config._create_tenant_lease.return_value = None
     config.driver_features = {}
     config.connection_instance.acquire.return_value = conn
     ctx = OracleSyncConnectionContext(config)
@@ -165,6 +166,7 @@ async def test_async_connection_context_rolls_back_on_block_exception() -> None:
     pool.acquire = AsyncMock(return_value=conn)
     pool.release = AsyncMock()
     config = MagicMock()
+    config._create_tenant_lease.return_value = None
     config.driver_features = {}
     config.provide_pool = AsyncMock(return_value=pool)
     ctx = OracleAsyncConnectionContext(config)

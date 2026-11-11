@@ -1368,11 +1368,6 @@ async def test_tenant_providers_apply_structural_strategy_and_dispose(
 
 @pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
 def test_tenant_psycopg_pool_safety(config_type: Any) -> None:
-    from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
-
-    strategy = PsycopgSyncRLSStrategy() if config_type is CockroachPsycopgSyncConfig else PsycopgAsyncRLSStrategy()
-    with pytest.raises(ImproperConfigurationError, match="Cockroach"):
-        config_type(driver_features={"tenant_strategy": strategy})
     with pytest.raises(ImproperConfigurationError, match="close_returns"):
         config_type(connection_config={"close_returns": True}, driver_features={"tenant_strategy": True})
 
@@ -1386,7 +1381,6 @@ def test_tenant_async_strategy_facade() -> None:
 
     assert package.CockroachPsycopgAsyncRLSStrategy is CockroachPsycopgAsyncRLSStrategy
     assert package.CockroachPsycopgSyncRLSStrategy is CockroachPsycopgSyncRLSStrategy
-    assert {"CockroachPsycopgAsyncRLSStrategy", "CockroachPsycopgSyncRLSStrategy"} <= set(package.__all__)
     assert isinstance(
         CockroachPsycopgAsyncConfig(driver_features={"tenant_strategy": True}).driver_features["tenant_strategy"],
         CockroachPsycopgAsyncRLSStrategy,

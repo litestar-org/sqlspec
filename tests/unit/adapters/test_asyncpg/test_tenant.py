@@ -182,7 +182,7 @@ def test_tenant_rejects_invalid_variable_source_names(key: Any) -> None:
 async def test_owned_release_joins_sdk_shielded_child_after_repeated_cancellation(scenario: str) -> None:
     import asyncio
 
-    from sqlspec.utils.tenant_asyncpg import await_owned_release
+    from sqlspec.driver._tenant import await_owned_release
 
     started = asyncio.Event()
     complete = asyncio.Event()

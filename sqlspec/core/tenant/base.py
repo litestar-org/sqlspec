@@ -3,9 +3,9 @@
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
 
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.utils.tenant import TenantContextPayload
@@ -19,7 +19,10 @@ __all__ = (
     "require_session_pooler",
     "validate_session_setting_name",
     "validate_tenant_session_baseline",
+    "with_cause",
 )
+
+_SESSION_SETTING_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
 
 class TenantLeaseState:
@@ -64,7 +67,7 @@ def validate_session_setting_name(name: object) -> str:
     Raises:
         ImproperConfigurationError: The setting name is invalid.
     """
-    if not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name) is None:
+    if not isinstance(name, str) or _SESSION_SETTING_NAME.fullmatch(name) is None:
         msg = "Tenant session setting names must match [A-Za-z_][A-Za-z0-9_.]*"
         raise ImproperConfigurationError(msg)
     return name
@@ -102,3 +105,17 @@ def require_session_pooler(pooler_mode: object, adapter: str) -> str:
         return "session"
     msg = f"{adapter} tenant strategies require pooler_mode='session'"
     raise ImproperConfigurationError(msg)
+
+
+def with_cause(error: SQLSpecError, cause: BaseException) -> SQLSpecError:
+    """Attach an explicit cause that survives compiled raise sites.
+
+    Args:
+        error: The tenant error reported to the caller.
+        cause: The underlying failure.
+
+    Returns:
+        The same error with its cause recorded.
+    """
+    error.__cause__ = cause
+    return error

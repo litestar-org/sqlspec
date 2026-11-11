@@ -13,32 +13,34 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_async,
     execute_session_release_sync,
 )
-from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
-    from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy
     from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "ORACLE_TENANT_IDENTIFIER_MAX_BYTES",
     "OracleAsyncIdentifierStrategy",
+    "OracleAsyncTenantLease",
     "OracleAsyncVPDStrategy",
     "OracleSyncIdentifierStrategy",
+    "OracleSyncTenantLease",
     "OracleSyncVPDStrategy",
-    "build_oracle_async_tenant_lease",
-    "build_oracle_sync_tenant_lease",
     "compose_tenant_session_hook",
     "tenant_client_identifier",
     "validate_oracle_tenant_hook",
 )
 
 ORACLE_TENANT_IDENTIFIER_MAX_BYTES: Final = 64
-_CONTEXT_QUERY: Final = "SELECT SYS_CONTEXT(:namespace, :attribute) FROM DUAL"
 _IDENTIFIER_QUERY: Final = "SELECT SYS_CONTEXT('USERENV', 'CLIENT_IDENTIFIER') FROM DUAL"
+_TENANT_STATE_QUERY: Final = (
+    "SELECT SYS_CONTEXT('USERENV', 'CLIENT_IDENTIFIER'), SYS_CONTEXT(:namespace, :attribute) FROM DUAL"
+)
 
 
 def tenant_client_identifier() -> str | None:
@@ -102,11 +104,18 @@ class OracleSyncIdentifierStrategy:
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
         self._hook = compose_tenant_session_hook(self.source_hook)
 
-    def checkout(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
-        """Apply the captured payload and verify the identifier on the server."""
-        with TenantContext.scope(payload):
+    def _apply_identifier(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> None:
+        with TenantContext.bind(payload):
             tenant_client_identifier()
             execute_session_checkout_sync(connection, self._hook)
+
+    def _clear_identifier(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
+        with TenantContext.bind(state.payload):
+            execute_session_release_sync(connection, self._hook)
+
+    def checkout(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
+        """Apply the captured payload and verify the identifier on the server."""
+        self._apply_identifier(connection, payload)
         with connection.cursor() as cursor:
             cursor.execute(_IDENTIFIER_QUERY)
             row = cursor.fetchone()
@@ -117,8 +126,7 @@ class OracleSyncIdentifierStrategy:
 
     def checkin(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
         """Clear the identifier and verify that the server has no tenant value."""
-        with TenantContext.scope(state.payload):
-            execute_session_release_sync(connection, self._hook)
+        self._clear_identifier(connection, state)
         with connection.cursor() as cursor:
             cursor.execute(_IDENTIFIER_QUERY)
             row = cursor.fetchone()
@@ -137,11 +145,18 @@ class OracleAsyncIdentifierStrategy:
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
         self._hook = compose_tenant_session_hook(self.source_hook)
 
-    async def checkout(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
-        """Apply the captured payload and verify the identifier on the server."""
-        with TenantContext.scope(payload):
+    async def _apply_identifier(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> None:
+        with TenantContext.bind(payload):
             tenant_client_identifier()
             await execute_session_checkout_async(connection, self._hook)
+
+    async def _clear_identifier(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
+        with TenantContext.bind(state.payload):
+            await execute_session_release_async(connection, self._hook)
+
+    async def checkout(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
+        """Apply the captured payload and verify the identifier on the server."""
+        await self._apply_identifier(connection, payload)
         with connection.cursor() as cursor:
             await cursor.execute(_IDENTIFIER_QUERY)
             row = await cursor.fetchone()
@@ -152,8 +167,7 @@ class OracleAsyncIdentifierStrategy:
 
     async def checkin(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
         """Clear the identifier and verify that the server has no tenant value."""
-        with TenantContext.scope(state.payload):
-            await execute_session_release_async(connection, self._hook)
+        await self._clear_identifier(connection, state)
         with connection.cursor() as cursor:
             await cursor.execute(_IDENTIFIER_QUERY)
             row = await cursor.fetchone()
@@ -169,58 +183,52 @@ def validate_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig 
         raise ImproperConfigurationError(msg)
 
 
-def build_oracle_sync_tenant_lease(config: "OracleSyncConfig") -> "SyncTenantLease":
-    """Wrap Oracle pool callbacks with verified tenant cleanup and physical drop."""
-    pool: Any = None
+class OracleSyncTenantLease(SyncTenantLease):
+    """Wrap Oracle pool hooks with verified tenant cleanup and physical drop."""
 
-    def acquire() -> Any:
-        nonlocal pool
-        pool = config.provide_pool()
-        return pool.acquire()
+    __slots__ = ("_config", "_pool")
 
-    def release(connection: Any) -> None:
-        pool.release(connection)
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+        self._pool: Any = None
 
-    def invalidate(connection: Any) -> None:
-        pool.drop(connection)
+    def _acquire(self) -> Any:
+        self._pool = self._config.provide_pool()
+        return self._pool.acquire()
 
-    def finish(connection: Any, _exc_type: type[BaseException] | None) -> None:
+    def _release(self, connection: Any) -> None:
+        self._pool.release(connection)
+
+    def _invalidate(self, connection: Any) -> None:
+        self._pool.drop(connection)
+
+    def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         connection.rollback()
 
-    return SyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish,
-    )
 
+class OracleAsyncTenantLease(AsyncTenantLease):
+    """Wrap asynchronous Oracle pool hooks and dispose unverified sessions."""
 
-def build_oracle_async_tenant_lease(config: "OracleAsyncConfig") -> "AsyncTenantLease":
-    """Wrap asynchronous Oracle pool callbacks and dispose unverified sessions."""
-    pool: Any = None
+    __slots__ = ("_config", "_pool")
 
-    async def acquire() -> Any:
-        nonlocal pool
-        pool = await config.provide_pool()
-        return await pool.acquire()
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+        self._pool: Any = None
 
-    async def release(connection: Any) -> None:
-        await pool.release(connection)
+    async def _acquire(self) -> Any:
+        self._pool = await self._config.provide_pool()
+        return await self._pool.acquire()
 
-    async def invalidate(connection: Any) -> None:
-        await pool.drop(connection)
+    async def _release(self, connection: Any) -> None:
+        await self._pool.release(connection)
 
-    async def finish(connection: Any, _exc_type: type[BaseException] | None) -> None:
+    async def _invalidate(self, connection: Any) -> None:
+        await self._pool.drop(connection)
+
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         await connection.rollback()
-
-    return AsyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish,
-    )
 
 
 def _validate_vpd_procedure(value: object, label: str) -> str:
@@ -265,39 +273,49 @@ class OracleSyncVPDStrategy(OracleSyncIdentifierStrategy):
         self._context_attribute = attribute
 
     def checkout(self, connection: "OracleSyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
-        """Set and verify the trusted context after binding the client identifier."""
-        state = super().checkout(connection, payload)
+        """Bind the identifier, set the trusted context, and verify both in one read."""
+        self._apply_identifier(connection, payload)
         try:
             with connection.cursor() as cursor:
                 cursor.execute(f"BEGIN {self._set_procedure}(:tenant_id); END;", {"tenant_id": payload.tenant_id})
-                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute})
+                cursor.execute(_TENANT_STATE_QUERY, self._context_binds())
                 row = cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be set"
-            error = TenantContextError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantContextError(msg), exc)
         if row is None or row[0] != payload.tenant_id:
+            msg = "Oracle tenant identifier verification failed"
+            raise TenantContextError(msg)
+        if row[1] != payload.tenant_id:
             msg = "Oracle trusted tenant context verification failed"
             raise TenantContextError(msg)
-        return state
+        return TenantLeaseState(payload)
 
     def checkin(self, connection: "OracleSyncConnection", state: TenantLeaseState) -> None:
-        """Clear and verify the trusted context before clearing the identifier."""
+        """Clear the trusted context, then the identifier, and verify both in one read."""
         try:
             with connection.cursor() as cursor:
                 cursor.execute(f"BEGIN {self._clear_procedure}; END;")
-                cursor.execute(_CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute})
-                row = cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be cleared"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
-        if row is None or row[0] is not None:
+            raise with_cause(TenantCleanupError(msg), exc)
+        self._clear_identifier(connection, state)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(_TENANT_STATE_QUERY, self._context_binds())
+                row = cursor.fetchone()
+        except Exception as exc:
+            msg = "Oracle tenant cleanup could not be verified"
+            raise with_cause(TenantCleanupError(msg), exc)
+        if row is None or row[1] is not None:
             msg = "Oracle trusted tenant context cleanup verification failed"
             raise TenantCleanupError(msg)
-        super().checkin(connection, state)
+        if row[0] is not None:
+            msg = "Oracle tenant identifier cleanup verification failed"
+            raise TenantCleanupError(msg)
+
+    def _context_binds(self) -> dict[str, str]:
+        return {"namespace": self._namespace, "attribute": self._context_attribute}
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -323,40 +341,46 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         self._context_attribute = attribute
 
     async def checkout(self, connection: "OracleAsyncConnection", payload: "TenantContextPayload") -> TenantLeaseState:
-        """Set and verify the trusted context after binding the client identifier."""
-        state = await super().checkout(connection, payload)
+        """Bind the identifier, set the trusted context, and verify both in one read."""
+        await self._apply_identifier(connection, payload)
         try:
             with connection.cursor() as cursor:
                 await cursor.execute(f"BEGIN {self._set_procedure}(:tenant_id); END;", {"tenant_id": payload.tenant_id})
-                await cursor.execute(
-                    _CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute}
-                )
+                await cursor.execute(_TENANT_STATE_QUERY, self._context_binds())
                 row = await cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be set"
-            error = TenantContextError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantContextError(msg), exc)
         if row is None or row[0] != payload.tenant_id:
+            msg = "Oracle tenant identifier verification failed"
+            raise TenantContextError(msg)
+        if row[1] != payload.tenant_id:
             msg = "Oracle trusted tenant context verification failed"
             raise TenantContextError(msg)
-        return state
+        return TenantLeaseState(payload)
 
     async def checkin(self, connection: "OracleAsyncConnection", state: TenantLeaseState) -> None:
-        """Clear and verify the trusted context before clearing the identifier."""
+        """Clear the trusted context, then the identifier, and verify both in one read."""
         try:
             with connection.cursor() as cursor:
                 await cursor.execute(f"BEGIN {self._clear_procedure}; END;")
-                await cursor.execute(
-                    _CONTEXT_QUERY, {"namespace": self._namespace, "attribute": self._context_attribute}
-                )
-                row = await cursor.fetchone()
         except Exception as exc:
             msg = "Oracle trusted tenant context could not be cleared"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
-        if row is None or row[0] is not None:
+            raise with_cause(TenantCleanupError(msg), exc)
+        await self._clear_identifier(connection, state)
+        try:
+            with connection.cursor() as cursor:
+                await cursor.execute(_TENANT_STATE_QUERY, self._context_binds())
+                row = await cursor.fetchone()
+        except Exception as exc:
+            msg = "Oracle tenant cleanup could not be verified"
+            raise with_cause(TenantCleanupError(msg), exc)
+        if row is None or row[1] is not None:
             msg = "Oracle trusted tenant context cleanup verification failed"
             raise TenantCleanupError(msg)
-        await super().checkin(connection, state)
+        if row[0] is not None:
+            msg = "Oracle tenant identifier cleanup verification failed"
+            raise TenantCleanupError(msg)
+
+    def _context_binds(self) -> dict[str, str]:
+        return {"namespace": self._namespace, "attribute": self._context_attribute}

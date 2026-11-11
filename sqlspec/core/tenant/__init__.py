@@ -9,6 +9,7 @@ from sqlspec.core.tenant.base import (
     require_session_pooler,
     validate_session_setting_name,
     validate_tenant_session_baseline,
+    with_cause,
 )
 
 __all__ = (
@@ -20,4 +21,5 @@ __all__ = (
     "require_session_pooler",
     "validate_session_setting_name",
     "validate_tenant_session_baseline",
+    "with_cause",
 )

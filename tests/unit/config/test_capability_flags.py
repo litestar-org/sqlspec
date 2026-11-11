@@ -1,6 +1,7 @@
 """Tests for adapter configuration capability flags."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -145,3 +146,14 @@ def test_unsupported_tenant_baseline_rejected(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ImproperConfigurationError, match="tenant_session_baseline"):
         SqliteConfig(driver_features={"tenant_strategy": _SyncTenantStrategy(), "tenant_session_baseline": {}})
+
+
+def test_tenant_strategy_without_lease_implementation_refuses_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(SqliteConfig, "supports_tenant_strategy", True, raising=False)
+    strategy = SimpleNamespace(checkout=lambda connection, payload: None, checkin=lambda connection, state: None)
+    config = SqliteConfig(driver_features={"tenant_strategy": strategy})
+
+    with pytest.raises(ImproperConfigurationError, match="no tenant lease implementation"):
+        config.provide_connection()
+    with pytest.raises(ImproperConfigurationError, match="no tenant lease implementation"), config.provide_session():
+        pytest.fail("Session opened without a tenant lease")

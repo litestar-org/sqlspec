@@ -2,22 +2,26 @@
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import ClassVar, cast
+from functools import lru_cache
+from typing import Final, cast
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.tenant.base import TenantLeaseState, validate_session_setting_name
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload
 from sqlspec.utils.text import quote_identifier
 
-__all__ = ("PostgresTenantSettings", "build_setting_query", "psycopg_setting_query")
+__all__ = ("PostgresTenantSettings", "build_setting_query", "pyformat_binds", "pyformat_query")
 
 
-DEFAULT_TENANT_KEY = "app.current_tenant_id"
-DEFAULT_SEARCH_PATH_RESTORE = '"$user", public'
+DEFAULT_TENANT_KEY: Final = "app.current_tenant_id"
+DEFAULT_SEARCH_PATH_RESTORE: Final = '"$user", public'
+_SCHEMA_NAME: Final = re.compile(r"[a-z_][a-z0-9_]*")
+_NUMERIC_PLACEHOLDER: Final = re.compile(r"\$(\d+)")
 
 
+@lru_cache(maxsize=64)
 def build_setting_query(count: int, *, restore: bool = False) -> str:
     """Build one management statement with an explicit evaluation dependency."""
     if restore:
@@ -31,9 +35,15 @@ def build_setting_query(count: int, *, restore: bool = False) -> str:
     return f"WITH captured AS MATERIALIZED (SELECT {captured}) SELECT {output} FROM captured"
 
 
-def psycopg_setting_query(sql: str, params: Sequence[str]) -> tuple[str, dict[str, str]]:
-    """Translate numeric management parameters to psycopg named placeholders."""
-    return re.sub(r"\$(\d+)", r"%(p\1)s", sql), {f"p{i}": value for i, value in enumerate(params, 1)}
+@lru_cache(maxsize=64)
+def pyformat_query(sql: str) -> bytes:
+    """Translate numeric management placeholders to named pyformat placeholders."""
+    return _NUMERIC_PLACEHOLDER.sub(r"%(p\1)s", sql).encode("ascii")
+
+
+def pyformat_binds(params: Sequence[str]) -> dict[str, str]:
+    """Name positional management values for a pyformat statement."""
+    return {f"p{i}": value for i, value in enumerate(params, 1)}
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -43,7 +53,6 @@ class PostgresTenantSettings:
     __slots__ = ("_default_checkout_sql", "_schema_resolver", "_sorted_variable_keys", "_tenant_key", "_variable_keys")
 
     _schema_resolver: Callable[[TenantContextPayload], object] | None
-    _unset_restore_value: ClassVar[str] = ""
 
     def __init__(
         self,
@@ -89,7 +98,7 @@ class PostgresTenantSettings:
         )
         if self._schema_resolver is not None:
             schema = self._schema_resolver(payload)
-            if not isinstance(schema, str) or re.fullmatch(r"[a-z_][a-z0-9_]*", schema) is None:
+            if not isinstance(schema, str) or _SCHEMA_NAME.fullmatch(schema) is None:
                 msg = "Tenant schema must match [a-z_][a-z0-9_]*"
                 raise TenantContextError(msg)
             pairs.append(("search_path", quote_identifier(schema)))
@@ -116,7 +125,7 @@ class PostgresTenantSettings:
                 key,
                 value
                 if value is not None
-                else (DEFAULT_SEARCH_PATH_RESTORE if key.casefold() == "search_path" else self._unset_restore_value),
+                else (DEFAULT_SEARCH_PATH_RESTORE if key.casefold() == "search_path" else ""),
             )
             for key, value in state.baseline.items()
         ]

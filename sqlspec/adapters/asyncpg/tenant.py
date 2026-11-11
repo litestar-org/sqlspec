@@ -4,18 +4,25 @@ import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from asyncpg import InterfaceError
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler, validate_tenant_session_baseline
+from sqlspec.core.tenant.base import (
+    TenantLeaseState,
+    require_session_pooler,
+    validate_tenant_session_baseline,
+    with_cause,
+)
+from sqlspec.driver._tenant import DEFAULT_TENANT_CLEANUP_TIMEOUT, AsyncTenantLease, await_owned_release
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant_asyncpg import await_owned_release
-from sqlspec.utils.tenant_postgres import PostgresTenantSettings
+from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
+    from sqlspec.core.tenant.base import AsyncTenantStrategy
     from sqlspec.utils.tenant import TenantContextPayload
 
-__all__ = ("AsyncpgRLSStrategy",)
+__all__ = ("AsyncpgRLSStrategy", "AsyncpgTenantLease", "apply_session_baseline", "validate_asyncpg_tenant_config")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -41,13 +48,11 @@ class AsyncpgRLSStrategy(PostgresTenantSettings):
         try:
             row = await connection.fetchrow(sql, *params)
             self.verify_checkin(params, tuple(row) if row is not None else None)
+        except TenantCleanupError:
+            raise
         except Exception as exc:
-            if isinstance(exc, TenantCleanupError):
-                raise
             msg = "Tenant session restoration failed"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantCleanupError(msg), exc)
 
 
 async def apply_session_baseline(connection: "AsyncpgConnection", baseline: Mapping[str, str]) -> None:
@@ -74,59 +79,56 @@ def validate_asyncpg_tenant_config(
     )
 
 
-def build_asyncpg_tenant_lease(config: Any) -> Any:
-    """Wrap the adapter pool callbacks in the shared fail-closed lease."""
-    from asyncpg import InterfaceError
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncpgTenantLease(AsyncTenantLease):
+    """Fail-closed tenant lease over an asyncpg pool.
 
-    from sqlspec.driver._tenant import DEFAULT_TENANT_CLEANUP_TIMEOUT, AsyncTenantLease
+    Release shares one deadline with transaction cleanup, and every release is
+    joined through caller cancellation before the connection changes owner.
+    """
 
-    pool: Any = None
-    cleanup_deadline: float | None = None
+    __slots__ = ("_cleanup_deadline", "_config", "_pool")
 
-    async def release(connection: Any) -> None:
-        timeout = (
-            DEFAULT_TENANT_CLEANUP_TIMEOUT
-            if cleanup_deadline is None
-            else max(0.0, cleanup_deadline - asyncio.get_running_loop().time())
-        )
-        await await_owned_release(pool.release(connection, timeout=timeout))
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy, cleanup_timeout=DEFAULT_TENANT_CLEANUP_TIMEOUT)
+        self._config = config
+        self._pool: Any = None
+        self._cleanup_deadline: float | None = None
 
-    async def invalidate(connection: Any) -> None:
-        try:
-            connection.terminate()
-        except InterfaceError:
-            pass
-        finally:
-            await release(connection)
-
-    async def acquire() -> Any:
-        nonlocal pool
-        pool = await config.provide_pool()
-        connection = await pool.acquire()
+    async def _acquire(self) -> Any:
+        self._pool = await self._config.provide_pool()
+        connection = await self._pool.acquire()
         setup_error: BaseException | None = None
         try:
-            await apply_session_baseline(connection, config.driver_features.get("tenant_session_baseline", {}))
+            await apply_session_baseline(connection, self._config.driver_features.get("tenant_session_baseline", {}))
         except BaseException as exc:
             setup_error = exc
         if setup_error is not None:
             try:
-                await invalidate(connection)
+                await self._invalidate(connection)
             except BaseException as cleanup:
                 setup_error.add_note(f"Tenant connection disposal failed: {type(cleanup).__name__}")
             raise setup_error
         return connection
 
-    async def finish_transaction(connection: Any, _exc_type: type[BaseException] | None) -> None:
-        nonlocal cleanup_deadline
-        cleanup_deadline = asyncio.get_running_loop().time() + DEFAULT_TENANT_CLEANUP_TIMEOUT
+    async def _release(self, connection: Any) -> None:
+        deadline = self._cleanup_deadline
+        timeout = (
+            DEFAULT_TENANT_CLEANUP_TIMEOUT
+            if deadline is None
+            else max(0.0, deadline - asyncio.get_running_loop().time())
+        )
+        await await_owned_release(self._pool.release(connection, timeout=timeout))
+
+    async def _invalidate(self, connection: Any) -> None:
+        try:
+            connection.terminate()
+        except InterfaceError:
+            pass
+        finally:
+            await self._release(connection)
+
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        self._cleanup_deadline = asyncio.get_running_loop().time() + DEFAULT_TENANT_CLEANUP_TIMEOUT
         if connection.is_in_transaction():
             await connection.execute("ROLLBACK")
-
-    return AsyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish_transaction,
-        cleanup_timeout=DEFAULT_TENANT_CLEANUP_TIMEOUT,
-    )

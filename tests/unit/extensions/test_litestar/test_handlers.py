@@ -1114,6 +1114,7 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
     )
     config_type = AiosqliteConfig if is_async else SqliteConfig
     monkeypatch.setattr(config_type, "supports_tenant_strategy", True)
+    monkeypatch.setattr(config_type, "_create_tenant_lease", lambda self, **kwargs: None)
     config = config_type(
         driver_features={"tenant_strategy": strategy},
         extension_config={"litestar": {"tenant_extractor": lambda scope: "acme"}},

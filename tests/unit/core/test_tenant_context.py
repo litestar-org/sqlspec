@@ -11,8 +11,12 @@ from uuid import UUID
 
 import pytest
 
-from sqlspec.core.tenant import TenantLeaseState, validate_session_setting_name, validate_tenant_session_baseline
-from sqlspec.driver._tenant import require_session_pooler
+from sqlspec.core.tenant import (
+    TenantLeaseState,
+    require_session_pooler,
+    validate_session_setting_name,
+    validate_tenant_session_baseline,
+)
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, async_tenant_bypass, async_tenant_scope
 
@@ -321,3 +325,37 @@ async def test_cancellation_restores_context_in_cancelled_task(bypass: bool) -> 
             await task
         assert TenantContext.get_tenant_id() == "parent"
     assert restored == ["outer", None]
+
+
+async def test_scope_supports_sync_and_async_entry_and_sequential_reuse() -> None:
+    scope = TenantContext.scope("tenant-a")
+    with scope as payload:
+        assert TenantContext.get() is payload
+    assert TenantContext.get() is None
+    async with scope as payload:
+        assert TenantContext.get_tenant_id() == "tenant-a"
+        with pytest.raises(TenantContextError, match="already active"):
+            scope.__enter__()
+        assert TenantContext.get() is payload
+    assert TenantContext.get() is None
+
+
+def test_bind_applies_resolved_payload_or_absence_and_restores() -> None:
+    payload = TenantContextPayload("tenant-a")
+    with TenantContext.scope("outer") as outer:
+        with TenantContext.bind(payload):
+            assert TenantContext.get() is payload
+        assert TenantContext.get() is outer
+        binding = TenantContext.bind(None)
+        with binding:
+            assert TenantContext.get() is None
+            with pytest.raises(TenantContextError, match="already active"):
+                binding.__enter__()
+        assert TenantContext.get() is outer
+
+
+def test_bind_restores_after_body_failure() -> None:
+    with TenantContext.scope("outer") as outer:
+        with pytest.raises(RuntimeError), TenantContext.bind(TenantContextPayload("inner")):
+            raise RuntimeError
+        assert TenantContext.get() is outer

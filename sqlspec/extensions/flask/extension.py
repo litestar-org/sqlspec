@@ -21,7 +21,13 @@ from sqlspec.extensions.flask._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantExtractorValue, coerce_tenant_payload
+from sqlspec.utils.tenant import (
+    TenantContext,
+    TenantContextPayload,
+    TenantExtractorValue,
+    coerce_tenant_payload,
+    shared_tenant_extractor,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,11 +45,8 @@ _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 
 
 async def _enter_tenant_connection(conn_ctx: Any, payload: TenantContextPayload | None) -> Any:
-    token = TenantContext.set(payload)
-    try:
+    with TenantContext.bind(payload):
         return await conn_ctx.__aenter__()
-    finally:
-        TenantContext.reset(token)
 
 
 class SQLSpecPlugin:
@@ -263,26 +266,7 @@ class SQLSpecPlugin:
         )
 
     def _configure_tenant_extractor(self) -> None:
-        for state in self._config_states:
-            if state.disable_di:
-                continue
-            extractor = state.tenant_extractor
-            if state.config.driver_features.get("tenant_strategy") is not None and extractor is None:
-                msg = f"Flask session {state.session_key!r} requires tenant_extractor for tenant strategy"
-                raise ImproperConfigurationError(msg)
-            if extractor is None:
-                continue
-            if (
-                not callable(extractor)
-                or inspect.iscoroutinefunction(extractor)
-                or inspect.iscoroutinefunction(type(extractor).__call__)
-            ):
-                msg = "Flask tenant_extractor must be a synchronous callable"
-                raise ImproperConfigurationError(msg)
-            if self._tenant_extractor is not None and self._tenant_extractor is not extractor:
-                msg = "Flask configurations must share the same tenant_extractor"
-                raise ImproperConfigurationError(msg)
-            self._tenant_extractor = extractor
+        self._tenant_extractor = shared_tenant_extractor(self._config_states, framework="Flask", synchronous=True)
         if self._tenant_extractor is not None:
             extractor_signature = inspect.signature(self._tenant_extractor)
             try:

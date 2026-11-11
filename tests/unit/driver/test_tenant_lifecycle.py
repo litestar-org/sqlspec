@@ -13,6 +13,69 @@ if TYPE_CHECKING:
     from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy
 
 
+class CallbackSyncLease(SyncTenantLease):
+    """Route lease hooks to recording callables."""
+
+    __slots__ = ("_on_acquire", "_on_finish", "_on_invalidate", "_on_release")
+
+    def __init__(
+        self,
+        strategy: "SyncTenantStrategy",
+        *,
+        acquire: Callable[[], Any],
+        release: Callable[[Any], None],
+        invalidate: Callable[[Any], None],
+        finish_transaction: Callable[[Any, type[BaseException] | None], None],
+    ) -> None:
+        super().__init__(strategy)
+        self._on_acquire, self._on_release = acquire, release
+        self._on_invalidate, self._on_finish = invalidate, finish_transaction
+
+    def _acquire(self) -> Any:
+        return self._on_acquire()
+
+    def _release(self, connection: Any) -> None:
+        self._on_release(connection)
+
+    def _invalidate(self, connection: Any) -> None:
+        self._on_invalidate(connection)
+
+    def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        self._on_finish(connection, exc_type)
+
+
+class CallbackAsyncLease(AsyncTenantLease):
+    """Route asynchronous lease hooks to recording callables."""
+
+    __slots__ = ("_on_acquire", "_on_finish", "_on_invalidate", "_on_release")
+
+    def __init__(
+        self,
+        strategy: "AsyncTenantStrategy",
+        *,
+        acquire: Callable[[], Awaitable[Any]],
+        release: Callable[[Any], Awaitable[None]],
+        invalidate: Callable[[Any], Awaitable[None]],
+        finish_transaction: Callable[[Any, type[BaseException] | None], Awaitable[None]],
+        cleanup_timeout: float = 5.0,
+    ) -> None:
+        super().__init__(strategy, cleanup_timeout=cleanup_timeout)
+        self._on_acquire, self._on_release = acquire, release
+        self._on_invalidate, self._on_finish = invalidate, finish_transaction
+
+    async def _acquire(self) -> Any:
+        return await self._on_acquire()
+
+    async def _release(self, connection: Any) -> None:
+        await self._on_release(connection)
+
+    async def _invalidate(self, connection: Any) -> None:
+        await self._on_invalidate(connection)
+
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        await self._on_finish(connection, exc_type)
+
+
 def make_recording_lease(
     calls: list[str],
     *,
@@ -72,7 +135,7 @@ def make_recording_lease(
         return f"finish:{None if exc_type is None else exc_type.__name__}"
 
     if asynchronous:
-        return AsyncTenantLease(
+        return CallbackAsyncLease(
             cast("AsyncTenantStrategy", SimpleNamespace(checkout=async_checkout, checkin=async_checkin)),
             acquire=async_acquire,
             release=lambda conn: async_record("release"),
@@ -80,7 +143,7 @@ def make_recording_lease(
             finish_transaction=lambda conn, exc_type: async_record(finish_name(exc_type)),
             cleanup_timeout=timeout,
         ), connection
-    return SyncTenantLease(
+    return CallbackSyncLease(
         cast("SyncTenantStrategy", SimpleNamespace(checkout=checkout, checkin=checkin)),
         acquire=acquire,
         release=lambda conn: record("release"),
@@ -138,7 +201,7 @@ async def test_tenant_lease_normalizes_strategy_state_to_captured_payload(asynch
         checked_in.append(state)
 
     if asynchronous:
-        lease: SyncTenantLease | AsyncTenantLease = AsyncTenantLease(
+        lease: SyncTenantLease | AsyncTenantLease = CallbackAsyncLease(
             cast(
                 "AsyncTenantStrategy",
                 SimpleNamespace(checkout=lambda conn, payload: async_value(returned), checkin=async_checkin),
@@ -149,7 +212,7 @@ async def test_tenant_lease_normalizes_strategy_state_to_captured_payload(asynch
             finish_transaction=lambda conn, exc_type: async_value(None),
         )
     else:
-        lease = SyncTenantLease(
+        lease = CallbackSyncLease(
             cast(
                 "SyncTenantStrategy",
                 SimpleNamespace(

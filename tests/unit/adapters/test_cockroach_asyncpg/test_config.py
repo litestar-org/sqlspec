@@ -699,9 +699,6 @@ def test_tenant_shorthand_and_facade(shorthand: Any) -> None:
     assert isinstance(config.driver_features["tenant_strategy"], CockroachAsyncpgRLSStrategy)
     assert config.driver_features["pooler_mode"] == "session"
     assert CockroachAsyncpgRLSStrategy is Implementation
-    import sqlspec.adapters.cockroach_asyncpg as package
-
-    assert "CockroachAsyncpgRLSStrategy" in package.__all__
 
 
 @pytest.mark.parametrize("disabled", [False, None])
@@ -794,13 +791,6 @@ async def test_tenant_missing_context_never_acquires(provider: str) -> None:
     pool.acquire.assert_not_called()
     with pytest.raises(ImproperConfigurationError):
         await config.create_connection()
-
-
-def test_tenant_rejects_postgres_strategy() -> None:
-    from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
-
-    with pytest.raises(ImproperConfigurationError, match="Cockroach"):
-        CockroachAsyncpgConfig(driver_features={"tenant_strategy": AsyncpgRLSStrategy()})
 
 
 async def test_tenant_disposal_tolerates_an_already_terminated_proxy() -> None:

@@ -527,7 +527,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         if isinstance(direct_dsn, str) and direct_dsn and callable(derive_fn):
             config = cast("ConfigT", derive_fn())
         self.config = config
-        if self._config_has_tenant_strategy():
+        if self.config.driver_features.get("tenant_strategy") is not None:
             msg = "Migrations cannot use tenant_strategy; use a separate configuration without tenant_strategy"
             raise MigrationError(msg)
         migration_config = self._get_migration_config()
@@ -544,11 +544,6 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         self._runtime: ObservabilityRuntime | None = self.config.get_observability_runtime()
         self._last_command_error: Exception | None = None
         self._last_command_metrics: dict[str, float] | None = None
-
-    def _config_has_tenant_strategy(self) -> bool:
-        """Return whether the effective migration config enables tenant leases."""
-        strategy = self.config.driver_features.get("tenant_strategy")
-        return strategy is not None and strategy is not False
 
     def init_directory(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.

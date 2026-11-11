@@ -8,7 +8,7 @@ __signature__/__annotations__ at runtime for dependency injection.
 
 import contextlib
 import inspect
-from collections.abc import AsyncGenerator, Callable, Iterator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -66,7 +66,7 @@ async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
 def _resolve_connection_tenant(
     config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
 ) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
-    if config.supports_tenant_strategy and config.driver_features.get("tenant_strategy") is not None:
+    if config.driver_features.get("tenant_strategy") is not None:
         ambient = TenantContext.get()
         return (
             ambient
@@ -76,18 +76,9 @@ def _resolve_connection_tenant(
     return None
 
 
-@contextlib.contextmanager
-def _tenant_connection_scope(payload: TenantContextPayload | None) -> Iterator[None]:
-    """Bind a payload only while the current execution context performs lease I/O.
-
-    Yields:
-        Control to acquisition or cleanup in the token's creating context.
-    """
-    token = TenantContext.set(payload)
-    try:
-        yield
-    finally:
-        TenantContext.reset(token)
+def tenant_payload_key(connection_key: str) -> str:
+    """Return the scope-state key holding a connection's captured tenant payload."""
+    return f"{connection_key}_tenant_payload"
 
 
 async def _capture_connection_tenant(
@@ -99,7 +90,7 @@ async def _capture_connection_tenant(
     payload = _resolve_connection_tenant(config, scope, settings)
     if inspect.isawaitable(payload):
         payload = await payload
-    set_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload", payload)
+    set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
     return payload
 
 
@@ -123,11 +114,11 @@ async def _exit_connection_context(
     exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
     payload = (
-        get_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload", pop=True)
+        get_sqlspec_scope_state(scope, tenant_payload_key(connection_key), pop=True)
         if connection_key is not None
         else None
     )
-    with _tenant_connection_scope(payload):
+    with TenantContext.bind(payload):
         if isinstance(connection_cm, AbstractAsyncContextManager):
             await connection_cm.__aexit__(*exit_args)
         elif isinstance(connection_cm, AbstractContextManager):
@@ -136,14 +127,11 @@ async def _exit_connection_context(
             await ensure_async_(connection.close)()
 
 
-def manual_handler_maker(
-    connection_scope_key: str, *, tenant_settings: TenantResolutionSettings | None = None
-) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
+def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for manual connection management.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
-        tenant_settings: Tenant settings paired with the connection provider.
 
     Returns:
         The handler callable.
@@ -176,14 +164,11 @@ def autocommit_handler_maker(
     commit_on_redirect: bool = False,
     extra_commit_statuses: "set[int] | None" = None,
     extra_rollback_statuses: "set[int] | None" = None,
-    *,
-    tenant_settings: TenantResolutionSettings | None = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for automatic transaction commit/rollback based on response status.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
-        tenant_settings: Tenant settings paired with the connection provider.
         commit_on_redirect: Issue a commit when the response status is a redirect (3XX).
         extra_commit_statuses: A set of additional status codes that trigger a commit.
         extra_rollback_statuses: A set of additional status codes that trigger a rollback.
@@ -356,7 +341,7 @@ def connection_provider_maker(
         payload = await _capture_connection_tenant(config, scope, connection_key, tenant_settings)
         try:
             context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
-            with _tenant_connection_scope(payload):
+            with TenantContext.bind(payload):
                 connection_cm: Any = config.provide_connection(db_pool)
                 if isinstance(connection_cm, AbstractAsyncContextManager):
                     context_manager = connection_cm
@@ -400,7 +385,7 @@ def connection_provider_maker(
             delete_sqlspec_scope_state(scope, connection_key)
             await _exit_connection_context(context_manager, conn_instance, scope, connection_key=connection_key)
         except BaseException:
-            delete_sqlspec_scope_state(scope, f"{connection_key}_tenant_payload")
+            delete_sqlspec_scope_state(scope, tenant_payload_key(connection_key))
             raise
 
     return provide_connection

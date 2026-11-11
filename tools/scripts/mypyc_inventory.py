@@ -302,7 +302,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     **{
         f"sqlspec/adapters/{adapter}/tenant.py": {
             "classification": "compile_now",
-            "reason": "Tenant strategy and lease callbacks with native SDK and interpreted-subclass coverage.",
+            "reason": "Tenant strategies and lease subclasses with native SDK and interpreted-subclass coverage.",
         }
         for adapter in (
             "asyncpg",
@@ -365,19 +365,19 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Compiled adapter coercion helpers are on the hot path.",
     },
-    "sqlspec/utils/tenant.py": {
-        "classification": "hard_block",
-        "reason": "Public tenant scopes use decorated class methods and async generators, which fail MyPyC code generation.",
-    },
-    "sqlspec/utils/tenant_asyncpg.py": {
+    "sqlspec/extensions/litestar/_tenant_resolution.py": {
         "classification": "compile_now",
-        "reason": "Asyncpg pool release is joined through cancellation before tenant ownership ends.",
+        "reason": "Per-request tenant resolution is pure scope and mapping traversal with no Litestar runtime imports.",
     },
-    "sqlspec/utils/tenant_mssql.py": {
+    "sqlspec/utils/tenant/_context.py": {
+        "classification": "compile_now",
+        "reason": "Tenant payload validation, context scopes, and ASGI binding run on every tenant acquisition.",
+    },
+    "sqlspec/utils/tenant/_mssql.py": {
         "classification": "compile_now",
         "reason": "Typed SQL Server batch generation and result validation are shared by both tenant strategies.",
     },
-    "sqlspec/utils/tenant_postgres.py": {
+    "sqlspec/utils/tenant/_postgres.py": {
         "classification": "compile_now",
         "reason": "Shared PostgreSQL-family batch construction and validation with interpreted subclass support.",
     },

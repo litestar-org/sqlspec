@@ -55,9 +55,9 @@ from sqlspec.adapters.oracledb.driver import (
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.adapters.oracledb.tenant import (
     OracleAsyncIdentifierStrategy,
+    OracleAsyncTenantLease,
     OracleSyncIdentifierStrategy,
-    build_oracle_async_tenant_lease,
-    build_oracle_sync_tenant_lease,
+    OracleSyncTenantLease,
     validate_oracle_tenant_hook,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
@@ -438,16 +438,11 @@ def _derive_oracle_pool_kwargs(
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Oracle sync connections."""
 
-    __slots__ = ("_conn", "_tenant_lease")
+    __slots__ = ("_conn",)
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
         self._conn: OracleSyncConnection | None = None
-        self._tenant_lease = (
-            build_oracle_sync_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
 
     def acquire_connection(self) -> "OracleSyncConnection":
         if self._tenant_lease is not None:
@@ -524,6 +519,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
     supports_tenant_strategy: ClassVar[bool] = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "identifier"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = OracleSyncIdentifierStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = OracleSyncTenantLease
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -595,10 +593,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> TenantStrategy | None:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "identifier"}):
-            return OracleSyncIdentifierStrategy(self._tenant_source_hook)
-        return super()._resolve_tenant_strategy(strategy)
+    def _default_tenant_strategy(self) -> TenantStrategy:
+        return OracleSyncIdentifierStrategy(self._tenant_source_hook)
 
     def create_connection(self) -> "OracleSyncConnection":
         """Create a single connection (not from pool).
@@ -606,9 +602,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         Returns:
             An Oracle Connection instance.
         """
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Oracle tenant configurations require provide_session() or provide_connection()"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         _initialize_oracle_client(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = oracledb.connect(**config)
@@ -774,15 +768,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Oracle connections."""
 
-    __slots__ = ("_tenant_lease",)
-
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        super().__init__(config)
-        self._tenant_lease = (
-            build_oracle_async_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
+    __slots__ = ()
 
     async def __aenter__(self) -> Any:
         if self._tenant_lease is not None:
@@ -817,15 +803,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
 
 
 class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ("_tenant_lease",)
-
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        super().__init__(config)
-        self._tenant_lease = (
-            build_oracle_async_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
+    __slots__ = ()
 
     async def acquire_connection(self) -> Any:
         if self._tenant_lease is not None:
@@ -868,6 +846,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
     supports_tenant_strategy: ClassVar[bool] = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "identifier"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = OracleAsyncIdentifierStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = OracleAsyncTenantLease
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -942,10 +923,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self._extracted_wallet_dir = pending_wallet_dir
             retain_extracted_wallet_dir(pending_wallet_dir)
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> TenantStrategy | None:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "identifier"}):
-            return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
-        return super()._resolve_tenant_strategy(strategy)
+    def _default_tenant_strategy(self) -> TenantStrategy:
+        return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
 
     async def create_connection(self) -> OracleAsyncConnection:
         """Create a single async connection (not from pool).
@@ -953,9 +932,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Returns:
             An Oracle AsyncConnection instance.
         """
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Oracle tenant configurations require provide_session() or provide_connection()"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         _validate_async_oracle_mode(self.connection_config)
         config = _build_standalone_connection_params(self.connection_config)
         conn = await oracledb.connect_async(**config)

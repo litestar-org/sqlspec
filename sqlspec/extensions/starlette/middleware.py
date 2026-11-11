@@ -1,6 +1,6 @@
 """HTTP middleware classes for the Starlette SQLSpec extension."""
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +17,7 @@ from sqlspec.utils.tenant import TenantContext, coerce_tenant_payload
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
     from starlette.responses import Response
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -25,6 +25,32 @@ if TYPE_CHECKING:
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = ("CorrelationMiddleware", "SQLCommenterMiddleware", "SQLSpecAutocommitMiddleware", "SQLSpecManualMiddleware")
+
+
+def _response_owner_key(connection_key: str) -> str:
+    return f"sqlspec_response_owner_{connection_key}"
+
+
+def _completes_response(message: "Message") -> bool:
+    return message["type"] == "http.response.pathsend" or (
+        message["type"] == "http.response.body" and not message.get("more_body", False)
+    )
+
+
+@contextmanager
+def _published_connection(request: "Request", config_state: "SQLSpecConfigState", connection: Any) -> "Iterator[None]":
+    """Expose a connection on request state and clear every derived entry on exit.
+
+    Yields:
+        Control while the connection is visible to the request.
+    """
+    set_state_value(request.state, config_state.connection_key, connection)
+    try:
+        yield
+    finally:
+        pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
+        pop_state_value(request.state, f"{config_state.session_key}_instance")
+        pop_state_value(request.state, config_state.connection_key)
 
 
 @asynccontextmanager
@@ -42,37 +68,22 @@ async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "R
         if isawaitable(raw):
             raw = await raw
         token = TenantContext.set(coerce_tenant_payload(raw))
-    connection_key = config_state.connection_key
-    cache_key = f"sqlspec_session_cache_{config_state.session_key}"
     try:
+        provided: Any = None
         if config.supports_connection_pooling:
-            pool = get_state_value(request.app.state, config_state.pool_key)
-            async with with_ensure_async_(config.provide_connection(pool)) as connection:
-                set_state_value(request.state, connection_key, connection)
-                try:
+            provided = config.provide_connection(get_state_value(request.app.state, config_state.pool_key))
+        elif config.driver_features.get("tenant_strategy") is not None:
+            provided = config.provide_connection()
+        if provided is not None:
+            async with with_ensure_async_(provided) as connection:
+                with _published_connection(request, config_state, connection):
                     yield connection
-                finally:
-                    pop_state_value(request.state, cache_key)
-                    pop_state_value(request.state, f"{config_state.session_key}_instance")
-                    pop_state_value(request.state, connection_key)
-        elif getattr(config, "driver_features", {}).get("tenant_strategy") is not None:
-            async with with_ensure_async_(config.provide_connection()) as connection:
-                set_state_value(request.state, connection_key, connection)
-                try:
-                    yield connection
-                finally:
-                    pop_state_value(request.state, cache_key)
-                    pop_state_value(request.state, f"{config_state.session_key}_instance")
-                    pop_state_value(request.state, connection_key)
         else:
             connection = await ensure_async_(config.create_connection)()
-            set_state_value(request.state, connection_key, connection)
             try:
-                yield connection
+                with _published_connection(request, config_state, connection):
+                    yield connection
             finally:
-                pop_state_value(request.state, cache_key)
-                pop_state_value(request.state, f"{config_state.session_key}_instance")
-                pop_state_value(request.state, connection_key)
                 await ensure_async_(connection.close)()
     finally:
         if token is not None:
@@ -110,7 +121,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
-        if get_state_value(request.state, f"sqlspec_response_owner_{self.config_state.connection_key}", False):
+        if get_state_value(request.state, _response_owner_key(self.config_state.connection_key), False):
             return await call_next(request)
         async with self._connection_cm(request):
             return await call_next(request)
@@ -152,7 +163,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
-        if get_state_value(request.state, f"sqlspec_response_owner_{self.config_state.connection_key}", False):
+        if get_state_value(request.state, _response_owner_key(self.config_state.connection_key), False):
             return await call_next(request)
         cache_key = f"sqlspec_session_cache_{self.config_state.session_key}"
         async with self._connection_cm(request) as connection:
@@ -202,14 +213,11 @@ def _track_downstream_completion(app: "ASGIApp", config_state: "SQLSpecConfigSta
         if scope["type"] != "http":
             await app(scope, receive, send)
             return
-        completion = scope.get("state", {}).get(f"sqlspec_response_owner_{config_state.connection_key}")
+        completion = scope.get("state", {}).get(_response_owner_key(config_state.connection_key))
 
         async def tracked_send(message: "Message") -> None:
             await send(message)
-            if completion is not None and (
-                message["type"] == "http.response.pathsend"
-                or (message["type"] == "http.response.body" and not message.get("more_body", False))
-            ):
+            if completion is not None and _completes_response(message):
                 completion["complete"] = True
 
         await app(scope, receive, tracked_send)
@@ -230,7 +238,7 @@ async def _run_connection_lifecycle(
         return
     request = Request(scope, receive=receive, send=send)
     state = middleware.config_state
-    owner_key = f"sqlspec_response_owner_{state.connection_key}"
+    owner_key = _response_owner_key(state.connection_key)
     status_code = 500
     response_complete = False
 
@@ -239,9 +247,7 @@ async def _run_connection_lifecycle(
         await send(message)
         if message["type"] == "http.response.start":
             status_code = message["status"]
-        elif message["type"] == "http.response.pathsend" or (
-            message["type"] == "http.response.body" and not message.get("more_body", False)
-        ):
+        elif _completes_response(message):
             response_complete = True
 
     async with middleware._connection_cm(request) as connection:

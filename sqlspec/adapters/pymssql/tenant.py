@@ -1,116 +1,72 @@
 """Bound, verified SQL Server session-context tenant strategy."""
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor
-from sqlspec.core.tenant import TenantLeaseState
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant import TenantContextPayload
-from sqlspec.utils.tenant_mssql import build_checkin_sql, build_checkout_sql, read_batch_result, validate_session_key
+from sqlspec.core.tenant.base import TenantLeaseState, with_cause
+from sqlspec.driver._tenant import SyncTenantLease
+from sqlspec.exceptions import TenantCleanupError, TenantContextError
+from sqlspec.utils.tenant._mssql import MssqlTenantSettings, read_batch_result
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.pymssql.config import PymssqlConfig
-    from sqlspec.driver._tenant import SyncTenantLease
+    from sqlspec.core.tenant.base import SyncTenantStrategy
+    from sqlspec.utils.tenant import TenantContextPayload
 
-__all__ = ("PymssqlSessionContextStrategy", "build_pymssql_tenant_lease")
-
-
-DEFAULT_MSSQL_TENANT_KEY: Final = "tenant_id"
+__all__ = ("PymssqlSessionContextStrategy", "PymssqlTenantLease")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class PymssqlSessionContextStrategy:
+class PymssqlSessionContextStrategy(MssqlTenantSettings):
     """Apply and restore owned mutable keys with one verified SQL batch per boundary."""
 
-    __slots__ = ("_sorted_variable_keys", "_tenant_key", "_variable_keys")
+    __slots__ = ()
 
-    def __init__(
-        self, *, tenant_key: object = DEFAULT_MSSQL_TENANT_KEY, variable_keys: Mapping[str, str] | None = None
-    ) -> None:
-        self._tenant_key = validate_session_key(tenant_key)
-        self._variable_keys = dict(variable_keys or {})
-        keys = cast("Mapping[str, object]", self._variable_keys)
-        targets = [self._tenant_key, *(validate_session_key(key) for key in keys.values())]
-        if len(set(targets)) != len(targets):
-            msg = "Tenant session keys must be distinct"
-            raise ImproperConfigurationError(msg)
-        self._sorted_variable_keys = tuple(sorted(self._variable_keys))
-
-    def checkout(self, connection: "PymssqlConnection", payload: TenantContextPayload) -> TenantLeaseState:
+    def checkout(self, connection: "PymssqlConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Capture previous settings, bind identity and verify the resulting values."""
-        if payload.variables.keys() - self._variable_keys.keys():
-            msg = "Tenant variables require an explicit session-key mapping"
-            raise TenantContextError(msg)
-        pairs = [(self._tenant_key, payload.tenant_id)] + [
-            (self._variable_keys[key], payload.variables[key])
-            for key in self._sorted_variable_keys
-            if key in payload.variables
-        ]
-        keys = tuple(key for key, _ in pairs)
-        params = keys + tuple(value for pair in pairs for value in pair) + keys
-        count = len(keys)
-        columns = tuple(f"sqlspec_prior_{i}" for i in range(count)) + tuple(
-            f"sqlspec_current_{i}" for i in range(count)
-        )
+        sql, params, columns = self.prepare_checkout(payload, "%s")
         try:
             with PymssqlCursor(connection, as_dict=False) as cursor:
-                cursor.execute(build_checkout_sql(count, "%s"), params)
+                cursor.execute(sql, params)
                 row = read_batch_result(cursor, columns)
         except Exception as exc:
             msg = "Tenant session context checkout failed"
-            error = TenantContextError(msg)
-            error.__cause__ = exc
-            raise error
-        if row[count:] != tuple(value for _, value in pairs):
-            msg = "Tenant session context verification failed"
-            raise TenantContextError(msg)
-        return TenantLeaseState(payload, baseline=dict(zip(keys, row[:count], strict=True)))
+            raise with_cause(TenantContextError(msg), exc)
+        return self.capture(payload, params, row)
 
     def checkin(self, connection: "PymssqlConnection", state: TenantLeaseState) -> None:
         """Restore and verify only this lease's captured settings."""
         if not state.baseline:
             return
-        pairs = tuple(state.baseline.items())
-        keys = tuple(key for key, _ in pairs)
-        params = tuple(value for pair in pairs for value in pair) + keys
-        columns = tuple(f"sqlspec_current_{i}" for i in range(len(keys)))
+        sql, params, columns = self.prepare_checkin(state, "%s")
         try:
             with PymssqlCursor(connection, as_dict=False) as cursor:
-                cursor.execute(build_checkin_sql(len(keys), "%s"), params)
+                cursor.execute(sql, params)
                 restored = read_batch_result(cursor, columns)
         except Exception as exc:
             msg = "Tenant session context cleanup failed"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
-        if restored != tuple(value for _, value in pairs):
-            msg = "Tenant session context restore verification failed"
-            raise TenantCleanupError(msg)
+            raise with_cause(TenantCleanupError(msg), exc)
+        self.verify_checkin(state, restored)
 
 
-def build_pymssql_tenant_lease(config: "PymssqlConfig") -> "SyncTenantLease":
-    """Build an adapter-owned fail-closed tenant lease."""
-    from sqlspec.driver._tenant import SyncTenantLease
+class PymssqlTenantLease(SyncTenantLease):
+    """Fail-closed tenant lease over pymssql connections."""
 
-    def acquire() -> "PymssqlConnection":
-        return config.provide_pool().new_connection()
+    __slots__ = ("_config",)
 
-    def release(connection: "PymssqlConnection") -> None:
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+
+    def _acquire(self) -> Any:
+        return self._config.provide_pool().new_connection()
+
+    def _release(self, connection: Any) -> None:
         connection.close()
 
-    def invalidate(connection: "PymssqlConnection") -> None:
+    def _invalidate(self, connection: Any) -> None:
         connection.close()
 
-    def finish(connection: "PymssqlConnection", exc_type: type[BaseException] | None) -> None:
+    def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         connection.rollback()
-
-    return SyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish,
-    )

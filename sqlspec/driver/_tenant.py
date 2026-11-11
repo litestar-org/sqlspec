@@ -1,39 +1,35 @@
-"""Fail-closed tenant leases around adapter-owned connection callbacks."""
+"""Fail-closed tenant leases around adapter-owned connection hooks."""
 
 import asyncio
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Mapping
 from typing import Any, Final
 
-from sqlspec.core.tenant.base import (
-    AsyncTenantStrategy,
-    SyncTenantStrategy,
-    TenantLeaseState,
-    TenantStrategy,
-    TenantStrategyShorthand,
-    require_session_pooler,
-)
+from mypy_extensions import mypyc_attr
+
+from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy, TenantLeaseState
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContext, TenantContextPayload
 
-__all__ = (
-    "AsyncTenantLease",
-    "AsyncTenantStrategy",
-    "SyncTenantLease",
-    "SyncTenantStrategy",
-    "TenantLeaseState",
-    "TenantStrategy",
-    "TenantStrategyShorthand",
-    "require_session_pooler",
-)
+__all__ = ("DEFAULT_TENANT_CLEANUP_TIMEOUT", "AsyncTenantLease", "SyncTenantLease", "await_owned_release")
 
 logger = get_logger("sqlspec.driver")
 DEFAULT_TENANT_CLEANUP_TIMEOUT: Final = 5.0
 
 
 def _lease_state(payload: TenantContextPayload, state: TenantLeaseState | Mapping[str, str | None]) -> TenantLeaseState:
-    return TenantLeaseState(payload, state.baseline if isinstance(state, TenantLeaseState) else state)
+    if isinstance(state, TenantLeaseState):
+        return state if state.payload is payload else TenantLeaseState(payload, state.baseline)
+    return TenantLeaseState(payload, state)
+
+
+def _require_payload() -> TenantContextPayload:
+    payload = TenantContext.get()
+    if payload is None:
+        msg = "A tenant scope or explicit bypass is required before acquiring a connection"
+        raise TenantContextError(msg)
+    return payload
 
 
 def _report_cleanup_failure(
@@ -50,37 +46,42 @@ def _report_cleanup_failure(
         raise error
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncTenantLease:
-    """Capture tenant identity and dispose of connections whose cleanup fails."""
+    """Capture tenant identity and dispose of connections whose cleanup fails.
 
-    __slots__ = ("_acquire", "_connection", "_finish_transaction", "_invalidate", "_release", "_state", "_strategy")
+    Adapters subclass the lease and implement the four connection hooks.
+    """
 
-    def __init__(
-        self,
-        strategy: SyncTenantStrategy,
-        *,
-        acquire: Callable[[], Any],
-        release: Callable[[Any], None],
-        invalidate: Callable[[Any], None],
-        finish_transaction: Callable[[Any, type[BaseException] | None], None],
-    ) -> None:
+    __slots__ = ("_connection", "_state", "_strategy")
+
+    def __init__(self, strategy: SyncTenantStrategy) -> None:
         self._strategy = strategy
-        self._acquire = acquire
-        self._release = release
-        self._invalidate = invalidate
-        self._finish_transaction = finish_transaction
         self._connection: Any = None
         self._state: TenantLeaseState | None = None
+
+    def _acquire(self) -> Any:
+        """Return one connection from the adapter pool."""
+        raise NotImplementedError
+
+    def _release(self, connection: Any) -> None:
+        """Return a verified connection to the adapter pool."""
+        raise NotImplementedError
+
+    def _invalidate(self, connection: Any) -> None:
+        """Physically dispose of a connection that cannot be reused."""
+        raise NotImplementedError
+
+    def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        """Finish application work before tenant state is restored."""
+        raise NotImplementedError
 
     def acquire(self) -> Any:
         """Acquire and initialize one connection using the caller's tenant snapshot."""
         if self._state is not None:
             msg = "Tenant lease already owns a connection"
             raise TenantContextError(msg)
-        payload = TenantContext.get()
-        if payload is None:
-            msg = "A tenant scope or explicit bypass is required before acquiring a connection"
-            raise TenantContextError(msg)
+        payload = _require_payload()
         connection = self._acquire()
         try:
             state = (
@@ -121,7 +122,7 @@ class SyncTenantLease:
 
 
 async def _await_owned(
-    task: asyncio.Future[None], timeout: float | None = None
+    task: "asyncio.Future[Any]", timeout: float | None = None
 ) -> tuple[BaseException | None, asyncio.CancelledError | None]:
     cancellation: asyncio.CancelledError | None = None
     deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
@@ -141,51 +142,61 @@ async def _await_owned(
     return None, cancellation
 
 
-class AsyncTenantLease:
-    """Capture tenant identity and shield adapter-owned disposal from cancellation."""
+async def await_owned_release(operation: Awaitable[Any]) -> None:
+    """Join adapter-owned release work before reporting its error or the caller's cancellation.
 
-    __slots__ = (
-        "_acquire",
-        "_cleanup_timeout",
-        "_connection",
-        "_finish_transaction",
-        "_invalidate",
-        "_release",
-        "_state",
-        "_strategy",
-    )
+    Cancellation of the caller never abandons the operation. Its own failure
+    takes precedence over a cancellation observed while waiting.
+    """
+    error, cancellation = await _await_owned(asyncio.ensure_future(operation))
+    if error is not None:
+        raise error
+    if cancellation is not None:
+        raise cancellation
+
+
+@mypyc_attr(allow_interpreted_subclasses=True)
+class AsyncTenantLease:
+    """Capture tenant identity and shield adapter-owned disposal from cancellation.
+
+    Adapters subclass the lease and implement the four connection hooks.
+    """
+
+    __slots__ = ("_cleanup_timeout", "_connection", "_state", "_strategy")
 
     def __init__(
-        self,
-        strategy: AsyncTenantStrategy,
-        *,
-        acquire: Callable[[], Awaitable[Any]],
-        release: Callable[[Any], Awaitable[None]],
-        invalidate: Callable[[Any], Awaitable[None]],
-        finish_transaction: Callable[[Any, type[BaseException] | None], Awaitable[None]],
-        cleanup_timeout: float = DEFAULT_TENANT_CLEANUP_TIMEOUT,
+        self, strategy: AsyncTenantStrategy, *, cleanup_timeout: float = DEFAULT_TENANT_CLEANUP_TIMEOUT
     ) -> None:
         if not math.isfinite(cleanup_timeout) or cleanup_timeout <= 0:
             msg = "Tenant cleanup timeout must be finite and positive"
             raise ImproperConfigurationError(msg)
         self._strategy = strategy
-        self._acquire = acquire
-        self._release = release
-        self._invalidate = invalidate
-        self._finish_transaction = finish_transaction
         self._cleanup_timeout = cleanup_timeout
         self._connection: Any = None
         self._state: TenantLeaseState | None = None
+
+    async def _acquire(self) -> Any:
+        """Return one connection from the adapter pool."""
+        raise NotImplementedError
+
+    async def _release(self, connection: Any) -> None:
+        """Return a verified connection to the adapter pool."""
+        raise NotImplementedError
+
+    async def _invalidate(self, connection: Any) -> None:
+        """Physically dispose of a connection that cannot be reused."""
+        raise NotImplementedError
+
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        """Finish application work before tenant state is restored."""
+        raise NotImplementedError
 
     async def acquire(self) -> Any:
         """Acquire a connection and apply a captured tenant or explicit bypass."""
         if self._state is not None:
             msg = "Tenant lease already owns a connection"
             raise TenantContextError(msg)
-        payload = TenantContext.get()
-        if payload is None:
-            msg = "A tenant scope or explicit bypass is required before acquiring a connection"
-            raise TenantContextError(msg)
+        payload = _require_payload()
         connection = await self._acquire()
         try:
             state = (
@@ -198,14 +209,11 @@ class AsyncTenantLease:
         else:
             self._connection, self._state = connection, state
             return connection
-        disposal = asyncio.create_task(self._dispose(connection))
+        disposal = asyncio.create_task(self._invalidate(connection))
         invalidation_error, _ = await _await_owned(disposal)
         if invalidation_error is not None:
             checkout_error.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
         raise checkout_error
-
-    async def _dispose(self, connection: Any) -> None:
-        await self._invalidate(connection)
 
     async def _cleanup(self, connection: Any, state: TenantLeaseState, exc_type: type[BaseException] | None) -> None:
         await self._finish_transaction(connection, exc_type)
@@ -231,7 +239,7 @@ class AsyncTenantLease:
             _, pending = await _await_owned(cleanup)
             cancellation = cancellation or pending
         if cause is not None:
-            disposal = asyncio.create_task(self._dispose(connection))
+            disposal = asyncio.create_task(self._invalidate(connection))
             invalidation_error, pending = await _await_owned(disposal)
             cancellation = cancellation or pending
             _report_cleanup_failure(cause, cancellation or kwargs.get("exc_val"), invalidation_error)

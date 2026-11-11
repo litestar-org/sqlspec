@@ -905,6 +905,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_reliable_rowcount: "ClassVar[bool]" = True
     supports_tenant_strategy: "ClassVar[bool]" = False
     supports_tenant_session_baseline: "ClassVar[bool]" = False
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset()
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = None
+    tenant_lease_type: "ClassVar[type[Any] | None]" = None
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
@@ -1525,16 +1528,26 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
             raise TypeError(msg)
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> "TenantStrategy | None":
-        """Normalize disabled tenancy and validate structural strategy instances.
+    def _default_tenant_strategy(self) -> "TenantStrategy":
+        """Build the strategy selected by ``True`` or an adapter shorthand."""
+        strategy_type = self.tenant_strategy_type
+        if strategy_type is None:
+            msg = f"{type(self).__name__} does not support tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        return cast("TenantStrategy", strategy_type())
 
-        Adapters override this method to resolve their supported shorthands.
+    def _resolve_tenant_strategy(self, strategy: Any) -> "TenantStrategy | None":
+        """Normalize disabled tenancy, adapter shorthands, and structural strategy instances.
 
         Raises:
             ImproperConfigurationError: The shorthand or strategy is unsupported.
         """
         if strategy is None or strategy is False:
             return None
+        if self.tenant_strategy_type is not None and (
+            strategy is True or (isinstance(strategy, str) and strategy in self.tenant_strategy_shorthands)
+        ):
+            return self._default_tenant_strategy()
         if isinstance(strategy, (str, bool)):
             msg = f"{type(self).__name__} does not support tenant_strategy shorthand {strategy!r}"
             raise ImproperConfigurationError(msg)
@@ -1542,6 +1555,39 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return cast("TenantStrategy", strategy)
         msg = f"{type(self).__name__} received an invalid tenant_strategy: {strategy!r}"
         raise ImproperConfigurationError(msg)
+
+    def _create_tenant_lease(self, *, session: bool = False) -> Any:
+        """Build one fail-closed lease for a connection or session acquisition.
+
+        Args:
+            session: The lease serves a driver session instead of a raw connection.
+
+        Returns:
+            The adapter lease, or None when no tenant strategy is configured.
+
+        Raises:
+            ImproperConfigurationError: A strategy is configured without a lease implementation.
+        """
+        strategy = self.driver_features.get("tenant_strategy")
+        if strategy is None:
+            return None
+        lease_type = self.tenant_lease_type
+        if lease_type is None:
+            msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
+            raise ImproperConfigurationError(msg)
+        return lease_type(self, strategy, session=session)
+
+    def _require_leased_tenant_connection(self) -> None:
+        """Reject standalone connections that would bypass tenant leases.
+
+        Raises:
+            ImproperConfigurationError: A tenant strategy is configured.
+        """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = (
+                f"{type(self).__name__} tenant configurations require provide_connection() or provide_session() leases"
+            )
+            raise ImproperConfigurationError(msg)
 
     def _init_config_state(
         self,

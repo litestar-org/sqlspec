@@ -118,6 +118,7 @@ class _ConnectionManager:
 class _Config:
     def __init__(self, *, pooled: bool, connection: _Connection, manager: _ConnectionManager | None = None) -> None:
         self.supports_connection_pooling = pooled
+        self.driver_features: dict[str, Any] = {}
         self.connection = connection
         self.manager = manager
         self.created = False

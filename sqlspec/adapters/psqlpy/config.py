@@ -12,7 +12,7 @@ from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, Psql
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
 from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
-from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, build_psqlpy_tenant_lease
+from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, PsqlpyTenantLease
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (
@@ -23,7 +23,7 @@ from sqlspec.core.config_runtime import (
 )
 from sqlspec.core.tenant import require_session_pooler
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -171,18 +171,15 @@ class PsqlpyDriverFeatures(TypedDict):
 
 
 class _PsqlpySessionFactory(AsyncPoolSessionFactory):
-    __slots__ = ("_ctx", "_lease")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsqlpyConfig") -> None:
         super().__init__(config)
         self._ctx: Any | None = None
-        self._lease = (
-            build_psqlpy_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
-        )
 
     async def acquire_connection(self) -> "PsqlpyConnection":
-        if self._lease is not None:
-            return cast("PsqlpyConnection", await self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsqlpyConnection", await self._tenant_lease.acquire())
         pool = self._config.connection_instance
         if pool is None:
             pool = await self._config.create_pool()
@@ -199,8 +196,8 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
-        if self._lease is not None:
-            await self._lease.release(_conn, **kwargs)
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(_conn, **kwargs)
             return
         if kwargs.get("exc_type") is not None and _conn is not None:
             with contextlib.suppress(Exception):
@@ -215,18 +212,15 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psqlpy connections."""
 
-    __slots__ = ("_ctx", "_lease")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsqlpyConfig") -> None:
         super().__init__(config)
         self._ctx: Any = None
-        self._lease = (
-            build_psqlpy_tenant_lease(config) if config.driver_features.get("tenant_strategy") is not None else None
-        )
 
     async def __aenter__(self) -> PsqlpyConnection:
-        if self._lease is not None:
-            return cast("PsqlpyConnection", await self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsqlpyConnection", await self._tenant_lease.acquire())
         pool = self._config.connection_instance
         if pool is None:
             pool = await self._config.create_pool()
@@ -248,8 +242,8 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._lease is not None:
-            await self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             return None
         connection = self._connection
         self._connection = None
@@ -271,6 +265,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
     driver_type: ClassVar[type[PsqlpyDriver]] = PsqlpyDriver
     connection_type: "ClassVar[type[PsqlpyConnection]]" = PsqlpyConnection
     supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = PsqlpyRLSStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = PsqlpyTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = False
@@ -356,11 +353,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
                 self.driver_features.get("pooler_mode"), "PsqlpyConfig"
             )
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
-            return PsqlpyRLSStrategy()
-        return super()._resolve_tenant_strategy(strategy)
-
     @property
     def pg_textsearch_available(self) -> bool:
         """Return True if the pg_textsearch extension is available."""
@@ -372,9 +364,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         Returns:
             A psqlpy Connection instance.
         """
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Tenant configurations require provide_connection or provide_session leases"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         pool = self.connection_instance
         if pool is None:
             pool = await self.create_pool()

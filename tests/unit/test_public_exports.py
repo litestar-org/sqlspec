@@ -26,28 +26,28 @@ def test_top_level_exports_resolve() -> None:
 
 
 @pytest.mark.parametrize("defining_first", [False, True])
-@pytest.mark.parametrize(
-    ("name", "defining_module"),
-    [
-        ("TenantContext", "sqlspec.utils.tenant"),
-        ("TenantContextPayload", "sqlspec.utils.tenant"),
-        ("async_tenant_scope", "sqlspec.utils.tenant"),
-        ("async_tenant_bypass", "sqlspec.utils.tenant"),
-        ("TenantContextError", "sqlspec.exceptions"),
-        ("TenantCleanupError", "sqlspec.exceptions"),
-    ],
-)
-def test_tenant_exports_retain_defining_objects(name: str, defining_module: str, defining_first: bool) -> None:
+def test_tenant_exports_retain_defining_objects(defining_first: bool) -> None:
+    exports = {
+        "TenantContext": "sqlspec.utils.tenant",
+        "TenantContextPayload": "sqlspec.utils.tenant",
+        "async_tenant_scope": "sqlspec.utils.tenant",
+        "async_tenant_bypass": "sqlspec.utils.tenant",
+        "TenantContextError": "sqlspec.exceptions",
+        "TenantCleanupError": "sqlspec.exceptions",
+    }
     script = f"""
 import importlib
+exports = {exports!r}
 if {defining_first!r}:
-    importlib.import_module({defining_module!r})
-from sqlspec import {name}
-defining_object = getattr(importlib.import_module({defining_module!r}), {name!r})
-assert {name} is defining_object
+    for module in set(exports.values()):
+        importlib.import_module(module)
+import sqlspec
 namespace = {{}}
 exec('from sqlspec import *', namespace)
-assert namespace[{name!r}] is defining_object
+for name, module in exports.items():
+    defining_object = getattr(importlib.import_module(module), name)
+    assert getattr(sqlspec, name) is defining_object, name
+    assert namespace[name] is defining_object, name
 """
     subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
 

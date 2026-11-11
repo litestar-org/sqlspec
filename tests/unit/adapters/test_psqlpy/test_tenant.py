@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, build_psqlpy_tenant_lease
+from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, PsqlpyTenantLease
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
@@ -117,7 +117,7 @@ async def test_tenant_disposal_is_verified_and_bounded(disposal: str, monkeypatc
         driver_features={"tenant_strategy": strategy},
     )
     monkeypatch.setattr(tenant_module, "PSQLPY_DISPOSAL_TIMEOUT_S", 0.01)
-    lease = build_psqlpy_tenant_lease(config)
+    lease = PsqlpyTenantLease(config, config.driver_features["tenant_strategy"])
     with TenantContext.scope(payload):
         await lease.acquire()
     with pytest.raises(TenantCleanupError):
@@ -140,7 +140,7 @@ async def test_tenant_acquire_probe_failure_exits_once() -> None:
         _close_pool=AsyncMock(),
         driver_features={"tenant_strategy": AsyncMock()},
     )
-    lease = build_psqlpy_tenant_lease(config)
+    lease = PsqlpyTenantLease(config, config.driver_features["tenant_strategy"])
     with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
         await lease.acquire()
     assert caught.value is error
@@ -166,7 +166,7 @@ async def test_tenant_failed_acquire_waits_for_disposal_despite_cancellation() -
         _close_pool=close_pool,
         driver_features={"tenant_strategy": AsyncMock()},
     )
-    lease = build_psqlpy_tenant_lease(config)
+    lease = PsqlpyTenantLease(config, config.driver_features["tenant_strategy"])
     with TenantContext.scope("a"):
         task = asyncio.create_task(lease.acquire())
     await entered_disposal.wait()
@@ -187,7 +187,7 @@ async def test_tenant_failed_pool_disposal_never_returns_dirty_context() -> None
         _close_pool=AsyncMock(side_effect=RuntimeError("pool close failed")),
         driver_features={"tenant_strategy": AsyncMock()},
     )
-    lease = build_psqlpy_tenant_lease(config)
+    lease = PsqlpyTenantLease(config, config.driver_features["tenant_strategy"])
     with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
         await lease.acquire()
     assert caught.value is failure

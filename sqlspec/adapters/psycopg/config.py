@@ -34,9 +34,9 @@ from sqlspec.adapters.psycopg.driver import (
 )
 from sqlspec.adapters.psycopg.tenant import (
     PsycopgAsyncRLSStrategy,
+    PsycopgAsyncTenantLease,
     PsycopgSyncRLSStrategy,
-    build_psycopg_async_tenant_lease,
-    build_psycopg_sync_tenant_lease,
+    PsycopgSyncTenantLease,
     validate_psycopg_tenant_config,
 )
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
@@ -268,27 +268,19 @@ def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str,
 class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Psycopg connections."""
 
-    __slots__ = ("_lease",)
-
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._lease = (
-            build_psycopg_sync_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
+    __slots__ = ()
 
     def __enter__(self) -> "PsycopgSyncConnection":
-        if self._lease is not None:
-            return cast("PsycopgSyncConnection", self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
         self._ctx = self._config.provide_pool().connection()
         return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._lease is not None:
-            self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             return None
         if self._ctx is None:
             return None
@@ -299,25 +291,17 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
 
 
 class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_lease",)
-
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._lease = (
-            build_psycopg_sync_tenant_lease(config, rollback_on_exit=True)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
+    __slots__ = ()
 
     def acquire_connection(self) -> "PsycopgSyncConnection":
-        if self._lease is not None:
-            return cast("PsycopgSyncConnection", self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
         self._ctx = self._config.provide_pool().connection()
         return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
-        if self._lease is not None:
-            self._lease.release(_conn, **kwargs)
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
         elif self._ctx is not None:
             try:
                 self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
@@ -332,6 +316,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
     driver_type: "ClassVar[type[PsycopgSyncDriver]]" = PsycopgSyncDriver
     connection_type: "ClassVar[type[PsycopgSyncConnection]]" = PsycopgSyncConnection
     supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = PsycopgSyncRLSStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = PsycopgSyncTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -426,11 +413,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgSyncConfig"
             )
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
-            return PsycopgSyncRLSStrategy()
-        return super()._resolve_tenant_strategy(strategy)
-
     @property
     def pg_textsearch_available(self) -> bool:
         """Return True if the pg_textsearch extension is available."""
@@ -472,9 +454,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         Returns:
             A psycopg Connection instance.
         """
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Tenant configurations require provide_connection or provide_session leases"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = connection_class.connect(conninfo, **connection_kwargs)
         user_configure = self.connection_config.get("configure")
@@ -767,20 +747,15 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psycopg connections."""
 
-    __slots__ = ("_ctx", "_lease")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
         super().__init__(config)
         self._ctx: Any = None
-        self._lease = (
-            build_psycopg_async_tenant_lease(config)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
 
     async def __aenter__(self) -> "PsycopgAsyncConnection":
-        if self._lease is not None:
-            return cast("PsycopgAsyncConnection", await self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
         pool = await self._config.provide_pool()
         self._ctx = pool.connection()
         return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
@@ -788,8 +763,8 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._lease is not None:
-            await self._lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             return None
         if self._ctx is not None:
             try:
@@ -800,27 +775,22 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
 
 
 class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ("_ctx", "_lease")
+    __slots__ = ("_ctx",)
 
     def __init__(self, config: "PsycopgAsyncConfig") -> None:
         super().__init__(config)
         self._ctx: Any = None
-        self._lease = (
-            build_psycopg_async_tenant_lease(config, rollback_on_exit=True)
-            if config.driver_features.get("tenant_strategy") is not None
-            else None
-        )
 
     async def acquire_connection(self) -> "PsycopgAsyncConnection":
-        if self._lease is not None:
-            return cast("PsycopgAsyncConnection", await self._lease.acquire())
+        if self._tenant_lease is not None:
+            return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
         pool = await self._config.provide_pool()
         self._ctx = pool.connection()
         return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection", **kwargs: Any) -> None:
-        if self._lease is not None:
-            await self._lease.release(_conn, **kwargs)
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(_conn, **kwargs)
         elif self._ctx is not None:
             try:
                 await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
@@ -835,6 +805,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
     driver_type: ClassVar[type[PsycopgAsyncDriver]] = PsycopgAsyncDriver
     connection_type: "ClassVar[type[PsycopgAsyncConnection]]" = PsycopgAsyncConnection
     supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = PsycopgAsyncRLSStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = PsycopgAsyncTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -926,11 +899,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgAsyncConfig"
             )
 
-    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
-        if strategy is True or (isinstance(strategy, str) and strategy in {"default", "rls"}):
-            return PsycopgAsyncRLSStrategy()
-        return super()._resolve_tenant_strategy(strategy)
-
     @property
     def pg_textsearch_available(self) -> bool:
         """Return True if the pg_textsearch extension is available."""
@@ -972,9 +940,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         Returns:
             A psycopg AsyncConnection instance.
         """
-        if self.driver_features.get("tenant_strategy") is not None:
-            msg = "Tenant configurations require provide_connection or provide_session leases"
-            raise ImproperConfigurationError(msg)
+        self._require_leased_tenant_connection()
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         auth_token_provider = self.connection_config.get("auth_token_provider")
         if callable(auth_token_provider):

@@ -43,7 +43,6 @@ from sqlspec.extensions.litestar.handlers import (
     _capture_connection_tenant,
     _exit_connection_context,
     _resolve_connection_tenant,
-    _tenant_connection_scope,
     autocommit_handler_maker,
     connection_provider_maker,
     lifespan_handler_maker,
@@ -51,6 +50,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     record_request_exception,
     session_provider_maker,
+    tenant_payload_key,
 )
 from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
@@ -58,6 +58,7 @@ from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
 from sqlspec.utils.sync_tools import ensure_async_
+from sqlspec.utils.tenant import TenantContext
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -248,13 +249,7 @@ class ConnectionCleanupMiddleware:
 
     __slots__ = ("_app", "_targets")
 
-    def __init__(
-        self,
-        app: "ASGIApp",
-        *,
-        targets: "tuple[_ConnectionCleanupTarget, ...]",
-        tenant_settings: TenantResolutionSettings | None = None,
-    ) -> None:
+    def __init__(self, app: "ASGIApp", *, targets: "tuple[_ConnectionCleanupTarget, ...]") -> None:
         self._app = app
         self._targets = targets
 
@@ -931,16 +926,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         disable_di = litestar_config.get("disable_di", False)
 
         return {
-            "tenant_settings": TenantResolutionSettings(
-                tenant_extractor=litestar_config.get("tenant_extractor"),
-                user_attr=litestar_config.get("tenant_user_attr", "tenant_id"),
-                memberships_attr=litestar_config.get("tenant_memberships_attr", "tenant_ids"),
-                variables_attr=litestar_config.get("tenant_variables_attr", "tenant_variables"),
-                jwt_claim=litestar_config.get("tenant_jwt_claim", "tenant_id"),
-                path_parameter=litestar_config.get("tenant_path_parameter", "tenant_id"),
-                session_key=litestar_config.get("tenant_session_key", "tenant_id"),
-                header=litestar_config.get("tenant_header"),
-            ),
+            "tenant_settings": TenantResolutionSettings.from_extension_config(litestar_config),
             "connection_key": connection_key,
             "pool_key": pool_key,
             "session_key": session_key,
@@ -996,15 +982,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state.session_provider = session_provider_maker(config, connection_key)
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key, tenant_settings=state.tenant_settings)
+            state.before_send_handler = manual_handler_maker(connection_key)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key,
-                commit_on_redirect,
-                state.extra_commit_statuses,
-                state.extra_rollback_statuses,
-                tenant_settings=state.tenant_settings,
+                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
             )
 
     def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
@@ -1024,10 +1006,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 close()
             msg = "Synchronous on-demand connections require a synchronous tenant_extractor"
             raise ImproperConfigurationError(msg)
-        payload_key = f"{plugin_state.connection_key}_tenant_payload"
+        payload_key = tenant_payload_key(plugin_state.connection_key)
         set_sqlspec_scope_state(scope, payload_key, payload)
         try:
-            with _tenant_connection_scope(payload):
+            with TenantContext.bind(payload):
                 cm = cast("AbstractContextManager[Any]", plugin_state.config.provide_connection(pool))
                 connection = cm.__enter__()
         except BaseException:
@@ -1051,11 +1033,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             plugin_state.config, scope, plugin_state.connection_key, plugin_state.tenant_settings
         )
         try:
-            with _tenant_connection_scope(payload):
+            with TenantContext.bind(payload):
                 cm = cast("AbstractAsyncContextManager[Any]", plugin_state.config.provide_connection(pool))
                 connection = await cm.__aenter__()
         except BaseException:
-            delete_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_tenant_payload")
+            delete_sqlspec_scope_state(scope, tenant_payload_key(plugin_state.connection_key))
             raise
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
         set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)

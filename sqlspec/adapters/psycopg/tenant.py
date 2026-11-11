@@ -7,15 +7,23 @@ from mypy_extensions import mypyc_attr
 from psycopg import pq
 from psycopg.rows import tuple_row
 
-from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler
+from sqlspec.core.tenant.base import TenantLeaseState, require_session_pooler, with_cause
+from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant_postgres import PostgresTenantSettings, psycopg_setting_query
+from sqlspec.utils.tenant._postgres import PostgresTenantSettings, pyformat_binds, pyformat_query
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
+    from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy
     from sqlspec.utils.tenant import TenantContextPayload
 
-__all__ = ("PsycopgAsyncRLSStrategy", "PsycopgSyncRLSStrategy")
+__all__ = (
+    "PsycopgAsyncRLSStrategy",
+    "PsycopgAsyncTenantLease",
+    "PsycopgSyncRLSStrategy",
+    "PsycopgSyncTenantLease",
+    "validate_psycopg_tenant_config",
+)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -31,8 +39,7 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
         with connection.cursor(row_factory=tuple_row) as cursor:
-            query, binds = psycopg_setting_query(sql, params)
-            cursor.execute(query.encode("ascii"), binds)
+            cursor.execute(pyformat_query(sql), pyformat_binds(params))
             state = self.capture(payload, params, cursor.fetchone())
         if not connection.autocommit:
             connection.commit()
@@ -47,18 +54,15 @@ class PsycopgSyncRLSStrategy(PostgresTenantSettings):
                 connection.rollback()
             sql, params = self.prepare_checkin(state)
             with connection.cursor(row_factory=tuple_row) as cursor:
-                query, binds = psycopg_setting_query(sql, params)
-                cursor.execute(query.encode("ascii"), binds)
+                cursor.execute(pyformat_query(sql), pyformat_binds(params))
                 self.verify_checkin(params, cursor.fetchone())
             if not connection.autocommit:
                 connection.commit()
+        except TenantCleanupError:
+            raise
         except Exception as exc:
-            if isinstance(exc, TenantCleanupError):
-                raise
             msg = "Tenant session restoration failed"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantCleanupError(msg), exc)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -74,8 +78,7 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
             raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
         async with connection.cursor(row_factory=tuple_row) as cursor:
-            query, binds = psycopg_setting_query(sql, params)
-            await cursor.execute(query.encode("ascii"), binds)
+            await cursor.execute(pyformat_query(sql), pyformat_binds(params))
             state = self.capture(payload, params, await cursor.fetchone())
         if not connection.autocommit:
             await connection.commit()
@@ -90,18 +93,15 @@ class PsycopgAsyncRLSStrategy(PostgresTenantSettings):
                 await connection.rollback()
             sql, params = self.prepare_checkin(state)
             async with connection.cursor(row_factory=tuple_row) as cursor:
-                query, binds = psycopg_setting_query(sql, params)
-                await cursor.execute(query.encode("ascii"), binds)
+                await cursor.execute(pyformat_query(sql), pyformat_binds(params))
                 self.verify_checkin(params, await cursor.fetchone())
             if not connection.autocommit:
                 await connection.commit()
+        except TenantCleanupError:
+            raise
         except Exception as exc:
-            if isinstance(exc, TenantCleanupError):
-                raise
             msg = "Tenant session restoration failed"
-            error = TenantCleanupError(msg)
-            error.__cause__ = exc
-            raise error
+            raise with_cause(TenantCleanupError(msg), exc)
 
 
 def validate_psycopg_tenant_config(
@@ -115,97 +115,96 @@ def validate_psycopg_tenant_config(
     return mode
 
 
-def build_psycopg_sync_tenant_lease(config: Any, *, rollback_on_exit: bool = False) -> Any:
-    """Adapt the native pool context to synchronous lease callbacks."""
-    from sqlspec.driver._tenant import SyncTenantLease
+def _quarantine_error(close_error: BaseException, quarantine_error: BaseException) -> TenantCleanupError:
+    msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
+    error = TenantCleanupError(msg)
+    error.__cause__ = close_error
+    return error
 
-    context: Any = None
-    pool: Any = None
 
-    def acquire() -> Any:
-        nonlocal context, pool
-        pool = config.provide_pool()
-        context = pool.connection()
-        return context.__enter__()
+@mypyc_attr(allow_interpreted_subclasses=True)
+class PsycopgSyncTenantLease(SyncTenantLease):
+    """Adapt the native pool context to a synchronous fail-closed lease.
 
-    def release(_connection: Any) -> None:
-        nonlocal context
-        current, context = context, None
+    Session leases always roll back; connection leases commit clean exits.
+    """
+
+    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
+
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+        self._rollback_on_exit = session
+        self._context: Any = None
+        self._pool: Any = None
+
+    def _acquire(self) -> Any:
+        self._pool = self._config.provide_pool()
+        self._context = self._pool.connection()
+        return self._context.__enter__()
+
+    def _release(self, connection: Any) -> None:
+        current, self._context = self._context, None
         if current is not None:
             current.__exit__(None, None, None)
 
-    def invalidate(connection: Any) -> None:
+    def _invalidate(self, connection: Any) -> None:
         try:
             connection.close()
         except BaseException as close_error:
             try:
-                pool.close(timeout=0)
+                self._pool.close(timeout=0)
             except BaseException as quarantine_error:
-                msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                error = TenantCleanupError(msg)
-                error.__cause__ = close_error
-                raise error
+                raise _quarantine_error(close_error, quarantine_error)
             raise
-        release(connection)
+        self._release(connection)
 
-    def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not rollback_on_exit:
+    def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        if exc_type is None and not self._rollback_on_exit:
             connection.commit()
         else:
             connection.rollback()
 
-    return SyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish_transaction,
-    )
 
+@mypyc_attr(allow_interpreted_subclasses=True)
+class PsycopgAsyncTenantLease(AsyncTenantLease):
+    """Adapt the native pool context to an asynchronous fail-closed lease.
 
-def build_psycopg_async_tenant_lease(config: Any, *, rollback_on_exit: bool = False) -> Any:
-    """Adapt the native pool context to asynchronous lease callbacks."""
-    from sqlspec.driver._tenant import AsyncTenantLease
+    Session leases always roll back; connection leases commit clean exits.
+    """
 
-    context: Any = None
-    pool: Any = None
+    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
 
-    async def acquire() -> Any:
-        nonlocal context, pool
-        pool = await config.provide_pool()
-        context = pool.connection()
-        return await context.__aenter__()
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+        super().__init__(strategy)
+        self._config = config
+        self._rollback_on_exit = session
+        self._context: Any = None
+        self._pool: Any = None
 
-    async def release(_connection: Any) -> None:
-        nonlocal context
-        current, context = context, None
+    async def _acquire(self) -> Any:
+        self._pool = await self._config.provide_pool()
+        self._context = self._pool.connection()
+        return await self._context.__aenter__()
+
+    async def _release(self, connection: Any) -> None:
+        current, self._context = self._context, None
         if current is not None:
             await current.__aexit__(None, None, None)
 
-    async def invalidate(connection: Any) -> None:
+    async def _invalidate(self, connection: Any) -> None:
         try:
             await connection.close()
         except BaseException as close_error:
             try:
-                await pool.close(timeout=0)
+                await self._pool.close(timeout=0)
             except BaseException as quarantine_error:
-                msg = f"Physical close failed: {close_error!r}; pool quarantine failed: {quarantine_error!r}"
-                error = TenantCleanupError(msg)
-                error.__cause__ = close_error
-                raise error
+                raise _quarantine_error(close_error, quarantine_error)
             raise
-        await release(connection)
+        await self._release(connection)
 
-    async def finish_transaction(connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not rollback_on_exit:
+    async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        if exc_type is None and not self._rollback_on_exit:
             await connection.commit()
         else:
             await connection.rollback()
-
-    return AsyncTenantLease(
-        config.driver_features["tenant_strategy"],
-        acquire=acquire,
-        release=release,
-        invalidate=invalidate,
-        finish_transaction=finish_transaction,
-    )
