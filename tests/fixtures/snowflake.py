@@ -3,6 +3,7 @@
 import contextlib
 import gzip
 import http.server
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -123,7 +124,26 @@ class _EmbucketSnowflakeProxyHandler(http.server.BaseHTTPRequestHandler):
         bindings = payload.get("bindings")
         if not isinstance(sql_text, str) or not isinstance(bindings, dict) or not bindings:
             return body
-        payload["sqlText"] = cls._substitute_qmark_bindings(sql_text, bindings)
+        array_lengths = [
+            len(entry["value"])
+            for entry in bindings.values()
+            if isinstance(entry, dict) and isinstance(entry.get("value"), list)
+        ]
+        values_parts = re.split(r"\bVALUES\s*", sql_text, maxsplit=1, flags=re.IGNORECASE)
+        if array_lengths and len(values_parts) == 2:
+            rows = []
+            for index in range(array_lengths[0]):
+                row_bindings = {
+                    key: {
+                        **entry,
+                        "value": entry["value"][index] if isinstance(entry.get("value"), list) else entry.get("value"),
+                    }
+                    for key, entry in bindings.items()
+                }
+                rows.append(cls._substitute_qmark_bindings(values_parts[1], row_bindings))
+            payload["sqlText"] = values_parts[0] + "VALUES " + ", ".join(rows)
+        else:
+            payload["sqlText"] = cls._substitute_qmark_bindings(sql_text, bindings)
         payload.pop("bindings", None)
         return to_json(payload, as_bytes=True)
 

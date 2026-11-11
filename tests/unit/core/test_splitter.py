@@ -349,3 +349,36 @@ def test_snowflake_splitter_drops_comments_and_recognizes_mixed_case_dialect(cap
             "SELECT 2",
         ]
     assert caplog.records == []
+
+
+@pytest.mark.parametrize("separator", [" /* boundary */ ", " -- boundary\n ", " // boundary\n ", "/**/"])
+@pytest.mark.parametrize("transaction", ["TRANSACTION", "WORK", "NAME tx1"])
+def test_snowflake_splitter_transaction_keywords_allow_comments(separator: str, transaction: str) -> None:
+    begin = "BEGIN" + separator + transaction
+    assert split_sql_script(begin + "; SELECT 1; COMMIT;", dialect="snowflake", strip_trailing_terminator=True) == [
+        begin,
+        "SELECT 1",
+        "COMMIT",
+    ]
+
+
+@pytest.mark.parametrize("separator", [" /* boundary */ ", " -- boundary\n ", " // boundary\n ", "/**/"])
+@pytest.mark.parametrize(
+    "control,opener,condition",
+    [
+        ("IF", "IF (1 = 1) THEN", ""),
+        ("FOR", "FOR i IN 1 TO 1 DO", ""),
+        ("WHILE", "WHILE (1 = 1) DO", ""),
+        ("LOOP", "LOOP", ""),
+        ("REPEAT", "REPEAT", " UNTIL (1 = 1)"),
+        ("CASE", "CASE WHEN 1 = 1 THEN", ""),
+    ],
+)
+def test_snowflake_splitter_control_enders_allow_comments(
+    separator: str, control: str, opener: str, condition: str
+) -> None:
+    block = "BEGIN " + opener + " SELECT 1;" + condition + " END" + separator + control + "; SELECT 2; END;"
+    assert split_sql_script(block + " SELECT 3;", dialect="snowflake", strip_trailing_terminator=True) == [
+        block,
+        "SELECT 3",
+    ]

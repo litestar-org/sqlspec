@@ -654,3 +654,21 @@ def test_ensure_schema_json_variant_compatibility_is_symmetric(catalog_type: str
             assert result.added_columns == {}
     finally:
         config.close_pool()
+
+
+@pytest.mark.parametrize("unrelated_type", ["TSVECTOR", "TOKENLIST", "STRUCT"])
+@pytest.mark.parametrize("json_first", [True, False])
+def test_ensure_schema_strict_rejects_json_and_unrelated_struct_types(unrelated_type: str, json_first: bool) -> None:
+    """JSON compatibility does not permit unrelated structured column types."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    target_type, catalog_type = ("JSON", unrelated_type) if json_first else (unrelated_type, "JSON")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute(f"CREATE TABLE documents (payload {catalog_type})")
+            target = SchemaTarget("documents", sql.create_table("documents").column("payload", target_type))
+            with pytest.raises(MigrationError, match="Incompatible column type"):
+                ensure_schema_sync(driver, [target], manage_schema=True, commit=False, strict=True)
+    finally:
+        config.close_pool()

@@ -54,7 +54,9 @@ SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<pyformat_pos>%s(?!\w)) |
     (?P<positional_colon>(?<![A-Za-z0-9_$"\]\)]):(?P<colon_num>\d+)) |
     (?P<named_colon>(?<![A-Za-z0-9_$"\]\)]):(?P<colon_name>\w+)) |
-    (?P<qmark>\?)
+    (?P<qmark>\?) |
+    (?P<sf_word>[A-Za-z_][A-Za-z0-9_$]*) |
+    (?P<sf_other>[^\s])
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
@@ -72,6 +74,10 @@ _SKIP_GROUPS: Final[tuple[str, ...]] = (
 
 
 _SNOWFLAKE_PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:")
+_SNOWFLAKE_COLON_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.POSITIONAL_COLON,
+})
 _SNOWFLAKE_SKIP_GROUPS: Final[tuple[str, ...]] = (
     *_SKIP_GROUPS,
     "sf_slash_comment",
@@ -145,6 +151,13 @@ _NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
     "end",
     "if",
 ])
+_SNOWFLAKE_NON_OPERAND_KEYWORDS: Final[frozenset[str]] = _NON_OPERAND_KEYWORDS | frozenset({
+    "default",
+    "immediate",
+    "qualify",
+    "regexp",
+    "rlike",
+})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -236,29 +249,54 @@ class ParameterValidator:
             return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
         return None, None
 
-    def _extract_parameters_uncached(self, sql: str, normalized_dialect: str | None = None) -> "list[ParameterInfo]":
-        parameters: list[ParameterInfo] = []
-        ordinal = 0
+    def _extract_snowflake_parameters(self, sql: str) -> "list[ParameterInfo]":
+        """Distinguish colon binds from path access using preceding meaningful tokens.
 
-        snowflake = normalized_dialect == "snowflake"
-        parameter_chars = _SNOWFLAKE_PARAM_CHARS if snowflake else _PARAM_CHARS
-        if not parameter_chars.intersection(sql):
+        Comments and whitespace preserve the preceding expression. Operators and SQL
+        expression-introducing keywords make the next colon a binding candidate.
+        """
+        if not _SNOWFLAKE_PARAM_CHARS.intersection(sql):
             return []
-        regex = SNOWFLAKE_PARAMETER_REGEX if snowflake else PARAMETER_REGEX
-        skip_groups = _SNOWFLAKE_SKIP_GROUPS if snowflake else _SKIP_GROUPS
-        for match in regex.finditer(sql):
-            if any(match.group(*skip_groups)):
+        parameters: list[ParameterInfo] = []
+        preceding_operand = False
+        for match in SNOWFLAKE_PARAMETER_REGEX.finditer(sql):
+            if match.group("line_comment") or match.group("block_comment") or match.group("sf_slash_comment"):
                 continue
-            style, name = (
-                self._extract_snowflake_parameter_style(match) if snowflake else self._extract_parameter_style(match)
-            )
+            word = match.group("sf_word")
+            if word is not None:
+                preceding_operand = word.lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
+                continue
+            other = match.group("sf_other")
+            if other is not None:
+                preceding_operand = other in ")]" or other.isdigit()
+                continue
+            if any(match.group(*_SNOWFLAKE_SKIP_GROUPS)):
+                preceding_operand = match.group("pg_q_operator") is None
+                continue
+            style, name = self._extract_snowflake_parameter_style(match)
+            if style is None:
+                continue
+            if preceding_operand and style in _SNOWFLAKE_COLON_STYLES:
+                continue
+            preceding_operand = True
+            parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
+        return parameters
+
+    def _extract_parameters_uncached(self, sql: str, normalized_dialect: str | None = None) -> "list[ParameterInfo]":
+        if normalized_dialect == "snowflake":
+            return self._extract_snowflake_parameters(sql)
+        if not _PARAM_CHARS.intersection(sql):
+            return []
+        parameters: list[ParameterInfo] = []
+        for match in PARAMETER_REGEX.finditer(sql):
+            if any(match.group(*_SKIP_GROUPS)):
+                continue
+            style, name = self._extract_parameter_style(match)
             if style is None:
                 continue
             if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
                 continue
-            placeholder_text = match.group(0)
-            parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
-            ordinal += 1
+            parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
 

@@ -48,8 +48,6 @@ def restore_snowflake_migration_schema(driver: "SyncDriverAdapterBase") -> None:
 class SnowflakeSyncMigrationTracker(SyncMigrationTracker):
     """Track migrations with Snowflake types and explicit lowercase result aliases."""
 
-    __slots__ = ()
-
     def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
         name = quote_identifier(normalize_identifier(version_table_name, "snowflake"))
         return (

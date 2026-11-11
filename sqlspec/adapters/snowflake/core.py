@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Literal
 from urllib.parse import urlsplit
@@ -81,6 +82,55 @@ _OBJECT_NOT_FOUND_ERRNO: Final[int] = 2003
 _QUERY_CANCELLED_ERRNO: Final[int] = 604
 _MAX_INT64_DECIMAL_PRECISION: Final[int] = 18
 _TIME_TYPE_CODE: Final[int] = 12
+_TYPED_BINDING_SIZE: Final[int] = 2
+_TYPED_BINDING_TYPE_NAMES: Final[frozenset[str]] = frozenset({
+    "ARRAY",
+    "BINARY",
+    "BOOLEAN",
+    "DATE",
+    "FIXED",
+    "GEOGRAPHY",
+    "GEOMETRY",
+    "OBJECT",
+    "REAL",
+    "TEXT",
+    "TIME",
+    "TIMESTAMP",
+    "TIMESTAMP_LTZ",
+    "TIMESTAMP_NTZ",
+    "TIMESTAMP_TZ",
+    "VARIANT",
+    "VECTOR",
+})
+
+
+class _SnowflakeTupleConverter:
+    __slots__ = ("_serializer",)
+
+    def __init__(self, serializer: Callable[[Any], str]) -> None:
+        self._serializer = serializer
+
+    def __call__(self, value: Any) -> Any:
+        if (
+            len(value) == _TYPED_BINDING_SIZE
+            and isinstance(value[0], str)
+            and value[0].upper() in _TYPED_BINDING_TYPE_NAMES
+        ):
+            return value
+        return self._serializer(list(value))
+
+
+def _with_server_tuple_bindings(statement_config: StatementConfig, serializer: Callable[[Any], str]) -> StatementConfig:
+    if statement_config.parameter_config.default_execution_parameter_style not in {
+        ParameterStyle.QMARK,
+        ParameterStyle.POSITIONAL_COLON,
+    }:
+        return statement_config
+    type_map = dict(statement_config.parameter_config.type_coercion_map)
+    type_map[tuple] = _SnowflakeTupleConverter(serializer)
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.replace(type_coercion_map=type_map)
+    )
 
 
 def build_profile(*, paramstyle: str = "qmark") -> DriverParameterProfile:
@@ -127,12 +177,13 @@ def build_statement_config(
     json_deserializer: Callable[[str], Any] | None = None,
 ) -> StatementConfig:
     """Construct Snowflake statement settings and JSON parameter codecs."""
-    return build_statement_config_from_profile(
+    statement_config = build_statement_config_from_profile(
         build_profile(paramstyle=paramstyle),
         statement_overrides={"dialect": "snowflake"},
         json_serializer=json_serializer or to_json,
         json_deserializer=json_deserializer or from_json,
     )
+    return _with_server_tuple_bindings(statement_config, json_serializer or to_json)
 
 
 def apply_driver_features(
@@ -148,7 +199,7 @@ def apply_driver_features(
         ("stage_parquet_threshold_rows", 1000),
         ("enable_query_tag_correlation", False),
         ("enable_events", True),
-        ("events_backend", "table_queue"),
+        ("events_backend", "poll_queue"),
     ):
         features.setdefault(key, default)
     threshold = features["stage_parquet_threshold_rows"]
@@ -165,7 +216,7 @@ def apply_driver_features(
                 serializer, deserializer=deserializer
             )
         )
-    return statement_config, features
+    return _with_server_tuple_bindings(statement_config, serializer or to_json), features
 
 
 def _normalize_authenticator(value: str) -> str:
@@ -367,16 +418,33 @@ def resolve_rowcount(cursor: Any) -> int:
     return int(count) if count is not None and count >= 0 else -1
 
 
-def normalize_execute_parameters(parameters: Any) -> Any:
-    """Preserve compiled Snowflake parameter containers and omit empty bindings."""
+def _normalize_server_binding(value: Any) -> Any:
+    if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
+        return ("TIMESTAMP_TZ", value)
+    return value
+
+
+def _normalize_server_parameters(parameters: Any) -> Any:
+    if isinstance(parameters, Mapping):
+        return {key: _normalize_server_binding(value) for key, value in parameters.items()}
+    if isinstance(parameters, tuple):
+        return tuple(_normalize_server_binding(value) for value in parameters)
+    if isinstance(parameters, list):
+        return [_normalize_server_binding(value) for value in parameters]
+    return _normalize_server_binding(parameters)
+
+
+def normalize_execute_parameters(parameters: Any, *, paramstyle: str = "qmark") -> Any:
+    """Preserve aware datetime offsets for server bindings and omit empty bindings."""
     if parameters is None or (isinstance(parameters, (list, tuple, dict)) and not parameters):
         return None
-    return parameters
+    return _normalize_server_parameters(parameters) if paramstyle in {"qmark", "numeric"} else parameters
 
 
-def normalize_many_parameters(parameters: Any) -> list[Any]:
-    """Materialize batch parameter sets for the connector's executemany method."""
-    return list(parameters) if parameters is not None else []
+def normalize_many_parameters(parameters: Any, *, paramstyle: str = "qmark") -> list[Any]:
+    """Materialize batches and preserve aware datetime offsets for server bindings."""
+    rows = list(parameters) if parameters is not None else []
+    return [_normalize_server_parameters(row) for row in rows] if paramstyle in {"qmark", "numeric"} else rows
 
 
 def is_snowflake_error(error: BaseException) -> bool:

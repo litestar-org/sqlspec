@@ -22,6 +22,7 @@ from sqlspec.adapters.snowflake.core import (
 )
 from sqlspec.core import (
     SQL,
+    ParameterStyle,
     StatementConfig,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
@@ -112,7 +113,7 @@ def materialize_arrow_table_from_batches(cursor: Any, driver_features: Mapping[s
     tables = list(_iter_arrow_tables(cursor, driver_features))
     if not tables:
         return build_empty_arrow_table_from_description(cursor.description, driver_features)
-    return tables[0] if len(tables) == 1 else pa.concat_tables(tables)
+    return tables[0] if len(tables) == 1 else pa.concat_tables(tables, promote_options="default")
 
 
 def build_arrow_reader_from_cursor(
@@ -139,6 +140,8 @@ def build_arrow_reader_from_cursor(
         try:
             yield from first.to_batches(max_chunksize=batch_size)
             for table in tables:
+                if table.schema != first.schema:
+                    table = table.cast(first.schema)
                 yield from table.to_batches(max_chunksize=batch_size)
         finally:
             cursor_close_callback()
@@ -162,7 +165,7 @@ class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
 class SnowflakeDriver(SyncDriverAdapterBase):
     """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
 
-    __slots__ = ("_active_stream_cursors", "_data_dictionary", "_in_transaction")
+    __slots__ = ("_active_stream_cursors", "_data_dictionary")
     dialect = "snowflake"
     native_arrow_export: ClassVar[bool] = True
 
@@ -189,7 +192,6 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         )
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._data_dictionary: SnowflakeSyncDataDictionary | None = None
-        self._in_transaction = False
         self._active_stream_cursors: dict[int, Any] = {}
 
     def close(self) -> None:
@@ -216,12 +218,28 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         """Create a deferred connector exception handler."""
         return SnowflakeExceptionHandler()
 
-    def _execute_cursor(self, cursor: Any, sql: str, params: Any) -> None:
+    def _binding_mode(self, config: StatementConfig | None = None) -> str:
+        style = (config or self.statement_config).parameter_config.default_execution_parameter_style
+        if style in {ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_PYFORMAT}:
+            return "pyformat"
+        return "numeric" if style == ParameterStyle.POSITIONAL_COLON else "qmark"
+
+    def _track_stream_cursor(self, cursor: Any) -> Callable[[], None]:
+        self._active_stream_cursors[id(cursor)] = cursor
+
+        def close_cursor() -> None:
+            owned = self._active_stream_cursors.pop(id(cursor), None)
+            if owned is not None:
+                owned.close()
+
+        return close_cursor
+
+    def _execute_cursor(self, cursor: Any, sql: str, params: Any, config: StatementConfig | None = None) -> None:
         options: dict[str, Any] = {}
         if self.driver_features.get("enable_query_tag_correlation") and (correlation := CorrelationContext.get()):
             tag = self.driver_features.get("query_tag")
             options["_statement_params"] = {"QUERY_TAG": f"{tag}:{correlation}" if tag else correlation}
-        cursor.execute(sql, normalize_execute_parameters(params), **options)
+        cursor.execute(sql, normalize_execute_parameters(params, paramstyle=self._binding_mode(config)), **options)
 
     def collect_rows(self, cursor: Any, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
         """Materialize rows with consistent identifier casing."""
@@ -263,7 +281,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Compile, bind and materialize one statement."""
         sql, params = self._compiled_sql(statement, self.statement_config)
-        self._execute_cursor(cursor, sql, params)
+        self._execute_cursor(cursor, sql, params, statement.statement_config)
         if statement.returns_rows() or self._should_force_select(statement, cursor):
             data, names, count = self.collect_rows(cursor, cursor.fetchall())
             return self.create_execution_result(
@@ -279,7 +297,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute a batch of bound parameter sets."""
         sql, params = self._compiled_sql(statement, self.statement_config)
-        rows = normalize_many_parameters(params)
+        rows = normalize_many_parameters(params, paramstyle=self._binding_mode(statement.statement_config))
         if rows:
             cursor.executemany(sql, rows)
         return self.create_execution_result(
@@ -287,58 +305,46 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         )
 
     def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute unbound scripts through the connector's Snowflake parser."""
-        sql, params = self._compiled_sql(statement, self.statement_config)
-        count = 0
-        if not params and callable(getattr(self.connection, "execute_string", None)):
-            cursors = self.connection.execute_string(sql, remove_comments=False, return_cursors=True)
-            try:
-                for result in cursors:
-                    count += 1
-                    result.close()
-            finally:
-                for result in cursors:
-                    with contextlib.suppress(Exception):
-                        result.close()
-        else:
-            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-            offset = 0
-            from sqlspec.core.parameters import ParameterValidator
-
-            validator = ParameterValidator()
-            for text in statements:
-                bindings = params
-                if isinstance(params, (list, tuple)):
-                    width = len(validator.extract_parameters(text, dialect="snowflake"))
-                    bindings = params[offset : offset + width]
-                    offset += width
-                self._execute_cursor(cursor, text, bindings)
-                count += 1
+        """Execute hardened Snowflake script splits with a cursor per statement."""
+        sql, _ = self._compiled_sql(statement, statement.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        successful = 0
+        for text in statements:
+            with self.with_cursor(self.connection) as owned_cursor:
+                self._execute_cursor(owned_cursor, text, None, statement.statement_config)
+            successful += 1
         return self.create_execution_result(
-            cursor, statement_count=count, successful_statements=count, is_script_result=True
+            cursor, statement_count=len(statements), successful_statements=successful, is_script_result=True
         )
 
     def begin(self) -> None:
         """Begin a DML transaction; Snowflake DDL remains autocommitting."""
         self.execute("BEGIN")
-        self._in_transaction = True
 
     def commit(self) -> None:
         """Commit the active transaction."""
         handler = self.handle_database_exceptions()
         self._run_with_exception_handler(handler, self.connection.commit)
         self._check_pending_exception(handler)
-        self._in_transaction = False
 
     def rollback(self) -> None:
         """Roll back the active transaction."""
         handler = self.handle_database_exceptions()
         self._run_with_exception_handler(handler, self.connection.rollback)
         self._check_pending_exception(handler)
-        self._in_transaction = False
 
     def _connection_in_transaction(self) -> bool:
-        return self._in_transaction
+        handler = self.handle_database_exceptions()
+        active = False
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT CURRENT_TRANSACTION()")
+            rows = cursor.fetchall()
+            if rows:
+                row = rows[0]
+                transaction_id = next(iter(row.values()), None) if isinstance(row, Mapping) else row[0]
+                active = transaction_id is not None
+        self._check_pending_exception(handler)
+        return active
 
     def create_savepoint(self, name: str) -> None:
         """Reject unsupported Snowflake savepoints."""
@@ -370,7 +376,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         query_id = None
         with handler, self.with_cursor(self.connection) as cursor:
             sql, params = self._compiled_sql(prepared, config)
-            cursor.execute_async(sql, normalize_execute_parameters(params))
+            cursor.execute_async(sql, normalize_execute_parameters(params, paramstyle=self._binding_mode(config)))
             query_id = cursor.sfqid
         self._check_pending_exception(handler)
         if not query_id:
@@ -451,14 +457,9 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         try:
             with handler:
                 sql, params = self._compiled_sql(prepared, config)
-                self._execute_cursor(cursor, sql, params)
+                self._execute_cursor(cursor, sql, params, config)
                 if return_format == "reader":
-                    self._active_stream_cursors[id(cursor)] = cursor
-
-                    def close_cursor() -> None:
-                        owned = self._active_stream_cursors.pop(id(cursor), None)
-                        if owned is not None:
-                            owned.close()
+                    close_cursor = self._track_stream_cursor(cursor)
 
                     reader = build_arrow_reader_from_cursor(
                         cursor, close_cursor, self.driver_features, batch_size=batch_size
@@ -582,35 +583,59 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         """Load already normalized physical columns without folding them again."""
         arrow_table = self._coerce_arrow_table(source)
         formatted = _format_identifier(table)
-        if overwrite:
-            self.execute(f"TRUNCATE TABLE {formatted}")
         threshold = int(self.driver_features.get("stage_parquet_threshold_rows", 10_000))
         if (
             arrow_table.num_rows
             and self.driver_features.get("enable_stage_parquet_load", True)
             and arrow_table.num_rows >= threshold
         ):
+            if overwrite:
+                self.execute(f"TRUNCATE TABLE {formatted}")
             self._load_parquet_stage(formatted, arrow_table)
-        elif arrow_table.num_rows:
+        elif arrow_table.num_rows or overwrite:
             import pyarrow as pa
 
             nested = {field.name for field in arrow_table.schema if pa.types.is_nested(field.type)}
             serializer = self.driver_features.get("json_serializer", encode_json)
             columns = ", ".join(quote_identifier(name) for name in arrow_table.column_names)
-            values = ", ".join("PARSE_JSON(?)" if name in nested else "?" for name in arrow_table.column_names)
+            names = [f"p{index}" for index in range(arrow_table.num_columns)]
+            values = ", ".join(
+                f"PARSE_JSON(:{parameter})" if name in nested else f":{parameter}"
+                for name, parameter in zip(arrow_table.column_names, names, strict=True)
+            )
             insert = f"INSERT INTO {formatted} ({columns}) " + (f"SELECT {values}" if nested else f"VALUES ({values})")
-            handler = self.handle_database_exceptions()
-            with handler, self.with_cursor(self.connection) as cursor:
+            owns_transaction = not self._connection_in_transaction()
+            if owns_transaction:
+                self.begin()
+            try:
+                if overwrite:
+                    self.execute(f"TRUNCATE TABLE {formatted}")
                 for batch in arrow_table.to_batches(max_chunksize=batch_size):
                     rows = [
-                        tuple(
-                            serializer(value) if name in nested and value is not None else value
-                            for name, value in row.items()
+                        dict(
+                            zip(
+                                names,
+                                (
+                                    serializer(value) if name in nested and value is not None else value
+                                    for name, value in row.items()
+                                ),
+                                strict=True,
+                            )
                         )
                         for row in batch.to_pylist()
                     ]
-                    cursor.executemany(insert, rows)
-            self._check_pending_exception(handler)
+                    if nested:
+                        for row in rows:
+                            self.execute(insert, row)
+                    else:
+                        self.execute_many(insert, rows)
+                if owns_transaction:
+                    self.commit()
+            except BaseException:
+                if owns_transaction:
+                    with contextlib.suppress(Exception):
+                        self.rollback()
+                raise
         payload = self._ingest_telemetry(arrow_table)
         payload["destination"] = table
         self._attach_partition_telemetry(payload, partitioner)
@@ -650,11 +675,12 @@ class _SnowflakeArrowStreamSource:
 
     def start(self) -> None:
         cursor = self._driver.connection.cursor()
+        close_cursor = self._driver._track_stream_cursor(cursor)
         handler = self._driver.handle_database_exceptions()
         try:
             with handler:
                 sql, params = self._driver._compiled_sql(self._statement, self._driver.statement_config)
-                self._driver._execute_cursor(cursor, sql, params)
+                self._driver._execute_cursor(cursor, sql, params, self._statement.statement_config)
                 names = normalize_column_names(
                     [str(item[0]) for item in cursor.description or ()],
                     enable_lowercase_column_names=bool(
@@ -665,12 +691,12 @@ class _SnowflakeArrowStreamSource:
                     names[index] for index, item in enumerate(cursor.description or ()) if item[1] in {5, 9, 10}
                 }
                 self._reader = build_arrow_reader_from_cursor(
-                    cursor, cursor.close, self._driver.driver_features, batch_size=self._chunk_size
+                    cursor, close_cursor, self._driver.driver_features, batch_size=self._chunk_size
                 )
                 self._iterator = iter(self._reader)
             self._driver._check_pending_exception(handler)
         except BaseException:
-            cursor.close()
+            close_cursor()
             raise
 
     def fetch_chunk(self) -> list[dict[str, Any]]:

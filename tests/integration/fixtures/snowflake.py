@@ -77,7 +77,10 @@ def snowflake_connection_config(snowflake_service: SnowflakeService) -> Generato
             "insecure_mode": True,
             "login_timeout": 15,
             "network_timeout": 15,
-            "session_parameters": {"PYTHON_CONNECTOR_QUERY_RESULT_FORMAT": "JSON"},
+            "session_parameters": {
+                "PYTHON_CONNECTOR_QUERY_RESULT_FORMAT": "JSON",
+                "CLIENT_STAGE_ARRAY_BINDING_THRESHOLD": 0,
+            },
         }
 
 

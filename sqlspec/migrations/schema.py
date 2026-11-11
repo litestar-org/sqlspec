@@ -153,7 +153,7 @@ _TYPE_FAMILIES: Final[dict[str, str]] = {
     "sparsevec": "vector",
     "array": "vector",
     "struct": "struct",
-    "variant": "struct",
+    "variant": "json",
     "object": "struct",
     "tokenlist": "struct",
     "tsvector": "struct",
@@ -979,9 +979,9 @@ def _type_families_compatible(target_family: str, catalog_family: str) -> bool:
     """Return whether target and catalog type families are compatible under strict mode."""
     if target_family == catalog_family:
         return True
-    if target_family == "json" and catalog_family in {"text", "binary", "struct"}:
+    if target_family == "json" and catalog_family in {"text", "binary"}:
         return True
-    if catalog_family == "json" and target_family in {"text", "binary", "struct"}:
+    if catalog_family == "json" and target_family in {"text", "binary"}:
         return True
     if target_family == "boolean" and catalog_family in {"numeric", "bit"}:
         return True

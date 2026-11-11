@@ -114,3 +114,55 @@ def test_arrow_backed_row_stream_decodes_variant_and_closes_on_break(snowflake_c
     with driver.select_stream("SELECT ID, PAYLOAD FROM data", chunk_size=1) as stream:
         assert next(stream) == {"id": 1, "payload": {"x": 1}}
     assert snowflake_connection.cursors[-1].closed
+
+
+def test_session_close_releases_active_arrow_row_stream_once(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [("ID", 0, None, None, 18, 0, False)],
+        "tables": [pa.table({"ID": [1, 2]})],
+    }
+    driver = SnowflakeDriver(snowflake_connection)
+    stream = driver.select_stream("SELECT ID FROM data", chunk_size=1)
+    assert next(stream) == {"id": 1}
+    cursor = snowflake_connection.cursors[-1]
+    driver.close()
+    assert cursor.closed
+    stream.close()
+    assert cursor.close_count == 1
+
+
+def test_arrow_materialization_promotes_null_batches_without_losing_rows(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [("ID", 0, None, None, 18, 0, True)],
+        "tables": [pa.table({"ID": pa.nulls(1)}), pa.table({"ID": [2]})],
+    }
+    table = SnowflakeDriver(snowflake_connection).select_to_arrow("SELECT ID FROM data").get_data()
+    assert table.column("id").type == pa.int64()
+    assert table.to_pylist() == [{"id": None}, {"id": 2}]
+
+
+def test_arrow_reader_casts_compatible_later_batch_to_first_schema(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [("ID", 0, None, None, 18, 0, True)],
+        "tables": [pa.table({"ID": pa.array([1], type=pa.int64())}), pa.table({"ID": pa.array([2], type=pa.int32())})],
+    }
+    reader = (
+        SnowflakeDriver(snowflake_connection).select_to_arrow("SELECT ID FROM data", return_format="reader").get_data()
+    )
+    table = reader.read_all()
+    assert table.column("id").type == pa.int64()
+    assert table.to_pylist() == [{"id": 1}, {"id": 2}]
+    assert snowflake_connection.cursors[-1].closed
+
+
+def test_arrow_reader_refuses_incompatible_later_batch_and_closes_cursor(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [("ID", 0, None, None, 18, 0, True)],
+        "tables": [pa.table({"ID": [1]}), pa.table({"ID": ["bad"]})],
+    }
+    reader = (
+        SnowflakeDriver(snowflake_connection).select_to_arrow("SELECT ID FROM data", return_format="reader").get_data()
+    )
+    with pytest.raises(pa.ArrowInvalid, match="bad"):
+        reader.read_all()
+    assert snowflake_connection.cursors[-1].closed

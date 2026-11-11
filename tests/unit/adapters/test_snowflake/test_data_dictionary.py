@@ -124,7 +124,7 @@ def test_constraints_merge_catalog_and_ordered_show_key_columns(snowflake_connec
 @pytest.mark.parametrize(
     ("table", "schema", "expected"),
     [
-        (None, None, "SHOW IMPORTED KEYS IN SCHEMA"),
+        (None, None, 'SHOW IMPORTED KEYS IN SCHEMA "PUBLIC"'),
         (None, "sales", 'SHOW IMPORTED KEYS IN SCHEMA "SALES"'),
         ('"sales"."Orders"', "ignored", 'SHOW IMPORTED KEYS IN TABLE "sales"."Orders"'),
     ],
@@ -144,3 +144,94 @@ def test_missing_view_ddl_returns_explicit_unsupported_result(snowflake_connecti
     result = driver.data_dictionary.get_ddl(driver, "missing", object_type="view", include_dependencies=False)
     assert result.status == MetadataSupport.UNSUPPORTED
     assert result.warnings == ("GET_DDL returned no definition",)
+
+
+def test_qualified_imported_keys_preserve_composite_columns(snowflake_connection: Any) -> None:
+    """Qualified table lookups filter by the final exact catalog table component."""
+    query = 'SHOW IMPORTED KEYS IN TABLE "sales"."Orders"'
+    snowflake_connection.results[query] = _result(
+        [
+            "fk_schema_name",
+            "fk_table_name",
+            "fk_column_name",
+            "fk_name",
+            "pk_schema_name",
+            "pk_table_name",
+            "pk_column_name",
+            "key_sequence",
+            "delete_rule",
+            "update_rule",
+        ],
+        [
+            ("sales", "Orders", "LINE_ID", "FK_ORDER", "sales", "Lines", "LINE", 2, "CASCADE", "NO ACTION"),
+            ("sales", "Orders", "ORDER_ID", "FK_ORDER", "sales", "Lines", "ORDER", 1, "CASCADE", "NO ACTION"),
+        ],
+    )
+    driver = SnowflakeDriver(snowflake_connection)
+
+    keys = driver.data_dictionary.get_foreign_keys(driver, '"sales"."Orders"', "ignored")
+
+    assert [(key.table_name, key.column_name, key.referenced_column) for key in keys] == [
+        ("Orders", "ORDER_ID", "ORDER"),
+        ("Orders", "LINE_ID", "LINE"),
+    ]
+    assert [key.schema for key in keys] == ["sales", "sales"]
+    assert snowflake_connection.calls[-1][0] == query
+
+
+@pytest.mark.parametrize(
+    ("table", "schema", "expected_schema", "expected_table", "scope"),
+    [
+        (None, None, "PUBLIC", None, 'IN SCHEMA "PUBLIC"'),
+        ('"Orders"', None, "PUBLIC", "Orders", 'IN TABLE "PUBLIC"."Orders"'),
+        ('"sales"."Orders"', "ignored", "sales", "Orders", 'IN TABLE "sales"."Orders"'),
+        ('"Orders"', '"sales"', "sales", "Orders", 'IN TABLE "sales"."Orders"'),
+    ],
+)
+def test_constraints_share_exact_catalog_and_show_scope(
+    snowflake_connection: Any,
+    table: str | None,
+    schema: str | None,
+    expected_schema: str,
+    expected_table: str | None,
+    scope: str,
+) -> None:
+    """Catalog binds and SHOW commands describe the same resolved schema and table."""
+    snowflake_connection.default_result = _result(
+        ["table_name", "constraint_name", "constraint_type"], [("Orders", "PK_ORDERS", "PRIMARY KEY")]
+    )
+    snowflake_connection.results[f"SHOW PRIMARY KEYS {scope}"] = _result(
+        ["schema_name", "table_name", "constraint_name", "column_name", "key_sequence"],
+        [(expected_schema, "Orders", "PK_ORDERS", "ID", 1)],
+    )
+    snowflake_connection.results[f"SHOW UNIQUE KEYS {scope}"] = _result(
+        ["schema_name", "table_name", "constraint_name", "column_name", "key_sequence"], []
+    )
+    driver = SnowflakeDriver(snowflake_connection)
+
+    metadata = driver.data_dictionary.get_constraints(driver, table, schema)
+
+    assert tuple(snowflake_connection.calls[0][1]) == (
+        (expected_schema,) if expected_table is None else (expected_schema, expected_table)
+    )
+    assert [call[0] for call in snowflake_connection.calls[1:]] == [
+        f"SHOW PRIMARY KEYS {scope}",
+        f"SHOW UNIQUE KEYS {scope}",
+    ]
+    constraints = cast("tuple[dict[str, Any], ...]", metadata.items)
+    assert len(constraints) == 1
+    assert constraints[0]["schema_name"] == expected_schema
+    assert constraints[0]["column_names"] == ["ID"]
+
+
+def test_static_feature_flags_need_no_version_query(snowflake_connection: Any) -> None:
+    """Known Snowflake flags resolve locally without issuing version probes."""
+    driver = SnowflakeDriver(snowflake_connection)
+    dictionary = driver.data_dictionary
+
+    assert dictionary.get_feature_flag(driver, "supports_json") is True
+    assert dictionary.get_feature_flag(driver, "supports_transactions") is True
+    assert dictionary.get_feature_flag(driver, "supports_transactional_ddl") is False
+    assert dictionary.get_feature_flag(driver, "supports_returning") is False
+    assert dictionary.get_feature_flag(driver, "supports_savepoints") is False
+    assert snowflake_connection.calls == []

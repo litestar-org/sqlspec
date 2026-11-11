@@ -1,5 +1,6 @@
 """Snowflake cursor, session, and row collection tests."""
 
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -13,6 +14,8 @@ from sqlspec.adapters.snowflake.core import (
     collect_rows,
     create_mapped_exception,
     normalize_column_names,
+    normalize_execute_parameters,
+    normalize_many_parameters,
 )
 from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
 from sqlspec.exceptions import (
@@ -108,3 +111,61 @@ def test_empty_arrow_schema_supports_attribute_metadata() -> None:
         pa.field("id", pa.int64(), nullable=False),
         pa.field("tz", pa.timestamp("ns", tz="UTC")),
     ])
+
+
+def test_server_bindings_preserve_aware_datetime_offsets() -> None:
+    aware = datetime(2026, 11, 11, 12, 30, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    naive = datetime(2026, 11, 11, 12, 30)
+    explicit = ("TIMESTAMP_LTZ", aware)
+    assert normalize_execute_parameters([aware, naive, explicit]) == [("TIMESTAMP_TZ", aware), naive, explicit]
+    assert normalize_many_parameters([[aware], [naive]]) == [[("TIMESTAMP_TZ", aware)], [naive]]
+
+
+@pytest.mark.parametrize("paramstyle", ["pyformat", "format"])
+def test_client_bindings_keep_native_aware_datetime(paramstyle: str) -> None:
+    aware = datetime(2026, 11, 11, 12, 30, tzinfo=UTC)
+    parameters = {"created_at": aware}
+    assert normalize_execute_parameters(parameters, paramstyle=paramstyle) is parameters
+    assert normalize_many_parameters([parameters], paramstyle=paramstyle) == [parameters]
+
+
+@pytest.mark.parametrize("paramstyle", ["qmark", "numeric"])
+def test_public_driver_binds_aware_datetimes_as_timestamp_tz(snowflake_connection: Any, paramstyle: str) -> None:
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    aware = datetime(2026, 11, 11, 12, 30, tzinfo=UTC)
+    naive = datetime(2026, 11, 11, 12, 30)
+    explicit = ("TIMESTAMP_NTZ", aware)
+    driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
+    driver.execute(
+        "INSERT INTO events(created, local_time, selected_type) VALUES (:created, :local_time, :selected_type)",
+        {"created": aware, "local_time": naive, "selected_type": explicit},
+    )
+    assert list(snowflake_connection.calls[-1][1]) == [("TIMESTAMP_TZ", aware), naive, explicit]
+    driver.execute_many("INSERT INTO events(created) VALUES (:created)", [{"created": aware}, {"created": naive}])
+    assert [list(row) for row in snowflake_connection.calls[-1][1]] == [[("TIMESTAMP_TZ", aware)], [naive]]
+
+
+@pytest.mark.parametrize("paramstyle", ["pyformat", "format"])
+def test_public_driver_client_modes_keep_datetime_values(snowflake_connection: Any, paramstyle: str) -> None:
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    aware = datetime(2026, 11, 11, 12, 30, tzinfo=UTC)
+    driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
+    driver.execute("INSERT INTO events(created) VALUES (:created)", {"created": aware})
+    assert list(snowflake_connection.calls[-1][1]) == [aware]
+    driver.execute_many("INSERT INTO events(created) VALUES (:created)", [{"created": aware}])
+    assert [list(row) for row in snowflake_connection.calls[-1][1]] == [[aware]]
+
+
+def test_server_tuple_bindings_keep_json_codec_for_regular_tuples(snowflake_connection: Any) -> None:
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    aware = datetime(2026, 11, 11, 12, 30, tzinfo=UTC)
+    explicit = ("TIMESTAMP_NTZ", aware)
+    config = build_statement_config(json_serializer=lambda value: f"custom:{','.join(value)}")
+    driver = SnowflakeDriver(snowflake_connection, statement_config=config)
+    driver.execute(
+        "INSERT INTO events(created, tags) VALUES (:created, :tags)", {"created": explicit, "tags": ("blue", "green")}
+    )
+    assert list(snowflake_connection.calls[-1][1]) == [explicit, "custom:blue,green"]

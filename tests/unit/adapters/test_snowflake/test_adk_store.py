@@ -1,12 +1,15 @@
 """Snowflake ADK session, state, event, and memory store behavior."""
 
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from sqlspec.adapters.snowflake.adk import SnowflakeADKMemoryStore, SnowflakeADKStore
+from sqlspec.adapters.snowflake.config import SnowflakeConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk._types import StoredEvent
 from sqlspec.extensions.adk.memory._types import StoredMemory
@@ -191,9 +194,50 @@ def test_adk_deletes_child_events_before_sessions(monkeypatch: pytest.MonkeyPatc
         store.delete_session("app", "u1", "s1")
     statements = [_sql(call) for call in driver.execute.call_args_list]
     assert len(statements) == 2
-    assert statements[0].startswith("DELETE FROM adk_event WHERE session_id")
+    assert statements[0].startswith("DELETE FROM adk_event WHERE")
     assert statements[1].startswith("DELETE FROM adk_session WHERE")
     driver.transaction.return_value.__enter__.assert_called_once_with()
+
+
+@pytest.mark.parametrize("app_name", ["app-a", None])
+def test_adk_idle_cleanup_preserves_other_scopes_with_reused_session_id(tmp_path: Path, app_name: str | None) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "scoped-adk.sqlite")})
+    try:
+        with config.provide_session() as driver:
+            driver.execute("CREATE TABLE adk_session (id TEXT, app_name TEXT, user_id TEXT, update_time TEXT)")
+            driver.execute("CREATE TABLE adk_event (id TEXT, session_id TEXT, app_name TEXT, user_id TEXT)")
+            driver.execute_many(
+                "INSERT INTO adk_session VALUES (?, ?, ?, ?)",
+                [
+                    ("shared", "app-a", "user-a", "2026-11-01"),
+                    ("shared", "app-a", "user-b", "2026-11-12"),
+                    ("shared", "app-b", "user-a", "2026-11-12"),
+                ],
+            )
+            driver.execute_many(
+                "INSERT INTO adk_event VALUES (?, ?, ?, ?)",
+                [
+                    ("idle-event", "shared", "app-a", "user-a"),
+                    ("other-user-event", "shared", "app-a", "user-b"),
+                    ("other-app-event", "shared", "app-b", "user-a"),
+                ],
+            )
+            driver.commit()
+
+        store = SnowflakeADKStore(cast("SnowflakeConfig", config))
+        assert store.delete_idle_sessions(datetime(2026, 11, 11, tzinfo=UTC), app_name) == 1
+
+        with config.provide_session() as driver:
+            assert driver.select("SELECT id FROM adk_event ORDER BY id") == [
+                {"id": "other-app-event"},
+                {"id": "other-user-event"},
+            ]
+            assert driver.select("SELECT app_name, user_id FROM adk_session ORDER BY app_name, user_id") == [
+                {"app_name": "app-a", "user_id": "user-b"},
+                {"app_name": "app-b", "user_id": "user-a"},
+            ]
+    finally:
+        config.close_pool()
 
 
 def test_adk_state_and_metadata_upserts_use_merge(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3280,3 +3280,43 @@ def test_snowflake_sql_default_compilation_uses_dialect_lexing() -> None:
     compiled, parameters = SQL(sql, {"id": 99}, dialect="Snowflake").compile()
     assert compiled == "SELECT $1 FROM @%sales WHERE id = ? // ? :ignored"
     assert parameters == (99,)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "payload :region",
+        "payload /* warehouse field */ :region",
+        "payload/*warehouse field*/:region",
+        "payload -- warehouse field\n :region",
+        "payload // warehouse field\n :region",
+        '"PAYLOAD" /* warehouse field */ :region',
+        "items[0] /* warehouse field */ :region",
+        "PARSE_JSON(raw) /* warehouse field */ :region",
+        "payload /* first */ :region /* nested */ :city",
+    ],
+)
+def test_snowflake_sql_compile_preserves_spaced_variant_paths(expression: str) -> None:
+    statement = SQL("SELECT " + expression + " FROM events WHERE id = :id", {"id": 7}, dialect="snowflake")
+    assert statement.compile() == ("SELECT " + expression + " FROM events WHERE id = ?", (7,))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT :value FROM events WHERE id = :id",
+        "SELECT /* projection */ :value FROM events WHERE id = :id",
+        "SELECT DISTINCT :value FROM events WHERE id = :id",
+        "SELECT payload RLIKE :value FROM events WHERE id = :id",
+        "SELECT payload REGEXP :value FROM events WHERE id = :id",
+        "SELECT :value FROM events QUALIFY :id = id",
+        "EXECUTE IMMEDIATE :value USING :id",
+        "SELECT COALESCE(payload :region, :value) FROM events WHERE id = :id",
+        "SELECT payload :region = :value FROM events WHERE id = :id",
+        "SELECT CASE WHEN id = :id THEN :value ELSE payload :region END FROM events",
+    ],
+)
+def test_snowflake_sql_compile_binds_values_next_to_variant_paths(query: str) -> None:
+    compiled, parameters = SQL(query, {"value": "west", "id": 7}, dialect="snowflake").compile()
+    assert compiled == query.replace(":value", "?").replace(":id", "?")
+    assert parameters == ((7, "west") if query.startswith("SELECT CASE") else ("west", 7))

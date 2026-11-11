@@ -327,12 +327,15 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     def delete_idle_sessions(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete idle sessions after deleting their child events."""
         predicate = "update_time < ?" + (" AND app_name = ?" if app_name is not None else "")
+        scoped_predicate = "s.update_time < ?" + (" AND s.app_name = ?" if app_name is not None else "")
         parameters: list[Any] = [updated_before] if app_name is None else [updated_before, app_name]
         try:
             with self._config.provide_session() as driver, driver.transaction():
                 driver.execute(
-                    f"DELETE FROM {self._events_table} WHERE session_id IN "
-                    f"(SELECT id FROM {self._session_table} WHERE {predicate})",
+                    f"DELETE FROM {self._events_table} WHERE EXISTS "
+                    f"(SELECT 1 FROM {self._session_table} s WHERE s.id = {self._events_table}.session_id "
+                    f"AND s.app_name = {self._events_table}.app_name "
+                    f"AND s.user_id = {self._events_table}.user_id AND {scoped_predicate})",
                     parameters,
                 )
                 result = driver.execute(f"DELETE FROM {self._session_table} WHERE {predicate}", parameters)

@@ -42,6 +42,7 @@ __all__ = (
 logger = get_logger("sqlspec.core.splitter")
 
 _BEGIN_BLOCK_KEYWORD: Final[str] = "BEGIN"
+_SNOWFLAKE_KEYWORD_GAP: Final[str] = r"(?:\s|/\*[\s\S]*?\*/|--[^\r\n]*|(?<!:)//[^\r\n]*)*"
 _TOKENIZE_DEBUG_SAMPLE_LIMIT: Final[int] = 3
 _TOKENIZE_SNIPPET_LENGTH: Final[int] = 20
 _DOLLAR_QUOTE_START_PATTERN: Final[Pattern[str]] = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$")
@@ -555,9 +556,9 @@ class SnowflakeDialectConfig(_EagerDialectConfig):
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
             (TokenType.COMMENT_LINE, r"--[^\r\n]*"),
             (TokenType.COMMENT_LINE, r"(?<!:)//[^\r\n]*"),
-            (TokenType.OTHER, r"\bBEGIN\b(?=\s*(?:;|TRANSACTION\b|WORK\b|NAME\b))"),
-            (TokenType.OTHER, r"\bEND\s+(?:IF|FOR|WHILE|LOOP|REPEAT)\b"),
-            (TokenType.KEYWORD, r"\bEND\s+CASE\b"),
+            (TokenType.OTHER, r"\bBEGIN\b(?=" + _SNOWFLAKE_KEYWORD_GAP + r"(?:;|TRANSACTION\b|WORK\b|NAME\b))"),
+            (TokenType.OTHER, r"\bEND\b" + _SNOWFLAKE_KEYWORD_GAP + r"(?:IF|FOR|WHILE|LOOP|REPEAT)\b"),
+            (TokenType.KEYWORD, r"\bEND\b" + _SNOWFLAKE_KEYWORD_GAP + r"CASE\b"),
         ]
         keywords = self.block_starters | self.block_enders | self.batch_separators
         patterns.append((TokenType.KEYWORD, r"\b(" + "|".join(sorted(keywords)) + r")\b"))
@@ -793,7 +794,7 @@ class StatementSplitter:
                             raise ValueError(msg)
                 elif (
                     dialect.name == "snowflake"
-                    and re.fullmatch(r"END\s+CASE", token_upper)
+                    and token_upper.endswith("CASE")
                     and block_stack
                     and block_stack[-1] == "CASE"
                 ) or (token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)):

@@ -27,9 +27,12 @@ def test_arrow_nested_values_use_parse_json_select(snowflake_connection: Any) ->
     driver = SnowflakeDriver(snowflake_connection, driver_features={"enable_stage_parquet_load": False})
     job = driver.load_from_arrow('"Orders"', pa.table({"id": [1, 2], "payload": [{"x": 1}, None]}))
     assert job.telemetry["rows_processed"] == 2
-    sql, parameters, _ = snowflake_connection.calls[-1]
+    sql = snowflake_connection.calls[-1][0]
     assert sql == 'INSERT INTO "Orders" ("ID", "PAYLOAD") SELECT ?, PARSE_JSON(?)'
-    assert parameters == [(1, '{"x":1}'), (2, None)]
+    assert [call[1] for call in snowflake_connection.calls if call[0].startswith("INSERT")] == [
+        (1, '{"x":1}'),
+        (2, None),
+    ]
 
 
 def test_arrow_large_load_cleans_remote_and_local_stage(snowflake_connection: Any) -> None:
@@ -72,7 +75,7 @@ def test_staged_merge_creates_target_then_stage_and_skips_index_ddl(snowflake_co
     statements = [call[0] for call in snowflake_connection.calls]
     assert statements[0].startswith('CREATE TABLE IF NOT EXISTS "ORDERS"')
     assert any(statement.startswith("MERGE INTO") for statement in statements)
-    assert statements[-1].startswith("DROP TABLE")
+    assert any(statement.startswith("DROP TABLE") for statement in statements)
 
 
 def test_arrow_load_rejects_invalid_batch_size_before_sql(snowflake_connection: Any) -> None:
@@ -108,3 +111,66 @@ def test_storage_export_import_roundtrip_uses_arrow_pipeline(tmp_path: Path, sno
     assert loaded.telemetry["rows_processed"] == 2
     assert snowflake_connection.calls[-1][0] == 'INSERT INTO "COPIED" ("ID", "NAME") VALUES (?, ?)'
     assert snowflake_connection.calls[-1][1] == [(1, "one"), (2, "two")]
+
+
+@pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_arrow_load_uses_configured_binding_mode(snowflake_connection: Any, paramstyle: str, nested: bool) -> None:
+    from sqlspec.adapters.snowflake.core import build_statement_config
+
+    snowflake_connection.paramstyle = paramstyle
+    driver = SnowflakeDriver(
+        snowflake_connection,
+        statement_config=build_statement_config(paramstyle=paramstyle),
+        driver_features={"enable_stage_parquet_load": False},
+    )
+    source = pa.table({"id": [1, 2], "payload": [{"x": 1}, {"x": 2}]}) if nested else pa.table({"id": [1, 2]})
+    driver.load_from_arrow("orders", source)
+    statements = [call[0] for call in snowflake_connection.calls if call[0].startswith("INSERT")]
+    placeholder = "%s" if paramstyle in {"format", "pyformat"} else ":1" if paramstyle == "numeric" else "?"
+    assert all(placeholder in statement for statement in statements)
+    assert len(snowflake_connection.committed_rows) == 2
+
+
+@pytest.mark.parametrize("autocommit", [True, False])
+def test_arrow_load_rolls_back_partial_batches_when_it_owns_transaction(
+    snowflake_connection: Any, autocommit: bool
+) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    snowflake_connection.autocommit_enabled = autocommit
+    snowflake_connection.fail_on_batch = 2
+    snowflake_connection.failure = ProgrammingError(msg="partial batch failure", errno=1003, sqlstate="42000")
+    driver = SnowflakeDriver(snowflake_connection, driver_features={"enable_stage_parquet_load": False})
+    with pytest.raises(SQLParsingError, match="partial batch failure"):
+        driver.load_from_arrow("orders", pa.table({"id": [1, 2, 3]}), batch_size=2)
+    assert snowflake_connection.pending_rows == []
+    assert snowflake_connection.committed_rows == []
+    assert snowflake_connection.rollbacks == 1
+    assert snowflake_connection.commits == 0
+
+
+def test_arrow_load_preserves_existing_caller_transaction(snowflake_connection: Any) -> None:
+    driver = SnowflakeDriver(snowflake_connection, driver_features={"enable_stage_parquet_load": False})
+    driver.execute("BEGIN")
+    driver.load_from_arrow("orders", pa.table({"id": [1, 2]}), batch_size=1)
+    assert snowflake_connection.commits == 0
+    assert len(snowflake_connection.pending_rows) == 2
+    driver.rollback()
+    assert snowflake_connection.committed_rows == []
+
+
+def test_arrow_batch_failure_keeps_caller_transaction_under_caller_control(snowflake_connection: Any) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    driver = SnowflakeDriver(snowflake_connection, driver_features={"enable_stage_parquet_load": False})
+    driver.execute("BEGIN")
+    snowflake_connection.fail_on_batch = 2
+    snowflake_connection.failure = ProgrammingError(msg="caller batch failure", errno=1003, sqlstate="42000")
+    with pytest.raises(SQLParsingError, match="caller batch failure"):
+        driver.load_from_arrow("orders", pa.table({"id": [1, 2, 3]}), batch_size=2)
+    assert snowflake_connection.commits == 0
+    assert snowflake_connection.rollbacks == 0
+    assert len(snowflake_connection.pending_rows) == 2
+    driver.rollback()
+    assert snowflake_connection.committed_rows == []

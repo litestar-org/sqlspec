@@ -2,8 +2,8 @@
 
 import contextlib
 import sys
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -88,15 +88,19 @@ def test_snowflake_catalog_wire_query(snowflake_session: "SnowflakeDriver", snow
     assert tables == [{"table_name": snowflake_items}]
 
 
-async def test_snowflake_live_extension_stores_round_trip(snowflake_live_config: "SnowflakeConfig") -> None:
+async def test_snowflake_live_extension_stores_round_trip(snowflake_live_connection_config: dict[str, Any]) -> None:
     """Litestar and ADK stores persist session payloads through native Snowflake sessions."""
+    from sqlspec.adapters.snowflake import SnowflakeConfig
     from sqlspec.adapters.snowflake.adk import SnowflakeADKMemoryStore, SnowflakeADKStore
     from sqlspec.adapters.snowflake.events import SnowflakeEventQueueStore
     from sqlspec.adapters.snowflake.litestar import SnowflakeStore
-    from sqlspec.extensions.adk import StoredMemory
+    from sqlspec.extensions.adk import StoredEvent, StoredMemory
     from sqlspec.extensions.events import SyncEventChannel
 
-    snowflake_driver_config = snowflake_live_config
+    snowflake_driver_config = SnowflakeConfig(
+        connection_config={**snowflake_live_connection_config, "timezone": "America/Los_Angeles"},
+        driver_features={"enable_lowercase_column_names": False},
+    )
     token = uuid4().hex
     snowflake_driver_config.extension_config["litestar"] = {"session_table": "sqlspec_sf_sessions_" + token}
     snowflake_driver_config.extension_config["adk"] = {
@@ -120,12 +124,38 @@ async def test_snowflake_live_extension_stores_round_trip(snowflake_live_config:
         await store.create_table()
         await store.set("s1", b"payload")
         assert await store.get("s1") == b"payload"
+        await store.set("ttl", b"expiring", expires_in=120)
+        ttl = await store.expires_in("ttl")
+        assert ttl is not None and 0 < ttl <= 120
         adk.create_tables()
         created = adk.create_session("s1", "sqlspec", "user1", {"step": 1})
         assert created["state"] == {"step": 1}
         assert adk.get_session("sqlspec", "user1", "s1") == created
         memory.create_tables()
         now = datetime.now(UTC)
+        for app_name, user_id in (("app-a", "user-a"), ("app-a", "user-b"), ("app-b", "user-a")):
+            adk.create_session("shared", app_name, user_id, {})
+            adk.append_event(
+                StoredEvent(
+                    id=f"{app_name}-{user_id}",
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id="shared",
+                    invocation_id="invocation",
+                    timestamp=now,
+                    event_data={"text": "scoped event"},
+                )
+            )
+        with snowflake_driver_config.provide_session() as session:
+            session.execute(
+                "UPDATE sqlspec_sf_adk_sessions_" + token + " SET update_time = ? "
+                "WHERE app_name = ? AND user_id = ? AND id = ?",
+                (now - timedelta(days=2), "app-a", "user-a", "shared"),
+            )
+            session.commit()
+        assert adk.delete_idle_sessions(now - timedelta(days=1), app_name="app-a") == 1
+        assert [event["id"] for event in adk.get_events("app-a", "user-b", "shared")] == ["app-a-user-b"]
+        assert [event["id"] for event in adk.get_events("app-b", "user-a", "shared")] == ["app-b-user-a"]
         entry = StoredMemory(
             id="m1",
             session_id="s1",
@@ -157,16 +187,19 @@ async def test_snowflake_live_extension_stores_round_trip(snowflake_live_config:
             if close := getattr(events, "close", None):
                 close()
     finally:
-        with contextlib.suppress(Exception):
-            await store.delete_all()
-        with contextlib.suppress(Exception):
-            memory.drop_tables()
-        with contextlib.suppress(Exception):
-            adk.drop_tables()
-        with snowflake_driver_config.provide_session() as session:
-            session.execute("DROP TABLE IF EXISTS sqlspec_sf_sessions_" + token)
-            for statement in queue.drop_statements():
-                session.execute(statement)
+        try:
+            with contextlib.suppress(Exception):
+                await store.delete_all()
+            with contextlib.suppress(Exception):
+                memory.drop_tables()
+            with contextlib.suppress(Exception):
+                adk.drop_tables()
+            with snowflake_driver_config.provide_session() as session:
+                session.execute("DROP TABLE IF EXISTS sqlspec_sf_sessions_" + token)
+                for statement in queue.drop_statements():
+                    session.execute(statement)
+        finally:
+            snowflake_driver_config.close_pool()
 
 
 def test_snowflake_live_auth_and_imported_keys(snowflake_live_session: "SnowflakeDriver") -> None:

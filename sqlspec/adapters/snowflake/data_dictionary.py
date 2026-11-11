@@ -67,6 +67,23 @@ def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str
     return f"IN SCHEMA {_format_snowflake_identifier(schema_name)}" if schema_name is not None else "IN SCHEMA"
 
 
+def _resolve_snowflake_catalog_scope(schema: str | None, table: str | None) -> tuple[str | None, str | None, str]:
+    """Resolve exact catalog identity and SHOW scope from the same quoted identifiers."""
+    schema_input = schema if schema is not None else SNOWFLAKE_CONFIG.default_schema
+    scope = _format_snowflake_show_scope(schema_input, table)
+    schema_name = None
+    if schema_input is not None:
+        schema_parts = split_qualified_identifier(_format_snowflake_identifier(schema_input))
+        schema_name = schema_parts[-1]
+    table_name = None
+    if table is not None:
+        table_parts = split_qualified_identifier(_format_snowflake_identifier(table))
+        table_name = table_parts[-1]
+        if len(table_parts) > 1:
+            schema_name = table_parts[-2]
+    return schema_name, table_name, scope
+
+
 def _capability(domain: str) -> MetadataCapability:
     if domain in _SUPPORTED:
         return MetadataCapability(
@@ -107,7 +124,12 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         return version
 
     def get_feature_flag(self, driver: Any, feature: str) -> bool:
-        """Resolve dialect feature support against the server version."""
+        """Resolve static features locally and probe versions only for gated features."""
+        static_flag = SNOWFLAKE_CONFIG.get_feature_flag(feature)
+        if static_flag is not None:
+            return static_flag
+        if SNOWFLAKE_CONFIG.get_feature_version(feature) is None:
+            return False
         return self.resolve_feature_flag(feature, self.get_version(driver))
 
     def get_optimal_type(self, driver: Any, type_category: str) -> str:
@@ -163,20 +185,25 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         self, driver: Any, table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Read ordered imported-key metadata without KEY_COLUMN_USAGE."""
-        rows = driver.select(f"SHOW IMPORTED KEYS {_format_snowflake_show_scope(schema, table)}")
-        return parse_snowflake_imported_keys(rows, table_name=self.resolve_identifier(table) if table else None)
+        _, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        rows = driver.select(f"SHOW IMPORTED KEYS {scope}")
+        return parse_snowflake_imported_keys(rows, table_name=table_name)
 
     def get_constraints(self, driver: Any, table: str | None = None, schema: str | None = None) -> MetadataResult:
         """Combine catalog constraints with column-ordered SHOW key metadata."""
-        params: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
+        schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        params: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
-        if table is not None:
-            params["table_name"] = self.resolve_identifier(table)
+        if table_name is not None:
+            params["table_name"] = table_name
             operation = "by_table"
         rows = list(driver.select(self.get_query("constraints", operation), **params))
-        scope = _format_snowflake_show_scope(schema, table)
-        keys = parse_snowflake_primary_or_unique_keys(driver.select(f"SHOW PRIMARY KEYS {scope}"))
-        keys += parse_snowflake_primary_or_unique_keys(driver.select(f"SHOW UNIQUE KEYS {scope}"), unique=True)
+        keys = parse_snowflake_primary_or_unique_keys(
+            driver.select(f"SHOW PRIMARY KEYS {scope}"), table_name=table_name
+        )
+        keys += parse_snowflake_primary_or_unique_keys(
+            driver.select(f"SHOW UNIQUE KEYS {scope}"), unique=True, table_name=table_name
+        )
         keyed = {(str(row.get("constraint_name")), str(row.get("table_name"))) for row in keys}
         combined = [row for row in rows if (str(row.get("constraint_name")), str(row.get("table_name"))) not in keyed]
         combined.extend(keys)

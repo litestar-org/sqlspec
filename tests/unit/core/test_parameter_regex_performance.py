@@ -208,3 +208,13 @@ def test_snowflake_quote_escape_stress_keeps_only_real_parameter() -> None:
     elapsed = time.perf_counter() - started
     assert [parameter.name for parameter in parameters] == ["id"]
     assert elapsed < 0.6
+
+
+def test_snowflake_spaced_paths_keep_linear_scan_and_real_bind() -> None:
+    validator = ParameterValidator(cache_max_size=0)
+    sql = "SELECT " + ", ".join(["payload /* field */ :region"] * 2000) + " FROM events WHERE id = :id"
+    started = time.perf_counter()
+    parameters = validator.extract_parameters(sql, dialect="snowflake")
+    elapsed = time.perf_counter() - started
+    assert [parameter.name for parameter in parameters] == ["id"]
+    assert elapsed < 0.6

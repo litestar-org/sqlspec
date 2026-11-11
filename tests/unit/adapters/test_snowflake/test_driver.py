@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.snowflake import SnowflakeDriver
+from sqlspec.core import StatementStack
 from sqlspec.exceptions import PermissionDeniedError, SQLParsingError, SQLSpecError
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -37,7 +38,10 @@ def test_dml_description_does_not_turn_insert_into_select(snowflake_connection: 
 def test_script_preserves_snowflake_blocks_and_closes_all_cursors(snowflake_connection: Any) -> None:
     script = "BEGIN LET x INTEGER := 1; RETURN x; END; SHOW TABLES ->> SELECT * FROM $1;"
     SnowflakeDriver(snowflake_connection).execute_script(script)
-    assert snowflake_connection.scripts == [script]
+    assert [call[0] for call in snowflake_connection.calls] == [
+        "BEGIN LET x INTEGER := 1; RETURN x; END;",
+        "SHOW TABLES ->> SELECT * FROM $1",
+    ]
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
 
 
@@ -164,3 +168,61 @@ def test_migration_schema_restores_schema_without_current_database(snowflake_con
     driver.set_migration_session_schema("target")
     driver.reset_migration_session_schema()
     assert snowflake_connection.calls[-1][0] == 'USE SCHEMA "OriginalSchema"'
+
+
+@pytest.mark.parametrize("transaction_start", ["implicit", "raw_begin"])
+def test_execute_stack_preserves_caller_server_transaction(snowflake_connection: Any, transaction_start: str) -> None:
+    driver = SnowflakeDriver(snowflake_connection)
+    if transaction_start == "implicit":
+        snowflake_connection.autocommit_enabled = False
+        driver.execute("INSERT INTO orders(id) VALUES (?)", (1,))
+    else:
+        driver.execute("BEGIN")
+    driver.execute_stack(StatementStack().push_execute("INSERT INTO orders(id) VALUES (?)", (2,)))
+    assert snowflake_connection.commits == 0
+    assert snowflake_connection.transaction_active
+    driver.rollback()
+    assert snowflake_connection.committed_rows == []
+
+
+def test_execute_stack_refreshes_server_state_after_ddl_auto_commit(snowflake_connection: Any) -> None:
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.begin()
+    driver.execute("CREATE TABLE orders(id INTEGER)")
+    driver.execute_stack(StatementStack().push_execute("INSERT INTO orders(id) VALUES (?)", (1,)))
+    assert snowflake_connection.commits == 1
+    assert snowflake_connection.transaction_active is False
+    assert len(snowflake_connection.committed_rows) == 1
+
+
+def test_script_second_statement_failure_closes_all_owned_cursors(snowflake_connection: Any) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    snowflake_connection.fail_on = "missing_table"
+    snowflake_connection.failure = ProgrammingError(msg="statement failed", errno=1003, sqlstate="42000")
+    with pytest.raises(SQLParsingError, match="statement failed"):
+        SnowflakeDriver(snowflake_connection).execute_script(
+            "INSERT INTO orders VALUES (1); INSERT INTO missing_table VALUES (2);"
+        )
+    assert [call[0] for call in snowflake_connection.calls] == [
+        "INSERT INTO orders VALUES (1)",
+        "INSERT INTO missing_table VALUES (2)",
+    ]
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+@pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
+def test_script_parameters_compile_statically_in_configured_modes(snowflake_connection: Any, paramstyle: str) -> None:
+    from sqlspec.adapters.snowflake.core import build_statement_config
+
+    driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
+    result = driver.execute_script(
+        "INSERT INTO orders VALUES (:first); // ignored ; ? :ghost\n INSERT INTO orders VALUES (:second);",
+        first=1,
+        second=2,
+    )
+    assert result.total_statements == 2
+    assert snowflake_connection.calls[0][0] == "INSERT INTO orders VALUES (1)"
+    assert snowflake_connection.calls[1][0].endswith("INSERT INTO orders VALUES (2)")
+    assert [call[1] for call in snowflake_connection.calls] == [None, None]
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
