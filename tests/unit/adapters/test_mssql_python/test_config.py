@@ -1,6 +1,8 @@
 """Unit tests for mssql_python adapter configuration."""
 
+import gc
 import warnings
+from collections.abc import Iterator
 from typing import Any, cast, get_type_hints
 
 import pytest
@@ -15,6 +17,20 @@ from sqlspec.adapters.mssql_python.config import (
 )
 from sqlspec.adapters.mssql_python.core import build_connection_config
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
+
+
+@pytest.fixture(autouse=True)
+def _reset_mssql_pool_state() -> Iterator[None]:
+    """Isolate process-global mssql-python pool tracking across unit tests."""
+    _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+    _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
+    _mssql_pool._POOLING_PARAMS = None
+    try:
+        yield
+    finally:
+        _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+        _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
+        _mssql_pool._POOLING_PARAMS = None
 
 
 def test_config_applies_driver_feature_json_serializer_to_statement_config() -> None:
@@ -286,17 +302,19 @@ def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) 
         "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
-    MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
+    pool_a = MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        MssqlPythonConnectionPool(connection_string="Server=srv2;", max_size=20, idle_timeout=60, enabled=True)
+        pool_b = MssqlPythonConnectionPool(connection_string="Server=srv2;", max_size=20, idle_timeout=60, enabled=True)
 
     assert len(caught) == 1
     message = str(caught[0].message)
     assert "overwriting" in message
     assert "(10, 60, True)" in message
     assert "(20, 60, True)" in message
+    pool_a.close()
+    pool_b.close()
 
 
 def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,13 +325,15 @@ def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> Non
         "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
-    MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
+    pool_a = MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        MssqlPythonConnectionPool(connection_string="Server=srv2;", max_size=10, idle_timeout=60, enabled=True)
+        pool_b = MssqlPythonConnectionPool(connection_string="Server=srv2;", max_size=10, idle_timeout=60, enabled=True)
 
     assert len(caught) == 0
+    pool_a.close()
+    pool_b.close()
 
 
 def test_normalize_mssql_python_init_returns_config_features_and_hook() -> None:
@@ -398,15 +418,23 @@ def test_pool_does_not_reconfigure_when_params_match(monkeypatch: pytest.MonkeyP
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
-        MssqlPythonConnectionPool(connection_string="Server=localhost;", max_size=10, idle_timeout=60, enabled=True)
-    assert not any("Pooling configuration was already set" in str(w.message) for w in recorded)
+        pool = MssqlPythonConnectionPool(
+            connection_string="Server=localhost;", max_size=10, idle_timeout=60, enabled=True
+        )
+    assert len(recorded) == 0
     assert calls == []
+    pool.close()
 
 
 def test_close_pool_clears_connection_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     """MssqlPythonConfig._close_pool closes the pool and clears connection_instance."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+    _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
+    )
     config = MssqlPythonConfig(connection_config={"server": "localhost"})
     pool = config.create_pool()
     assert config.connection_instance is pool
@@ -414,6 +442,8 @@ def test_close_pool_clears_connection_instance(monkeypatch: pytest.MonkeyPatch) 
     config.close_pool()
 
     assert config.connection_instance is None
+    assert pooling_calls == [{"max_size": 100, "idle_timeout": 600, "enabled": True}, {"enabled": False}]
+    assert _mssql_pool._POOLING_PARAMS is None
 
 
 def test_session_clean_exit_rolls_back_active_transaction() -> None:
@@ -468,18 +498,171 @@ def test_connection_context_rolls_back_on_exception(monkeypatch: pytest.MonkeyPa
     assert conn.closed is True
 
 
-def test_pool_disabled_does_not_mutate_process_wide_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """enabled=False preserves connection_string without calling MSSQL_PYTHON_MODULE.pooling."""
+@pytest.mark.parametrize(
+    ("connection_config", "driver_features"),
+    [({"server": "localhost", "pool_enabled": False}, None), ({"server": "localhost"}, {"enable_pooling": False})],
+    ids=["pool_enabled_false", "driver_feature_enable_pooling_false"],
+)
+def test_pool_disabled_explicitly_disables_native_pooling(
+    monkeypatch: pytest.MonkeyPatch, connection_config: dict[str, Any], driver_features: dict[str, Any] | None
+) -> None:
+    """Disabling pooling initializes mssql_python.PoolingManager as disabled so connect() will not auto-enable pooling."""
+    from mssql_python.pooling import PoolingManager
+
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+    _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
+    PoolingManager._reset_for_testing()
+    config = MssqlPythonConfig(connection_config=connection_config, driver_features=driver_features)
+    try:
+        pool = config.create_pool()
+
+        assert pool.enabled is False
+        assert PoolingManager.is_initialized() is True
+        assert PoolingManager.is_enabled() is False
+    finally:
+        config.close_pool()
+        PoolingManager._reset_for_testing()
+
+
+def test_multiple_disabled_pools_do_not_warn_or_reconfigure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Multiple disabled pools share process-wide disabled state without warnings or repeated pooling() calls."""
     pooling_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+    _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
     monkeypatch.setattr(
         "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
     )
 
-    pool = MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pool_a = MssqlPythonConnectionPool(connection_string="Server=srv1;Database=db1;", max_size=5, enabled=False)
+        pool_b = MssqlPythonConnectionPool(connection_string="Server=srv1;Database=db2;", max_size=25, enabled=False)
 
-    assert pool.connection_string == "Server=localhost;"
-    assert pooling_calls == []
+    assert len(caught) == 0
+    assert pooling_calls == [{"enabled": False}]
+    pool_a.close()
+    assert _mssql_pool._POOLING_PARAMS == (0, 0, False)
+    pool_b.close()
+    assert _mssql_pool._POOLING_PARAMS is None
+    assert pooling_calls == [{"enabled": False}]
+
+
+def test_close_disables_native_pooling_only_when_last_enabled_pool_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closing one enabled pool keeps native pooling active until the final enabled pool closes."""
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    _mssql_pool._ACTIVE_ENABLED_POOLS.clear()
+    _mssql_pool._ACTIVE_DISABLED_POOLS.clear()
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
+    )
+
+    pool_a = MssqlPythonConnectionPool(connection_string="Server=srv1;Database=db1;", max_size=10, idle_timeout=60)
+    pool_b = MssqlPythonConnectionPool(connection_string="Server=srv1;Database=db2;", max_size=10, idle_timeout=60)
+
+    pool_a.close()
+    pool_a.close()
+    assert pooling_calls == [{"max_size": 10, "idle_timeout": 60, "enabled": True}]
+    assert _mssql_pool._POOLING_PARAMS == (10, 60, True)
+
+    pool_b.close()
+    assert pooling_calls == [{"max_size": 10, "idle_timeout": 60, "enabled": True}, {"enabled": False}]
+    assert _mssql_pool._POOLING_PARAMS is None
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pool_c = MssqlPythonConnectionPool(connection_string="Server=srv1;Database=db3;", max_size=20, idle_timeout=30)
+
+    assert len(caught) == 0
+    assert pooling_calls[-1] == {"max_size": 20, "idle_timeout": 30, "enabled": True}
+    pool_c.close()
+
+
+@pytest.mark.parametrize(
+    ("first_kwargs", "second_kwargs", "expected_pooling_calls", "expected_active_params"),
+    [
+        (
+            {"max_size": 10, "idle_timeout": 60, "enabled": True},
+            {"enabled": False},
+            [{"max_size": 10, "idle_timeout": 60, "enabled": True}, {"enabled": False}],
+            (0, 0, False),
+        ),
+        (
+            {"enabled": False},
+            {"max_size": 10, "idle_timeout": 60, "enabled": True},
+            [{"enabled": False}, {"max_size": 10, "idle_timeout": 60, "enabled": True}],
+            (10, 60, True),
+        ),
+    ],
+    ids=["enabled_then_disabled", "disabled_then_enabled"],
+)
+def test_superseded_pool_close_preserves_active_pooling_state(
+    monkeypatch: pytest.MonkeyPatch,
+    first_kwargs: dict[str, Any],
+    second_kwargs: dict[str, Any],
+    expected_pooling_calls: list[dict[str, Any]],
+    expected_active_params: tuple[int, int, bool],
+) -> None:
+    """Closing a superseded pool must not disturb the replacing pooling state."""
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
+    )
+
+    first_pool = MssqlPythonConnectionPool(connection_string="Server=srv1;", **first_kwargs)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        second_pool = MssqlPythonConnectionPool(connection_string="Server=srv2;", **second_kwargs)
+
+    assert len(caught) == 1
+    assert pooling_calls == expected_pooling_calls
+    assert _mssql_pool._POOLING_PARAMS == expected_active_params
+
+    first_pool.close()
+    assert _mssql_pool._POOLING_PARAMS == expected_active_params
+    assert pooling_calls == expected_pooling_calls
+
+    second_pool.close()
+    assert _mssql_pool._POOLING_PARAMS is None
+
+
+def test_gc_evicted_pool_does_not_trigger_overwrite_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When all prior pools are garbage-collected without close(), new configs do not warn."""
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
+    )
+
+    def _create_ephemeral_pool() -> None:
+        MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
+
+    _create_ephemeral_pool()
+    gc.collect()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        replacement = MssqlPythonConnectionPool(
+            connection_string="Server=srv2;", max_size=20, idle_timeout=30, enabled=True
+        )
+
+    assert len(caught) == 0
+    assert pooling_calls == [
+        {"max_size": 10, "idle_timeout": 60, "enabled": True},
+        {"max_size": 20, "idle_timeout": 30, "enabled": True},
+    ]
+    replacement.close()
+
+
+def test_acquire_on_closed_pool_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Acquiring a connection after pool.close() raises RuntimeError."""
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    pool = MssqlPythonConnectionPool(connection_string="Server=srv1;", enabled=False)
+    pool.close()
+
+    with pytest.raises(RuntimeError, match="closed mssql-python pool"):
+        pool.acquire()
 
 
 def test_config_applies_driver_features_to_custom_statement_config() -> None:
