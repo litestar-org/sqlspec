@@ -52,7 +52,7 @@ def _driver(dialect: str) -> AdbcDriver:
     )
 
 
-@pytest.mark.parametrize("dialect", ["duckdb", "bigquery", "snowflake"])
+@pytest.mark.parametrize("dialect", ["duckdb", "bigquery", "snowflake", "teradata"])
 @pytest.mark.parametrize("method", ["create_savepoint", "release_savepoint", "rollback_to_savepoint"])
 def test_savepoints_are_reported_unsupported(dialect: str, method: str) -> None:
     driver = _driver(dialect)
@@ -62,7 +62,7 @@ def test_savepoints_are_reported_unsupported(dialect: str, method: str) -> None:
     assert cast("_Connection", driver.connection).cursor_obj.statements == []
 
 
-@pytest.mark.parametrize("dialect", ["duckdb", "bigquery", "snowflake"])
+@pytest.mark.parametrize("dialect", ["duckdb", "bigquery", "snowflake", "teradata"])
 def test_nested_service_block_reports_missing_savepoints(dialect: str) -> None:
     driver = _driver(dialect)
     service = SQLSpecSyncService(driver)

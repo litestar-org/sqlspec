@@ -31,6 +31,8 @@ _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("oracle", "oracle"),
     ("oracledb", "oracle"),
     ("db2", "db2"),
+    ("teradata", "teradata"),
+    ("vantage", "teradata"),
     ("adbc", "adbc"),
 )
 

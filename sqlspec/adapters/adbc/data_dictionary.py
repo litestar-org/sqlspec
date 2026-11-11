@@ -238,7 +238,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return self._snowflake_get_tables(driver, schema_name)
 
         rows = driver.select(self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, table_name=None)
-        return cast("list[TableMetadata]", _lowercase_dict_rows(rows))
+        return cast("list[TableMetadata]", _lowercase_dict_rows(rows, dialect))
 
     def get_columns(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -284,12 +284,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             rows = driver.select(
                 self._get_query(dialect, "columns", "by_schema"), schema_name=schema_name, table_name=None
             )
-            return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
+            return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, dialect))
         table_name = self._resolve_identifier(dialect, table)
         rows = driver.select(
             self._get_query(dialect, "columns", "by_table"), schema_name=schema_name, table_name=table_name
         )
-        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
+        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, dialect))
 
     def get_indexes(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -380,15 +380,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if table is None:
             query_text_optional = self._get_query_text_or_none(dialect, "foreign_keys", "by_schema")
             if query_text_optional is not None:
-                return driver.select(query_text_optional, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+                rows = driver.select(query_text_optional, schema_name=schema_name, schema_type=ForeignKeyMetadata)
+                return cast("list[ForeignKeyMetadata]", _lowercase_dict_rows(rows, dialect))
 
         resolved_table_name = self._resolve_identifier(dialect, table) if table is not None else None
-        return driver.select(
+        rows = driver.select(
             self._get_query(dialect, "foreign_keys", "by_table"),
             schema_name=schema_name,
             table_name=resolved_table_name,
             schema_type=ForeignKeyMetadata,
         )
+        return cast("list[ForeignKeyMetadata]", _lowercase_dict_rows(rows, dialect))
 
     def get_statistics(
         self, driver: "AdbcDriver", table: str, schema: "str | None" = None, *, approximate: bool = True
@@ -547,6 +549,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
         dialect_value = str(driver.dialect)
+        if str(dialect_value).strip().lower() == "vantage":
+            return "teradata"
         return normalize_dialect_name(dialect_value)
 
     def _get_query(self, dialect: str, domain: str, operation: str) -> "SQL":
@@ -757,6 +761,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         rows = reader.read_all().to_pylist()
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise _NativeMetadataIncompleteError
+        if dialect == "teradata":
+            rows = _strip_teradata_metadata(rows)
         return cast("list[dict[str, Any]]", rows)
 
     def _native_get_tables(
@@ -817,7 +823,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 "AND UPPER(table_schema) != 'INFORMATION_SCHEMA' "
                 "ORDER BY table_schema, table_name"
             )
-        return cast("list[TableMetadata]", _lowercase_dict_rows(rows))
+        return cast("list[TableMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
     def _snowflake_get_columns(
         self, driver: "AdbcDriver", table_name: "str | None", schema_name: "str | None"
@@ -849,21 +855,24 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 f"{base_select}WHERE UPPER(table_schema) != 'INFORMATION_SCHEMA' "
                 "ORDER BY table_schema, table_name, ordinal_position"
             )
-        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows))
+        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
 
-def _lowercase_dict_rows(rows: "Sequence[Any]") -> "list[dict[str, Any]]":
+def _lowercase_dict_rows(rows: "Sequence[Any]", dialect: str = "") -> "list[dict[str, Any]]":
     normalized: list[dict[str, Any]] = []
     for row in rows:
         if isinstance(row, dict):
-            normalized.append({str(key).lower(): value for key, value in row.items()})
+            normalized.append({
+                str(key).lower(): _strip_teradata_metadata(value) if dialect == "teradata" else value
+                for key, value in row.items()
+            })
         else:
             normalized.append(cast("dict[str, Any]", row))
     return normalized
 
 
 def _normalize_sql_index_rows(rows: "Sequence[Any]", dialect: str) -> "list[IndexMetadata]":
-    lowered = _lowercase_dict_rows(rows)
+    lowered = _lowercase_dict_rows(rows, dialect)
     if not lowered:
         return []
     if dialect == "db2" or ("column_name" in lowered[0] and "columns" not in lowered[0]):
@@ -879,8 +888,8 @@ def _normalize_sql_index_rows(rows: "Sequence[Any]", dialect: str) -> "list[Inde
                     "table_name": key[1],
                     "index_name": key[2],
                     "columns": [],
-                    "is_unique": bool(row.get("is_unique", 0)),
-                    "is_primary": bool(row.get("is_primary", 0)),
+                    "is_unique": _coerce_index_unique(row.get("is_unique", row.get("unique", 0))),
+                    "is_primary": _coerce_index_unique(row.get("is_primary", 0)),
                 }
                 grouped[key] = entry
             col_name = row.get("column_name")
@@ -957,6 +966,8 @@ def _normalize_native_columns(
             if ordinal is not None:
                 entry["ordinal_position"] = int(ordinal)
             nullable = column.get("xdbc_is_nullable")
+            if nullable is None and column.get("xdbc_nullable") in {0, 1}:
+                nullable = "YES" if column["xdbc_nullable"] == 1 else "NO"
             if nullable is not None:
                 entry["is_nullable"] = str(nullable)
             default = column.get("xdbc_column_def")
@@ -1198,3 +1209,21 @@ def _format_sqlite_identifier(identifier: str) -> str:
         msg = f"Invalid SQLite identifier: {identifier!r}"
         raise SQLSpecError(msg)
     return ".".join(quote_identifier(part) for part in parts)
+
+
+def _strip_teradata_metadata(value: Any) -> Any:
+    """Remove fixed CHAR padding from a Teradata metadata tree."""
+    if isinstance(value, str):
+        return value.rstrip()
+    if isinstance(value, list):
+        return [_strip_teradata_metadata(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_teradata_metadata(item) for key, item in value.items()}
+    return value
+
+
+def _coerce_index_unique(value: Any) -> bool:
+    """Interpret numeric, boolean, and catalog character uniqueness flags."""
+    if isinstance(value, str):
+        return value.strip().upper() in {"1", "TRUE", "T", "Y", "YES", "U", "Q", "K", "P"}
+    return bool(value) if isinstance(value, (bool, int, float)) else False

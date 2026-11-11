@@ -766,3 +766,61 @@ def test_snowflake_tables_and_columns_filter_permutations() -> None:
     assert table_cols[0]["column_name"] == "ID"
     assert schema_cols[0]["column_name"] == "ID"
     assert all_cols[0]["column_name"] == "ID"
+
+
+def test_teradata_native_metadata_padding() -> None:
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "vantage"
+    driver.connection.adbc_get_objects.return_value = _make_reader([
+        {
+            "catalog_name": "analytics   ",
+            "catalog_db_schemas": [
+                {
+                    "db_schema_name": "analytics   ",
+                    "db_schema_tables": [
+                        {
+                            "table_name": "events   ",
+                            "table_type": "TABLE   ",
+                            "table_columns": [
+                                {
+                                    "column_name": "event_id   ",
+                                    "xdbc_type_name": "VARCHAR   ",
+                                    "xdbc_nullable": 0,
+                                    "ordinal_position": 1,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ])
+    tables = dictionary.get_tables(driver)
+    assert tables[0]["table_name"] == "events"
+    assert tables[0]["schema_name"] == "analytics"
+    columns = dictionary.get_columns(driver, table="events", schema="analytics")
+    assert columns[0]["column_name"] == "event_id"
+    assert columns[0]["data_type"] == "VARCHAR"
+    assert columns[0]["is_nullable"] == "NO"
+
+
+@pytest.mark.parametrize("flag,expected", [("N", False), ("0", False), ("U", True), ("Y", True), ("1", True)])
+def test_teradata_sql_index_flags(flag: str, expected: bool) -> None:
+    driver = Mock()
+    driver.dialect = "teradata"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.return_value = [
+        {"index_name": "idx_event   ", "table_name": "events   ", "column_name": "event_id   ", "is_unique": flag}
+    ]
+    result = AdbcDataDictionary().get_indexes(driver, table="events")
+    assert result == [
+        {
+            "schema_name": "",
+            "table_name": "events",
+            "index_name": "idx_event",
+            "columns": ["event_id"],
+            "is_unique": expected,
+            "is_primary": False,
+        }
+    ]

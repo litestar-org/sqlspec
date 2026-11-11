@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sized
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID
 
 import sqlglot
@@ -63,6 +64,8 @@ if TYPE_CHECKING:
 
 __all__ = (
     "RECONCILE_ADBC_DIALECTS",
+    "_TERADATA_INDEX_EXISTS_SQL",
+    "_TERADATA_TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
@@ -104,8 +107,10 @@ __all__ = (
     "resolve_parameter_casts",
     "resolve_reconcile_adbc_dialect",
     "resolve_rowcount",
+    "split_teradata_table_name",
 )
 
+_MAX_TCP_PORT: Final = 65535
 COLUMN_CACHE_MAX_SIZE: int = 256
 RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "bigquery",
@@ -115,6 +120,7 @@ RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "oracle",
     "postgres",
     "snowflake",
+    "teradata",
     "sqlite",
 })
 _IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
@@ -144,6 +150,7 @@ _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
     "bigquery": ("bigquery",),
+    "teradata": ("teradata", "vantage"),
     "sqlite": ("sqlite", "flight", "flightsql"),
     "duckdb": ("duckdb", "gizmosql", "gizmo", "quack"),
     "mysql": ("mysql",),
@@ -183,6 +190,9 @@ _DRIVER_ALIASES: "dict[str, str]" = {
     "pg": "adbc_driver_postgresql.dbapi.connect",
     "snowflake": "adbc_driver_snowflake.dbapi.connect",
     "sf": "adbc_driver_snowflake.dbapi.connect",
+    "teradata": "adbc_driver_teradata.dbapi.connect",
+    "vantage": "adbc_driver_teradata.dbapi.connect",
+    "adbc-driver-flightsql": "adbc_driver_flightsql.dbapi.connect",
     "bigquery": "adbc_driver_bigquery.dbapi.connect",
     "bq": "adbc_driver_bigquery.dbapi.connect",
     "flightsql": "adbc_driver_flightsql.dbapi.connect",
@@ -206,6 +216,7 @@ _URI_PREFIX_DRIVER: "tuple[tuple[str, str], ...]" = (
     ("grpc+tls://", "adbc_driver_flightsql.dbapi.connect"),
     ("gizmosql://", "adbc_driver_flightsql.dbapi.connect"),
     ("gizmo://", "adbc_driver_flightsql.dbapi.connect"),
+    ("teradata://", "adbc_driver_teradata.dbapi.connect"),
     ("snowflake://", "adbc_driver_snowflake.dbapi.connect"),
     ("bigquery://", "adbc_driver_bigquery.dbapi.connect"),
     ("oracle://", "adbc_driver_oracle.dbapi.connect"),
@@ -219,6 +230,8 @@ _DRIVER_PATH_KEYWORDS_TO_DIALECT: "tuple[tuple[str, str], ...]" = (
     ("sqlite", "sqlite"),
     ("duckdb", "duckdb"),
     ("bigquery", "bigquery"),
+    ("teradata", "teradata"),
+    ("vantage", "teradata"),
     ("snowflake", "snowflake"),
     ("gizmosql", "duckdb"),
     ("quack", "duckdb"),
@@ -478,6 +491,8 @@ def normalize_driver_path(driver_name: str) -> str:
 def driver_from_uri(uri: str) -> "str | None":
     """Resolve a default driver connect path from a URI."""
     lowered = uri.lower()
+    if lowered.startswith("teradata://"):
+        return _resolve_teradata_driver_connect()
     if lowered.startswith(("gizmosql://", "gizmo://")):
         return _resolve_gizmosql_driver_connect()
     if lowered.startswith(("mssql://", "sqlserver://")):
@@ -493,6 +508,10 @@ def driver_from_uri(uri: str) -> "str | None":
 def driver_kind_from_driver_name(driver_name: str) -> "str | None":
     """Return a canonical driver kind based on driver name content."""
     lowered_name = driver_name.lower()
+    if is_shared_object_driver(driver_name):
+        lowered_name = lowered_name.replace("\\", "/").rsplit("/", 1)[-1]
+    if "teradata" in lowered_name or "vantage" in lowered_name:
+        return "teradata"
     if lowered_name in {"gizmosql", "gizmo"} or "gizmosql" in lowered_name:
         return "gizmosql"
     if lowered_name in {"mssql", "sqlserver", "tsql"} or "mssql" in lowered_name or "sqlserver" in lowered_name:
@@ -503,7 +522,7 @@ def driver_kind_from_driver_name(driver_name: str) -> "str | None":
         return "db2"
     if lowered_name == "quack" or "quack" in lowered_name:
         return "quack"
-    resolved = _DRIVER_ALIASES.get(lowered_name, driver_name)
+    resolved = _DRIVER_ALIASES.get(lowered_name, lowered_name)
     lowered = resolved.lower()
     for keyword, _dialect in _DRIVER_PATH_KEYWORDS_TO_DIALECT:
         if keyword in lowered:
@@ -514,6 +533,8 @@ def driver_kind_from_driver_name(driver_name: str) -> "str | None":
 def driver_kind_from_uri(uri: str) -> "str | None":
     """Return a canonical driver kind based on URI scheme."""
     lowered = uri.lower()
+    if lowered.startswith("teradata://"):
+        return "teradata"
     if lowered.startswith(("gizmosql://", "gizmo://")):
         return "gizmosql"
     if lowered.startswith(("mssql://", "sqlserver://")):
@@ -536,6 +557,8 @@ def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
         if is_shared_object_driver(driver_name):
             return _DRIVER_MANAGER_CONNECT
         lowered_driver = driver_name.lower()
+        if lowered_driver in {"teradata", "vantage"}:
+            return _resolve_teradata_driver_connect()
         if lowered_driver in {"gizmosql", "gizmo"}:
             return _resolve_gizmosql_driver_connect()
         if lowered_driver in {"mssql", "sqlserver", "tsql"}:
@@ -606,6 +629,10 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
 
     GizmoSQL connections default to DuckDB unless the backend is explicitly overridden.
     """
+    override = connection_config.get("adbc_dialect")
+    if isinstance(override, str) and override.strip():
+        normalized = override.strip().lower()
+        return "teradata" if normalized == "vantage" else normalize_dialect_name(normalized)
     backend = connection_config.get("gizmosql_backend")
     if isinstance(backend, str):
         lowered_backend = backend.lower()
@@ -615,6 +642,8 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     driver_name = connection_config.get("driver_name") or connection_config.get("driver")
     if isinstance(driver_name, str):
         lowered_driver_name = driver_name.lower()
+        if lowered_driver_name in {"teradata", "vantage"}:
+            return "teradata"
         if lowered_driver_name in {"gizmosql", "gizmo"}:
             return "duckdb"
         if lowered_driver_name in {"mssql", "sqlserver", "tsql"}:
@@ -639,6 +668,8 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     )
     if isinstance(uri, str):
         lowered_uri = uri.lower()
+        if lowered_uri.startswith("teradata://"):
+            return "teradata"
         if lowered_uri.startswith(("gizmosql://", "gizmo://", "quack://", "quack+tls://")):
             return "duckdb"
         if lowered_uri.startswith(("mssql://", "sqlserver://")):
@@ -662,6 +693,9 @@ def is_sqlite_reconcile_target(connection_config: "Mapping[str, Any]") -> bool:
     Returns:
         True when the configuration unambiguously resolves to a local SQLite ADBC target.
     """
+    override = connection_config.get("adbc_dialect")
+    if isinstance(override, str) and override.strip().lower() not in {"", "sqlite"}:
+        return False
     backend = connection_config.get("gizmosql_backend")
     if isinstance(backend, str) and backend.strip().lower() not in {"", "sqlite"}:
         return False
@@ -785,7 +819,14 @@ def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dic
     if driver_kind is None and isinstance(uri, str):
         driver_kind = driver_kind_from_uri(uri)
 
-    if (driver_kind == "sqlite" or driver_kind is None) and "uri" not in config and "db_kwargs" not in config:
+    hint = config.get("adbc_dialect")
+    non_sqlite_hint = isinstance(hint, str) and hint.strip().lower() not in {"", "sqlite"}
+    if (
+        not non_sqlite_hint
+        and (driver_kind == "sqlite" or driver_kind is None)
+        and "uri" not in config
+        and "db_kwargs" not in config
+    ):
         db_path = (
             config.pop("database", None)
             or config.pop("db", None)
@@ -817,6 +858,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Normalized connection configuration dictionary.
     """
     config = normalize_connection_aliases(connection_config)
+    config.pop("adbc_dialect", None)
 
     driver_name = config.get("driver_name") or config.get("driver")
     db_kwargs_existing = config.get("db_kwargs")
@@ -861,6 +903,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         else:
             config["password"] = fresh_token
 
+    if driver_kind == "teradata":
+        _build_or_augment_teradata_uri(config)
+    if not uses_driver_manager and driver_kind in {"mssql", "teradata"}:
+        config.pop("driver", None)
     _lift_driver_specific_db_kwargs(config, driver_kind, resolved_connect_path)
 
     config.pop("driver_name", None)
@@ -1096,6 +1142,9 @@ def build_profile() -> "DriverParameterProfile":
 
 def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
+    detected_dialect = "teradata" if detected_dialect == "vantage" else detected_dialect
+    if detected_dialect == "teradata":
+        import_optional("sqlspec.dialects.teradata")
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         "postgres" if is_postgres_dialect(detected_dialect) else detected_dialect,
         (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
@@ -1125,7 +1174,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
     elif detected_dialect == "oracle":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.POSITIONAL_COLON}
-    elif detected_dialect in {"db2", "mssql", "tsql"}:
+    elif detected_dialect in {"db2", "mssql", "tsql", "teradata"}:
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK}
 
@@ -1159,7 +1208,9 @@ def apply_driver_features(
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_pg_textsearch", True)
-    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2", "snowflake"})
+    processed_features.setdefault(
+        "enable_lowercase_column_names", resolved_dialect in {"oracle", "db2", "snowflake", "teradata", "vantage"}
+    )
     processed_features.setdefault("enable_statement_profiling", False)
 
     if json_serializer is not None:
@@ -1872,6 +1923,8 @@ def _map_enterprise_exception(
         return oracle_mapped
     if db2_mapped := _map_db2_exception(error, raw_message, lowered_message, sqlstate):
         return db2_mapped
+    if teradata_mapped := _map_teradata_exception(error, raw_message, lowered_message, sqlstate):
+        return teradata_mapped
     return _map_mssql_exception(error, raw_message, lowered_message)
 
 
@@ -2283,8 +2336,10 @@ def _normalize_db2_cli_dsn(config: "dict[str, Any]", uri: str) -> None:
 
 
 def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | None", driver_name: Any) -> None:
-    if driver_kind == "mssql":
-        config["driver"] = "mssql"
+    if driver_kind in {"mssql", "teradata"} and not (
+        isinstance(driver_name, str) and is_shared_object_driver(driver_name)
+    ):
+        config["driver"] = driver_kind
     elif isinstance(driver_name, str) and "driver" not in config:
         config["driver"] = driver_name.strip()
     if any(field in config for field in ("uri", "username", "password")):
@@ -2314,3 +2369,151 @@ def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
     if len(parts) >= _MIN_QUALIFIED_PARTS:
         return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
     return None, normalize_identifier(parts[0] if parts else table_name, "db2")
+
+
+_TERADATA_ERROR_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\s*Error\s+(\d+)\s*\]", re.IGNORECASE)
+_TERADATA_ERROR_CODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    2616: (DataError, "numeric overflow"),
+    2620: (DataError, "format or data contains a bad character"),
+    2621: (DataError, "bad character in number"),
+    2631: (DeadlockError, "transaction ABORTed due to deadlock"),
+    2644: (OperationalError, "no more room in database"),
+    2646: (OperationalError, "no more spool space"),
+    2665: (DataError, "invalid date"),
+    2700: (ForeignKeyViolationError, "referential constraint violation"),
+    2701: (ForeignKeyViolationError, "referential constraint violation"),
+    2801: (UniqueViolationError, "duplicate unique prime key"),
+    2802: (UniqueViolationError, "duplicate row error"),
+    2803: (UniqueViolationError, "secondary index uniqueness violation"),
+    2843: (OperationalError, "no more temporary table space"),
+    3110: (QueryTimeoutError, "transaction aborted due to timeout"),
+    3156: (QueryTimeoutError, "request aborted by TDWM"),
+    3523: (PermissionDeniedError, "insufficient access privilege"),
+    3524: (PermissionDeniedError, "insufficient privilege for database object"),
+    3604: (NotNullViolationError, "cannot place a null value in a not-null field"),
+    3706: (SQLParsingError, "syntax error"),
+    3707: (SQLParsingError, "syntax error"),
+    3802: (NotFoundError, "database does not exist"),
+    3807: (NotFoundError, "object does not exist"),
+    3811: (NotNullViolationError, "column is NOT NULL"),
+    3932: (OperationalError, "only an ET or null statement is legal after a DDL statement"),
+    5312: (ForeignKeyViolationError, "referential integrity violation"),
+    5313: (ForeignKeyViolationError, "referential integrity violation"),
+    5317: (CheckViolationError, "check constraint violation"),
+    5628: (NotFoundError, "column not found"),
+    6706: (DataError, "untranslatable character"),
+    6758: (DataError, "invalid time"),
+    6760: (DataError, "invalid timestamp"),
+    8017: (PermissionDeniedError, "invalid username or password"),
+}
+
+
+def _map_teradata_exception(
+    error: Any, raw_message: str, lowered_message: str, sqlstate: str | None
+) -> SQLSpecError | None:
+    """Map Teradata DBS [Error NNNN] diagnostics and ODBC SQLSTATE codes to SQLSpecError."""
+    match = _TERADATA_ERROR_CODE_PATTERN.search(raw_message)
+    has_teradata_marker = any(marker in lowered_message for marker in ("teradata", "[teradata", "teradatasql", "tdwm"))
+    code: int | None = None
+    if match is not None:
+        code = int(match.group(1))
+    elif has_teradata_marker:
+        vendor_code = getattr(error, "vendor_code", None)
+        if isinstance(vendor_code, int) and not isinstance(vendor_code, bool) and vendor_code != 0:
+            code = abs(vendor_code)
+
+    if code is not None and code in _TERADATA_ERROR_CODE_MAP:
+        exc_cls, desc = _TERADATA_ERROR_CODE_MAP[code]
+        return _create_adbc_error(error, exc_cls, desc)
+
+    if has_teradata_marker and sqlstate is not None:
+        if sqlstate in {"HYT00", "HYT01"}:
+            return _create_adbc_error(error, QueryTimeoutError, "query timeout")
+        if sqlstate == "HY008":
+            return _create_adbc_error(error, OperationCancelledError, "operation cancelled")
+        if sqlstate == "42S02":
+            return _create_adbc_error(error, NotFoundError, "object does not exist")
+
+    return None
+
+
+def _resolve_teradata_driver_connect() -> str:
+    """Resolve the optional native module or dbc-managed Teradata manifest."""
+    if import_optional("adbc_driver_teradata") is not None:
+        return "adbc_driver_teradata.dbapi.connect"
+    return _DRIVER_MANAGER_CONNECT
+
+
+def _build_or_augment_teradata_uri(config: dict[str, Any]) -> None:
+    """Encode discrete Teradata fields while preserving pre-encoded URI components.
+
+    Raises:
+        ImproperConfigurationError: If a discrete port is invalid.
+    """
+    nested = config.get("db_kwargs")
+    uri = config.get("uri") or (nested.get("uri") if isinstance(nested, dict) else None)
+    host = config.pop("host", None)
+    port = config.pop("port", None)
+    database = config.pop("database", None)
+    user = config.pop("user", None)
+    username = config.pop("username", None)
+    username = username if username is not None else user
+    password = config.pop("password", None)
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= _MAX_TCP_PORT):
+        msg = "Teradata port must be an integer between 1 and 65535"
+        raise ImproperConfigurationError(msg)
+    if uri is None and host is None:
+        if username is not None:
+            config["username"] = username
+        if password is not None:
+            config["password"] = password
+        return
+    if isinstance(uri, str) and all(value is None for value in (host, port, database, username, password)):
+        return
+    parsed = urlsplit(uri) if isinstance(uri, str) else None
+    host_text = str(host) if host is not None else (parsed.hostname or "" if parsed is not None else "")
+    if ":" in host_text and not host_text.startswith("["):
+        host_text = "[" + host_text + "]"
+    resolved_port = port if port is not None else (parsed.port if parsed is not None else 1025)
+    raw_auth = parsed.netloc.rsplit("@", 1)[0] if parsed is not None and "@" in parsed.netloc else ""
+    raw_user, separator, raw_password = raw_auth.partition(":")
+    if username is not None:
+        raw_user = quote(str(username), safe="")
+    if password is not None:
+        raw_password = quote(str(password), safe="")
+        separator = ":"
+    auth = (raw_user + separator + raw_password + "@") if raw_user or separator else ""
+    path = parsed.path if parsed is not None else ""
+    if database is not None:
+        path = "/" + quote(str(database).strip().lstrip("/"), safe="")
+    netloc = auth + host_text + (":" + str(resolved_port) if resolved_port is not None else "")
+    config["uri"] = urlunsplit((
+        "teradata",
+        netloc,
+        path,
+        parsed.query if parsed else "",
+        parsed.fragment if parsed else "",
+    ))
+    if isinstance(nested, dict) and nested.get("uri") == uri:
+        nested_copy = dict(nested)
+        nested_copy.pop("uri", None)
+        config["db_kwargs"] = nested_copy
+
+
+_TERADATA_TABLE_EXISTS_SQL: Final[str] = (
+    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.TablesV "
+    "WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND TableKind IN ('T', 'O')"
+)
+_TERADATA_INDEX_EXISTS_SQL: Final[str] = (
+    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV "
+    "WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND IndexName = ?"
+)
+
+
+def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
+    """Split a qualified Teradata table name into optional database and table identifiers."""
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return parts[-2].strip('"') or None, parts[-1].strip('"')
+    raw = parts[0] if parts else table_name
+    return None, raw.strip('"')

@@ -956,6 +956,12 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
     ("config_name", "driver", "expected"),
     [
         ("SQLSpecConfig", "AsyncpgDriver", "postgresql"),
+        ("AdbcConfig", "AdbcDriver[teradata]", "teradata"),
+        ("AdbcConfig", "AdbcDriver[postgresql]", "postgresql"),
+        ("AdbcConfig", "AdbcDriver", "adbc"),
+        ("AdbcConfig", "UnmappedCustomDriver", "adbc"),
+        ("TeradataConfig", "TeradataDriver", "teradata"),
+        ("VantageConfig", "AdbcDriver", "teradata"),
         ("SybaseConfig", "PymssqlDriver", "sybase"),
         ("SqlanywhereConfig", "SqlanywhereDriver", "sqlanywhere"),
         ("SQLSpecConfig", "SybaseDriver", "sybase"),

@@ -64,14 +64,21 @@ class SpanManager:
         connection_info: dict[str, Any] | None = None,
         storage_backend: str | None = None,
         correlation_id: str | None = None,
+        db_system_hint: str | None = None,
     ) -> Any:
         """Start a query span with SQLSpec semantic attributes."""
 
         if not self._enabled:
             return None
         db_system = resolve_db_system(adapter)
-        if db_system == "other_sql" and driver:
-            db_system = resolve_db_system(driver)
+        if db_system in {"other_sql", "adbc"}:
+            for candidate in (driver, db_system_hint):
+                if candidate:
+                    candidate_system = resolve_db_system(candidate)
+                    if db_system == "other_sql" or candidate_system not in {"other_sql", "adbc"}:
+                        db_system = candidate_system
+                        if candidate_system not in {"other_sql", "adbc"}:
+                            break
         attributes: dict[str, Any] = {"db.system": db_system, "db.operation": operation, "sqlspec.driver": driver}
         if sql:
             attributes["db.statement"] = sql

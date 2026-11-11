@@ -61,6 +61,14 @@ class AdbcPoolConfig(TypedDict):
 class AdbcConnectionParams(TypedDict):
     """ADBC connection parameters across PyPI-installable Arrow Database Connectivity drivers."""
 
+    host: NotRequired[str]
+    """Teradata server hostname or IP address."""
+    port: NotRequired[int]
+    """Teradata server port, defaulting to 1025."""
+    user: NotRequired[str]
+    """Alias for the Teradata connection username."""
+    adbc_dialect: NotRequired[str]
+    """Explicit database dialect for generic FlightSQL transports."""
     uri: NotRequired[str]
     """Backend connection URI (such as ``postgresql://``, ``sqlite://``, ``duckdb://``, ``grpc+tls://``, ``oracle://``, ``db2://``, or ``quack://``)."""
     dsn: NotRequired[str]
@@ -351,7 +359,7 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
-        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake"}:
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake", "teradata", "vantage"}:
             features_dict["enable_lowercase_column_names"] = True
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)

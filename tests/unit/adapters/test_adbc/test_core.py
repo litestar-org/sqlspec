@@ -1006,3 +1006,134 @@ def test_adbc_exception_isolation() -> None:
         mp.setattr(adbc_driver_mod, "_fetch_record_batch", lambda _c: iter([batch]))
         source.start()
         assert source._reader is not None
+
+
+@pytest.mark.parametrize("driver", ["teradata", "vantage", "/opt/libadbc_driver_teradata.so"])
+def test_teradata_dialect_routing(driver: str) -> None:
+    assert resolve_dialect_from_config({"driver": driver}) == "teradata"
+
+
+def test_teradata_flightsql_dialect_override() -> None:
+    assert resolve_dialect_from_config({"driver": "flightsql", "adbc_dialect": "vantage"}) == "teradata"
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (2801, UniqueViolationError),
+        (3807, NotFoundError),
+        (2631, DeadlockError),
+        (3706, SQLParsingError),
+        (2646, OperationalError),
+        (2616, DataError),
+        (2620, DataError),
+        (2621, DataError),
+        (2665, DataError),
+        (6706, DataError),
+        (6758, DataError),
+        (6760, DataError),
+        (2700, ForeignKeyViolationError),
+        (2701, ForeignKeyViolationError),
+        (5312, ForeignKeyViolationError),
+        (5313, ForeignKeyViolationError),
+        (2802, UniqueViolationError),
+        (2803, UniqueViolationError),
+        (2644, OperationalError),
+        (2843, OperationalError),
+        (3932, OperationalError),
+        (3110, QueryTimeoutError),
+        (3156, QueryTimeoutError),
+        (3523, PermissionDeniedError),
+        (3524, PermissionDeniedError),
+        (8017, PermissionDeniedError),
+        (3604, NotNullViolationError),
+        (3811, NotNullViolationError),
+        (3707, SQLParsingError),
+        (3802, NotFoundError),
+        (5628, NotFoundError),
+        (5317, CheckViolationError),
+    ],
+)
+def test_teradata_error_mapping(code: int, expected: type[SQLSpecError]) -> None:
+    error = DatabaseError(
+        f"[Teradata Database] [Error {code}] request failed", status_code=AdbcStatusCode.INTERNAL, sqlstate="HY000"
+    )
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected)
+    assert mapped.__cause__ is error
+
+
+@pytest.mark.parametrize("port", [0, 70000, True, "bad"])
+def test_teradata_invalid_port(port: Any) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError, match="port"):
+        build_connection_config({"driver": "teradata", "host": "td.corp", "port": port})
+
+
+@pytest.mark.parametrize(
+    "config,expected",
+    [
+        (
+            {
+                "driver": "teradata",
+                "host": "td.corp",
+                "username": "u:1",
+                "password": "p@ss/w?rd#1%2",
+                "database": "mart",
+            },
+            "teradata://u%3A1:p%40ss%2Fw%3Frd%231%252@td.corp:1025/mart",
+        ),
+        ({"uri": "TERADATA://u%3A1:p%40ss@td.corp:1025/prod"}, "TERADATA://u%3A1:p%40ss@td.corp:1025/prod"),
+        (
+            {
+                "uri": "teradata://old:old@td.corp:1025/prod?mode=x#f",
+                "username": "u@1",
+                "password": "p#1",
+                "database": " /new db",
+            },
+            "teradata://u%401:p%231@td.corp:1025/new%20db?mode=x#f",
+        ),
+        (
+            {"driver": "vantage", "host": "::1", "user": "dbc", "password": "dbc", "port": 1026},
+            "teradata://dbc:dbc@[::1]:1026",
+        ),
+        (
+            {
+                "uri": "teradata://td.corp:1025",
+                "user": "svc",
+                "auth_token_provider": lambda: "t@k#1",
+                "database": "sales",
+            },
+            "teradata://svc:t%40k%231@td.corp:1025/sales",
+        ),
+        (
+            {"driver": "teradata", "db_kwargs": {"uri": "teradata://td.corp:1025"}, "user": "svc"},
+            "teradata://svc@td.corp:1025",
+        ),
+    ],
+)
+def test_teradata_uri_encoding(config: dict[str, Any], expected: str) -> None:
+    result = build_connection_config(config)
+    assert result == {"driver": "teradata", "db_kwargs": {"uri": expected}}
+
+
+@pytest.mark.parametrize("option_supported", [True, False])
+def test_teradata_autocommit_only_begin(option_supported: bool) -> None:
+    from sqlspec.exceptions import TransactionError
+
+    error = NotSupportedError("autocommit only")
+    native = Mock()
+    if option_supported:
+        native.get_option.return_value = "true"
+    else:
+        native.get_option.side_effect = error
+    native.set_autocommit.side_effect = error
+    connection = Mock(adbc_connection=native, _autocommit=True)
+    driver = AdbcDriver(connection, dialect="teradata")
+    with pytest.raises(TransactionError, match="autocommit") as exc:
+        driver.begin()
+    assert exc.value.__cause__ is error
+    with pytest.raises(TransactionError, match="autocommit"):
+        driver.begin()
+    assert native.set_autocommit.call_args_list == [call(False), call(False)]

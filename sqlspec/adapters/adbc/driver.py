@@ -49,7 +49,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
+from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
@@ -63,13 +63,14 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import CachedQuery, ExecutionResult
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
-_DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake"})
+_DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake", "teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
@@ -258,7 +259,13 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
-        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2", "snowflake"}:
+        if not explicit_lowercase and (dialect or self._detected_dialect) in {
+            "oracle",
+            "db2",
+            "snowflake",
+            "teradata",
+            "vantage",
+        }:
             normalized_features["enable_lowercase_column_names"] = True
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
@@ -502,6 +509,12 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._stream_closers.extend((source.close, stream.close))
         return stream
 
+    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
+        """Attach runtime and expose the concrete ADBC backend to telemetry."""
+        super().attach_observability(runtime)
+        if self._dialect_name and self._dialect_name != "sql":
+            runtime.set_db_system_hint(self._dialect_name)
+
     def begin(self) -> None:
         """Begin a transaction, disabling native autocommit when its state is available."""
         if self._transaction_active:
@@ -516,9 +529,17 @@ class AdbcDriver(SyncDriverAdapterBase):
                 pass
             except AdbcNativeError as exc:
                 raise create_mapped_exception(exc) from exc
-        if mode == "true" and native is not None:
+        if (
+            native is not None
+            and callable(getattr(native, "set_autocommit", None))
+            and (mode == "true" or (mode is None and getattr(self.connection, "_autocommit", None) is True))
+        ):
             try:
                 native.set_autocommit(False)
+            except AdbcNotSupportedError as exc:
+                self._previous_autocommit = None
+                msg = f"ADBC {self._dialect_name} cannot disable autocommit; this driver supports autocommit-only operations."
+                raise TransactionError(msg) from exc
             except BaseException as exc:
                 with contextlib.suppress(BaseException):
                     native.set_autocommit(True)
