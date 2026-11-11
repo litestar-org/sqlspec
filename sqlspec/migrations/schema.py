@@ -50,6 +50,7 @@ _ALIGN_COLUMN_REMEDY: Final[str] = (
 
 _TYPE_FAMILIES: Final[dict[str, str]] = {
     "tinyint": "numeric",
+    "byteint": "numeric",
     "smallint": "numeric",
     "mediumint": "numeric",
     "int": "numeric",
@@ -103,6 +104,8 @@ _TYPE_FAMILIES: Final[dict[str, str]] = {
     "name": "text",
     "citext": "text",
     "binary": "binary",
+    "byte": "binary",
+    "varbyte": "binary",
     "varbinary": "binary",
     "blob": "binary",
     "tinyblob": "binary",
