@@ -59,7 +59,7 @@ def test_teradata_adk_public_pagination_and_atomic_delete(monkeypatch) -> None:
     assert statements[0][1] == ("app", "user", 11, 15)
     store.delete_session("app", "user", "session")
     assert statements[-2] == (
-        'DELETE FROM "adk_event" WHERE app_name = ? AND user_id = ? AND session_id = ?',
+        'DELETE FROM "ADK_EVENT" WHERE app_name = ? AND user_id = ? AND session_id = ?',
         ("app", "user", "session"),
     )
     assert states[-2:] == [False, False]
@@ -99,7 +99,7 @@ async def test_teradata_litestar_crud(teradata_connection) -> None:
     await store.delete("session")
     assert "WHERE session_id = ?" in cursor.execute.call_args.args[0]
     await store.delete_all()
-    assert cursor.execute.call_args.args[0] == 'DELETE FROM "litestar_session" ALL'
+    assert cursor.execute.call_args.args[0] == 'DELETE FROM "LITESTAR_SESSION" ALL'
     assert await store.delete_expired() == 1
     cursor.fetchone.return_value = None
     assert await store.get("missing") is None
@@ -260,7 +260,7 @@ def test_teradata_event_queue_catalog_lifecycle(monkeypatch) -> None:
     def execute(sql):
         statements.append(sql)
         if sql.startswith("CREATE MULTISET TABLE"):
-            tables.add("sqlspec_event_queue")
+            tables.add("SQLSPEC_EVENT_QUEUE")
         elif sql.startswith("CREATE INDEX"):
             indexes.add("idx_sqlspec_event_queue_channel_status")
         elif sql.startswith("DROP TABLE"):
@@ -272,7 +272,7 @@ def test_teradata_event_queue_catalog_lifecycle(monkeypatch) -> None:
     store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
     store.create_table()
     assert len(statements) == 2
-    assert store.get_schema_targets()[0].table_name == "sqlspec_event_queue"
+    assert store.get_schema_targets()[0].table_name == "SQLSPEC_EVENT_QUEUE"
     store.create_table()
     assert len(statements) == 2
     store.drop_table()
@@ -300,8 +300,8 @@ def test_teradata_adk_and_memory_catalog_lifecycle(monkeypatch) -> None:
     store.reconcile_companion_objects_sync(driver)
     memory.reconcile_companion_objects_sync(driver)
     assert len(statements) == 11
-    assert statements[0] == 'CREATE INDEX "idx_adk_session_app_user" (app_name, user_id) ON "adk_session"'
-    assert statements[-1] == 'CREATE INDEX "idx_adk_memory_timestamp" (timestamp) ON "adk_memory"'
+    assert statements[0] == 'CREATE INDEX "idx_ADK_SESSION_app_user" (app_name, user_id) ON "ADK_SESSION"'
+    assert statements[-1] == 'CREATE INDEX "idx_ADK_MEMORY_timestamp" (timestamp) ON "ADK_MEMORY"'
     store.drop_tables()
     memory.drop_tables()
     assert len(statements) == 11
@@ -428,7 +428,7 @@ async def test_teradata_litestar_catalog_lifecycle(monkeypatch) -> None:
     def execute(sql):
         statements.append(sql)
         if sql.startswith("CREATE MULTISET TABLE"):
-            tables.add("litestar_session")
+            tables.add("LITESTAR_SESSION")
         elif sql.startswith("DROP TABLE"):
             tables.clear()
 
@@ -447,11 +447,11 @@ async def test_teradata_litestar_catalog_lifecycle(monkeypatch) -> None:
     monkeypatch.setattr(TeradataConfig, "provide_session", session)
     store = TeradataStore(TeradataConfig(connection_config={"host": "localhost"}))
     await store.create_table()
-    assert statements[0].startswith('CREATE MULTISET TABLE "litestar_session"')
+    assert statements[0].startswith('CREATE MULTISET TABLE "LITESTAR_SESSION"')
     assert "CREATE INDEX" in statements[1]
     await store.drop_table()
     await store.drop_table()
-    assert statements[-1] == 'DROP TABLE "litestar_session"'
+    assert statements[-1] == 'DROP TABLE "LITESTAR_SESSION"'
 
 
 @pytest.mark.anyio
@@ -487,7 +487,7 @@ def test_teradata_extension_targets_preserve_database_qualifier() -> None:
         TeradataEventQueueStore(config).get_schema_targets()[0],
     ]
     assert [(target.schema, target.table_name) for target in targets] == [
-        ("app", "sessions"),
-        ("app", "http_sessions"),
-        ("app", "queue"),
+        ("APP", "SESSIONS"),
+        ("APP", "HTTP_SESSIONS"),
+        ("APP", "QUEUE"),
     ]

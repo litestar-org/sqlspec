@@ -388,7 +388,7 @@ skip = 'uv.lock'
 
 [tool.coverage.run]
 branch = true
-concurrency = ["multiprocessing"]
+concurrency = ["multiprocessing", "thread"]
 disable_warnings = ["no-data-collected", "module-not-measured", "module-not-imported"]
 omit = ["*/tests/*"]
 parallel = true

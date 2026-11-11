@@ -153,6 +153,7 @@ class TeradataConnectionPool:
             if should_wait:
                 continue
             now = time.monotonic()
+            created = now
             connection = None
             try:
                 if entry is not None:

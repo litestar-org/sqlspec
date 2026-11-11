@@ -797,8 +797,8 @@ def test_get_trace_context_with_otel(monkeypatch) -> None:
     def get_current_span() -> "FakeSpan":
         return FakeSpan()
 
-    trace_module.get_current_span = get_current_span
-    opentelemetry_module.trace = trace_module
+    monkeypatch.setattr(trace_module, "get_current_span", get_current_span, raising=False)
+    monkeypatch.setattr(opentelemetry_module, "trace", trace_module, raising=False)
 
     monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
     monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)

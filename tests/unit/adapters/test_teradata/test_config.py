@@ -1,7 +1,7 @@
 """Exercise session hooks and exceptional lease cleanup through public configs."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,7 +37,7 @@ def test_config_session_releases_connection_after_success(connections: list[Any]
 
 
 def test_session_prepare_hook_failure_discards_lease(connections: list[Any]) -> None:
-    def fail(session: Any) -> None:
+    def fail(session: Any) -> NoReturn:
         raise ValueError("session setup failed")
 
     from sqlspec.adapters.teradata import TeradataSessionContext
