@@ -42,6 +42,7 @@ DIALECT_FLIGHTSQL: Final = "flightsql"
 DIALECT_ORACLE: Final = "oracle"
 DIALECT_DB2: Final = "db2"
 DIALECT_MSSQL: Final = "mssql"
+DIALECT_TERADATA: Final = "teradata"
 
 
 class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
@@ -103,6 +104,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Return drop statements in reverse dependency order."""
         dialect = self.dialect
 
+        if dialect == DIALECT_TERADATA:
+            return [f"DROP TABLE {self.table_name}"]
+
         if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
             return [f"DROP TABLE IF EXISTS {self.table_name}"]
 
@@ -119,10 +123,15 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             ]
 
         if dialect == DIALECT_MSSQL:
-            return [f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NOT NULL DROP TABLE {self.table_name}"]
+            return [
+                f"IF OBJECT_ID(N'{self.table_name}', N'U') IS NOT NULL DROP TABLE {self.table_name}"
+            ]
 
         index_name = self._index_name()
-        return [f"DROP INDEX IF EXISTS {index_name}", f"DROP TABLE IF EXISTS {self.table_name}"]
+        return [
+            f"DROP INDEX IF EXISTS {index_name}",
+            f"DROP TABLE IF EXISTS {self.table_name}",
+        ]
 
     def _detect_dialect_from_config(self) -> str:
         """Detect ADBC driver dialect from connection config.
@@ -131,7 +140,18 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             Dialect identifier for DDL generation.
         """
         connection_config = self._config.connection_config
-        driver_name = connection_config.get("driver_name") or connection_config.get("driver") or ""
+        from sqlspec.adapters.adbc.core import resolve_reconcile_adbc_dialect
+
+        classified = resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
+        if classified == DIALECT_TERADATA:
+            return DIALECT_TERADATA
+        driver_name = (
+            connection_config.get("driver_name")
+            or connection_config.get("driver")
+            or ""
+        )
         uri = connection_config.get("uri", "")
 
         driver_lower = str(driver_name).lower() if driver_name else ""
@@ -144,15 +164,24 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 return normalized_gizmo
 
         is_flight_or_grpc = (
-            "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith(("grpc://", "grpc+tls://"))
+            "flightsql" in driver_lower
+            or "grpc" in driver_lower
+            or uri_lower.startswith(("grpc://", "grpc+tls://"))
         )
         if is_flight_or_grpc:
             explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
             if isinstance(explicit_dialect, str) and explicit_dialect.strip():
                 normalized_explicit = normalize_dialect_name(explicit_dialect.strip())
-                if normalized_explicit in RECONCILE_ADBC_DIALECTS and normalized_explicit != DIALECT_SQLITE:
+                if (
+                    normalized_explicit in RECONCILE_ADBC_DIALECTS
+                    and normalized_explicit != DIALECT_SQLITE
+                ):
                     return normalized_explicit
-            if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
+            if (
+                "flightsql" in driver_lower
+                or "grpc" in driver_lower
+                or uri_lower.startswith("grpc://")
+            ):
                 return DIALECT_FLIGHTSQL
 
         resolved = resolve_dialect_from_config(connection_config)
@@ -160,12 +189,19 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             return DIALECT_POSTGRESQL
         if resolved in {"mssql", "tsql"}:
             return DIALECT_MSSQL
-        if resolved in {DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE, DIALECT_ORACLE, DIALECT_DB2}:
+        if resolved in {
+            DIALECT_DUCKDB,
+            DIALECT_BIGQUERY,
+            DIALECT_SNOWFLAKE,
+            DIALECT_ORACLE,
+            DIALECT_DB2,
+        }:
             return resolved
         if resolved == DIALECT_SQLITE and (
             "sqlite" in driver_lower
             or uri_lower.startswith("sqlite://")
-            or str(connection_config.get("gizmosql_backend", "")).lower() == DIALECT_SQLITE
+            or str(connection_config.get("gizmosql_backend", "")).lower()
+            == DIALECT_SQLITE
         ):
             return DIALECT_SQLITE
 
@@ -202,6 +238,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Return payload, metadata, and timestamp column types for the dialect."""
         dialect = self.dialect
 
+        if dialect == DIALECT_TERADATA:
+            return "JSON", "JSON", "TIMESTAMP(6) WITH TIME ZONE"
         if dialect == DIALECT_POSTGRESQL:
             return "JSONB", "JSONB", "TIMESTAMPTZ"
         if dialect == DIALECT_DUCKDB:
@@ -222,6 +260,17 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
     def _table_ddl(self) -> str:
         """Build dialect-specific CREATE TABLE SQL."""
         dialect = self.dialect
+
+        if dialect == DIALECT_TERADATA:
+            return (
+                f"CREATE MULTISET TABLE {self.table_name} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, "
+                "channel VARCHAR(128) NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, "
+                "status VARCHAR(32) DEFAULT 'pending' NOT NULL, "
+                "available_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+                "lease_expires_at TIMESTAMP(6) WITH TIME ZONE, attempts INTEGER DEFAULT 0 NOT NULL, "
+                "created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+                "acknowledged_at TIMESTAMP(6) WITH TIME ZONE)"
+            )
 
         if dialect == DIALECT_BIGQUERY:
             return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id STRING NOT NULL, channel STRING NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, status STRING NOT NULL DEFAULT 'pending', available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), lease_expires_at TIMESTAMP, attempts INT64 NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), acknowledged_at TIMESTAMP) CLUSTER BY channel, status, available_at"
@@ -250,6 +299,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Build dialect-specific index SQL."""
         dialect = self.dialect
 
+        if dialect == DIALECT_TERADATA:
+            return f"CREATE INDEX {self._index_name()} (channel, status, available_at) ON {self.table_name}"
+
         if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
             return None
 
@@ -272,6 +324,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             Idempotent DDL statement.
         """
         dialect = self.dialect
+        if dialect == DIALECT_TERADATA:
+            return statement
         if dialect == DIALECT_ORACLE:
             escaped = statement.replace("'", "''")
             if object_type == "table":
@@ -281,9 +335,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         if dialect == DIALECT_DB2:
             escaped = statement.replace("'", "''")
             if object_type == "table":
-                return (
-                    f"BEGIN DECLARE CONTINUE HANDLER FOR SQLSTATE '42710' BEGIN END; EXECUTE IMMEDIATE '{escaped}'; END"
-                )
+                return f"BEGIN DECLARE CONTINUE HANDLER FOR SQLSTATE '42710' BEGIN END; EXECUTE IMMEDIATE '{escaped}'; END"
             if object_type == "index":
                 return f"BEGIN DECLARE CONTINUE HANDLER FOR SQLSTATE '01550' BEGIN END; DECLARE CONTINUE HANDLER FOR SQLSTATE '42710' BEGIN END; EXECUTE IMMEDIATE '{escaped}'; END"
         if dialect == DIALECT_MSSQL:
@@ -292,9 +344,15 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             if object_type == "index":
                 return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{self._index_name()}' AND object_id = OBJECT_ID(N'{self.table_name}')) BEGIN {statement}; END"
         upper_statement = statement.upper()
-        if object_type == "table" and "CREATE TABLE IF NOT EXISTS" not in upper_statement:
+        if (
+            object_type == "table"
+            and "CREATE TABLE IF NOT EXISTS" not in upper_statement
+        ):
             return statement.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
-        if object_type == "index" and "CREATE INDEX IF NOT EXISTS" not in upper_statement:
+        if (
+            object_type == "index"
+            and "CREATE INDEX IF NOT EXISTS" not in upper_statement
+        ):
             return statement.replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1)
         return statement
 
@@ -303,9 +361,17 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         dialect = self.dialect
         if dialect == DIALECT_DB2:
             schema, table = split_db2_table_name(self.table_name)
-            return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="db2")
-        parse_dialect = "tsql" if dialect == DIALECT_MSSQL else ("sqlite" if dialect == DIALECT_FLIGHTSQL else dialect)
-        return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=parse_dialect)
+            return SchemaTarget.from_ddl(
+                table, self.create_statements()[0], schema=schema, dialect="db2"
+            )
+        parse_dialect = (
+            "tsql"
+            if dialect == DIALECT_MSSQL
+            else ("sqlite" if dialect == DIALECT_FLIGHTSQL else dialect)
+        )
+        return SchemaTarget.from_ddl(
+            self.table_name, self.create_statements()[0], dialect=parse_dialect
+        )
 
     def _index_existence_target(self) -> "tuple[str | None, str] | None":
         """Return optional schema and table name for companion queue index catalog lookup."""

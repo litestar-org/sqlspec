@@ -12,7 +12,11 @@ from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 import pytest
-from pytest_databases.docker.snowflake import SNOWFLAKE_HTTP_PORT, SnowflakeService, check_snowflake_health
+from pytest_databases.docker.snowflake import (
+    SNOWFLAKE_HTTP_PORT,
+    SnowflakeService,
+    check_snowflake_health,
+)
 from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -648,3 +652,58 @@ def _prepare_gizmosql_test_table(session: AdbcDriver) -> None:
     )
     session.execute("DELETE FROM test_table_adbc")
     session.commit()
+
+
+@pytest.fixture
+def adbc_teradata_config() -> Generator[AdbcConfig, None, None]:
+    """Yield a native Columnar Teradata configuration when explicitly configured."""
+    import os
+
+    uri = os.getenv("SQLSPEC_TERADATA_ADBC_URI", "").strip()
+    if not uri:
+        pytest.skip("SQLSPEC_TERADATA_ADBC_URI is not set")
+    pytest.importorskip("adbc_driver_manager")
+    config = AdbcConfig(connection_config={"driver": os.getenv("SQLSPEC_TERADATA_ADBC_DRIVER", "teradata"), "uri": uri})
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def adbc_teradata_session(adbc_teradata_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+    """Yield a native Teradata ADBC session."""
+    with adbc_teradata_config.provide_session() as session:
+        yield session
+
+
+@pytest.fixture
+def adbc_teradata_flightsql_config() -> Generator[AdbcConfig, None, None]:
+    """Yield a Teradata Flight SQL configuration when explicitly configured."""
+    import os
+
+    from sqlspec import StatementConfig
+
+    uri = os.getenv("SQLSPEC_TERADATA_FLIGHTSQL_URI", "").strip()
+    if not uri:
+        pytest.skip("SQLSPEC_TERADATA_FLIGHTSQL_URI is not set")
+    pytest.importorskip("adbc_driver_flightsql")
+    options: dict[str, Any] = {"driver": "flightsql", "uri": uri}
+    for key in ("username", "password"):
+        value = os.getenv(f"SQLSPEC_TERADATA_FLIGHTSQL_{key.upper()}")
+        if value:
+            options[key] = value
+    if os.getenv("SQLSPEC_TERADATA_FLIGHTSQL_TLS_SKIP_VERIFY", "").lower() in {"1", "true"}:
+        options["db_kwargs"] = {"adbc.flight.sql.client_option.tls_skip_verify": "true"}
+    config = AdbcConfig(connection_config=options, statement_config=StatementConfig(dialect="teradata"))
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def adbc_teradata_flightsql_session(adbc_teradata_flightsql_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+    """Yield a Teradata Flight SQL session."""
+    with adbc_teradata_flightsql_config.provide_session() as session:
+        yield session

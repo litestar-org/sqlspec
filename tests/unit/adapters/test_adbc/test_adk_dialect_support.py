@@ -1189,3 +1189,11 @@ def test_adbc_memory_companion_hook_skips_catalog_when_fts_disabled_and_propagat
         fts_store.reconcile_companion_objects_sync(fts_driver)
     assert all("CREATE TRIGGER" not in str(call.args[0]) for call in fts_driver.execute.call_args_list)
     assert fts_driver.commit.call_count == 0
+
+
+def test_teradata_adk_schema_targets() -> None:
+    config = AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"})
+    store = AdbcADKStore(config)
+    targets = store.get_schema_targets_sync(None)
+    assert len(targets) == 5
+    assert all(str(target.create_statement).startswith("CREATE MULTISET TABLE") for target in targets)

@@ -79,7 +79,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+    async def get(
+        self, key: str, renew_for: "int | timedelta | None" = None
+    ) -> "bytes | None":
         """Get a session value by key.
 
         Args:
@@ -91,7 +93,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         return await async_(self._get)(key, renew_for)
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+    async def set(
+        self,
+        key: str,
+        value: "str | bytes",
+        expires_in: "int | timedelta | None" = None,
+    ) -> None:
         """Store a session value.
 
         Args:
@@ -149,8 +156,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             return
         connection_config = getattr(self._config, "connection_config", None)
         explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
-        if isinstance(connection_config, Mapping) and (connection_config.get("gizmosql_backend") or explicit_dialect):
-            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+        if isinstance(connection_config, Mapping) and (
+            connection_config.get("gizmosql_backend")
+            or connection_config.get("adbc_dialect")
+            or explicit_dialect
+        ):
+            resolved = resolve_reconcile_adbc_dialect(
+                connection_config, explicit_dialect
+            )
             if resolved is not None:
                 self._dialect = resolved
                 return
@@ -170,7 +183,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         connection_config = getattr(self._config, "connection_config", None)
         if isinstance(connection_config, Mapping):
             explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
-            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            resolved = resolve_reconcile_adbc_dialect(
+                connection_config, explicit_dialect
+            )
             if resolved is not None:
                 self._dialect = resolved
                 return resolved
@@ -179,10 +194,19 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
     def _schema_target(self) -> SchemaTarget:
         """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
         dialect = self._resolve_schema_dialect()
-        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        parse_dialect = (
+            "postgres"
+            if is_postgres_dialect(dialect)
+            else ("tsql" if dialect == "mssql" else dialect)
+        )
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
-            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+            return SchemaTarget.from_ddl(
+                catalog_table,
+                self._table_ddl(),
+                schema=schema_name,
+                dialect=parse_dialect,
+            )
         raw_schema, dot, raw_table = self._table_name.partition(".")
         if dot:
             schema_name = raw_schema.strip('"`[]') or None
@@ -190,7 +214,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         else:
             schema_name = None
             bare_table = self._table_name.strip('"`[]')
-        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        return SchemaTarget.from_ddl(
+            bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect
+        )
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return dialect-specific companion index definitions for ADBC session storage."""
@@ -213,19 +239,41 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     END IF;
             END;
             """.strip()
-            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+            return [
+                CompanionIndex(
+                    name=index_name, table=bare_table, schema=schema_name, ddl=ddl
+                )
+            ]
+
+        if dialect == "teradata":
+            schema, _, table = self._table_name.rpartition(".")
+            name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            return [
+                CompanionIndex(
+                    name=name,
+                    table=table,
+                    schema=schema or None,
+                    ddl=f"CREATE INDEX {name} (expires_at) ON {self._table_name}",
+                )
+            ]
 
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
             raw_index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
             index_name = normalize_identifier(raw_index_name, "db2")
             ddl = f"CREATE INDEX {raw_index_name} ON {self._table_name}(expires_at)"
-            return [CompanionIndex(name=index_name, table=catalog_table, schema=schema_name, ddl=ddl)]
+            return [
+                CompanionIndex(
+                    name=index_name, table=catalog_table, schema=schema_name, ddl=ddl
+                )
+            ]
 
         if dialect == "mssql":
             raw_schema, dot, raw_table = self._table_name.partition(".")
             schema_name = raw_schema.strip('[]"') or None if dot else None
-            bare_table = raw_table.strip('[]"') if dot else self._table_name.strip('[]"')
+            bare_table = (
+                raw_table.strip('[]"') if dot else self._table_name.strip('[]"')
+            )
             index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
             ddl = f"""
             IF NOT EXISTS (
@@ -236,7 +284,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             CREATE INDEX {index_name}
             ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
             """.strip()
-            return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+            return [
+                CompanionIndex(
+                    name=index_name, table=bare_table, schema=schema_name, ddl=ddl
+                )
+            ]
 
         return super().get_companion_indexes()
 
@@ -252,7 +304,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         with self._config.provide_session() as driver:
             dialect_value = driver.dialect
             raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
-            self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
+            self._dialect = (
+                "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
+            )
 
         assert self._dialect is not None
         return self._dialect
@@ -264,6 +318,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             SQL statement to create the sessions table with proper indexes.
         """
         dialect = self._get_dialect()
+
+        if dialect == "teradata":
+            return (
+                f"CREATE MULTISET TABLE {self._table_name} ("
+                "session_id VARCHAR(255) NOT NULL PRIMARY KEY, data BLOB NOT NULL, "
+                "expires_at TIMESTAMP(6) WITH TIME ZONE)"
+            )
 
         if is_postgres_dialect(dialect):
             return f"""
@@ -427,6 +488,25 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table using ADBC driver."""
         dialect = self._get_dialect()
+        if dialect == "teradata":
+            from sqlspec.adapters.adbc.core import (
+                _TERADATA_TABLE_EXISTS_SQL,
+                split_teradata_table_name,
+            )
+
+            schema, table = split_teradata_table_name(self._table_name)
+            with self._config.provide_session() as driver:
+                if (
+                    driver.select_one_or_none(
+                        _TERADATA_TABLE_EXISTS_SQL, (schema, table)
+                    )
+                    is None
+                ):
+                    driver.execute(self._table_ddl())
+                    driver.commit()
+                self.reconcile_companion_objects_sync(driver)
+            self._log_table_created()
+            return
         if dialect == "oracle":
             table_block = self._table_ddl().strip()
             index_block = f"""
@@ -453,12 +533,24 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
-            index_name = normalize_identifier(f"idx_{self._table_name}_expires_at", "db2")
+            index_name = normalize_identifier(
+                f"idx_{self._table_name}_expires_at", "db2"
+            )
             with self._config.provide_session() as driver:
                 try:
-                    if driver.select_one_or_none(_DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table)) is None:
+                    if (
+                        driver.select_one_or_none(
+                            _DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table)
+                        )
+                        is None
+                    ):
                         driver.execute(self._table_ddl().strip())
-                    if driver.select_one_or_none(_DB2_INDEX_EXISTS_SQL, (schema_name, index_name)) is None:
+                    if (
+                        driver.select_one_or_none(
+                            _DB2_INDEX_EXISTS_SQL, (schema_name, index_name)
+                        )
+                        is None
+                    ):
                         driver.execute(
                             f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}(expires_at)"
                         )
@@ -489,6 +581,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         dialect = self._get_dialect()
 
+        if dialect == "teradata":
+            return [f"DROP TABLE {self._table_name}"]
+
         if dialect in {"bigquery", "snowflake"}:
             return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
@@ -500,7 +595,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
-            schema_filter = f"TABSCHEMA = '{schema_name}'" if schema_name is not None else "TABSCHEMA = CURRENT SCHEMA"
+            schema_filter = (
+                f"TABSCHEMA = '{schema_name}'"
+                if schema_name is not None
+                else "TABSCHEMA = CURRENT SCHEMA"
+            )
             return [
                 f"BEGIN IF EXISTS (SELECT 1 FROM SYSCAT.TABLES WHERE {schema_filter} AND TABNAME = '{catalog_table}') THEN EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}'; END IF; END"
             ]
@@ -517,9 +616,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 f"DROP TABLE IF EXISTS {self._table_name}",
             ]
 
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+        return [
+            f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at",
+            f"DROP TABLE IF EXISTS {self._table_name}",
+        ]
 
-    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+    def _get(
+        self, key: str, renew_for: "int | timedelta | None" = None
+    ) -> "bytes | None":
         """Synchronous implementation of get using ADBC driver."""
         dialect = self._get_dialect()
         p1 = self._get_param_placeholder(1)
@@ -545,7 +649,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 return None
 
             data = result["data"] if "data" in result else result["DATA"]
-            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
+            expires_at = (
+                result.get("expires_at")
+                if "expires_at" in result
+                else result.get("EXPIRES_AT")
+            )
 
             if renew_for is not None and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
@@ -566,7 +674,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     return data.encode("utf-8")
             return bytes(data)
 
-    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+    def _set(
+        self,
+        key: str,
+        value: "str | bytes",
+        expires_in: "int | timedelta | None" = None,
+    ) -> None:
         """Synchronous implementation of set using ADBC driver with dialect-specific UPSERT.
 
         Uses separate SQL statements for ``NULL`` vs non-``NULL`` ``expires_at``
@@ -616,15 +729,27 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             VALUES ({p1}, {p2}, {p3})
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
-        elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
+        elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql", "teradata"}:
             bind_data: bytes | str = data.hex() if dialect == "snowflake" else data
-            insert_data_expr = f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
-            update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
+            insert_data_expr = (
+                f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
+            )
+            update_data_expr = (
+                f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
+            )
             with self._config.provide_session() as driver:
                 try:
                     check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = (
+                        (
+                            result.get("count")
+                            if "count" in result
+                            else result.get("COUNT", 0)
+                        )
+                        if result
+                        else 0
+                    )
                     exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
@@ -751,7 +876,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             if result is None:
                 return None
 
-            expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
+            expires_at = (
+                result.get("expires_at")
+                if "expires_at" in result
+                else result.get("EXPIRES_AT")
+            )
             if expires_at is None:
                 return None
 
@@ -778,12 +907,22 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts} RETURNING session_id"
         else:
             count_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE expires_at <= {current_ts}"
-            delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
+            delete_sql = (
+                f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
+            )
 
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = (
+                        (
+                            result.get("count")
+                            if "count" in result
+                            else result.get("COUNT", 0)
+                        )
+                        if result
+                        else 0
+                    )
                     count = int(raw_count) if raw_count else 0
 
                     if count > 0:
