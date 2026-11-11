@@ -3,11 +3,12 @@
 import contextlib
 import re
 import struct
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
+from sqlspec.adapters.adbc._typing import AdbcNotSupportedError
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
@@ -26,7 +27,7 @@ from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_
 from sqlspec.config import ADKConfig
 from sqlspec.core.parameters._validator import PARAMETER_REGEX
 from sqlspec.data_dictionary import normalize_dialect_name
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
@@ -1296,7 +1297,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._enable_foreign_keys(cursor, conn)
@@ -1454,7 +1455,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         event_data = self._serialize_json_field(event_record["event_data"])
         now_val = self._encode_timestamp(datetime.now(UTC))
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
@@ -1716,7 +1717,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
         insert_sql = f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (?, {self._json_placeholder()}, ?)"
         now_val = self._encode_timestamp(datetime.now(UTC))
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name,))
@@ -1732,7 +1733,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         VALUES (?, ?, {self._json_placeholder()}, ?)
         """
         now_val = self._encode_timestamp(datetime.now(UTC))
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name, user_id))
@@ -1763,7 +1764,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         key_col = _metadata_key_column(self._dialect)
         delete_sql = f"DELETE FROM {self._metadata_table} WHERE {key_col} = ?"
         insert_sql = f"INSERT INTO {self._metadata_table} ({key_col}, value) VALUES (?, ?)"
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (key,))
@@ -3237,3 +3238,43 @@ def _teradata_table_exists(cursor: Any, table_name: str) -> bool:
     schema, table = split_teradata_table_name(table_name)
     cursor.execute(_TERADATA_TABLE_EXISTS_SQL, (schema, table))
     return cursor.fetchone() is not None
+
+
+@contextlib.contextmanager
+def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+    """Require transaction support before compound Teradata mutations.
+
+    Yields:
+        A connection with autocommit disabled for the compound operation.
+
+    Raises:
+        TransactionError: If the Teradata connection cannot provide transactions.
+    """
+    with config.provide_connection() as connection:
+        if dialect != DIALECT_TERADATA:
+            yield connection
+            return
+        native = getattr(connection, "adbc_connection", None)
+        set_autocommit = getattr(native, "set_autocommit", None)
+        get_option = getattr(native, "get_option", None)
+        mode = None
+        if callable(get_option):
+            with contextlib.suppress(AdbcNotSupportedError, NotImplementedError):
+                mode = get_option("adbc.connection.autocommit")
+        previous = mode == "true" if mode in {"true", "false"} else getattr(connection, "_autocommit", None)
+        if not callable(set_autocommit) or not isinstance(previous, bool):
+            msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
+            raise TransactionError(msg)
+        try:
+            set_autocommit(False)
+        except (AdbcNotSupportedError, NotImplementedError) as exc:
+            msg = "ADBC Teradata supports autocommit-only operations; this compound mutation requires a transaction."
+            raise TransactionError(msg) from exc
+        try:
+            yield connection
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            if previous:
+                set_autocommit(True)

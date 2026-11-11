@@ -1197,3 +1197,66 @@ def test_teradata_adk_schema_targets() -> None:
     targets = store.get_schema_targets_sync(None)
     assert len(targets) == 5
     assert all(str(target.create_statement).startswith("CREATE MULTISET TABLE") for target in targets)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["upsert_app_state", "upsert_user_state", "set_metadata", "delete_session", "append_event_and_update_state"],
+)
+def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, operation: str) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from adbc_driver_manager import NotSupportedError
+
+    from sqlspec.exceptions import TransactionError
+
+    native = SimpleNamespace(
+        get_option=lambda _: "true", set_autocommit=MagicMock(side_effect=NotSupportedError("autocommit only"))
+    )
+    conn = SimpleNamespace(adbc_connection=native, cursor=MagicMock(), commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"}))
+    now = datetime.now(UTC)
+    event = {
+        "id": "event",
+        "app_name": "app",
+        "user_id": "user",
+        "session_id": "session",
+        "invocation_id": "invocation",
+        "timestamp": now,
+        "event_data": {},
+    }
+    args = {
+        "upsert_app_state": ("app", {}),
+        "upsert_user_state": ("app", "user", {}),
+        "set_metadata": ("key", "value"),
+        "delete_session": ("app", "user", "session"),
+        "append_event_and_update_state": (event, "app", "user", "session", {}),
+    }
+    with pytest.raises(TransactionError, match="autocommit-only"):
+        getattr(store, operation)(*args[operation])
+    conn.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize("initial_mode", ["true", "false"])
+def test_teradata_flightsql_adk_compound_transaction_restores_mode(monkeypatch, initial_mode: str) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    modes = []
+    native = SimpleNamespace(get_option=lambda _: initial_mode, set_autocommit=lambda value: modes.append(value))
+    cursor = MagicMock()
+    conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"}))
+    store.upsert_app_state("app", {"value": 1})
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args_list[0].args == ("DELETE FROM adk_app_state WHERE app_name = ?", ("app",))
+    conn.commit.assert_called_once()
+    assert modes == ([False, True] if initial_mode == "true" else [False])
+    cursor.execute.side_effect = RuntimeError("insert failed")
+    with pytest.raises(RuntimeError, match="insert failed"):
+        store.upsert_user_state("app", "user", {})
+    conn.rollback.assert_called_once()
+    assert modes[-1] is (initial_mode == "true")

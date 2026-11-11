@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.utils.module_loader import resolve_optional_attr
-
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
@@ -24,8 +22,8 @@ if TYPE_CHECKING:
     TeradataRawCursor: TypeAlias = Any
     TeradataQueryParams: TypeAlias = Any
 else:
-    TeradataConnection = resolve_optional_attr("teradatasql", "TeradataConnection", object)
-    TeradataRawCursor = resolve_optional_attr("teradatasql", "TeradataCursor", object)
+    TeradataConnection = object
+    TeradataRawCursor = object
     TeradataQueryParams = Any
 
 __all__ = ("TeradataConnection", "TeradataCursor", "TeradataQueryParams", "TeradataRawCursor", "TeradataSessionContext")
