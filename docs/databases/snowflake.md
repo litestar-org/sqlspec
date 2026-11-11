@@ -175,17 +175,17 @@ Pass connection and pool keys in `connection_config`, and feature flags in `driv
 
 ## Arrow Streaming and Bulk Loads
 
-`select_to_arrow()` returns an `ArrowResult`; call `get_data()` to access its Arrow table. `select_stream()` reads batches lazily, and Arrow readers close their cursor when exhausted or closed. The adapter uses `fetch_arrow_batches()` without pandas, preserves empty-result column schemas, and falls back to rows for unsupported Arrow commands. Column names returned in uppercase become lowercase by default; mixed-case names remain unchanged.
+`select_to_arrow()` returns an `ArrowResult`; `get_data()` exposes its Arrow table. `select_stream()` reads batches lazily, and readers close their cursor on exhaustion, early close, or session close. Reads use `fetch_arrow_batches()` without pandas, preserve empty schemas, and fall back to rows for unsupported commands. Materialization promotes compatible Arrow schemas; streams cast later batches to the first schema. Uppercase column names become lowercase by default; mixed-case names remain unchanged.
 
-`load_from_arrow(table, source, if_not_exists=True)` creates and loads a table from Arrow data. With stage loading enabled, larger inputs use temporary Parquet files and a user-stage `PUT` followed by `COPY INTO`. The connector removes staged files after the load. Smaller inputs use batched parameter binding. Use `stage_table=True` with `conflict_keys` for a staged `MERGE`; `load_from_storage()` accepts the same conflict options. [Arrow and storage](../learn/arrow-and-storage.md) describes object storage exports and imports.
+`load_from_arrow(table, source)` uses bound batches below the stage threshold, which defaults to 1000 rows for config-managed sessions. Standalone bound loads own one DML transaction; existing caller transactions stay open. Table creation and truncation retain Snowflake DDL commit behavior. Larger loads write temporary Parquet, run user-stage `PUT` and `COPY INTO`, then remove staged files. Use `stage_table=True` with `conflict_keys` for staged `MERGE`; `load_from_storage()` accepts the same conflict options. See [Arrow and storage](../learn/arrow-and-storage.md).
 
 ## SQL, Query Jobs, and Extension Stores
 
 Write `:name`, `:1`, `%s`, or `%(name)s` parameters; the default wire format is `?`. Snowflake stages (`@stage`, `@%table`, `@~`), `$1` stage/pipe columns, session variables, and `//` comments remain native SQL. For VARIANT values, use `INSERT INTO events (payload) SELECT PARSE_JSON(:payload)` and bind JSON text. `MERGE INTO ... USING (SELECT PARSE_JSON(:payload) AS payload)` also accepts bound JSON.
 
-`execute_script()` sends unbound scripts through the connector's `execute_string()` parser, including scripting blocks and `->>` pipelines. `execute_async_query()` submits a warehouse query and returns its query ID; `fetch_async_query_result(query_id)` waits for its result. These methods are synchronous Python calls. Async frameworks use `sqlspec.utils.sync_tools.async_()` to bridge synchronous work.
+`execute_script()` binds supplied values statically, splits SQL with SQLSpec's Snowflake splitter, and executes each statement through its own managed cursor. Scripting blocks, comments, and dollar-quoted bodies stay intact. Transaction ownership comes from `CURRENT_TRANSACTION()` on the server. `execute_async_query()` submits a warehouse query and returns its query ID; `fetch_async_query_result(query_id)` waits for its result. These methods are synchronous Python calls. Async frameworks use `sqlspec.utils.sync_tools.async_()` to bridge synchronous work.
 
-Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQueueStore` (`SnowflakeSyncEventQueueStore` alias) with VARIANT payloads. Google ADK uses `SnowflakeADKStore` and `SnowflakeADKMemoryStore`; memory recall uses `ILIKE`, and vector embeddings are unsupported. Built-in schema reconciliation creates extension tables without secondary indexes.
+Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQueueStore` (`SnowflakeSyncEventQueueStore` alias) with VARIANT payloads and the `poll_queue` backend by default. Google ADK uses `SnowflakeADKStore` and `SnowflakeADKMemoryStore`; memory recall uses `ILIKE`, and vector embeddings are unsupported. Built-in schema reconciliation creates extension tables without secondary indexes.
 
 ## Type Mappings and Related Reference
 
@@ -194,6 +194,6 @@ Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQu
 | `NUMBER`, `FLOAT` | `int` or `Decimal`, `float`; precision-aware Arrow numbers |
 | `VARCHAR`, `BINARY`, `BOOLEAN` | `str`, `bytes`, `bool` |
 | `VARIANT`, `OBJECT`, `ARRAY` | Decoded Python JSON values for row results; Arrow representation follows connector metadata |
-| `TIMESTAMP_TZ`, `TIMESTAMP_LTZ`, `TIMESTAMP_NTZ`, `DATE`, `TIME` | Python datetime/date/time values and Arrow temporal types |
+| `TIMESTAMP_TZ`, `TIMESTAMP_LTZ`, `TIMESTAMP_NTZ`, `DATE`, `TIME` | Python and Arrow temporal values; aware datetimes bind explicitly as `TIMESTAMP_TZ` in `qmark`/`numeric` modes |
 
-See the [adapter API](../reference/adapters/snowflake.md) and [Snowflake catalog reference](../reference/data-dictionary/dialects/snowflake.md).
+Catalog key reflection defaults to `PUBLIC`; qualified quoted table names retain their exact identity. Strict schema reconciliation recognizes VARIANT as JSON while rejecting unrelated STRUCT/OBJECT drift. See the [adapter API](../reference/adapters/snowflake.md) and [catalog reference](../reference/data-dictionary/dialects/snowflake.md).

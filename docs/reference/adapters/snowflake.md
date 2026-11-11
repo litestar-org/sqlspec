@@ -16,6 +16,7 @@ from sqlspec.adapters.snowflake import (
 ```
 
 Synchronous Snowflake adapter built on `snowflake-connector-python`, with bounded pooling, native Arrow batches, and Parquet stage loads.
+Scripts use SQLSpec's Snowflake splitter and a managed cursor per statement. Transaction checks use server `CURRENT_TRANSACTION()`; aware datetime binds preserve timezone offsets in server binding modes.
 Inherited query and transaction methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md).
 See the [Snowflake setup guide](../../databases/snowflake.md) and [Snowflake catalog reference](../data-dictionary/dialects/snowflake.md).
 
