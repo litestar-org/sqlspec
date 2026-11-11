@@ -7,6 +7,9 @@ from sqlglot import exp, generator
 from sqlglot.generators.teradata import TeradataGenerator
 from sqlglot.optimizer.simplify import simplify
 
+__all__ = ("teradata_datatype_sql", "teradata_dispatch", "teradata_select_sql", "teradata_set_operation_sql")
+
+
 _BASE_SELECT_TRANSFORM: Final[Callable[[Any, Any], str]] = TeradataGenerator.TRANSFORMS[exp.Select]
 
 TERADATA_TYPE_MAPPING: Final[dict[exp.DType, str]] = {

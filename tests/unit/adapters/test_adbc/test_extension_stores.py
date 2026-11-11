@@ -151,3 +151,26 @@ def test_adbc_litestar_store_rollback_on_failure() -> None:
 
 def _make_adbc_config(dialect_uri: str) -> AdbcConfig:
     return AdbcConfig(connection_config={"uri": dialect_uri})
+
+
+@pytest.mark.parametrize(
+    "connection_config",
+    [{"uri": "teradata://user:pass@host/database"}, {"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"}],
+)
+def test_adbc_teradata_extension_targets(connection_config: dict[str, str]) -> None:
+    config = AdbcConfig(connection_config=connection_config)
+    store = AdbcStore(config)
+    queue = AdbcEventQueueStore(config)
+    session_target = store.get_schema_targets()[0]
+    queue_target = queue.get_schema_targets()[0]
+    assert str(session_target.create_statement).startswith("CREATE MULTISET TABLE")
+    assert str(queue_target.create_statement).startswith("CREATE MULTISET TABLE")
+    assert (
+        store.get_companion_indexes()[0].ddl
+        == "CREATE INDEX idx_litestar_session_expires_at (expires_at) ON litestar_session"
+    )
+    assert (
+        queue.create_statements()[1]
+        == "CREATE INDEX idx_sqlspec_event_queue_channel_status (channel, status, available_at) ON sqlspec_event_queue"
+    )
+    assert queue.drop_statements() == ["DROP TABLE sqlspec_event_queue"]

@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from sqlspec.adapters.teradata.config import TeradataConfig
 from sqlspec.adapters.teradata.core import split_teradata_table_name
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.migrations.schema import metadata_has_index
+from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 
 __all__ = ("TeradataEventQueueStore", "TeradataSyncEventQueueStore")
 
@@ -43,6 +43,10 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
     def _index_ddl(self) -> str:
         return f"CREATE INDEX {self._index_name()} (channel, status, available_at) ON {self.table_name}"
 
+    def _schema_target(self) -> SchemaTarget:
+        schema, table = split_teradata_table_name(self.table_name)
+        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
+
     def _index_existence_target(self) -> tuple[str | None, str]:
         return split_teradata_table_name(self.table_name)
 
@@ -66,10 +70,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
         """Drop an existing queue table."""
         schema, table = self._index_existence_target()
         with self._config.provide_session() as driver:
-            if (
-                driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table))
-                is not None
-            ):
+            if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is not None:
                 driver.execute(f"DROP TABLE {self.table_name}")
                 driver.commit()
 
@@ -84,7 +85,6 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
             exists = driver.select_one_or_none(_INDEX_EXISTS_SQL, (schema, table, self._index_name())) is not None
         if not exists:
             driver.execute(self._index_ddl())
-
 
 
 TeradataSyncEventQueueStore = TeradataEventQueueStore

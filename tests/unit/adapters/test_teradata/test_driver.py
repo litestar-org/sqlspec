@@ -73,3 +73,99 @@ def test_teradata_transaction_band_requires_active_transaction() -> None:
     with pytest.raises(TransactionError, match="active transaction"):
         driver.set_query_band({"app": "sqlspec"}, transaction=True)
     connection.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+def test_teradata_transaction_failure_remains_recoverable(finish: str) -> None:
+    connection = MagicMock()
+    connection.autocommit = True
+    driver = TeradataDriver(connection)
+    driver.begin()
+    error = RuntimeError("temporary failure")
+    getattr(connection, finish).side_effect = [error, None]
+    with pytest.raises(TransactionError, match=finish) as raised:
+        getattr(driver, finish)()
+    assert raised.value.__cause__ is error
+    getattr(driver, finish)()
+    assert connection.autocommit is True
+
+
+def test_teradata_begin_failure_is_reported_as_transaction_error() -> None:
+    class Connection:
+        @property
+        def autocommit(self) -> bool:
+            return True
+
+        @autocommit.setter
+        def autocommit(self, value: bool) -> None:
+            msg = "unsupported setting"
+            raise RuntimeError(msg)
+
+    error_driver = TeradataDriver(Connection())
+    with pytest.raises(TransactionError, match="begin"):
+        error_driver.begin()
+
+
+@pytest.mark.parametrize("found", [True, False])
+def test_teradata_has_schema_uses_catalog_probe(found: bool) -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.fetchone.return_value = (1,) if found else None
+    assert TeradataDriver(connection).has_schema("analytics") is found
+    assert cursor.execute.call_args.args == (
+        "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.DatabasesV WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(?))",
+        ("analytics",),
+    )
+    cursor.close.assert_called_once_with()
+
+
+def test_teradata_schema_probe_maps_errors_during_exception_handling() -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.execute.side_effect = RuntimeError("[Error 2801] duplicate")
+    try:
+        raise ValueError("outer failure")
+    except ValueError:
+        with pytest.raises(UniqueViolationError):
+            TeradataDriver(connection).has_schema("analytics")
+    cursor.close.assert_called_once_with()
+
+
+def test_teradata_query_band_session_and_transaction_boundaries() -> None:
+    connection = MagicMock()
+    connection.autocommit = False
+    cursor = connection.cursor.return_value
+    cursor.description = None
+    cursor.rowcount = 0
+    driver = TeradataDriver(connection)
+    driver.set_query_band({"app": "etl"})
+    driver.set_query_band({"request": "R1"}, transaction=True)
+    assert cursor.execute.call_args_list[0].args == ("SET QUERY_BAND = 'app=etl;' FOR SESSION", ())
+    assert cursor.execute.call_args_list[1].args == ("SET QUERY_BAND = 'request=R1;' FOR TRANSACTION", ())
+    connection.commit.assert_called_once_with()
+
+
+def test_teradata_session_release_closes_stream_and_rolls_back_open_work() -> None:
+    from sqlspec.adapters.teradata import TeradataSessionContext
+    from sqlspec.adapters.teradata.core import default_statement_config
+
+    connection = MagicMock()
+    connection.autocommit = True
+    cursor = connection.cursor.return_value
+    cursor.description = [("ID", int, None, None, None, None, False)]
+    cursor.fetchmany.return_value = [(1,)]
+    released = []
+    with TeradataSessionContext(
+        lambda: connection,
+        lambda conn, **kwargs: released.append(conn),
+        default_statement_config,
+        {},
+        lambda session: session,
+    ) as driver:
+        driver.begin()
+        stream = driver.select_stream("SELECT id FROM orders")
+        assert next(iter(stream)) == {"id": 1}
+    cursor.close.assert_called_once_with()
+    connection.rollback.assert_called_once_with()
+    assert released == [connection]
+    assert connection.autocommit is True

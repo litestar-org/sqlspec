@@ -11,6 +11,7 @@ from adbc_driver_manager import AdbcStatusCode
 from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 from adbc_driver_manager import OperationalError as AdbcOperationalError
+from adbc_driver_manager import ProgrammingError as AdbcProgrammingError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
@@ -37,6 +38,7 @@ __all__ = (
     "AdbcNativeError",
     "AdbcNotSupportedError",
     "AdbcOperationalError",
+    "AdbcProgrammingError",
     "AdbcRawCursor",
     "AdbcSessionContext",
     "AdbcStatusCode",
@@ -56,7 +58,7 @@ class AdbcCursor:
         self.cursor = self.connection.cursor()
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()

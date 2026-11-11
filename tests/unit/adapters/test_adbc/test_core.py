@@ -551,9 +551,9 @@ def test_create_mapped_exception_db2_diagnostics(
 ) -> None:
     err = Exception(message)
     if sqlstate is not None:
-        setattr(err, "sqlstate", sqlstate)
+        err.sqlstate = sqlstate
     if vendor_code is not None:
-        setattr(err, "vendor_code", vendor_code)
+        err.vendor_code = vendor_code
     mapped = adbc_core.create_mapped_exception(err)
     assert isinstance(mapped, expected_cls)
 
@@ -588,7 +588,7 @@ def test_create_mapped_exception_mssql_diagnostics(
 ) -> None:
     err = Exception(message)
     if vendor_code is not None:
-        setattr(err, "vendor_code", vendor_code)
+        err.vendor_code = vendor_code
     mapped = adbc_core.create_mapped_exception(err)
     assert isinstance(mapped, expected_cls)
 

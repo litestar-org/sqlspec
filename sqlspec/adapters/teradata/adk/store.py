@@ -9,16 +9,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 from sqlspec.adapters.teradata._typing import TeradataCursor
 from sqlspec.adapters.teradata.core import extract_teradata_error_code, resolve_rowcount
 from sqlspec.adapters.teradata.core import format_identifier as quote_double_identifier
-from sqlspec.adapters.teradata.core import (
-    split_teradata_table_name as split_schema_and_table,
-)
+from sqlspec.adapters.teradata.core import split_teradata_table_name as split_schema_and_table
 from sqlspec.adapters.teradata.events.store import _TABLE_EXISTS_SQL
-from sqlspec.extensions.adk import (
-    BaseSyncADKStore,
-    StoredEvent,
-    StoredSession,
-    normalize_session_list_options,
-)
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
@@ -47,13 +40,8 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
     def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         with self._config.provide_session() as driver:
             for statement in statements:
-                schema, table = split_schema_and_table(
-                    statement.removeprefix("DROP TABLE ").strip()
-                )
-                if (
-                    driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table))
-                    is not None
-                ):
+                schema, table = split_schema_and_table(statement.removeprefix("DROP TABLE ").strip())
+                if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is not None:
                     driver.execute(statement)
                     driver.commit()
 
@@ -67,38 +55,22 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             return
 
         with self._config.provide_session() as driver:
-            _create_missing_table(
-                driver, self._session_table, self._sessions_table_ddl()
-            )
+            _create_missing_table(driver, self._session_table, self._sessions_table_ddl())
             _create_missing_table(driver, self._events_table, self._events_table_ddl())
-            _create_missing_table(
-                driver, self._app_state_table, self._app_states_table_ddl()
-            )
-            _create_missing_table(
-                driver, self._user_state_table, self._user_states_table_ddl()
-            )
-            _create_missing_table(
-                driver, self._metadata_table, self._metadata_table_ddl()
-            )
+            _create_missing_table(driver, self._app_state_table, self._app_states_table_ddl())
+            _create_missing_table(driver, self._user_state_table, self._user_states_table_ddl())
+            _create_missing_table(driver, self._metadata_table, self._metadata_table_ddl())
             for index_name, index_table, columns in self._index_specs():
                 _create_missing_index(driver, index_table, index_name, columns)
+                driver.commit()
             driver.commit()
         self.reconcile_schema(assume_existing=True)
 
     def create_session(
-        self,
-        session_id: str,
-        app_name: str,
-        user_id: str,
-        state: "dict[str, Any]",
-        owner_id: "Any | None" = None,
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new ADK session."""
-        owner_column = (
-            f", {quote_double_identifier(self._owner_id_column_name)}"
-            if self._owner_id_column_name
-            else ""
-        )
+        owner_column = f", {quote_double_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
         insert_sql = f"""
         INSERT INTO {_table_ref(self._session_table)} (
@@ -124,19 +96,11 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         return _session_record_from_row(row)
 
     def get_session(
-        self,
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        *,
-        renew_for: "int | timedelta | None" = None,
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            if (
-                renew_for is not None
-                and self._calculate_expires_at(renew_for) is not None
-            ):
+            if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                 self._execute(
                     f"""
                     UPDATE {_table_ref(self._session_table)}
@@ -160,9 +124,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             raise
         return _session_record_from_row(row) if row is not None else None
 
-    def update_session_state(
-        self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]"
-    ) -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Replace a session's durable state."""
         self._execute(
             f"""
@@ -185,20 +147,12 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         offset: "int | None" = None,
     ) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
-        column, direction, page_limit, page_offset = normalize_session_list_options(
-            order_by, descending, limit, offset
-        )
+        column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
             return []
 
         sql, params = _session_list_query(
-            self._session_table,
-            app_name,
-            user_id,
-            column,
-            direction,
-            page_limit,
-            page_offset,
+            self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
             rows = self._execute_fetchall(sql, params)
@@ -227,11 +181,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
-        self._execute(
-            _insert_event_sql(self._events_table),
-            _event_insert_params(event_record),
-            commit=True,
-        )
+        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
 
     def append_event_and_update_state(
         self,
@@ -257,25 +207,18 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """
         with _transaction(self._config) as (conn, cursor):
             try:
-                cursor.execute(
-                    update_sql, (to_json(state), app_name, user_id, session_id)
-                )
+                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
                 cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 if row is None:
                     _raise_session_not_found(session_id)
-                cursor.execute(
-                    _insert_event_sql(self._events_table),
-                    _event_insert_params(event_record),
-                )
+                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                 if app_state is not None:
                     app_json = to_json(app_state)
                     cursor.execute(self._upsert_app_state_sql(), (app_name, app_json))
                 if user_state is not None:
                     user_json = to_json(user_state)
-                    cursor.execute(
-                        self._upsert_user_state_sql(), (app_name, user_id, user_json)
-                    )
+                    cursor.execute(self._upsert_user_state_sql(), (app_name, user_id, user_json))
             except Exception:
                 conn.rollback()
                 raise
@@ -293,9 +236,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """Return events for a scoped session ordered by event timestamp."""
         if limit == 0:
             return []
-        sql, params = self._events_query(
-            app_name, user_id, session_id, after_timestamp, limit
-        )
+        sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
             rows = self._execute_fetchall(sql, params)
         except Exception as exc:
@@ -304,9 +245,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             raise
         return [_event_record_from_row(row) for row in rows]
 
-    def delete_expired_events(
-        self, before: datetime, app_name: "str | None" = None
-    ) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than ``before``."""
         sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
         params: list[Any] = [before]
@@ -320,9 +259,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(
-        self, updated_before: datetime, app_name: str | None = None
-    ) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete events before expired parent sessions in one transaction."""
         where = "update_time < ?"
         params: tuple[Any, ...] = (updated_before,)
@@ -335,10 +272,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     f"DELETE FROM {_table_ref(self._events_table)} WHERE session_id IN (SELECT id FROM {_table_ref(self._session_table)} WHERE {where})",
                     params,
                 )
-                cursor.execute(
-                    f"DELETE FROM {_table_ref(self._session_table)} WHERE {where}",
-                    params,
-                )
+                cursor.execute(f"DELETE FROM {_table_ref(self._session_table)} WHERE {where}", params)
                 count = resolve_rowcount(cursor)
                 conn.commit()
             except Exception as exc:
@@ -349,9 +283,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             else:
                 return count
 
-    def delete_idle_user_states(
-        self, updated_before: datetime, app_name: "str | None" = None
-    ) -> int:
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete user state rows whose update_time is older than ``updated_before``."""
         sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
         params: list[Any] = [updated_before]
@@ -369,8 +301,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         """Return app-scoped state."""
         try:
             row = self._execute_fetchone(
-                f"SELECT TOP 1 state FROM {_table_ref(self._app_state_table)} WHERE app_name = ?",
-                (app_name,),
+                f"SELECT TOP 1 state FROM {_table_ref(self._app_state_table)} WHERE app_name = ?", (app_name,)
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -400,21 +331,16 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         encoded = to_json(state)
         self._execute(self._upsert_app_state_sql(), (app_name, encoded), commit=True)
 
-    def upsert_user_state(
-        self, app_name: str, user_id: str, state: "dict[str, Any]"
-    ) -> None:
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state."""
         encoded = to_json(state)
-        self._execute(
-            self._upsert_user_state_sql(), (app_name, user_id, encoded), commit=True
-        )
+        self._execute(self._upsert_user_state_sql(), (app_name, user_id, encoded), commit=True)
 
     def get_metadata(self, key: str) -> "str | None":
         """Return an ADK metadata value."""
         try:
             row = self._execute_fetchone(
-                f'SELECT TOP 1 value FROM {_table_ref(self._metadata_table)} WHERE "key" = ?',
-                (key,),
+                f'SELECT TOP 1 value FROM {_table_ref(self._metadata_table)} WHERE "key" = ?', (key,)
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -424,16 +350,11 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set an ADK metadata value."""
-        self._execute(
-            _upsert_metadata_sql(self._metadata_table), (key, value), commit=True
-        )
+        self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
     def _index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
-        return [
-            *_sessions_index_specs(self._session_table),
-            *_events_index_specs(self._events_table),
-        ]
+        return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
 
     def _schema_targets(self) -> "list[SchemaTarget]":
         """Construct Teradata SchemaTarget definitions in FK dependency order."""
@@ -444,10 +365,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             (self._user_state_table, self._user_states_table_ddl()),
             (self._metadata_table, self._metadata_table_ddl()),
         )
-        return [
-            SchemaTarget.from_ddl(table, ddl, dialect="teradata")
-            for table, ddl in ddl_targets
-        ]
+        return [_schema_target(table, ddl) for table, ddl in ddl_targets]
 
     def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
         """Return ordered Teradata ADK session-store SchemaTarget definitions."""
@@ -461,15 +379,11 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
 
     def _sessions_table_ddl(self) -> str:
         """Return Teradata DDL for the ADK session table."""
-        return _sessions_table_ddl(
-            self._session_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl
-        )
+        return _sessions_table_ddl(self._session_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
 
     def _events_table_ddl(self) -> str:
         """Return Teradata DDL for the ADK event table."""
-        return _events_table_ddl(
-            self._events_table, self._session_table, JSON_COLUMN_TYPE
-        )
+        return _events_table_ddl(self._events_table, self._session_table, JSON_COLUMN_TYPE)
 
     def _app_states_table_ddl(self) -> str:
         """Return Teradata DDL for the app-scoped state table."""
@@ -515,13 +429,9 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _events_query(
-            self._events_table, app_name, user_id, session_id, after_timestamp, limit
-        )
+        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
-    def _execute_fetchone(
-        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False
-    ) -> "Any | None":
+    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
@@ -529,16 +439,12 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                 conn.commit()
             return row
 
-    def _execute_fetchall(
-        self, sql: str, params: "tuple[Any, ...]" = ()
-    ) -> "list[Any]":
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(
-        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False
-    ) -> int:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
@@ -561,13 +467,8 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
     def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         with self._config.provide_session() as driver:
             for statement in statements:
-                schema, table = split_schema_and_table(
-                    statement.removeprefix("DROP TABLE ").strip()
-                )
-                if (
-                    driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table))
-                    is not None
-                ):
+                schema, table = split_schema_and_table(statement.removeprefix("DROP TABLE ").strip())
+                if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is not None:
                     driver.execute(statement)
                     driver.commit()
 
@@ -586,12 +487,11 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             _create_missing_table(driver, self._memory_table, self._memory_table_ddl())
             for index_name, index_table, columns in self._memory_index_specs():
                 _create_missing_index(driver, index_table, index_name, columns)
+                driver.commit()
             driver.commit()
         self.reconcile_schema(assume_existing=True)
 
-    def insert_memory_entries(
-        self, entries: "list[StoredMemory]", owner_id: "object | None" = None
-    ) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with event-id deduplication."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -599,11 +499,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         if not entries:
             return 0
 
-        owner_column = (
-            f", {quote_double_identifier(self._owner_id_column_name)}"
-            if self._owner_id_column_name
-            else ""
-        )
+        owner_column = f", {quote_double_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", ?" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
@@ -626,9 +522,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
                         entry["timestamp"],
                         to_json(entry["content_json"]),
                         entry["content_text"],
-                        to_json(entry["metadata_json"])
-                        if entry.get("metadata_json") is not None
-                        else None,
+                        to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
                     )
                     if self._owner_id_column_name:
                         params = (*params, owner_id)
@@ -665,9 +559,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             msg = "limit must be a non-negative integer"
             raise ValueError(msg)
         limit_value = limit if limit is not None else self._max_results
-        where_scope, scope_params = _build_teradata_scope_where(
-            app_name, user_id, scope_filter
-        )
+        where_scope, scope_params = _build_teradata_scope_where(app_name, user_id, scope_filter)
         escaped_query = _escape_like_pattern(query)
         sql = f"""
         SELECT TOP {int(limit_value)}
@@ -688,14 +580,10 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         return self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?",
-            (session_id,),
-            commit=True,
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True
         )
 
-    def delete_entries_older_than(
-        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
-    ) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than the retention window."""
         clauses = ["inserted_at < ?"]
         params: list[Any] = [datetime.now(UTC) - timedelta(days=days)]
@@ -707,15 +595,11 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             params.append(scope)
         where_sql = " AND ".join(clauses)
         return self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}",
-            tuple(params),
-            commit=True,
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
     def _memory_table_ddl(self) -> str:
-        owner_line = (
-            f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        )
+        owner_line = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         table_ref = _table_ref(self._memory_table)
         return (
             f"CREATE MULTISET TABLE {table_ref} ("
@@ -740,11 +624,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
         _, table_name = split_schema_and_table(self._memory_table)
         return [
-            (
-                f"idx_{table_name}_app_scope_user_time",
-                self._memory_table,
-                "app_name, scope, user_id, timestamp DESC",
-            ),
+            (f"idx_{table_name}_app_scope_user_time", self._memory_table, "app_name, scope, user_id, timestamp DESC"),
             (f"idx_{table_name}_scope", self._memory_table, "app_name, scope"),
             (f"idx_{table_name}_session", self._memory_table, "session_id"),
             (f"idx_{table_name}_timestamp", self._memory_table, "timestamp DESC"),
@@ -754,11 +634,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         """Construct the Teradata ADK memory-table SchemaTarget when enabled."""
         if not self._enabled:
             return []
-        return [
-            SchemaTarget.from_ddl(
-                self._memory_table, self._memory_table_ddl(), dialect="teradata"
-            )
-        ]
+        return [_schema_target(self._memory_table, self._memory_table_ddl())]
 
     def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
         """Return Teradata ADK memory-store SchemaTarget definitions when enabled."""
@@ -775,16 +651,12 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE {_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(
-        self, sql: str, params: "tuple[Any, ...]" = ()
-    ) -> "list[Any]":
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(
-        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False
-    ) -> int:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
@@ -793,9 +665,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
             return rowcount
 
 
-def _sessions_table_ddl(
-    table: str, json_column_type: str, owner_id_column_ddl: "str | None"
-) -> str:
+def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
     table_ref = _table_ref(table)
     return (
@@ -844,11 +714,7 @@ def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> 
 def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
     _, table_name = split_schema_and_table(table)
     return [
-        (
-            f"idx_{table_name}_scope",
-            table,
-            "app_name, user_id, session_id, timestamp ASC",
-        ),
+        (f"idx_{table_name}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
         (f"idx_{table_name}_session", table, "session_id, timestamp ASC"),
         (f"idx_{table_name}_invocation", table, "invocation_id"),
         (f"idx_{table_name}_timestamp", table, "timestamp ASC"),
@@ -912,10 +778,7 @@ def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
         f"CAST(? AS {'JSON' if col == 'state' else 'VARCHAR(128)'}) AS {quote_double_identifier(col)}"
         for col in columns
     )
-    join = " AND ".join(
-        f"t.{quote_double_identifier(col)} = s.{quote_double_identifier(col)}"
-        for col in key_columns
-    )
+    join = " AND ".join(f"t.{quote_double_identifier(col)} = s.{quote_double_identifier(col)}" for col in key_columns)
     names = ", ".join(quote_double_identifier(col) for col in (*columns, "update_time"))
     values = ", ".join(f"s.{quote_double_identifier(col)}" for col in columns)
     return (
@@ -935,12 +798,7 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str,
-    app_name: str,
-    user_id: str,
-    session_id: str,
-    after_timestamp: "datetime | None",
-    limit: "int | None",
+    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
 ) -> "tuple[str, tuple[Any, ...]]":
     params: list[Any] = [app_name, user_id, session_id]
     after_clause = ""
@@ -1022,9 +880,7 @@ def _memory_record_from_row(row: Any) -> "StoredMemory":
             "timestamp": _row_value(row, "timestamp", 7),
             "content_json": _json_dict(_row_value(row, "content_json", 8)),
             "content_text": _row_value(row, "content_text", 9),
-            "metadata_json": _json_dict(metadata_raw)
-            if metadata_raw is not None
-            else None,
+            "metadata_json": _json_dict(metadata_raw) if metadata_raw is not None else None,
             "inserted_at": _row_value(row, "inserted_at", 11),
             "embedding": None,
         },
@@ -1045,10 +901,7 @@ def _json_dict(value: Any) -> "dict[str, Any]":
 
 def _is_teradata_table_missing(exc: BaseException) -> bool:
     text = str(exc).lower()
-    return (
-        "error 3807" in text
-        or extract_teradata_error_code(exc) == TERADATA_TABLE_NOT_FOUND_SQLCODE
-    )
+    return "error 3807" in text or extract_teradata_error_code(exc) == TERADATA_TABLE_NOT_FOUND_SQLCODE
 
 
 def _table_ref(table: str) -> str:
@@ -1074,10 +927,7 @@ def _build_teradata_scope_where(
     app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
 ) -> tuple[str, tuple[Any, ...]]:
     if scope_filter == "all":
-        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (
-            app_name,
-            user_id,
-        )
+        return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
     if scope_filter == "user":
         return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
     return "app_name = ? AND scope = 'app'", (app_name,)
@@ -1088,13 +938,7 @@ def _escape_like_pattern(value: str) -> str:
 
 
 def _session_list_query(
-    table: str,
-    app_name: str,
-    user_id: str | None,
-    column: str,
-    direction: str,
-    limit: int | None,
-    offset: int,
+    table: str, app_name: str, user_id: str | None, column: str, direction: str, limit: int | None, offset: int
 ) -> tuple[str, tuple[Any, ...]]:
     params: list[Any] = [app_name]
     where = "app_name = ?"
@@ -1127,9 +971,7 @@ def _create_missing_table(driver: Any, table_name: str, ddl: str) -> None:
         driver.commit()
 
 
-def _create_missing_index(
-    driver: Any, table_name: str, index_name: str, columns: str
-) -> None:
+def _create_missing_index(driver: Any, table_name: str, index_name: str, columns: str) -> None:
     schema, table = split_schema_and_table(table_name)
     rows = driver.data_dictionary.get_indexes(driver, table=table, schema=schema)
     if not metadata_has_index(rows, table, index_name, schema_name=schema):
@@ -1151,3 +993,8 @@ def _transaction(config: "TeradataConfig") -> Iterator[tuple[Any, Any]]:
                 yield conn, cursor
         finally:
             conn.autocommit = previous
+
+
+def _schema_target(table_name: str, ddl: str) -> SchemaTarget:
+    schema, table = split_schema_and_table(table_name)
+    return SchemaTarget.from_ddl(table, ddl, schema=schema, dialect="teradata")

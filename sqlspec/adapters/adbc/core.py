@@ -451,7 +451,7 @@ def detect_postgres_extensions(
             cursor.execute("SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions])
             rows = cursor.fetchall()
             detected: set[str] = {row[0] for row in rows} if rows else set()
-            return "vector" in detected, "pg_search" in detected, "pg_textsearch" in detected
+            return ("vector" in detected, "pg_search" in detected, "pg_textsearch" in detected)
         finally:
             cursor.close()
     except Exception:
@@ -744,6 +744,13 @@ def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", state
     Returns:
         Canonical dialect name from ``RECONCILE_ADBC_DIALECTS``, or ``None`` when undetermined.
     """
+    hint = connection_config.get("adbc_dialect")
+    if isinstance(hint, str) and hint.strip():
+        normalized_hint = (
+            "teradata" if hint.strip().lower() == "vantage" else normalize_dialect_name(hint.strip().lower())
+        )
+        return normalized_hint if normalized_hint in RECONCILE_ADBC_DIALECTS else None
+
     backend = connection_config.get("gizmosql_backend")
     if isinstance(backend, str) and backend.strip():
         normalized_backend = normalize_dialect_name(backend.strip())
@@ -2142,7 +2149,7 @@ def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
     database_options = import_optional_attr("adbc_driver_flightsql", "DatabaseOptions")
     if database_options is None:
         return _FLIGHTSQL_TLS_SKIP_VERIFY_KEY, _FLIGHTSQL_AUTHORIZATION_HEADER_KEY
-    return database_options.TLS_SKIP_VERIFY.value, database_options.AUTHORIZATION_HEADER.value
+    return (database_options.TLS_SKIP_VERIFY.value, database_options.AUTHORIZATION_HEADER.value)
 
 
 def _lift_flightsql_common_options(

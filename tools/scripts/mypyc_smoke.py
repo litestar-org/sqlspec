@@ -31,6 +31,12 @@ class SmokeImport(NamedTuple):
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
+    SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Teradata"),
+    SmokeImport("teradata_generators", "sqlspec.dialects.teradata._generators", "teradata_dispatch", True),
+    SmokeImport("teradata_dd_config", "sqlspec.data_dictionary.dialects.teradata.config", "TERADATA_CONFIG", True),
+    SmokeImport("teradata_core", "sqlspec.adapters.teradata.core", "build_connection_config", True),
+    SmokeImport("teradata_pool", "sqlspec.adapters.teradata.pool", "TeradataConnectionPool", True, "teradatasql"),
+    SmokeImport("teradata_type_converter", "sqlspec.adapters.teradata.type_converter", None, True),
     SmokeImport("package", "sqlspec"),
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
     SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
@@ -1032,6 +1038,7 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
                 "pymssql",
                 "pymysql",
                 "sqlanydb",
+                "teradatasql",
             }:
                 raise
             skipped.append(f"{module_name}: optional dependency missing: {exc.name}")

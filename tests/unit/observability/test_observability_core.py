@@ -284,7 +284,7 @@ def test_observability_config_merge_combines_hooks_and_observers() -> None:
     assert merged.statement_observers is not None
     assert len(merged.statement_observers) == 1
     dispatcher = LifecycleDispatcher(cast("dict[str, Iterable[Any]]", merged.lifecycle))
-    assert getattr(dispatcher, "has_query_start") is True
+    assert dispatcher.has_query_start is True
     dispatcher.emit_query_start({"foo": "bar"})
     assert observer_called == []  # observers run via runtime, dispatcher unaffected
 
@@ -797,8 +797,8 @@ def test_get_trace_context_with_otel(monkeypatch) -> None:
     def get_current_span() -> "FakeSpan":
         return FakeSpan()
 
-    setattr(trace_module, "get_current_span", get_current_span)
-    setattr(opentelemetry_module, "trace", trace_module)
+    trace_module.get_current_span = get_current_span
+    opentelemetry_module.trace = trace_module
 
     monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
     monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)

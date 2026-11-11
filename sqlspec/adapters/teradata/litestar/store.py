@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.teradata._typing import TeradataCursor
 from sqlspec.adapters.teradata.core import format_identifier as quote_double_identifier
 from sqlspec.adapters.teradata.core import resolve_rowcount
-from sqlspec.adapters.teradata.core import (
-    split_teradata_table_name as split_schema_and_table,
-)
+from sqlspec.adapters.teradata.core import split_teradata_table_name as split_schema_and_table
 from sqlspec.adapters.teradata.events.store import _TABLE_EXISTS_SQL
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
+from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -32,6 +31,13 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
     def __init__(self, config: "TeradataConfig") -> None:
         super().__init__(config)
 
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        schema, table = split_schema_and_table(table_name)
+        if schema is not None:
+            BaseSQLSpecStore._ensure_table_name(schema)
+        BaseSQLSpecStore._ensure_table_name(table)
+
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
@@ -51,18 +57,11 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
                 driver.execute(self._drop_table_sql()[0])
                 driver.commit()
 
-    async def get(
-        self, key: str, renew_for: "int | timedelta | None" = None
-    ) -> "bytes | None":
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
         return await async_(self._get)(key, renew_for)
 
-    async def set(
-        self,
-        key: str,
-        value: "str | bytes",
-        expires_in: "int | timedelta | None" = None,
-    ) -> None:
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
         await async_(self._set)(key, value, expires_in)
 
@@ -93,6 +92,10 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
             "expires_at TIMESTAMP(6) WITH TIME ZONE)"
         )
 
+    def _schema_target(self) -> SchemaTarget:
+        schema, table = split_schema_and_table(self._table_name)
+        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
+
     def get_companion_indexes(self) -> list[CompanionIndex]:
         schema, table = split_schema_and_table(self._table_name)
         name = f"idx_{table}_expires_at"
@@ -118,9 +121,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
             driver.commit()
         self._log_table_created()
 
-    def _get(
-        self, key: str, renew_for: "int | timedelta | None" = None
-    ) -> "bytes | None":
+    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         table_ref = _table_ref(self._table_name)
         sql = f"""
         SELECT data, expires_at FROM {table_ref}
@@ -152,24 +153,17 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
-    def _set(
-        self,
-        key: str,
-        value: "str | bytes",
-        expires_in: "int | timedelta | None" = None,
-    ) -> None:
+    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         table_ref = _table_ref(self._table_name)
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(
-                f"UPDATE {table_ref} SET data = ?, expires_at = ? WHERE session_id = ?",
-                (data, expires_at, key),
+                f"UPDATE {table_ref} SET data = ?, expires_at = ? WHERE session_id = ?", (data, expires_at, key)
             )
             if resolve_rowcount(cursor) == 0:
                 cursor.execute(
-                    f"INSERT INTO {table_ref} (session_id, data, expires_at) VALUES (?, ?, ?)",
-                    (key, data, expires_at),
+                    f"INSERT INTO {table_ref} (session_id, data, expires_at) VALUES (?, ?, ?)", (key, data, expires_at)
                 )
             conn.commit()
 

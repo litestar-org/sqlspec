@@ -2,19 +2,15 @@
 
 import pytest
 
-from sqlspec.extensions.adk import StoredEvent, StoredMemory
-
 from sqlspec.adapters.teradata import TeradataConfig
 from sqlspec.adapters.teradata.adk import TeradataADKMemoryStore, TeradataADKStore
 from sqlspec.adapters.teradata.events import TeradataEventQueueStore
 from sqlspec.adapters.teradata.litestar import TeradataStore
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 
 def test_teradata_extension_schema_targets() -> None:
-    config = TeradataConfig(
-        connection_config={"host": "localhost"},
-        extension_config={"adk": {"enable_memory": True}},
-    )
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
     session_store = TeradataADKStore(config)
     memory_store = TeradataADKMemoryStore(config)
     queue_store = TeradataEventQueueStore(config)
@@ -26,10 +22,7 @@ def test_teradata_extension_schema_targets() -> None:
         *litestar_store.get_schema_targets(),
     ]
     assert len(targets) == 8
-    assert all(
-        str(target.create_statement).startswith("CREATE MULTISET TABLE")
-        for target in targets
-    )
+    assert all(str(target.create_statement).startswith("CREATE MULTISET TABLE") for target in targets)
     assert (
         queue_store.create_statements()[1]
         == "CREATE INDEX idx_sqlspec_event_queue_channel_status (channel, status, available_at) ON sqlspec_event_queue"
@@ -62,10 +55,7 @@ def test_teradata_adk_public_pagination_and_atomic_delete(monkeypatch) -> None:
     monkeypatch.setattr(TeradataConfig, "provide_connection", connection)
     store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
     assert store.list_sessions("app", "user", limit=5, offset=10) == []
-    assert (
-        "QUALIFY ROW_NUMBER() OVER (ORDER BY update_time DESC, id DESC) BETWEEN ? AND ?"
-        in statements[0][0]
-    )
+    assert "QUALIFY ROW_NUMBER() OVER (ORDER BY update_time DESC, id DESC) BETWEEN ? AND ?" in statements[0][0]
     assert statements[0][1] == ("app", "user", 11, 15)
     store.delete_session("app", "user", "session")
     assert statements[-2] == (
@@ -88,9 +78,7 @@ def teradata_connection(monkeypatch):
     conn = MagicMock()
     conn.autocommit = True
     conn.cursor.return_value = cursor
-    monkeypatch.setattr(
-        TeradataConfig, "provide_connection", lambda _: nullcontext(conn)
-    )
+    monkeypatch.setattr(TeradataConfig, "provide_connection", lambda _: nullcontext(conn))
     return conn, cursor
 
 
@@ -128,9 +116,7 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
     store = TeradataADKStore(config)
     now = datetime.now(UTC)
     cursor.fetchone.return_value = ("session", "app", "user", '{"count":1}', now, now)
-    assert store.create_session("session", "app", "user", {"count": 1})["state"] == {
-        "count": 1
-    }
+    assert store.create_session("session", "app", "user", {"count": 1})["state"] == {"count": 1}
     session = store.get_session("app", "user", "session")
     assert session and session["id"] == "session"
     store.update_session_state("app", "user", "session", {"count": 2})
@@ -154,12 +140,8 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
         "event_data": {"text": "hello"},
     }
     store.append_event(event)
-    cursor.fetchall.return_value = [
-        ("event", "app", "user", "session", "invoke", now, '{"text":"hello"}')
-    ]
-    assert store.get_events("app", "user", "session", limit=2)[0]["event_data"] == {
-        "text": "hello"
-    }
+    cursor.fetchall.return_value = [("event", "app", "user", "session", "invoke", now, '{"text":"hello"}')]
+    assert store.get_events("app", "user", "session", limit=2)[0]["event_data"] == {"text": "hello"}
     assert "TOP 2" in cursor.execute.call_args.args[0]
     assert store.get_events("app", "user", "session", limit=0) == []
     assert store.delete_expired_events(now, "app") == 1
@@ -177,10 +159,7 @@ def test_teradata_memory_insert_search_and_delete(teradata_connection) -> None:
     from datetime import UTC, datetime
 
     conn, cursor = teradata_connection
-    config = TeradataConfig(
-        connection_config={"host": "localhost"},
-        extension_config={"adk": {"enable_memory": True}},
-    )
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
     store = TeradataADKMemoryStore(config)
     now = datetime.now(UTC)
     entry: StoredMemory = {
@@ -201,25 +180,9 @@ def test_teradata_memory_insert_search_and_delete(teradata_connection) -> None:
     assert store.insert_memory_entries([entry]) == 1
     assert conn.autocommit is True
     cursor.fetchall.return_value = [
-        (
-            "memory",
-            "session",
-            "app",
-            "user",
-            "user",
-            "event",
-            "agent",
-            now,
-            '{"text":"hello"}',
-            "hello",
-            "{}",
-            now,
-        )
+        ("memory", "session", "app", "user", "user", "event", "agent", now, '{"text":"hello"}', "hello", "{}", now)
     ]
-    assert (
-        store.search_entries("hello", "app", "user", limit=3)[0]["content_text"]
-        == "hello"
-    )
+    assert store.search_entries("hello", "app", "user", limit=3)[0]["content_text"] == "hello"
     assert "TOP 3" in cursor.execute.call_args.args[0]
     assert store.search_entries("hello", "app", "user", limit=0) == []
     assert store.insert_memory_entries([]) == 0
@@ -228,7 +191,20 @@ def test_teradata_memory_insert_search_and_delete(teradata_connection) -> None:
     assert cursor.execute.call_args.args[1][1:] == ("app", "user")
 
 
-@pytest.mark.parametrize("operation", ["get_session", "get_app_state", "get_user_state", "get_metadata", "list_sessions", "get_events", "delete_expired_events", "delete_idle_user_states", "delete_idle_sessions"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "get_session",
+        "get_app_state",
+        "get_user_state",
+        "get_metadata",
+        "list_sessions",
+        "get_events",
+        "delete_expired_events",
+        "delete_idle_user_states",
+        "delete_idle_sessions",
+    ],
+)
 def test_teradata_adk_absent_tables_are_empty(teradata_connection, operation) -> None:
     from datetime import UTC, datetime
 
@@ -236,8 +212,24 @@ def test_teradata_adk_absent_tables_are_empty(teradata_connection, operation) ->
     cursor.execute.side_effect = RuntimeError("[Teradata Database] [Error 3807] Object does not exist")
     store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
     now = datetime.now(UTC)
-    args = {"get_session": ("app", "user", "session"), "get_app_state": ("app",), "get_user_state": ("app", "user"), "get_metadata": ("key",), "list_sessions": ("app",), "get_events": ("app", "user", "session"), "delete_expired_events": (now,), "delete_idle_user_states": (now,), "delete_idle_sessions": (now,)}
-    expected = {"list_sessions": [], "get_events": [], "delete_expired_events": 0, "delete_idle_user_states": 0, "delete_idle_sessions": 0}
+    args = {
+        "get_session": ("app", "user", "session"),
+        "get_app_state": ("app",),
+        "get_user_state": ("app", "user"),
+        "get_metadata": ("key",),
+        "list_sessions": ("app",),
+        "get_events": ("app", "user", "session"),
+        "delete_expired_events": (now,),
+        "delete_idle_user_states": (now,),
+        "delete_idle_sessions": (now,),
+    }
+    expected = {
+        "list_sessions": [],
+        "get_events": [],
+        "delete_expired_events": 0,
+        "delete_idle_user_states": 0,
+        "delete_idle_sessions": 0,
+    }
     assert getattr(store, operation)(*args[operation]) == expected.get(operation)
     assert conn.autocommit is True
 
@@ -250,3 +242,252 @@ def test_teradata_adk_delete_rolls_back_and_restores_connection(teradata_connect
         store.delete_session("app", "user", "session")
     conn.rollback.assert_called_once()
     assert conn.autocommit is True
+
+
+def test_teradata_event_queue_catalog_lifecycle(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    statements = []
+    tables = set()
+    indexes = set()
+
+    def select(_sql, params):
+        if "IndicesV" in _sql:
+            return {"found": 1} if params[-1] in indexes else None
+        return {"found": 1} if params[1] in tables else None
+
+    def execute(sql):
+        statements.append(sql)
+        if sql.startswith("CREATE MULTISET TABLE"):
+            tables.add("sqlspec_event_queue")
+        elif sql.startswith("CREATE INDEX"):
+            indexes.add("idx_sqlspec_event_queue_channel_status")
+        elif sql.startswith("DROP TABLE"):
+            tables.clear()
+            indexes.clear()
+
+    driver = SimpleNamespace(select_one_or_none=select, execute=execute, commit=lambda: None)
+    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
+    store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
+    store.create_table()
+    assert len(statements) == 2
+    assert store.get_schema_targets()[0].table_name == "sqlspec_event_queue"
+    store.create_table()
+    assert len(statements) == 2
+    store.drop_table()
+    store.drop_table()
+    assert statements[-1] == "DROP TABLE sqlspec_event_queue"
+    assert len(statements) == 3
+
+
+def test_teradata_adk_and_memory_catalog_lifecycle(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    statements = []
+    dictionary = SimpleNamespace(get_indexes=lambda *_args, **_kwargs: [])
+    driver = SimpleNamespace(
+        select_one_or_none=lambda *_args: None,
+        execute=lambda sql: statements.append(sql),
+        commit=lambda: None,
+        data_dictionary=dictionary,
+    )
+    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
+    store = TeradataADKStore(config)
+    memory = TeradataADKMemoryStore(config)
+    store.reconcile_companion_objects_sync(driver)
+    memory.reconcile_companion_objects_sync(driver)
+    assert len(statements) == 11
+    assert statements[0] == 'CREATE INDEX "idx_adk_session_app_user" (app_name, user_id) ON "adk_session"'
+    assert statements[-1] == 'CREATE INDEX "idx_adk_memory_timestamp" (timestamp) ON "adk_memory"'
+    store.drop_tables()
+    memory.drop_tables()
+    assert len(statements) == 11
+
+
+def test_teradata_native_adk_creates_and_reconciles_tables(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    statements = []
+    column_names = "id app_name user_id state create_time update_time session_id invocation_id timestamp event_data actions partial turn_complete interrupted key value scope event_id author content_json content_text metadata_json inserted_at".split()
+    dictionary = SimpleNamespace(
+        get_indexes=lambda *_args, **_kwargs: [],
+        get_columns=lambda *_args, **_kwargs: [{"column_name": name} for name in column_names],
+    )
+    driver = SimpleNamespace(
+        select_one_or_none=lambda *_args: None,
+        execute=lambda sql: statements.append(sql),
+        commit=lambda: None,
+        data_dictionary=dictionary,
+    )
+    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
+    TeradataADKStore(config).create_tables()
+    TeradataADKMemoryStore(config).create_tables()
+    assert sum(sql.startswith("CREATE MULTISET TABLE") for sql in statements) == 6
+    assert sum(sql.startswith("CREATE INDEX") for sql in statements) == 11
+
+
+def test_teradata_adk_atomic_event_state_and_owner(teradata_connection) -> None:
+    from datetime import UTC, datetime
+
+    conn, cursor = teradata_connection
+    config = TeradataConfig(
+        connection_config={"host": "localhost"}, extension_config={"adk": {"owner_id_column": "tenant_id INTEGER NULL"}}
+    )
+    store = TeradataADKStore(config)
+    now = datetime.now(UTC)
+    cursor.fetchone.return_value = ("session", "app", "user", '{"count":2}', now, now)
+    assert store.create_session("session", "app", "user", {"count": 2}, owner_id=5)["state"] == {"count": 2}
+    event: StoredEvent = {
+        "id": "event",
+        "session_id": "session",
+        "app_name": "app",
+        "user_id": "user",
+        "invocation_id": "invoke",
+        "timestamp": now,
+        "event_data": {"text": "hello"},
+    }
+    result = store.append_event_and_update_state(
+        event, "app", "user", "session", {"count": 2}, app_state={"app": 1}, user_state={"user": 1}
+    )
+    assert result["state"] == {"count": 2}
+    assert conn.autocommit is True
+    cursor.fetchone.return_value = None
+    with pytest.raises(ValueError, match="not found"):
+        store.append_event_and_update_state(event, "app", "user", "missing", {})
+    conn.rollback.assert_called_once()
+    assert conn.autocommit is True
+    with pytest.raises(RuntimeError, match="Failed to fetch"):
+        store.create_session("missing", "app", "user", {})
+
+
+def test_teradata_memory_disabled_missing_and_duplicates(teradata_connection) -> None:
+    from datetime import UTC, datetime
+
+    conn, cursor = teradata_connection
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": False}})
+    disabled = TeradataADKMemoryStore(config)
+    assert disabled.get_schema_targets_sync(None) == []
+    with pytest.raises(RuntimeError, match="disabled"):
+        disabled.insert_memory_entries([])
+    with pytest.raises(RuntimeError, match="disabled"):
+        disabled.search_entries("query", "app", "user")
+    enabled = TeradataADKMemoryStore(
+        TeradataConfig(
+            connection_config={"host": "localhost"},
+            extension_config={"adk": {"enable_memory": True, "owner_id_column": "tenant_id INTEGER NULL"}},
+        )
+    )
+    assert len(enabled.get_schema_targets_sync(None)) == 1
+    with pytest.raises(ValueError, match="non-negative"):
+        enabled.search_entries("query", "app", "user", limit=-1)
+    cursor.execute.side_effect = RuntimeError("[Error 3807] Object does not exist")
+    assert enabled.search_entries("query", "app", "user", scope_filter="all") == []
+    cursor.execute.side_effect = None
+    now = datetime.now(UTC)
+    entry: StoredMemory = {
+        "id": "memory",
+        "session_id": "session",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "app",
+        "event_id": "event",
+        "author": None,
+        "timestamp": now,
+        "content_json": {},
+        "content_text": "text",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+    cursor.execute.side_effect = RuntimeError("[Error 2801] Duplicate unique key")
+    assert enabled.insert_memory_entries([entry], owner_id=5) == 0
+    assert conn.autocommit is True
+    cursor.execute.side_effect = RuntimeError("connection failed")
+    with pytest.raises(RuntimeError, match="connection failed"):
+        enabled.insert_memory_entries([entry])
+    assert conn.autocommit is True
+
+
+@pytest.mark.anyio
+async def test_teradata_litestar_catalog_lifecycle(monkeypatch) -> None:
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    statements = []
+    tables = set()
+    dictionary = SimpleNamespace(
+        get_indexes=lambda *_args, **_kwargs: [],
+        get_columns=lambda *_args, **_kwargs: [{"column_name": name} for name in ("session_id", "data", "expires_at")],
+    )
+
+    def execute(sql):
+        statements.append(sql)
+        if sql.startswith("CREATE MULTISET TABLE"):
+            tables.add("litestar_session")
+        elif sql.startswith("DROP TABLE"):
+            tables.clear()
+
+    driver = SimpleNamespace(
+        select_one_or_none=lambda _sql, params: {"found": 1} if params[1] in tables else None,
+        execute=execute,
+        execute_script=execute,
+        commit=lambda: None,
+        data_dictionary=dictionary,
+    )
+
+    @contextmanager
+    def session(_):
+        yield driver
+
+    monkeypatch.setattr(TeradataConfig, "provide_session", session)
+    store = TeradataStore(TeradataConfig(connection_config={"host": "localhost"}))
+    await store.create_table()
+    assert statements[0].startswith('CREATE MULTISET TABLE "litestar_session"')
+    assert "CREATE INDEX" in statements[1]
+    await store.drop_table()
+    await store.drop_table()
+    assert statements[-1] == 'DROP TABLE "litestar_session"'
+
+
+@pytest.mark.anyio
+async def test_teradata_litestar_missing_expiry_and_insert(teradata_connection) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    _conn, cursor = teradata_connection
+    store = TeradataStore(TeradataConfig(connection_config={"host": "localhost"}))
+    cursor.rowcount = 0
+    await store.set("new", "payload")
+    assert cursor.execute.call_args.args[1] == ("new", b"payload", None)
+    cursor.fetchone.return_value = (memoryview(b"payload"), None)
+    assert await store.get("new", renew_for=60) == b"payload"
+    cursor.fetchone.return_value = (None,)
+    assert await store.expires_in("new") is None
+    cursor.fetchone.return_value = (datetime.now(UTC) - timedelta(seconds=1),)
+    assert await store.expires_in("expired") == 0
+    assert await store.delete_expired() == 0
+
+
+def test_teradata_extension_targets_preserve_database_qualifier() -> None:
+    config = TeradataConfig(
+        connection_config={"host": "localhost"},
+        extension_config={
+            "adk": {"session_table": "app.sessions", "events_table": "app.events"},
+            "litestar": {"session_table": "app.http_sessions"},
+            "events": {"queue_table": "app.queue"},
+        },
+    )
+    targets = [
+        TeradataADKStore(config).get_schema_targets_sync(None)[0],
+        TeradataStore(config).get_schema_targets()[0],
+        TeradataEventQueueStore(config).get_schema_targets()[0],
+    ]
+    assert [(target.schema, target.table_name) for target in targets] == [
+        ("app", "sessions"),
+        ("app", "http_sessions"),
+        ("app", "queue"),
+    ]

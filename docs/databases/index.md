@@ -29,6 +29,8 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`adbc`](adbc.md) | `sqlspec[adbc]` | Sync | `?` / `$1` / `:1` | Optional PostgreSQL clone pool | Native C-Stream | Table Queue | Sessions + Memory (PostgreSQL `pgvector` RRF, SQLite `FTS5`, DuckDB, Oracle, Db2) |
 | [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE`) |
 
+| [`teradata`](teradata.md) | `sqlspec[teradata]` | Sync | `?` (`qmark`) | `TeradataConnectionPool` | Row / Stream | Table Queue | Sessions + Memory |
+
 ## Database Setup Guides
 
 - **[PostgreSQL and AlloyDB](postgres/index.md)**: Compare [`asyncpg`](postgres/asyncpg.md), [`psycopg`](postgres/psycopg.md), and [`psqlpy`](postgres/psqlpy.md), configure PgBouncer `pooler_mode` with `direct_dsn` bypasses, and enable Google Cloud AlloyDB columnar scans.
@@ -39,6 +41,7 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 - **[Microsoft SQL Server](mssql.md)**: Microsoft's official `mssql-python` driver with streaming Arrow `BulkCopy` alongside FreeTDS `pymssql`.
 - **[SAP Adaptive Server Enterprise](sybase.md)**: Sybase ASE 16.0+ via FreeTDS TDS 5.0 (`pymssql`), transactional DDL behavior, and catalog introspection.
 - **[SAP SQL Anywhere](sqlanywhere.md)**: Embedded and client-server SQL Anywhere 12+ via `sqlanydb`, recursive dependency analysis, and automatic rollback on context exit.
+- **[Teradata Vantage](teradata.md)**: Synchronous `teradatasql` connections, TERA and ANSI transactions, Arrow streaming, and Unicode catalog introspection.
 - **[IBM Db2](db2.md)**: Sync and async DRDA pooling (`Db2SyncConfig` / `Db2AsyncConfig`), savepoint cursor retention, and lowercase column normalization.
 - **[DuckDB](duckdb.md)**: In-process OLAP queries over Parquet/S3, hybrid native/Arrow materialization, and JSON statement profiling.
 - **[Google Cloud BigQuery](bigquery.md)**: Interactive `query_and_wait` execution, Storage Read/Write APIs, reservation governance, and multi-statement script jobs.

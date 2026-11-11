@@ -33,23 +33,36 @@ def test_native_scalar_conversion(value: object, type_code: str, expected: objec
 
 def test_native_row_conversion_and_parameters() -> None:
     assert coerce_teradata_row([memoryview(b"abc"), "1.25"], description=[("raw", "BLOB"), ("amount", "DECIMAL")]) == (
-        b"abc", Decimal("1.25")
+        b"abc",
+        Decimal("1.25"),
     )
     assert prepare_teradata_parameters({"enabled": True, "id": UUID(int=0)}) == {
-        "enabled": 1, "id": "00000000-0000-0000-0000-000000000000"
+        "enabled": 1,
+        "id": "00000000-0000-0000-0000-000000000000",
     }
-    assert prepare_teradata_parameters([[True, bytearray(b"abc")], [False, None]], is_many=True) == [(1, b"abc"), (0, None)]
+    assert prepare_teradata_parameters([[True, bytearray(b"abc")], [False, None]], is_many=True) == [
+        (1, b"abc"),
+        (0, None),
+    ]
     assert prepare_teradata_parameters(None) == ()
     assert coerce_teradata_row((1, "hello")) == (1, "hello")
 
 
 @pytest.mark.parametrize(
     ("type_code", "precision", "scale", "expected"),
-    [(bool, None, None, "bool"), (int, None, None, "int64"), (float, None, None, "float64"),
-     (Decimal, 12, 2, "decimal(12,2)"), (Decimal, None, None, "decimal"),
-     (bytes, None, None, "binary"), ("TIMESTAMP WITH TIME ZONE", None, None, "timestamptz"),
-     (datetime, None, None, "timestamp"), (date, None, None, "date"), (time, None, None, "time"),
-     ("JSON", None, None, "string")],
+    [
+        (bool, None, None, "bool"),
+        (int, None, None, "int64"),
+        (float, None, None, "float64"),
+        (Decimal, 12, 2, "decimal(12,2)"),
+        (Decimal, None, None, "decimal"),
+        (bytes, None, None, "binary"),
+        ("TIMESTAMP WITH TIME ZONE", None, None, "timestamptz"),
+        (datetime, None, None, "timestamp"),
+        (date, None, None, "date"),
+        (time, None, None, "time"),
+        ("JSON", None, None, "string"),
+    ],
 )
 def test_native_arrow_metadata(type_code: object, precision: int | None, scale: int | None, expected: str) -> None:
     description = [("COL", type_code, None, None, precision, scale, True)]

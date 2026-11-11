@@ -225,6 +225,7 @@ ADAPTER_DRIVERS: dict[str, tuple[str, ...]] = {
     "sqlanywhere": ("sqlanydb",),
     "sqlite": (),
     "sybase": ("pymssql",),
+    "teradata": (),
 }
 """Driver module(s) each adapter imports; every package under ``sqlspec/adapters/`` must be registered."""
 

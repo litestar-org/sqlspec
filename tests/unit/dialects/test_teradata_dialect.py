@@ -65,3 +65,27 @@ def test_teradata_native_byte_types() -> None:
         transpile("SELECT CAST(x AS BYTEINT), CAST(y AS VARBYTE(12))", read=Teradata, write=Teradata)[0]
         == "SELECT CAST(x AS BYTEINT), CAST(y AS VARBYTE(12))"
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 2",
+            "SELECT TOP 2 * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _sqlspec_paged",
+        ),
+        (
+            "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id LIMIT 2",
+            "SELECT TOP 2 * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _sqlspec_paged ORDER BY id",
+        ),
+        ("SELECT id FROM a UNION ALL SELECT id FROM b", "SELECT id FROM a UNION ALL SELECT id FROM b"),
+        ("SELECT id FROM a FETCH FIRST 2 ROWS ONLY", "SELECT TOP 2 id FROM a"),
+    ],
+)
+def test_teradata_set_limits_and_fetch(source: str, expected: str) -> None:
+    from sqlspec.dialects.teradata import Teradata
+
+    node = parse_one(source)
+    original = node.copy()
+    assert node.sql(dialect=Teradata) == expected
+    assert node == original

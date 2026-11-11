@@ -42,12 +42,10 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.teradata.data_dictionary")
-_VERSION_PARTS_WITH_BUILD = 4
+_UNICODE_CHAR_TYPE = 2
 
 
-def parse_teradata_version(
-    row: "dict[str, Any] | None",
-) -> "TeradataVersionInfo | None":
+def parse_teradata_version(row: "dict[str, Any] | None") -> "TeradataVersionInfo | None":
     """Parse the Teradata version string returned by the version query."""
     value = extract_teradata_version_value(row)
     return TeradataVersionInfo.from_version_string(value) if value else None
@@ -62,19 +60,11 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
             column_name=str(r.get("column_name", "")),
             data_type=str(r.get("data_type") or "UNKNOWN"),
             is_nullable=r.get("is_nullable") in (True, 1, "YES", "yes"),
-            column_default=str(r["column_default"])
-            if r.get("column_default") is not None
-            else None,
+            column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
             ordinal_position=int(r.get("ordinal_position", 1)),
-            max_length=int(r.get("max_length", 0))
-            if r.get("max_length") is not None
-            else 0,
-            numeric_precision=int(r.get("numeric_precision", 0))
-            if r.get("numeric_precision") is not None
-            else 0,
-            numeric_scale=int(r.get("numeric_scale", 0))
-            if r.get("numeric_scale") is not None
-            else 0,
+            max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
+            numeric_precision=int(r.get("numeric_precision", 0)) if r.get("numeric_precision") is not None else 0,
+            numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
             is_primary=bool(r.get("is_primary")),
             is_unique=bool(r.get("is_unique")),
             is_identity=bool(r.get("is_identity")),
@@ -95,11 +85,7 @@ def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadat
     """Group per-column Teradata DBC.IndicesV rows into index metadata."""
     indexes_map: dict[tuple[str, str, str], dict[str, Any]] = {}
     for r in rows:
-        key = (
-            str(r.get("schema_name", "")),
-            str(r.get("table_name", "")),
-            str(r.get("index_name", "")),
-        )
+        key = (str(r.get("schema_name", "")), str(r.get("table_name", "")), str(r.get("index_name", "")))
         if key not in indexes_map:
             indexes_map[key] = {
                 "schema_name": key[0],
@@ -126,25 +112,17 @@ def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadat
     ]
 
 
-def build_foreign_key_metadata(
-    rows: "Iterable[dict[str, Any]]",
-) -> "list[ForeignKeyMetadata]":
+def build_foreign_key_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ForeignKeyMetadata]":
     """Convert Teradata DBC.All_RI_ChildrenV query rows to foreign key metadata."""
     return [
         ForeignKeyMetadata(
             table_name=str(r.get("table_name", "")),
             column_name=str(r.get("column_name", "")),
-            referenced_table=str(
-                r.get("referenced_table", r.get("referenced_table_name", ""))
-            ),
-            referenced_column=str(
-                r.get("referenced_column", r.get("referenced_column_name", ""))
-            ),
+            referenced_table=str(r.get("referenced_table", r.get("referenced_table_name", ""))),
+            referenced_column=str(r.get("referenced_column", r.get("referenced_column_name", ""))),
             constraint_name=str(r.get("constraint_name", "")),
             schema=str(r["schema_name"]) if r.get("schema_name") else None,
-            referenced_schema=str(r["referenced_schema"])
-            if r.get("referenced_schema")
-            else None,
+            referenced_schema=str(r["referenced_schema"]) if r.get("referenced_schema") else None,
         )
         for r in rows
     ]
@@ -167,9 +145,7 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
         """Detect and cache the Teradata server version."""
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
-            return cast(
-                "TeradataVersionInfo | None", self._version_cache.get(driver_id)
-            )
+            return cast("TeradataVersionInfo | None", self._version_cache.get(driver_id))
 
         version_row = driver.select_one_or_none(self.get_query("version", "current"))
         version_info = parse_teradata_version(version_row)
@@ -194,14 +170,10 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
         """List feature flags defined for the Teradata dialect."""
         return list_teradata_available_features()
 
-    def get_tables(
-        self, driver: "TeradataDriver", schema: "str | None" = None
-    ) -> "list[TableMetadata]":
+    def get_tables(self, driver: "TeradataDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Return tables in topological dependency order for a Teradata schema."""
         schema_name = self.resolve_schema(schema)
-        self._log_schema_introspect(
-            driver, schema_name=schema_name, table_name=None, operation="tables"
-        )
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         ordered_rows = cast(
             "list[TableMetadata]",
             driver.select(
@@ -223,45 +195,21 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
         return merge_teradata_table_lists(ordered_rows, all_rows)
 
     def get_columns(
-        self,
-        driver: "TeradataDriver",
-        table: "str | None" = None,
-        schema: "str | None" = None,
+        self, driver: "TeradataDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Return column metadata for a table or entire Teradata schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
-            self._log_schema_introspect(
-                driver, schema_name=schema_name, table_name=None, operation="columns"
-            )
-            rows = driver.select(
-                self.get_query("columns", "by_schema"),
-                schema_name=schema_name,
-                table_name=None,
-            )
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
+            rows = driver.select(self.get_query("columns", "by_schema"), schema_name=schema_name, table_name=None)
         else:
             table_name = self.resolve_identifier(table)
-            self._log_table_describe(
-                driver,
-                schema_name=schema_name,
-                table_name=table_name,
-                operation="columns",
-            )
-            rows = driver.select(
-                self.get_query("columns", "by_table"),
-                schema_name=schema_name,
-                table_name=table_name,
-            )
-        if (
-            table is not None
-            and rows
-            and any(row.get("data_type") in (None, "", "UNKNOWN") for row in rows)
-        ):
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
+            rows = driver.select(self.get_query("columns", "by_table"), schema_name=schema_name, table_name=table_name)
+        if table is not None and rows and any(row.get("data_type") in (None, "", "UNKNOWN") for row in rows):
             query = "LOCKING ROW FOR ACCESS SELECT TRIM(ColumnName) AS column_name, TRIM(ColumnType) AS raw_type_code, ColumnLength AS max_length, DecimalTotalDigits AS numeric_precision, DecimalFractionalDigits AS numeric_scale, Nullable AS is_nullable, CharType AS char_type FROM DBC.ColumnsQV WHERE DatabaseName = COALESCE(CAST(? AS VARCHAR(128)), DATABASE) AND TableName = ? ORDER BY ColumnId"
             try:
-                details = driver.select(
-                    query, schema_name, self.resolve_identifier(table)
-                )
+                details = driver.select(query, schema_name, self.resolve_identifier(table))
             except SQLSpecError:
                 details = []
             by_name = {str(row["column_name"]).strip().upper(): row for row in details}
@@ -298,97 +246,50 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
                 detail = by_name.get(str(row["column_name"]).strip().upper())
                 if detail and row.get("data_type") in (None, "", "UNKNOWN"):
                     item.update(detail)
-                    item["data_type"] = type_map.get(
-                        str(detail.get("raw_type_code", "")).strip(), "UNKNOWN"
-                    )
-                    item["is_nullable"] = detail.get("is_nullable") in (
-                        True,
-                        1,
-                        "Y",
-                        "YES",
-                    )
+                    item["data_type"] = type_map.get(str(detail.get("raw_type_code", "")).strip(), "UNKNOWN")
+                    item["is_nullable"] = detail.get("is_nullable") in (True, 1, "Y", "YES")
                     if (
                         item["data_type"] in {"VARCHAR", "CHAR"}
-                        and detail.get("char_type") == 2
+                        and detail.get("char_type") == _UNICODE_CHAR_TYPE
                         and isinstance(detail.get("max_length"), int)
                     ):
-                        item["max_length"] = detail["max_length"] // 2
+                        item["max_length"] = detail["max_length"] // _UNICODE_CHAR_TYPE
                 enriched.append(item)
             rows = enriched
         return build_column_metadata(rows)
 
     def get_indexes(
-        self,
-        driver: "TeradataDriver",
-        table: "str | None" = None,
-        schema: "str | None" = None,
+        self, driver: "TeradataDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Return index metadata for a table or entire Teradata schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
-            self._log_schema_introspect(
-                driver, schema_name=schema_name, table_name=None, operation="indexes"
-            )
-            rows = driver.select(
-                self.get_query("indexes", "by_schema"),
-                schema_name=schema_name,
-                table_name=None,
-            )
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
+            rows = driver.select(self.get_query("indexes", "by_schema"), schema_name=schema_name, table_name=None)
         else:
             table_name = self.resolve_identifier(table)
-            self._log_table_describe(
-                driver,
-                schema_name=schema_name,
-                table_name=table_name,
-                operation="indexes",
-            )
-            rows = driver.select(
-                self.get_query("indexes", "by_table"),
-                schema_name=schema_name,
-                table_name=table_name,
-            )
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="indexes")
+            rows = driver.select(self.get_query("indexes", "by_table"), schema_name=schema_name, table_name=table_name)
         return build_index_metadata(rows)
 
     def get_foreign_keys(
-        self,
-        driver: "TeradataDriver",
-        table: "str | None" = None,
-        schema: "str | None" = None,
+        self, driver: "TeradataDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Return foreign key metadata for a table or entire Teradata schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
-            self._log_schema_introspect(
-                driver,
-                schema_name=schema_name,
-                table_name=None,
-                operation="foreign_keys",
-            )
-            rows = driver.select(
-                self.get_query("foreign_keys", "by_schema"),
-                schema_name=schema_name,
-                table_name=None,
-            )
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
+            rows = driver.select(self.get_query("foreign_keys", "by_schema"), schema_name=schema_name, table_name=None)
         else:
             table_name = self.resolve_identifier(table)
-            self._log_table_describe(
-                driver,
-                schema_name=schema_name,
-                table_name=table_name,
-                operation="foreign_keys",
-            )
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="foreign_keys")
             rows = driver.select(
-                self.get_query("foreign_keys", "by_table"),
-                schema_name=schema_name,
-                table_name=table_name,
+                self.get_query("foreign_keys", "by_table"), schema_name=schema_name, table_name=table_name
             )
         return build_foreign_key_metadata(rows)
 
     def get_constraints(
-        self,
-        driver: "TeradataDriver",
-        table: "str | None" = None,
-        schema: "str | None" = None,
+        self, driver: "TeradataDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> MetadataResult:
         """Get Teradata constraint metadata."""
         schema_name = self.resolve_schema(schema)
@@ -397,9 +298,7 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
         rows = driver.select(query, schema_name=schema_name, table_name=table_name)
         return MetadataResult("constraints", items=tuple(rows))
 
-    def get_views(
-        self, driver: "TeradataDriver", schema: "str | None" = None
-    ) -> MetadataResult:
+    def get_views(self, driver: "TeradataDriver", schema: "str | None" = None) -> MetadataResult:
         """Get Teradata view metadata."""
         schema_name = self.resolve_schema(schema)
         query = self.get_query("views", "by_schema")
@@ -412,20 +311,14 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
         for chunks in grouped.values():
             chunks.sort(key=lambda row: int(row.get("line_no", 1)))
             view = dict(chunks[0])
-            view["definition"] = "".join(
-                str(row.get("definition") or "") for row in chunks
-            )
+            view["definition"] = "".join(str(row.get("definition") or "") for row in chunks)
             views.append(view)
         return MetadataResult("views", items=tuple(views))
 
-    def get_objects(
-        self, driver: "TeradataDriver", schema: "str | None" = None
-    ) -> MetadataResult:
+    def get_objects(self, driver: "TeradataDriver", schema: "str | None" = None) -> MetadataResult:
         """Get tables, views, and procedures from the Teradata catalog."""
         rows = driver.select(
-            self.get_query("objects", "by_schema"),
-            schema_name=self.resolve_schema(schema),
-            object_name=None,
+            self.get_query("objects", "by_schema"), schema_name=self.resolve_schema(schema), object_name=None
         )
         return MetadataResult("objects", items=tuple(rows))
 

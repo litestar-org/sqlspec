@@ -95,6 +95,10 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 <!-- GENERATED:START config-table:sqlspec.adapters.adbc.config.AdbcConnectionParams,sqlspec.adapters.adbc.config.AdbcPoolConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `host` | `str` | - | Teradata server hostname or IP address. |
+| `port` | `int` | - | Teradata server port, defaulting to 1025. |
+| `user` | `str` | - | Alias for the Teradata connection username. |
+| `adbc_dialect` | `str` | - | Explicit database dialect for generic FlightSQL transports. |
 | `uri` | `str` | - | Backend connection URI (such as `postgresql://`, `sqlite://`, `duckdb://`, `grpc+tls://`, `oracle://`, `db2://`, or `quack://`). |
 | `dsn` | `str` | - | Connection string alias normalized to `uri` when `uri` is unset. |
 | `url` | `str` | - | Connection URL alias normalized to `uri` when `uri` is unset. |
@@ -191,3 +195,30 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 - [BigQuery Dialect Reference](/reference/data-dictionary/dialects/bigquery/)
 - [Oracle Dialect Reference](/reference/data-dictionary/dialects/oracle/)
 - [IBM Db2 Dialect Reference](/reference/data-dictionary/dialects/db2/)
+
+## Teradata
+
+Teradata ADBC uses Columnar's `dbc` driver manifest rather than a PyPI `adbc-driver-teradata` package. Install the Teradata driver and its required TTU native libraries through your approved `dbc` installation, then use a `teradata://` URI with `AdbcConfig`. Keep credentials out of logged URIs.
+
+```python
+import os
+
+from sqlspec.adapters.adbc import AdbcConfig
+
+config = AdbcConfig(
+    connection_config={
+        "driver": "teradata",
+        "uri": os.environ["SQLSPEC_TERADATA_ADBC_URI"],
+    }
+)
+with config.provide_session() as session:
+    rows = session.select(
+        "SELECT order_id FROM orders WHERE customer_id = ?", (42,)
+    )
+```
+
+For an Arrow Flight SQL endpoint, select the Flight SQL driver and explicitly provide `StatementConfig(dialect="teradata")`. The SQL dialect controls parameter handling, catalog SQL fallback, and extension DDL. Flight SQL endpoint credentials and TLS settings belong in the driver's connection options.
+
+Columnar Teradata driver v0.1.1 supports autocommit only. Explicit `begin()` raises `TransactionError` when the driver refuses transaction mode; savepoints are unavailable. Native Arrow ingestion depends on the installed driver and server capabilities. The native [Teradata adapter](teradata.md) is available when DB-API transaction support is required.
+
+Live ADBC tests use `SQLSPEC_TERADATA_ADBC_URI`; Flight SQL tests use `SQLSPEC_TERADATA_FLIGHTSQL_URI`. Both skip when their URI is unset.

@@ -145,6 +145,14 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
         ),
     ),
     DialectDocSpec(
+        dialect="teradata",
+        title="Teradata Vantage",
+        ddl_strategy="DBC.TableTextV object text and catalog-backed AST synthesis",
+        guide_link="../../../databases/teradata.md",
+        summary="Introspects modern Unicode DBC.*V views using LOCKING ROW FOR ACCESS; columns support scoped ColumnsQV fallback.",
+        adapter_classes=("sqlspec.adapters.teradata.data_dictionary.TeradataSyncDataDictionary",),
+    ),
+    DialectDocSpec(
         dialect="sybase",
         title="Sybase ASE",
         ddl_strategy="AST synthesis + `dbo.syscomments` object text reassembly",

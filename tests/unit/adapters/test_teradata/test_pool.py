@@ -146,7 +146,20 @@ def test_pool_close_prevents_nested_lease_reuse(sdk_connections: list[Any]) -> N
     assert pool.size() == 0
 
 
-@pytest.mark.parametrize("options", [{"min_size": True}, {"max_size": False}, {"min_size": -1}, {"max_size": 0}, {"min_size": 3, "max_size": 2}, {"timeout": float("nan")}, {"timeout": -1}, {"recycle_seconds": -1}, {"health_check_interval": -1}])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"min_size": True},
+        {"max_size": False},
+        {"min_size": -1},
+        {"max_size": 0},
+        {"min_size": 3, "max_size": 2},
+        {"timeout": float("nan")},
+        {"timeout": -1},
+        {"recycle_seconds": -1},
+        {"health_check_interval": -1},
+    ],
+)
 def test_pool_rejects_invalid_bounds(options: dict[str, Any]) -> None:
     from sqlspec.exceptions import ImproperConfigurationError
 
@@ -167,7 +180,9 @@ def test_pool_defers_missing_dependency_until_checkout(monkeypatch: pytest.Monke
 
 
 @pytest.mark.parametrize("failed_ping", [False, True])
-def test_pool_health_check_reuses_or_replaces_connection(sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch, failed_ping: bool) -> None:
+def test_pool_health_check_reuses_or_replaces_connection(
+    sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch, failed_ping: bool
+) -> None:
     clock = [100.0]
     monkeypatch.setattr("sqlspec.adapters.teradata.pool.time.monotonic", lambda: clock[0])
     pool = TeradataConnectionPool({}, health_check_interval=5, recycle_seconds=0)
@@ -190,7 +205,9 @@ def test_pool_health_check_reuses_or_replaces_connection(sdk_connections: list[A
     pool.close()
 
 
-def test_pool_recycles_expired_connection_without_ping(sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pool_recycles_expired_connection_without_ping(
+    sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     clock = [100.0]
     monkeypatch.setattr("sqlspec.adapters.teradata.pool.time.monotonic", lambda: clock[0])
     pool = TeradataConnectionPool({}, recycle_seconds=5, health_check_interval=1)
@@ -255,4 +272,12 @@ def test_waiting_checkout_succeeds_after_lease_return(sdk_connections: list[Any]
     assert second is first
     assert pool.checked_out() == 1
     pool.release(second)
+    pool.close()
+
+
+def test_pool_query_band_none_resets_session(sdk_connections: list[Any]) -> None:
+    pool = TeradataConnectionPool({}, session_query_band="NONE")
+    connection = pool.acquire()
+    connection.cursor.return_value.execute.assert_called_once_with("SET QUERY_BAND = NONE FOR SESSION;")
+    pool.release(connection)
     pool.close()

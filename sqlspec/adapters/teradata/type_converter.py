@@ -6,6 +6,9 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+__all__ = ("coerce_teradata_row", "coerce_teradata_value", "extract_arrow_column_types", "prepare_teradata_parameters")
+
+
 _MAX_DECIMAL_PRECISION = 76
 
 
@@ -58,7 +61,7 @@ def prepare_teradata_parameters(parameters: Any, *, is_many: bool = False) -> An
 def extract_arrow_column_types(
     description: Sequence[Any] | None, *, column_names: Sequence[str] | None = None
 ) -> dict[str, str]:
-    """Map native DB-API metadata to Arrow type type_names."""
+    """Map native DB-API metadata to Arrow type tokens."""
     result = {}
     for i, col in enumerate(description or ()):
         code = col[1]

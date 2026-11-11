@@ -76,6 +76,7 @@ spanner = ["google-cloud-spanner>=3.64.0"]
 sqlanywhere = ["sqlanydb>=1.0.14"]
 starlette = ["starlette"]
 sybase = ["pymssql"]
+teradata = ["teradatasql>=20.0.0"]
 uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
@@ -161,6 +162,7 @@ spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
 sqlanywhere = "sqlspec.dialects.sybase:SQLAnywhere"
 sybase = "sqlspec.dialects.sybase:Sybase"
+teradata = "sqlspec.dialects.teradata:Teradata"
 
 [tool.uv]
 exclude-newer = "7 days"
@@ -264,6 +266,7 @@ include = [
   "sqlspec/dialects/db2/_transforms.py",           # Db2 custom dialect transform helpers
   "sqlspec/dialects/sybase/_generators.py",        # Sybase and SQL Anywhere custom dialect render hooks
   "sqlspec/dialects/sybase/_parsers.py",           # Sybase and SQL Anywhere custom dialect parser hooks
+  "sqlspec/dialects/teradata/_generators.py",
   "sqlspec/dialects/sybase/_transforms.py",        # Sybase and SQL Anywhere custom dialect transform helpers
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
@@ -491,6 +494,7 @@ markers = [
   "psqlpy: marks tests using psqlpy",
   "sqlanywhere: marks tests using the sqlanywhere adapter",
   "sybase: marks tests using the sybase adapter",
+  "teradata: tests requiring a live Teradata Vantage instance",
 ]
 python_files = ["test_*.py"]
 testpaths = ["tests"]
@@ -548,6 +552,8 @@ module = [
   "ibm_db_dbi.*",
   "sqlanydb",
   "sqlanydb.*",
+  "teradatasql",
+  "teradatasql.*",
   "sqlglot",
   "sqlglot.*",
 ]

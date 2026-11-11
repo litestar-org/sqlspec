@@ -9,9 +9,7 @@ from sqlspec.adapters.teradata.migrations import TeradataSyncMigrationTracker
 
 @pytest.mark.parametrize("exists", [False, True])
 def test_tracker_creates_only_missing_table(exists: bool) -> None:
-    tracker = TeradataSyncMigrationTracker(
-        version_table_name="history", version_table_schema="mart"
-    )
+    tracker = TeradataSyncMigrationTracker(version_table_name="history", version_table_schema="mart")
     driver = MagicMock()
     driver.driver_features = {"autocommit": False}
     driver.data_dictionary.get_columns.return_value = [
@@ -28,11 +26,9 @@ def test_tracker_creates_only_missing_table(exists: bool) -> None:
             "replaces",
         )
     ]
-    driver.select_one_or_none.return_value = (
-        {"table_name": "history"} if exists else None
-    )
+    driver.select_one_or_none.return_value = {"table_name": "history"} if exists else None
     tracker.ensure_tracking_table(driver)
-    assert driver.select_one_or_none.call_args.args[1:] == ("mart", "history")
+    assert driver.select_one_or_none.call_args.args[1:] == ("MART", "HISTORY")
     if exists:
         driver.execute_script.assert_not_called()
     else:

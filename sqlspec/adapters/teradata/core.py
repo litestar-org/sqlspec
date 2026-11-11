@@ -26,6 +26,26 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 
+__all__ = (
+    "apply_driver_features",
+    "build_connection_config",
+    "build_insert_statement",
+    "build_profile",
+    "build_set_query_band_sql",
+    "build_statement_config",
+    "collect_rows",
+    "create_mapped_exception",
+    "extract_teradata_error_code",
+    "format_identifier",
+    "format_query_band",
+    "is_ddl_or_session_band_sql",
+    "resolve_column_names",
+    "resolve_many_rowcount",
+    "resolve_rowcount",
+    "split_teradata_table_name",
+)
+
+
 _MAX_PORT = 65535
 _IDENTIFIER_PARTS = 2
 _COLUMN_CACHE_SIZE = 256
@@ -180,13 +200,20 @@ def split_teradata_table_name(identifier: str) -> tuple[str | None, str]:
     if not parts or len(parts) > _IDENTIFIER_PARTS:
         msg = "Expected a table or database.table identifier"
         raise SQLSpecError(msg)
-    return (parts[0], parts[1]) if len(parts) == _IDENTIFIER_PARTS else (None, parts[0])
+    raw_parts = re.findall(r'"(?:[^"]|"")*"|\[(?:[^\]]|\]\])*\]|[^.\s]+', identifier.strip())
+    normalized = [
+        part if raw.startswith(('"', "[")) else part.upper() for part, raw in zip(parts, raw_parts, strict=True)
+    ]
+    return (normalized[0], normalized[1]) if len(normalized) == _IDENTIFIER_PARTS else (None, normalized[0])
 
 
 def format_identifier(identifier: str) -> str:
     """Quote database-qualified identifiers."""
-    schema, table = split_teradata_table_name(identifier)
-    return ".".join('"' + p.replace('"', '""') + '"' for p in (schema, table) if p is not None)
+    parts = split_qualified_identifier(identifier.strip(), quote_chars='"', allow_bracket_quotes=True)
+    if not parts or len(parts) > _IDENTIFIER_PARTS:
+        msg = "Expected a table or database.table identifier"
+        raise SQLSpecError(msg)
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def build_insert_statement(table: str, columns: list[str]) -> str:

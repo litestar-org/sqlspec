@@ -1,0 +1,71 @@
+# Teradata Vantage
+
+Use `TeradataConfig` to connect synchronously to Teradata Vantage through `teradatasql`. The adapter uses `?` parameter markers, a bounded connection pool, and the `teradata` SQL dialect. The alias `vantage` selects the same dialect.
+
+## Install and connect
+
+Install the driver extra separately. Review the Teradata driver license before installing it; the default development extras do not include this driver.
+
+```bash
+pip install 'sqlspec[teradata]'
+```
+
+Keep credentials in your environment or secret manager:
+
+```python
+--8<-- "docs/examples/teradata/quickstart.py:example"
+```
+
+Construction does not connect. After setting your environment credentials, open a session and close the pool when finished:
+
+```python
+try:
+    with config.provide_session() as session:
+        rows = session.select(
+            "SELECT order_id FROM orders WHERE customer_id = ?", (42,)
+        )
+finally:
+    config.close_pool()
+```
+
+`teradatasql` is loaded when a connection is opened. Importing the adapter and constructing a configuration do not require an installed driver or open a network connection. The default character set is UTF-8. Pass driver authentication and TLS options in `connection_config` using the names accepted by `teradatasql`, such as `logmech`, `logdata`, and `sslmode`.
+
+## Transactions and pooling
+
+Teradata supports `TERA` and `ANSI` session transaction modes. Select the mode before opening connections. Use explicit `begin()`, `commit()`, and `rollback()` for units of work. The driver commits DDL and session query-band requests before subsequent statements to avoid Teradata error 3932; these operations also commit an enclosing unit of work, so keep them outside application transactions. Savepoints are unavailable.
+
+A session owns its checked-out connection until the context exits. Size pools conservatively against your database's TASM session limits, and close the pool during application shutdown. Connections must not cross process boundaries.
+
+## SQL, Arrow, and catalogs
+
+The dialect renders a limit as `TOP` and offset pagination with `QUALIFY ROW_NUMBER()`. Supply a stable `ORDER BY` for deterministic paging. `BOOLEAN` values use `BYTEINT`; large text and binary values use `CLOB` and `BLOB`. Merge sources cast parameters to concrete Teradata types.
+
+`select_to_arrow()` converts bounded DB-API chunks to Arrow; `native_only=True` is refused because this is a conversion path. `select_stream()` yields row dictionaries or mapped objects. FastExport and FastLoad are opt-in driver capabilities; check server permissions and restrictions before enabling them. Storage upserts use a staging table and separate update and insert requests.
+
+The data dictionary queries modern Unicode `DBC.*V` catalog views with `LOCKING ROW FOR ACCESS`. Catalog access depends on the connected user's privileges. See the [catalog reference](../reference/data-dictionary/dialects/teradata.md) and [adapter API](../reference/adapters/teradata.md).
+
+## Extensions and ADBC
+
+The adapter supplies Litestar session, event queue, and Google ADK session and memory stores. Configure extensions through `extension_config`; their schema reconcilers create missing tables and validate existing schemas.
+
+For native Arrow access through Columnar `dbc` or Flight SQL, see [ADBC Teradata connections](adbc.md#teradata). Native `teradatasql` and ADBC use separate drivers and installation paths.
+
+## Live verification
+
+Set `TERADATA_HOST`, `TERADATA_USER`, and `TERADATA_PASSWORD`, then run:
+
+```bash
+UV_NO_SYNC=1 uv run --no-sync pytest tests/integration/adapters/teradata -q
+```
+
+Optional variables include `TERADATA_PORT`, `TERADATA_DATABASE`, `TERADATA_LOGMECH`, `TERADATA_LOGDATA`, `TERADATA_SSLMODE`, and `TERADATA_ENCRYPTDATA`. The live suite skips when no host is configured.
+
+For a licensed, runnable local database image, the test suite can start a custom service through `pytest-databases`:
+
+```bash
+TERADATA_TEST_IMAGE=your-licensed-teradata-image \
+TERADATA_USER=dbc TERADATA_PASSWORD=your-test-password \
+UV_NO_SYNC=1 uv run --no-sync pytest tests/integration/adapters/teradata -q
+```
+
+The service publishes container port `1025` on a dynamic host port and waits for a successful driver probe. Set `TERADATA_STARTUP_TIMEOUT` to adjust the default 300-second startup allowance. Override the session-scoped `teradata_service_environment` fixture for image-specific initialization settings. An explicit `TERADATA_HOST` takes precedence over the local image. Supply your own licensed image; [Teradata Vantage Express](https://downloads.teradata.com/download/database/teradata-express/vmware) is distributed as a virtual machine, so this fixture does not assume a public Docker image exists.

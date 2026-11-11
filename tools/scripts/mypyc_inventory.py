@@ -27,6 +27,30 @@ CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "
 SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
+    "sqlspec/data_dictionary/dialects/teradata/config.py": {
+        "classification": "compile_now",
+        "reason": "Teradata catalog configuration compiles with dialect helpers.",
+    },
+    "sqlspec/dialects/teradata/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Explicit argument Teradata generator dispatch handlers.",
+    },
+    "sqlspec/adapters/teradata/core.py": {
+        "classification": "compile_now",
+        "reason": "Teradata connection normalization and error mapping helpers.",
+    },
+    "sqlspec/adapters/teradata/pool.py": {
+        "classification": "compile_now",
+        "reason": "Teradata bounded thread-local connection pool runtime.",
+    },
+    "sqlspec/adapters/teradata/type_converter.py": {
+        "classification": "compile_now",
+        "reason": "Teradata output and parameter coercion helpers.",
+    },
+    "sqlspec/adapters/teradata/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Public DB-API driver remains interpreted alongside sibling adapters.",
+    },
     "sqlspec/service/_base.py": {
         "classification": "keep_interpreted",
         "reason": "Public generic service bases preserve Python slots and subclassing; runtime helpers compile separately.",

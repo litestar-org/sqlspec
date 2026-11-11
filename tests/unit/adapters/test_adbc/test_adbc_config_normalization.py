@@ -38,9 +38,7 @@ from sqlspec.utils.module_loader import reset_dependency_cache
 
 
 @pytest.fixture
-def optional_driver_imports(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Callable[[str, bool], None]]:
+def optional_driver_imports(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, bool], None]]:
     """Control optional SDK package imports through Python's module registry."""
     configured: set[str] = set()
 
@@ -65,14 +63,10 @@ def test_adbc_config_runs_connection_create_callback(monkeypatch: Any) -> None:
     def fake_connect(**_kwargs: Any) -> Any:
         return connection
 
-    monkeypatch.setattr(
-        "sqlspec.adapters.adbc.config.resolve_driver_connect_func",
-        lambda *_args: fake_connect,
-    )
+    monkeypatch.setattr("sqlspec.adapters.adbc.config.resolve_driver_connect_func", lambda *_args: fake_connect)
 
     config = AdbcConfig(
-        connection_config={"driver_name": "sqlite"},
-        driver_features={"on_connection_create": seen.append},
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": seen.append}
     )
 
     assert config.create_connection() is connection
@@ -101,10 +95,7 @@ def test_adbc_session_json_bind_accepts_unhashable_callable_serializer() -> None
         },
     )
     with config.provide_session() as session:
-        assert (
-            session.select_value("SELECT :payload", payload={"answer": 42})
-            == '{"custom":{"answer":42}}'
-        )
+        assert session.select_value("SELECT :payload", payload={"answer": 42}) == '{"custom":{"answer":42}}'
 
 
 def test_adbc_converter_cache_preserves_distinct_equal_callable_identity() -> None:
@@ -155,17 +146,11 @@ def test_adbc_pool_option_enables_exclusive_reuse_without_changing_standalone_co
     seed, lease, standalone = MagicMock(), MagicMock(), MagicMock()
     seed.adbc_clone.return_value = lease
     create = MagicMock(side_effect=[seed, standalone])
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", create
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
     config = AdbcConfig(
         connection_config={"driver_name": "postgres"},
         pool_config={},
-        driver_features={
-            "enable_pgvector": False,
-            "enable_paradedb": False,
-            "enable_pg_textsearch": False,
-        },
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
     )
     pool = config.provide_pool()
     create.assert_not_called()
@@ -189,10 +174,7 @@ def test_adbc_disabled_pool_methods_preserve_borrowed_connection() -> None:
         connection_config={"driver_name": "sqlite"},
         connection_instance=borrowed,
         pool_config=None,
-        driver_features={
-            "on_pool_create": events.append,
-            "on_pool_destroy": events.append,
-        },
+        driver_features={"on_pool_create": events.append, "on_pool_destroy": events.append},
     )
     assert config.create_pool() is None
     assert config.provide_pool() is None
@@ -218,36 +200,23 @@ def test_adbc_disabled_pool_methods_preserve_borrowed_connection() -> None:
         "timeout",
     ],
 )
-def test_adbc_pool_rejects_unsupported_settings_before_native_io(
-    monkeypatch: pytest.MonkeyPatch, invalid: str
-) -> None:
+def test_adbc_pool_rejects_unsupported_settings_before_native_io(monkeypatch: pytest.MonkeyPatch, invalid: str) -> None:
     """Unsupported pooling settings fail before opening a native resource."""
     create = MagicMock()
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", create
-    )
-    options: dict[str, Any] = {
-        "connection_config": {"driver_name": "postgres"},
-        "pool_config": {},
-    }
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
+    options: dict[str, Any] = {"connection_config": {"driver_name": "postgres"}, "pool_config": {}}
     if invalid == "driver":
         options["connection_config"]["driver_name"] = "sqlite"
     elif invalid == "autocommit":
         options["connection_config"]["autocommit"] = True
     elif invalid == "native_autocommit":
-        options["connection_config"]["conn_kwargs"] = {
-            "adbc.connection.autocommit": "true"
-        }
+        options["connection_config"]["conn_kwargs"] = {"adbc.connection.autocommit": "true"}
     elif invalid == "injected":
         options["connection_instance"] = MagicMock()
     elif invalid == "hook":
         options["driver_features"] = {"on_connection_create": lambda _connection: None}
     elif invalid.startswith("size"):
-        options["pool_config"]["max_size"] = {
-            "size_zero": 0,
-            "size_bool": True,
-            "size_float": 1.5,
-        }[invalid]
+        options["pool_config"]["max_size"] = {"size_zero": 0, "size_bool": True, "size_float": 1.5}[invalid]
     else:
         options["pool_config"]["timeout"] = float("nan")
     with pytest.raises(ImproperConfigurationError):
@@ -255,9 +224,7 @@ def test_adbc_pool_rejects_unsupported_settings_before_native_io(
     create.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "distribution", ["adbc-driver-manager", "adbc-driver-postgresql"]
-)
+@pytest.mark.parametrize("distribution", ["adbc-driver-manager", "adbc-driver-postgresql"])
 @pytest.mark.parametrize("installed", ["1.11.0", "1.12.0rc1", "1.12.0.dev0", None])
 def test_adbc_pool_requires_supported_native_versions_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch, distribution: str, installed: str | None
@@ -273,16 +240,12 @@ def test_adbc_pool_requires_supported_native_versions_only_when_enabled(
         return installed
 
     monkeypatch.setattr(importlib.metadata, "version", version)
-    assert (
-        AdbcConfig(connection_config={"driver_name": "postgres"}).create_pool() is None
-    )
+    assert AdbcConfig(connection_config={"driver_name": "postgres"}).create_pool() is None
     with pytest.raises(ImproperConfigurationError, match=r"1\.12\.0"):
         _postgres_pool_config()
 
 
-def test_adbc_pool_requires_public_native_clone_capability(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_adbc_pool_requires_public_native_clone_capability(monkeypatch: pytest.MonkeyPatch) -> None:
     """A sufficient package version without public cloning fails before opening a connection."""
     monkeypatch.setattr(adbc_driver_manager.dbapi.Connection, "adbc_clone", None)
     with pytest.raises(ImproperConfigurationError, match="adbc_clone"):
@@ -314,15 +277,11 @@ def test_adbc_pool_atomic_first_publication_and_callbacks_outside_config_lock() 
     config.close_pool()
 
 
-def test_adbc_pool_drain_retains_origin_and_restarts_after_final_release(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_adbc_pool_drain_retains_origin_and_restarts_after_final_release(monkeypatch: pytest.MonkeyPatch) -> None:
     """A pending drain keeps ownership and retires exactly once before a new generation."""
     seed, lease = MagicMock(), MagicMock()
     seed.adbc_clone.return_value = lease
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
     events: list[tuple[str, Any]] = []
     config = _postgres_pool_config(
         driver_features={
@@ -342,12 +301,7 @@ def test_adbc_pool_drain_retains_origin_and_restarts_after_final_release(
     context.__exit__(None, None, None)
     replacement = config.provide_pool()
     assert replacement is not origin
-    assert events == [
-        ("create", origin),
-        ("destroying", origin),
-        ("destroy", origin),
-        ("create", replacement),
-    ]
+    assert events == [("create", origin), ("destroying", origin), ("destroy", origin), ("create", replacement)]
     lease.close.assert_called_once_with()
     seed.close.assert_called_once_with()
     config.close_pool()
@@ -355,16 +309,12 @@ def test_adbc_pool_drain_retains_origin_and_restarts_after_final_release(
     assert events[-2:] == [("destroying", replacement), ("destroy", replacement)]
 
 
-def test_adbc_pool_cleanup_failure_retains_generation_for_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_adbc_pool_cleanup_failure_retains_generation_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     """A native-close failure never permits a new generation before cleanup succeeds."""
     seed, lease = MagicMock(), MagicMock()
     seed.adbc_clone.return_value = lease
     lease.close.side_effect = [RuntimeError("native close failed"), None]
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
     config = _postgres_pool_config()
     with config.provide_session():
         pass
@@ -382,18 +332,14 @@ def test_adbc_pool_cleanup_failure_retains_generation_for_retry(
 
 
 @pytest.mark.parametrize("close_fails", [False, True])
-def test_adbc_pool_body_error_evicts_and_preserves_primary(
-    monkeypatch: pytest.MonkeyPatch, close_fails: bool
-) -> None:
+def test_adbc_pool_body_error_evicts_and_preserves_primary(monkeypatch: pytest.MonkeyPatch, close_fails: bool) -> None:
     """Failed session bodies discard their exact lease without masking the application error."""
     seed, lease = MagicMock(), MagicMock()
     primary = ValueError("application failed")
     seed.adbc_clone.return_value = lease
     if close_fails:
         lease.close.side_effect = [KeyboardInterrupt("native close interrupted"), None]
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
     config = _postgres_pool_config(pool_config={"max_size": 1, "timeout": 0})
     with pytest.raises(ValueError) as caught, config.provide_session() as session:
         assert session.connection is lease
@@ -432,24 +378,15 @@ def test_adbc_pool_destroying_reentry_cannot_close_replacement_generation() -> N
     config.close_pool()
     replacement = replacements[0]
     assert config.provide_pool() is replacement
-    assert events == [
-        ("create", origin),
-        ("destroying", origin),
-        ("destroy", origin),
-        ("create", replacement),
-    ]
+    assert events == [("create", origin), ("destroying", origin), ("destroy", origin), ("create", replacement)]
     config.close_pool()
 
 
-def test_adbc_pool_session_releases_exact_acquired_generation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_adbc_pool_session_releases_exact_acquired_generation(monkeypatch: pytest.MonkeyPatch) -> None:
     """A handler returns its lease to the captured generation even if the config reference changes."""
     seed, lease = MagicMock(), MagicMock()
     seed.adbc_clone.return_value = lease
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", lambda **_kwargs: seed)
     config = _postgres_pool_config()
     context = config.provide_session()
     context.__enter__()
@@ -465,16 +402,12 @@ def test_adbc_pool_session_releases_exact_acquired_generation(
 
 
 @pytest.mark.parametrize("event", ["create", "destroying"])
-def test_adbc_pool_callback_failure_retains_owned_generation(
-    monkeypatch: pytest.MonkeyPatch, event: str
-) -> None:
+def test_adbc_pool_callback_failure_retains_owned_generation(monkeypatch: pytest.MonkeyPatch, event: str) -> None:
     """Lifecycle failures retain ownership and emit each lifecycle callback at most once."""
     seed, lease = MagicMock(), MagicMock()
     seed.adbc_clone.return_value = lease
     create = MagicMock(return_value=seed)
-    monkeypatch.setattr(
-        import_module("adbc_driver_postgresql.dbapi"), "connect", create
-    )
+    monkeypatch.setattr(import_module("adbc_driver_postgresql.dbapi"), "connect", create)
     seen: list[Any] = []
 
     def failure(pool: Any) -> None:
@@ -518,10 +451,7 @@ def test_adbc_pool_rejects_inherited_generation_before_config_lock_and_callbacks
     config = _LockProbeConfig(
         connection_config={"driver_name": "postgres"},
         pool_config={},
-        driver_features={
-            "on_pool_create": events.append,
-            "on_pool_destroying": events.append,
-        },
+        driver_features={"on_pool_create": events.append, "on_pool_destroying": events.append},
     )
     config.provide_pool()
     events.clear()
@@ -555,35 +485,23 @@ def test_adbc_pool_derive_preserves_settings_and_validates_overrides() -> None:
     config.close_pool()
 
 
-@pytest.mark.parametrize(
-    "primary", [ValueError("hook failed"), KeyboardInterrupt("hook interrupted")]
-)
-@pytest.mark.parametrize(
-    "cleanup_error",
-    [None, RuntimeError("close failed"), SystemExit("close interrupted")],
-)
+@pytest.mark.parametrize("primary", [ValueError("hook failed"), KeyboardInterrupt("hook interrupted")])
+@pytest.mark.parametrize("cleanup_error", [None, RuntimeError("close failed"), SystemExit("close interrupted")])
 def test_adbc_config_hook_failure_closes_owned_connection(
-    monkeypatch: pytest.MonkeyPatch,
-    primary: BaseException,
-    cleanup_error: BaseException | None,
+    monkeypatch: pytest.MonkeyPatch, primary: BaseException, cleanup_error: BaseException | None
 ) -> None:
     """A failing initialization hook preserves its error after closing its owned connection."""
     connection = MagicMock()
     connection.close.side_effect = cleanup_error
-    monkeypatch.setattr(
-        adbc_driver_sqlite.dbapi, "connect", lambda **_kwargs: connection
-    )
+    monkeypatch.setattr(adbc_driver_sqlite.dbapi, "connect", lambda **_kwargs: connection)
 
     def fail_hook(_connection: Any) -> None:
         raise primary
 
     config = AdbcConfig(
-        connection_config={"driver_name": "sqlite"},
-        driver_features={"on_connection_create": fail_hook},
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": fail_hook}
     )
-    expected = (
-        ImproperConfigurationError if isinstance(primary, Exception) else type(primary)
-    )
+    expected = ImproperConfigurationError if isinstance(primary, Exception) else type(primary)
     with pytest.raises(expected) as caught:
         config.create_connection()
     if isinstance(primary, Exception):
@@ -594,9 +512,7 @@ def test_adbc_config_hook_failure_closes_owned_connection(
 
 
 @pytest.mark.parametrize("stage", ["constructor", "preparation"])
-@pytest.mark.parametrize(
-    "primary", [RuntimeError("setup failed"), KeyboardInterrupt("setup interrupted")]
-)
+@pytest.mark.parametrize("primary", [RuntimeError("setup failed"), KeyboardInterrupt("setup interrupted")])
 @pytest.mark.parametrize("cleanup_error", [None, SystemExit("release interrupted")])
 def test_adbc_session_setup_failure_releases_once(
     stage: str, primary: BaseException, cleanup_error: BaseException | None
@@ -623,14 +539,10 @@ def test_adbc_session_setup_failure_releases_once(
     context = AdbcSessionContext(
         acquire_connection=lambda: connection,
         release_connection=release,
-        statement_config=AdbcConfig(
-            connection_config={"driver_name": "sqlite"}
-        ).statement_config,
+        statement_config=AdbcConfig(connection_config={"driver_name": "sqlite"}).statement_config,
         driver_features={},
         prepare_driver=prepare,
-        driver_class=cast("type[AdbcDriver]", FailingDriver)
-        if stage == "constructor"
-        else AdbcDriver,
+        driver_class=cast("type[AdbcDriver]", FailingDriver) if stage == "constructor" else AdbcDriver,
     )
     with pytest.raises(type(primary)) as caught:
         context.__enter__()
@@ -650,9 +562,7 @@ def test_adbc_session_release_once_after_cleanup_failure() -> None:
     context = AdbcSessionContext(
         acquire_connection=lambda: connection,
         release_connection=lambda conn, **_kwargs: conn.close(),
-        statement_config=AdbcConfig(
-            connection_config={"driver_name": "sqlite"}
-        ).statement_config,
+        statement_config=AdbcConfig(connection_config={"driver_name": "sqlite"}).statement_config,
         driver_features={},
         prepare_driver=lambda driver: driver,
     )
@@ -700,18 +610,14 @@ def test_resolve_driver_name_from_uri() -> None:
     assert _resolve_driver_name(config) == "adbc_driver_postgresql.dbapi.connect"
 
 
-def test_resolve_driver_name_gizmosql_alias(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_resolve_driver_name_gizmosql_alias(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Resolve GizmoSQL aliases to the FlightSQL driver when native gizmosql driver is absent."""
     optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
 
 
-def test_resolve_driver_name_from_gizmosql_uri(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_resolve_driver_name_from_gizmosql_uri(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Detect FlightSQL driver from GizmoSQL URI schemes when native gizmosql driver is absent."""
     optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"uri": "gizmosql://localhost:31337"})
@@ -722,9 +628,7 @@ def test_resolve_driver_name_from_gizmosql_uri(
 
 def test_connection_config_dict_strips_sqlite_scheme() -> None:
     """Strip sqlite:// from URI when using the sqlite driver."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "sqlite", "uri": "sqlite:///tmp.db"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": "sqlite:///tmp.db"})
     resolved = _get_connection_config_dict(config)
     assert resolved.get("uri") == "/tmp.db"
     assert "driver_name" not in resolved
@@ -732,9 +636,7 @@ def test_connection_config_dict_strips_sqlite_scheme() -> None:
 
 def test_connection_config_dict_converts_duckdb_uri_to_path() -> None:
     """Convert duckdb:// URI to a path parameter for DuckDB."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "duckdb", "uri": "duckdb:///tmp.db"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "duckdb", "uri": "duckdb:///tmp.db"})
     resolved = _get_connection_config_dict(config)
     assert resolved.get("path") == "/tmp.db"
     assert "uri" not in resolved
@@ -764,9 +666,7 @@ def test_connection_config_dict_moves_bigquery_fields_into_db_kwargs() -> None:
 
 def test_connection_config_dict_moves_bigquery_fields_for_bq_alias() -> None:
     """Move BigQuery fields into db_kwargs when using the bq alias."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "bq", "project_id": "p", "dataset_id": "d"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "bq", "project_id": "p", "dataset_id": "d"})
     resolved = _get_connection_config_dict(config)
     assert resolved["db_kwargs"][DatabaseOptions.PROJECT_ID.value] == "p"
     assert resolved["db_kwargs"][DatabaseOptions.DATASET_ID.value] == "d"
@@ -774,9 +674,7 @@ def test_connection_config_dict_moves_bigquery_fields_for_bq_alias() -> None:
 
 def test_connection_config_dict_moves_bigquery_fields_for_bigquery_uri() -> None:
     """Move BigQuery fields into db_kwargs when the driver is inferred from the URI."""
-    config = AdbcConfig(
-        connection_config={"uri": "bigquery://", "project_id": "p", "dataset_id": "d"}
-    )
+    config = AdbcConfig(connection_config={"uri": "bigquery://", "project_id": "p", "dataset_id": "d"})
     resolved = _get_connection_config_dict(config)
     assert "project_id" not in resolved
     assert "dataset_id" not in resolved
@@ -786,26 +684,16 @@ def test_connection_config_dict_moves_bigquery_fields_for_bigquery_uri() -> None
 
 def test_connection_config_dict_preserves_db_kwargs_for_non_bigquery() -> None:
     """Preserve db_kwargs for drivers whose dbapi.connect accepts nested database kwargs."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "postgres", "db_kwargs": {"foo": "bar"}}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "postgres", "db_kwargs": {"foo": "bar"}})
     resolved = _get_connection_config_dict(config)
     assert resolved["db_kwargs"] == {"foo": "bar"}
     assert "foo" not in resolved
 
 
-def test_flightsql_lifts_username_password_into_db_kwargs(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_flightsql_lifts_username_password_into_db_kwargs(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """Top-level username/password move into db_kwargs on the FlightSQL fallback route."""
     optional_driver_imports("adbc_driver_gizmosql", False)
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "username": "alice",
-            "password": "secret",
-        }
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "username": "alice", "password": "secret"})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"] == {"username": "alice", "password": "secret"}
@@ -813,53 +701,31 @@ def test_flightsql_lifts_username_password_into_db_kwargs(
     assert "password" not in resolved
 
 
-def test_flightsql_lifts_tls_skip_verify_true(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_flightsql_lifts_tls_skip_verify_true(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """tls_skip_verify=True maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
     optional_driver_imports("adbc_driver_gizmosql", False)
-    config = AdbcConfig(
-        connection_config={"driver_name": "gizmosql", "tls_skip_verify": True}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": True})
     resolved = _get_connection_config_dict(config)
 
-    assert (
-        resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
-    )
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
 
 
-def test_flightsql_lifts_tls_skip_verify_false(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_flightsql_lifts_tls_skip_verify_false(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """tls_skip_verify=False maps to the FlightSQL ADBC option key on the FlightSQL fallback route."""
     optional_driver_imports("adbc_driver_gizmosql", False)
-    config = AdbcConfig(
-        connection_config={"driver_name": "gizmosql", "tls_skip_verify": False}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "tls_skip_verify": False})
     resolved = _get_connection_config_dict(config)
 
-    assert (
-        resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"]
-        == "false"
-    )
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "false"
 
 
-def test_flightsql_lifts_authorization_header(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_flightsql_lifts_authorization_header(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """authorization_header maps to the FlightSQL ADBC option key."""
     optional_driver_imports("adbc_driver_gizmosql", False)
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "authorization_header": "Bearer token",
-        }
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "authorization_header": "Bearer token"})
     resolved = _get_connection_config_dict(config)
 
-    assert (
-        resolved["db_kwargs"]["adbc.flight.sql.authorization_header"] == "Bearer token"
-    )
+    assert resolved["db_kwargs"]["adbc.flight.sql.authorization_header"] == "Bearer token"
 
 
 def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts(
@@ -872,25 +738,18 @@ def test_flightsql_explicit_db_kwargs_wins_over_top_level_shortcuts(
             "driver_name": "gizmosql",
             "username": "alice",
             "tls_skip_verify": False,
-            "db_kwargs": {
-                "username": "override",
-                "adbc.flight.sql.client_option.tls_skip_verify": "true",
-            },
+            "db_kwargs": {"username": "override", "adbc.flight.sql.client_option.tls_skip_verify": "true"},
         }
     )
     resolved = _get_connection_config_dict(config)
 
     assert resolved["db_kwargs"]["username"] == "override"
-    assert (
-        resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
-    )
+    assert resolved["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
 
 
 def test_flightsql_gizmosql_backend_is_stripped_from_outgoing_config() -> None:
     """gizmosql_backend drives dialect selection but does not leak to FlightSQL."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"})
     resolved = _get_connection_config_dict(config)
 
     assert "gizmosql_backend" not in resolved
@@ -900,11 +759,7 @@ def test_flightsql_gizmosql_backend_is_stripped_from_outgoing_config() -> None:
 def test_postgres_config_unchanged_by_flightsql_branch() -> None:
     """PostgreSQL keeps db_kwargs nested while preserving top-level connection shortcuts."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "postgres",
-            "username": "alice",
-            "db_kwargs": {"sslmode": "require"},
-        }
+        connection_config={"driver_name": "postgres", "username": "alice", "db_kwargs": {"sslmode": "require"}}
     )
     resolved = _get_connection_config_dict(config)
 
@@ -914,9 +769,7 @@ def test_postgres_config_unchanged_by_flightsql_branch() -> None:
 
 def test_duckdb_config_unchanged_by_flightsql_branch() -> None:
     """DuckDB configs are not affected by the FlightSQL branch."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "duckdb", "path": "/tmp/sqlspec-test.duckdb"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "duckdb", "path": "/tmp/sqlspec-test.duckdb"})
     resolved = _get_connection_config_dict(config)
 
     assert resolved["path"] == "/tmp/sqlspec-test.duckdb"
@@ -956,9 +809,7 @@ def test_gizmosql_default_dialect_is_duckdb() -> None:
 
 def test_gizmosql_backend_override_to_sqlite() -> None:
     """Override GizmoSQL dialect to SQLite when requested."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "sqlite"})
     assert config.statement_config.dialect == "sqlite"
 
 
@@ -971,15 +822,10 @@ def test_grpc_tls_uri_defaults_to_duckdb() -> None:
 def test_gizmosql_parameter_style_is_qmark() -> None:
     """GizmoSQL connections should use qmark parameter style like DuckDB."""
     config = AdbcConfig(connection_config={"driver_name": "gizmosql"})
-    assert (
-        config.statement_config.parameter_config.default_parameter_style
-        == ParameterStyle.QMARK
-    )
+    assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
 
 
-def test_gizmo_alias_resolves_to_flightsql(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_gizmo_alias_resolves_to_flightsql(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """The short 'gizmo' alias resolves to FlightSQL driver when native gizmosql driver is absent."""
     optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(connection_config={"driver_name": "gizmo"})
@@ -1004,11 +850,7 @@ def test_grpc_alias_backward_compatibility() -> None:
 def test_gizmosql_tls_skip_verify_in_config() -> None:
     """TLS skip verify parameter should be accepted in connection config."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "uri": "grpc+tls://localhost:31337",
-            "tls_skip_verify": True,
-        }
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "tls_skip_verify": True}
     )
     assert config.connection_config.get("tls_skip_verify") is True
 
@@ -1029,9 +871,7 @@ def test_gizmosql_with_authentication() -> None:
 
 def test_gizmosql_backend_duckdb_explicit() -> None:
     """Explicit DuckDB backend should work."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "gizmosql", "gizmosql_backend": "duckdb"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "gizmosql", "gizmosql_backend": "duckdb"})
     assert config.statement_config.dialect == "duckdb"
 
 
@@ -1045,12 +885,7 @@ def test_gizmosql_supported_parameter_styles() -> None:
 def test_bigquery_options_use_the_installed_driver_constants() -> None:
     """Every BigQuery option name must match the driver's own constant."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "bigquery",
-            "project_id": "p",
-            "dataset_id": "d",
-            "token": "t",
-        }
+        connection_config={"driver_name": "bigquery", "project_id": "p", "dataset_id": "d", "token": "t"}
     )
 
     db_kwargs = _get_connection_config_dict(config)["db_kwargs"]
@@ -1060,9 +895,7 @@ def test_bigquery_options_use_the_installed_driver_constants() -> None:
 
 def test_shared_object_driver_routes_through_the_driver_manager() -> None:
     """A driver shared object is a filesystem path, not an importable module path."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
 
     assert _resolve_driver_name(config) == "adbc_driver_manager.dbapi.connect"
 
@@ -1074,22 +907,14 @@ def test_shared_object_driver_routes_through_the_driver_manager() -> None:
 
 def test_shared_object_driver_connect_func_is_the_driver_manager() -> None:
     """Resolving the connect function must not try to import the path as a module."""
-    connect_func = resolve_driver_connect_func(
-        "/opt/lib/libadbc_driver_postgresql.dylib", None
-    )
+    connect_func = resolve_driver_connect_func("/opt/lib/libadbc_driver_postgresql.dylib", None)
 
     assert connect_func is adbc_driver_manager.dbapi.connect
 
 
 def test_entrypoint_is_stripped_for_dedicated_drivers() -> None:
     """Dedicated dbapi modules reject entrypoint, so it must not reach them."""
-    config = AdbcConfig(
-        connection_config={
-            "driver_name": "sqlite",
-            "uri": ":memory:",
-            "entrypoint": "foo",
-        }
-    )
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:", "entrypoint": "foo"})
 
     assert "entrypoint" not in _get_connection_config_dict(config)
 
@@ -1097,10 +922,7 @@ def test_entrypoint_is_stripped_for_dedicated_drivers() -> None:
 def test_entrypoint_is_preserved_on_the_driver_manager_route() -> None:
     """The driver manager is the only consumer of entrypoint."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "/opt/lib/libadbc_driver_postgresql.so",
-            "entrypoint": "PostgreSQL",
-        }
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so", "entrypoint": "PostgreSQL"}
     )
 
     assert _get_connection_config_dict(config)["entrypoint"] == "PostgreSQL"
@@ -1109,10 +931,7 @@ def test_entrypoint_is_preserved_on_the_driver_manager_route() -> None:
 def test_shared_object_driver_keeps_its_dialect() -> None:
     """Routing through the driver manager must not erase the dialect the path names."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "/opt/lib/libadbc_driver_postgresql.so",
-            "uri": "postgresql://host/db",
-        }
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so", "uri": "postgresql://host/db"}
     )
 
     assert config.statement_config.dialect == "postgres"
@@ -1120,34 +939,21 @@ def test_shared_object_driver_keeps_its_dialect() -> None:
 
 def test_shared_object_driver_keeps_its_parameter_style() -> None:
     """A PostgreSQL shared object must not be given SQLite's qmark placeholders."""
-    config = AdbcConfig(
-        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
 
-    assert (
-        config.statement_config.parameter_config.default_parameter_style
-        == ParameterStyle.NUMERIC
-    )
+    assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
 
 
 def test_resolve_driver_name_from_url_and_dsn() -> None:
     """Detect driver from URL and DSN aliases when driver_name is absent."""
-    url_config = AdbcConfig(
-        connection_config={"url": "postgresql://example.invalid/db"}
-    )
+    url_config = AdbcConfig(connection_config={"url": "postgresql://example.invalid/db"})
     assert _resolve_driver_name(url_config) == "adbc_driver_postgresql.dbapi.connect"
 
-    dsn_config = AdbcConfig(
-        connection_config={"dsn": "postgresql://example.invalid/db"}
-    )
+    dsn_config = AdbcConfig(connection_config={"dsn": "postgresql://example.invalid/db"})
     assert _resolve_driver_name(dsn_config) == "adbc_driver_postgresql.dbapi.connect"
 
-    conn_str_config = AdbcConfig(
-        connection_config={"connection_string": "postgresql://example.invalid/db"}
-    )
-    assert (
-        _resolve_driver_name(conn_str_config) == "adbc_driver_postgresql.dbapi.connect"
-    )
+    conn_str_config = AdbcConfig(connection_config={"connection_string": "postgresql://example.invalid/db"})
+    assert _resolve_driver_name(conn_str_config) == "adbc_driver_postgresql.dbapi.connect"
 
 
 def test_connection_config_dict_resolves_aliases() -> None:
@@ -1156,30 +962,22 @@ def test_connection_config_dict_resolves_aliases() -> None:
     assert url_result["uri"] == "postgresql://example.invalid/db"
     assert "url" not in url_result
 
-    sqlite_db_result = build_connection_config(
-        {"driver_name": "sqlite", "database": "/tmp/app.db"}
-    )
+    sqlite_db_result = build_connection_config({"driver_name": "sqlite", "database": "/tmp/app.db"})
     assert sqlite_db_result["uri"] == "/tmp/app.db"
     assert "database" not in sqlite_db_result
 
-    sqlite_path_result = build_connection_config(
-        {"driver_name": "sqlite", "path": "/tmp/app.db"}
-    )
+    sqlite_path_result = build_connection_config({"driver_name": "sqlite", "path": "/tmp/app.db"})
     assert sqlite_path_result["uri"] == "/tmp/app.db"
     assert "path" not in sqlite_path_result
 
-    duckdb_db_result = build_connection_config(
-        {"driver_name": "duckdb", "database": "/tmp/app.duckdb"}
-    )
+    duckdb_db_result = build_connection_config({"driver_name": "duckdb", "database": "/tmp/app.duckdb"})
     assert duckdb_db_result["path"] == "/tmp/app.duckdb"
     assert "database" not in duckdb_db_result
 
 
 def test_adbc_config_resolves_database_aliases() -> None:
     """AdbcConfig should normalize aliases in connection_config."""
-    sqlite_config = AdbcConfig(
-        connection_config={"driver_name": "sqlite", "database": "/tmp/app.db"}
-    )
+    sqlite_config = AdbcConfig(connection_config={"driver_name": "sqlite", "database": "/tmp/app.db"})
     assert sqlite_config.connection_config["uri"] == "/tmp/app.db"
     assert "database" not in sqlite_config.connection_config
 
@@ -1189,24 +987,19 @@ def test_adbc_config_resolves_database_aliases() -> None:
 
 
 def test_flightsql_native_shortcuts_preserve_explicit_options() -> None:
-    explicit = {
-        "adbc.flight.sql.rpc.call_header.x-token": "explicit",
-        "adbc.flight.sql.rpc.timeout_seconds.query": "9",
-    }
-    resolved = build_connection_config(
-        {
-            "driver_name": "flightsql",
-            "grpc_max_message_size": 1048576,
-            "query_timeout": 2.5,
-            "fetch_timeout": 1.5,
-            "tls_root_certs": "root",
-            "mtls_cert_chain": "chain",
-            "mtls_private_key": "key",
-            "with_cookie_middleware": True,
-            "headers": {"x-token": "shortcut", "x-trace": "trace"},
-            "db_kwargs": explicit,
-        }
-    )
+    explicit = {"adbc.flight.sql.rpc.call_header.x-token": "explicit", "adbc.flight.sql.rpc.timeout_seconds.query": "9"}
+    resolved = build_connection_config({
+        "driver_name": "flightsql",
+        "grpc_max_message_size": 1048576,
+        "query_timeout": 2.5,
+        "fetch_timeout": 1.5,
+        "tls_root_certs": "root",
+        "mtls_cert_chain": "chain",
+        "mtls_private_key": "key",
+        "with_cookie_middleware": True,
+        "headers": {"x-token": "shortcut", "x-trace": "trace"},
+        "db_kwargs": explicit,
+    })
     assert resolved["db_kwargs"] == {
         **explicit,
         "adbc.flight.sql.client_option.with_max_msg_size": "1048576",
@@ -1227,9 +1020,7 @@ def test_adbc_config_respects_connection_instance_without_closing() -> None:
     """connection_instance must be reused by create_connection and not closed on context exit."""
     conn = MagicMock()
     conn.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
-    config = AdbcConfig(
-        connection_config={"driver_name": "sqlite"}, connection_instance=conn
-    )
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"}, connection_instance=conn)
 
     assert config.create_connection() is conn
     with config.provide_connection() as yielded:
@@ -1241,26 +1032,15 @@ def test_adbc_config_respects_connection_instance_without_closing() -> None:
     conn.close.assert_not_called()
 
 
-def test_adbc_config_skips_extension_connection_when_all_probes_disabled(
-    monkeypatch: Any,
-) -> None:
+def test_adbc_config_skips_extension_connection_when_all_probes_disabled(monkeypatch: Any) -> None:
     """When all PostgreSQL extension probes are disabled, _detect_extensions_if_needed must not connect."""
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "postgres",
-            "uri": "postgresql://localhost/test",
-        },
-        driver_features={
-            "enable_pgvector": False,
-            "enable_paradedb": False,
-            "enable_pg_textsearch": False,
-        },
+        connection_config={"driver_name": "postgres", "uri": "postgresql://localhost/test"},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
     )
 
     def fail_connect(_self: AdbcConfig) -> None:
-        raise AssertionError(
-            "create_connection should not be called when all probes are disabled"
-        )
+        raise AssertionError("create_connection should not be called when all probes are disabled")
 
     monkeypatch.setattr(AdbcConfig, "create_connection", fail_connect)
     config._detect_extensions_if_needed()  # pyright: ignore[reportPrivateUsage]
@@ -1286,27 +1066,17 @@ def test_adbc_driver_standalone_applies_features_and_enforces_strict_coercion() 
 def test_oracle_driver_aliases_uri_and_parameter_profile() -> None:
     """Oracle aliases and oracle:// URI resolve to adbc_driver_oracle and POSITIONAL_COLON parameters."""
     for conn_cfg in (
-        {
-            "driver_name": "oracle",
-            "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1",
-        },
-        {
-            "driver_name": "oracledb",
-            "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1",
-        },
+        {"driver_name": "oracle", "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
+        {"driver_name": "oracledb", "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
         {"uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
     ):
         config = AdbcConfig(connection_config=conn_cfg)
         assert _resolve_driver_name(config) == "adbc_driver_oracle.dbapi.connect"
         assert config.statement_config.dialect == "oracle"
-        assert (
-            config.statement_config.parameter_config.default_parameter_style
-            == ParameterStyle.POSITIONAL_COLON
-        )
-        assert set(
-            config.statement_config.parameter_config.supported_execution_parameter_styles
-            or ()
-        ) == {ParameterStyle.POSITIONAL_COLON}
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.POSITIONAL_COLON
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.POSITIONAL_COLON
+        }
 
 
 def test_oracle_lifts_discrete_username_and_password_into_db_kwargs() -> None:
@@ -1329,31 +1099,18 @@ def test_oracle_lifts_discrete_username_and_password_into_db_kwargs() -> None:
 def test_db2_driver_aliases_uri_and_parameter_profile() -> None:
     """Db2 aliases and db2:// URI resolve to adbc_driver_db2 and QMARK parameters."""
     for conn_cfg in (
-        {
-            "driver_name": "db2",
-            "uri": "DATABASE=testdb;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=secret;",
-        },
-        {
-            "driver_name": "ibmdb2",
-            "uri": "db2://db2inst1:secret@localhost:50000/testdb",
-        },
-        {
-            "driver_name": "ibm_db",
-            "uri": "db2://db2inst1:secret@localhost:50000/testdb",
-        },
+        {"driver_name": "db2", "uri": "DATABASE=testdb;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=secret;"},
+        {"driver_name": "ibmdb2", "uri": "db2://db2inst1:secret@localhost:50000/testdb"},
+        {"driver_name": "ibm_db", "uri": "db2://db2inst1:secret@localhost:50000/testdb"},
         {"uri": "db2://db2inst1:secret@localhost:50000/testdb"},
     ):
         config = AdbcConfig(connection_config=conn_cfg)
         assert _resolve_driver_name(config) == "adbc_driver_db2.dbapi.connect"
         assert config.statement_config.dialect == "db2"
-        assert (
-            config.statement_config.parameter_config.default_parameter_style
-            == ParameterStyle.QMARK
-        )
-        assert set(
-            config.statement_config.parameter_config.supported_execution_parameter_styles
-            or ()
-        ) == {ParameterStyle.QMARK}
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.QMARK
+        }
 
 
 def test_mssql_driver_manager_fallback_and_tsql_statement_config(
@@ -1363,52 +1120,33 @@ def test_mssql_driver_manager_fallback_and_tsql_statement_config(
     optional_driver_imports("adbc_driver_mssql", False)
 
     for conn_cfg in (
-        {
-            "driver_name": "mssql",
-            "uri": "sqlserver://sa:Pass@localhost:1433?database=master",
-        },
-        {
-            "driver_name": "sqlserver",
-            "uri": "mssql://sa:Pass@localhost:1433?database=master",
-        },
+        {"driver_name": "mssql", "uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
+        {"driver_name": "sqlserver", "uri": "mssql://sa:Pass@localhost:1433?database=master"},
         {"uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
-        {
-            "driver": "mssql",
-            "db_kwargs": {"uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
-        },
+        {"driver": "mssql", "db_kwargs": {"uri": "sqlserver://sa:Pass@localhost:1433?database=master"}},
     ):
         config = AdbcConfig(connection_config=conn_cfg)
         assert _resolve_driver_name(config) == "adbc_driver_manager.dbapi.connect"
         assert config.statement_config.dialect == "tsql"
-        assert (
-            config.statement_config.parameter_config.default_parameter_style
-            == ParameterStyle.QMARK
-        )
-        assert set(
-            config.statement_config.parameter_config.supported_execution_parameter_styles
-            or ()
-        ) == {ParameterStyle.QMARK}
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.QMARK
+        }
         resolved = _get_connection_config_dict(config)
         assert resolved["driver"] == "mssql"
         assert "uri" not in resolved
         assert resolved["db_kwargs"]["uri"].startswith(("sqlserver://", "mssql://"))
 
 
-def test_mssql_native_package_preferred_when_installed(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_mssql_native_package_preferred_when_installed(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """When adbc_driver_mssql is installed, mssql resolves to adbc_driver_mssql.dbapi.connect."""
     optional_driver_imports("adbc_driver_mssql", True)
-    config = AdbcConfig(
-        connection_config={"driver_name": "mssql", "uri": "sqlserver://localhost:1433"}
-    )
+    config = AdbcConfig(connection_config={"driver_name": "mssql", "uri": "sqlserver://localhost:1433"})
     assert _resolve_driver_name(config) == "adbc_driver_mssql.dbapi.connect"
     assert config.statement_config.dialect == "tsql"
 
 
-def test_gizmosql_prefers_native_driver_when_installed(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_gizmosql_prefers_native_driver_when_installed(optional_driver_imports: Callable[[str, bool], None]) -> None:
     """When adbc_driver_gizmosql is installed, gizmosql resolves to adbc_driver_gizmosql.dbapi.connect."""
     optional_driver_imports("adbc_driver_gizmosql", True)
     config = AdbcConfig(
@@ -1426,11 +1164,7 @@ def test_gizmosql_prefers_native_driver_when_installed(
     assert resolved["autocommit"] is False
 
     explicit_autocommit = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "uri": "grpc+tls://localhost:31337",
-            "autocommit": True,
-        }
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "autocommit": True}
     )
     assert _get_connection_config_dict(explicit_autocommit)["autocommit"] is True
 
@@ -1441,11 +1175,7 @@ def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(
     """When adbc_driver_gizmosql is absent, auth_type is lifted into db_kwargs['adbc.gizmosql.auth_type']."""
     optional_driver_imports("adbc_driver_gizmosql", False)
     config = AdbcConfig(
-        connection_config={
-            "driver_name": "gizmosql",
-            "uri": "grpc+tls://localhost:31337",
-            "auth_type": "external",
-        }
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "auth_type": "external"}
     )
     assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
     resolved = _get_connection_config_dict(config)
@@ -1456,11 +1186,7 @@ def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(
 def test_quack_driver_aliases_uri_and_token_normalization() -> None:
     """Quack driver resolves to adbc_driver_quack, duckdb dialect, and lifts token into db_kwargs."""
     for conn_cfg in (
-        {
-            "driver_name": "quack",
-            "uri": "quack+tls://quack.example.com:9999",
-            "token": "secret-jwt",
-        },
+        {"driver_name": "quack", "uri": "quack+tls://quack.example.com:9999", "token": "secret-jwt"},
         {"uri": "quack://localhost:9999", "token": "secret-jwt"},
         {"uri": "quack+tls://localhost:9999", "token": "secret-jwt"},
     ):
@@ -1481,11 +1207,7 @@ def test_db2_cli_dsn_normalizes_to_db2_uri_and_credentials() -> None:
         }
     )
     resolved_explicit = _get_connection_config_dict(explicit_driver_cfg)
-    assert resolved_explicit == {
-        "uri": "db2://localhost:50000/testdb",
-        "username": "db2inst1",
-        "password": "secret",
-    }
+    assert resolved_explicit == {"uri": "db2://localhost:50000/testdb", "username": "db2inst1", "password": "secret"}
 
     inferred_dsn_cfg = AdbcConfig(
         connection_config={
@@ -1497,10 +1219,7 @@ def test_db2_cli_dsn_normalizes_to_db2_uri_and_credentials() -> None:
     )
     assert _resolve_driver_name(inferred_dsn_cfg) == "adbc_driver_db2.dbapi.connect"
     assert inferred_dsn_cfg.statement_config.dialect == "db2"
-    assert (
-        inferred_dsn_cfg.statement_config.parameter_config.default_parameter_style
-        == ParameterStyle.QMARK
-    )
+    assert inferred_dsn_cfg.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
     resolved_inferred = _get_connection_config_dict(inferred_dsn_cfg)
     assert resolved_inferred["uri"] == "db2://127.0.0.1:50000/testdb"
     assert resolved_inferred["username"] == "db2inst1"
@@ -1512,29 +1231,21 @@ def test_db2_cli_dsn_normalizes_to_db2_uri_and_credentials() -> None:
         "adbc.db2.connect_timeout": "10",
     }
 
-    override_resolved = build_connection_config(
-        {
-            "dsn": "DATABASE=testdb;HOSTNAME=db2.internal;UID=dsn_user;PWD=dsn_pwd;CURRENTSCHEMA=DSN_SCHEMA;",
-            "username": "explicit_user",
-            "db_kwargs": {"adbc.db2.current_schema": "EXPLICIT_SCHEMA"},
-        }
-    )
+    override_resolved = build_connection_config({
+        "dsn": "DATABASE=testdb;HOSTNAME=db2.internal;UID=dsn_user;PWD=dsn_pwd;CURRENTSCHEMA=DSN_SCHEMA;",
+        "username": "explicit_user",
+        "db_kwargs": {"adbc.db2.current_schema": "EXPLICIT_SCHEMA"},
+    })
     assert override_resolved["uri"] == "db2://db2.internal/testdb"
     assert override_resolved["username"] == "explicit_user"
     assert override_resolved["password"] == "dsn_pwd"
-    assert override_resolved["db_kwargs"] == {
-        "adbc.db2.current_schema": "EXPLICIT_SCHEMA"
-    }
+    assert override_resolved["db_kwargs"] == {"adbc.db2.current_schema": "EXPLICIT_SCHEMA"}
 
-    ipv6_resolved = build_connection_config(
-        {"dsn": "DATABASE=testdb;HOSTNAME=::1;PORT=50000;UID=db2inst1;"}
-    )
+    ipv6_resolved = build_connection_config({"dsn": "DATABASE=testdb;HOSTNAME=::1;PORT=50000;UID=db2inst1;"})
     assert ipv6_resolved["uri"] == "db2://[::1]:50000/testdb"
 
     odbc_cfg = AdbcConfig(
-        connection_config={
-            "dsn": "DRIVER={IBM DB2 ODBC DRIVER};DATABASE=testdb;HOSTNAME=localhost;PORT=50000;"
-        }
+        connection_config={"dsn": "DRIVER={IBM DB2 ODBC DRIVER};DATABASE=testdb;HOSTNAME=localhost;PORT=50000;"}
     )
     assert _resolve_driver_name(odbc_cfg) != "adbc_driver_db2.dbapi.connect"
     assert odbc_cfg.statement_config.dialect != "db2"
@@ -1548,15 +1259,10 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
     cursor.fetch_arrow_table.return_value = MagicMock(
         column_names=["ID"],
         to_pylist=lambda: [{"ID": 1}],
-        rename_columns=lambda cols: MagicMock(
-            column_names=cols, to_pylist=lambda: [{cols[0]: 1}]
-        ),
+        rename_columns=lambda cols: MagicMock(column_names=cols, to_pylist=lambda: [{cols[0]: 1}]),
     )
     conn = MagicMock()
-    conn.adbc_get_info.return_value = {
-        "vendor_name": "IBM Db2",
-        "driver_name": "adbc_driver_db2",
-    }
+    conn.adbc_get_info.return_value = {"vendor_name": "IBM Db2", "driver_name": "adbc_driver_db2"}
     conn.cursor.return_value = cursor
 
     driver = AdbcDriver(conn, dialect="db2")
@@ -1565,50 +1271,28 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
     assert cursor.execute.call_count == 1
     assert cursor.executemany.call_count == 0
 
-    first_insert = driver.execute(
-        "INSERT INTO items (id, name) VALUES (?, ?)", (1, "alpha")
-    )
+    first_insert = driver.execute("INSERT INTO items (id, name) VALUES (?, ?)", (1, "alpha"))
     assert first_insert.rows_affected == 1
     assert cursor.executemany.call_count == 1
-    assert cursor.executemany.call_args_list[0].args == (
-        "INSERT INTO items (id, name) VALUES (?, ?)",
-        [[1, "alpha"]],
-    )
+    assert cursor.executemany.call_args_list[0].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[1, "alpha"]])
 
-    cached_insert = driver.execute(
-        "INSERT INTO items (id, name) VALUES (?, ?)", (2, "beta")
-    )
+    cached_insert = driver.execute("INSERT INTO items (id, name) VALUES (?, ?)", (2, "beta"))
     assert cached_insert.rows_affected == 1
     assert cursor.executemany.call_count == 2
-    assert cursor.executemany.call_args_list[1].args == (
-        "INSERT INTO items (id, name) VALUES (?, ?)",
-        [[2, "beta"]],
-    )
+    assert cursor.executemany.call_args_list[1].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[2, "beta"]])
 
-    script_update = driver.execute_script(
-        "UPDATE items SET name = ? WHERE id = ?", ("gamma", 1)
-    )
+    script_update = driver.execute_script("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1))
     assert script_update.rows_affected == 1
     assert cursor.execute.call_count == 2
-    assert cursor.execute.call_args_list[1].args == (
-        "UPDATE items SET name = 'gamma' WHERE id = 1",
-    )
+    assert cursor.execute.call_args_list[1].args == ("UPDATE items SET name = 'gamma' WHERE id = 1",)
     assert cursor.executemany.call_count == 2
 
     direct_single_script = driver.dispatch_execute_script(
-        cursor,
-        SQL(
-            "UPDATE items SET name = ? WHERE id = ?",
-            ("gamma", 1),
-            statement_config=driver.statement_config,
-        ),
+        cursor, SQL("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1), statement_config=driver.statement_config)
     )
     assert direct_single_script.rowcount_override == 1
     assert cursor.executemany.call_count == 3
-    assert cursor.executemany.call_args_list[2].args == (
-        "UPDATE items SET name = ? WHERE id = ?",
-        [["gamma", 1]],
-    )
+    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
 
     direct_multi_script = driver.dispatch_execute_script(
         cursor,
@@ -1621,20 +1305,12 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
     assert direct_multi_script.rowcount_override == 1
     assert cursor.execute.call_count == 3
     assert cursor.executemany.call_count == 4
-    assert cursor.executemany.call_args_list[3].args == (
-        "INSERT INTO items (id, name) VALUES (?, ?)",
-        [[3, "delta"]],
-    )
+    assert cursor.executemany.call_args_list[3].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
 
-    named_delete = driver.execute(
-        "DELETE FROM items WHERE id = :item_id", {"item_id": 2}
-    )
+    named_delete = driver.execute("DELETE FROM items WHERE id = :item_id", {"item_id": 2})
     assert named_delete.rows_affected == 1
     assert cursor.executemany.call_count == 5
-    assert cursor.executemany.call_args_list[4].args == (
-        "DELETE FROM items WHERE id = ?",
-        [[2]],
-    )
+    assert cursor.executemany.call_args_list[4].args == ("DELETE FROM items WHERE id = ?", [[2]])
 
     driver.execute("SELECT id FROM items WHERE id = ?", (1,))
     assert cursor.execute.call_count == 4
@@ -1645,28 +1321,17 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
             return requested_schema
 
     arrow_stream = _ArrowStreamStub()
-    AdbcDriver._execute_db2_non_query(
-        cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream
-    )
+    AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
     assert cursor.executemany.call_count == 6
-    assert cursor.executemany.call_args_list[5].args == (
-        "INSERT INTO items (id, name) VALUES (?, ?)",
-        arrow_stream,
-    )
+    assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
 
 
 def _postgres_pool_config(**overrides: Any) -> AdbcConfig:
     """Construct a pooled config without unrelated native extension probes."""
-    features: dict[str, Any] = {
-        "enable_pgvector": False,
-        "enable_paradedb": False,
-        "enable_pg_textsearch": False,
-    }
+    features: dict[str, Any] = {"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False}
     features.update(overrides.pop("driver_features", {}))
     return AdbcConfig(
-        connection_config=overrides.pop(
-            "connection_config", {"driver_name": "postgres"}
-        ),
+        connection_config=overrides.pop("connection_config", {"driver_name": "postgres"}),
         pool_config=overrides.pop("pool_config", {}),
         driver_features=features,
         **overrides,
@@ -1695,10 +1360,7 @@ def test_driver_features_have_no_legacy_aliases() -> None:
     assert "arrow_extension_types" not in AdbcDriverFeatures.__annotations__
     config = AdbcConfig(
         connection_config={"driver_name": "sqlite"},
-        driver_features={
-            "enable_strict_type_coercion": True,
-            "enable_arrow_extension_types": False,
-        },
+        driver_features={"enable_strict_type_coercion": True, "enable_arrow_extension_types": False},
     )
     assert config.driver_features["enable_strict_type_coercion"] is True
     assert config.driver_features["enable_arrow_extension_types"] is False
@@ -1710,34 +1372,20 @@ def test_teradata_optional_driver_resolution(
 ) -> None:
     optional_driver_imports("adbc_driver_teradata", installed)
     config = AdbcConfig(
-        connection_config={
-            "driver": "vantage",
-            "host": "td.corp",
-            "username": "dbc",
-            "password": "dbc",
-        }
+        connection_config={"driver": "vantage", "host": "td.corp", "username": "dbc", "password": "dbc"}
     )
-    expected_connect = (
-        "adbc_driver_teradata.dbapi.connect"
-        if installed
-        else "adbc_driver_manager.dbapi.connect"
-    )
+    expected_connect = "adbc_driver_teradata.dbapi.connect" if installed else "adbc_driver_manager.dbapi.connect"
     assert _resolve_driver_name(config) == expected_connect
     expected = (
         {"uri": "teradata://dbc:dbc@td.corp:1025"}
         if installed
-        else {
-            "driver": "teradata",
-            "db_kwargs": {"uri": "teradata://dbc:dbc@td.corp:1025"},
-        }
+        else {"driver": "teradata", "db_kwargs": {"uri": "teradata://dbc:dbc@td.corp:1025"}}
     )
     assert _get_connection_config_dict(config) == expected
     assert config.driver_features["enable_lowercase_column_names"] is True
 
 
-def test_teradata_shared_object_preserves_driver(
-    optional_driver_imports: Callable[[str, bool], None],
-) -> None:
+def test_teradata_shared_object_preserves_driver(optional_driver_imports: Callable[[str, bool], None]) -> None:
     optional_driver_imports("adbc_driver_teradata", False)
     config = AdbcConfig(
         connection_config={

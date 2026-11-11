@@ -81,3 +81,20 @@ def test_config_signature_namespace_and_standalone_connection(connections: list[
     assert config.provide_pool().checked_out() == 0
     standalone.close()
     config.close_pool()
+
+
+@pytest.mark.parametrize("error", [False, True])
+def test_native_cursor_context_closes_after_use(error: bool) -> None:
+    from sqlspec.adapters.teradata import TeradataCursor
+
+    connection = MagicMock()
+    if error:
+        with pytest.raises(ValueError, match="application failed"):
+            with TeradataCursor(connection) as cursor:
+                cursor.execute("SELECT 1")
+                raise ValueError("application failed")
+    else:
+        with TeradataCursor(connection) as cursor:
+            cursor.execute("SELECT 1")
+    connection.cursor.return_value.execute.assert_called_once_with("SELECT 1")
+    connection.cursor.return_value.close.assert_called_once_with()

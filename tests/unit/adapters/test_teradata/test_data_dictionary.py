@@ -73,18 +73,9 @@ def test_columns_indexes_foreign_keys_and_constraints(table: str | None) -> None
             "column_name": "tenant",
             "is_unique": 1,
         },
-        {
-            "schema_name": "mart",
-            "table_name": "orders",
-            "index_name": "ix_pair",
-            "column_name": "id",
-            "is_unique": 1,
-        },
+        {"schema_name": "mart", "table_name": "orders", "index_name": "ix_pair", "column_name": "id", "is_unique": 1},
     ]
-    assert dictionary.get_indexes(driver, table, "mart")[0].get("columns") == [
-        "tenant",
-        "id",
-    ]
+    assert dictionary.get_indexes(driver, table, "mart")[0].get("columns") == ["tenant", "id"]
     driver.select.return_value = [
         {
             "schema_name": "mart",
@@ -97,14 +88,8 @@ def test_columns_indexes_foreign_keys_and_constraints(table: str | None) -> None
         }
     ]
     fk = dictionary.get_foreign_keys(driver, table, "mart")[0]
-    assert (fk.referenced_table, fk.referenced_column, fk.schema) == (
-        "customers",
-        "id",
-        "mart",
-    )
-    driver.select.return_value = [
-        {"constraint_name": "ck_id", "check_clause": "id > 0"}
-    ]
+    assert (fk.referenced_table, fk.referenced_column, fk.schema) == ("customers", "id", "mart")
+    driver.select.return_value = [{"constraint_name": "ck_id", "check_clause": "id > 0"}]
     assert dictionary.get_constraints(driver, table, "mart").items == (
         {"constraint_name": "ck_id", "check_clause": "id > 0"},
     )
@@ -113,12 +98,7 @@ def test_columns_indexes_foreign_keys_and_constraints(table: str | None) -> None
 def test_view_type_probe_is_scoped_and_permission_failure_keeps_columns() -> None:
     dictionary = TeradataDataDictionary()
     driver = MagicMock()
-    row = {
-        "schema_name": "mart",
-        "table_name": "v_orders",
-        "column_name": "amount",
-        "data_type": None,
-    }
+    row = {"schema_name": "mart", "table_name": "v_orders", "column_name": "amount", "data_type": None}
     driver.select.side_effect = [
         [row],
         [
@@ -138,36 +118,18 @@ def test_view_type_probe_is_scoped_and_permission_failure_keeps_columns() -> Non
     query, schema, table = driver.select.call_args.args
     assert "FROM DBC.ColumnsQV" in query
     assert (schema, table) == ("mart", "v_orders")
-    driver.select.side_effect = [
-        [row],
-        OperationalError("[Error 3523] Permission denied"),
-    ]
-    assert (
-        dictionary.get_columns(driver, "v_orders", "mart")[0].get("column_name")
-        == "amount"
-    )
+    driver.select.side_effect = [[row], OperationalError("[Error 3523] Permission denied")]
+    assert dictionary.get_columns(driver, "v_orders", "mart")[0].get("column_name") == "amount"
     driver.select.side_effect = [[row]]
-    assert (
-        dictionary.get_columns(driver, schema="mart")[0].get("column_name") == "amount"
-    )
+    assert dictionary.get_columns(driver, schema="mart")[0].get("column_name") == "amount"
 
 
 def test_views_reconstruct_ordered_overflow_chunks() -> None:
     dictionary = TeradataDataDictionary()
     driver = MagicMock()
     driver.select.return_value = [
-        {
-            "schema_name": "mart",
-            "view_name": "v",
-            "definition": "SELECT 1",
-            "line_no": 2,
-        },
-        {
-            "schema_name": "mart",
-            "view_name": "v",
-            "definition": "CREATE VIEW v AS ",
-            "line_no": 1,
-        },
+        {"schema_name": "mart", "view_name": "v", "definition": "SELECT 1", "line_no": 2},
+        {"schema_name": "mart", "view_name": "v", "definition": "CREATE VIEW v AS ", "line_no": 1},
     ]
     result = dictionary.get_views(driver, "mart")
     assert len(result.items) == 1
@@ -196,21 +158,11 @@ def test_catalog_domains_preserve_rows(operation: str) -> None:
         ("XM", "XML"),
     ],
 )
-def test_view_fallback_enriches_type_and_unicode_length(
-    code: str, expected: str
-) -> None:
+def test_view_fallback_enriches_type_and_unicode_length(code: str, expected: str) -> None:
     driver = MagicMock()
     driver.select.side_effect = [
         [{"column_name": "value", "data_type": None}],
-        [
-            {
-                "column_name": "value",
-                "raw_type_code": code,
-                "max_length": 200,
-                "char_type": 2,
-                "is_nullable": "N",
-            }
-        ],
+        [{"column_name": "value", "raw_type_code": code, "max_length": 200, "char_type": 2, "is_nullable": "N"}],
     ]
     column = TeradataDataDictionary().get_columns(driver, "v_data", "mart")[0]
     assert column.get("data_type") == expected

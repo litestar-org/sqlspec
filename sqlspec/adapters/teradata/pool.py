@@ -18,6 +18,8 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.module_loader import import_optional
 
+__all__ = ("TeradataConnectionPool",)
+
 
 class TeradataConnectionPool:
     """Lazily allocate exclusive leases with bounded capacity and fork refusal."""
@@ -112,7 +114,8 @@ class TeradataConnectionPool:
             if self._session_query_band is not None:
                 cursor = connection.cursor()
                 try:
-                    cursor.execute(f"SET QUERY_BAND = '{self._session_query_band}' FOR SESSION;")
+                    value = f"'{self._session_query_band}'" if self._session_query_band else "NONE"
+                    cursor.execute(f"SET QUERY_BAND = {value} FOR SESSION;")
                     if connection.autocommit is False:
                         connection.commit()
                 finally:

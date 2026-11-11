@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.adbc._typing import AdbcNotSupportedError, AdbcOperationalError
+from sqlspec.adapters.adbc._typing import AdbcNotSupportedError, AdbcOperationalError, AdbcProgrammingError
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     ConstraintMetadata,
@@ -59,7 +59,7 @@ __all__ = ("AdbcDataDictionary",)
 logger = get_logger("sqlspec.adapters.adbc")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
-_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AttributeError)
+_NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError, AdbcProgrammingError, AttributeError)
 _ADBC_METADATA_DOMAINS: Final = (
     "schemas",
     "objects",

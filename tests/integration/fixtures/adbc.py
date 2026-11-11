@@ -12,11 +12,7 @@ from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 import pytest
-from pytest_databases.docker.snowflake import (
-    SNOWFLAKE_HTTP_PORT,
-    SnowflakeService,
-    check_snowflake_health,
-)
+from pytest_databases.docker.snowflake import SNOWFLAKE_HTTP_PORT, SnowflakeService, check_snowflake_health
 from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
