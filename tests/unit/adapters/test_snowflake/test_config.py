@@ -170,8 +170,7 @@ def test_stage_threshold_requires_positive_integer(threshold: object) -> None:
 def test_config_preserves_query_tag_when_correlating_cached_statements(
     monkeypatch: pytest.MonkeyPatch, snowflake_connection: Any, options: dict[str, Any], expected_tag: str
 ) -> None:
-    from sqlspec.adapters.snowflake import pool as pool_module
-
+    connector = pytest.importorskip("snowflake.connector")
     connected: list[dict[str, Any]] = []
 
     def connect(**kwargs: Any) -> Any:
@@ -180,7 +179,7 @@ def test_config_preserves_query_tag_when_correlating_cached_statements(
         snowflake_connection.close = lambda: None
         return snowflake_connection
 
-    monkeypatch.setattr(pool_module, "import_optional", lambda _: SimpleNamespace(connect=connect))
+    monkeypatch.setattr(connector, "connect", connect)
     snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
     config = SnowflakeConfig(
         connection_config=options,
@@ -209,7 +208,7 @@ def test_config_preserves_query_tag_when_correlating_cached_statements(
 def test_named_profile_query_tag_is_preserved_for_correlation(
     monkeypatch: pytest.MonkeyPatch, snowflake_connection: Any, session_source: str
 ) -> None:
-    from sqlspec.adapters.snowflake import pool as pool_module
+    connector = pytest.importorskip("snowflake.connector")
 
     def connect(**kwargs: Any) -> Any:
         assert kwargs["connection_name"] == "reporting"
@@ -221,7 +220,7 @@ def test_named_profile_query_tag_is_preserved_for_correlation(
         snowflake_connection.close = lambda: None
         return snowflake_connection
 
-    monkeypatch.setattr(pool_module, "import_optional", lambda _: SimpleNamespace(connect=connect))
+    monkeypatch.setattr(connector, "connect", connect)
     snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
     config = SnowflakeConfig(
         connection_config={"connection_name": "reporting"}, driver_features={"enable_query_tag_correlation": True}
