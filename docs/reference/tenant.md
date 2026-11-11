@@ -49,8 +49,9 @@ All `TenantContext` methods are class methods:
 | `is_bypassed()` | Whether explicit bypass state is active. |
 | `set(payload)` | Restoration token; accepts `TenantContextPayload` or `None`. |
 | `reset(token)` | Restores the preceding state; returns `None`. |
-| `scope(tenant_id, *, variables=None)` | Sync context manager yielding a payload; accepts a string, UUID, or existing payload. |
-| `bypass()` | Sync context manager yielding `TenantContextPayload.bypass()`. |
+| `scope(tenant_id, *, variables=None)` | Context manager for `with` or `async with` yielding a payload; accepts a string, UUID, or existing payload. |
+| `bypass()` | Context manager for `with` or `async with` yielding `TenantContextPayload.bypass()`. |
+| `bind(payload)` | Sync context manager binding an already resolved payload, or `None`, around connection work. |
 
 ::: sqlspec.utils.tenant.TenantContextPayload
     options:
@@ -101,7 +102,7 @@ Extractors return an app-authorized `TenantContextPayload`, string, UUID, or `No
 
 ## Strategy and Lease Contracts
 
-A strategy returns `TenantLeaseState` or a baseline `Mapping[str, str | None]` from checkout. The lease freezes a returned mapping with the captured payload before checkin. Implement these interfaces structurally. Interpreted strategies must not inherit compiled protocols. Built-in adapters own connection acquisition, transaction completion, release, and physical disposal.
+A strategy returns `TenantLeaseState` or a baseline `Mapping[str, str | None]` from checkout. The lease freezes a returned mapping with the captured payload before checkin. Implement these interfaces structurally. Interpreted strategies must not inherit compiled protocols. Built-in adapters own connection acquisition, transaction completion, release, and physical disposal through `SyncTenantLease` and `AsyncTenantLease` subclasses. A config with a tenant strategy but no lease implementation refuses to hand out connections.
 
 ::: sqlspec.core.tenant.base.TenantLeaseState
     options:
