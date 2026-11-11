@@ -12,6 +12,7 @@ from sqlspec.data_dictionary.dialects.spanner import SPANNER_CONFIG
 from sqlspec.data_dictionary.dialects.sqlanywhere import SQLANYWHERE_CONFIG
 from sqlspec.data_dictionary.dialects.sqlite import SQLITE_CONFIG
 from sqlspec.data_dictionary.dialects.sybase import SYBASE_CONFIG
+from sqlspec.data_dictionary.dialects.teradata import TERADATA_CONFIG
 
 __all__ = (
     "BIGQUERY_CONFIG",
@@ -27,4 +28,5 @@ __all__ = (
     "SQLANYWHERE_CONFIG",
     "SQLITE_CONFIG",
     "SYBASE_CONFIG",
+    "TERADATA_CONFIG",
 )

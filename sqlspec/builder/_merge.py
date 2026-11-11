@@ -54,6 +54,10 @@ _ORACLE_TYPE_DISPATCHER.register(dict, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(list, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
 
+_TERADATA_DECIMAL_MAX_PRECISION: Final[int] = 38
+_TERADATA_VARBYTE_MAX_LENGTH: Final[int] = 64000
+_TERADATA_VARCHAR_MAX_LENGTH: Final[int] = 32000
+
 _DB2_VARCHAR_MAX_LENGTH: Final[int] = 32672
 _DB2_DEFAULT_TYPE: Final[str] = f"VARCHAR({_DB2_VARCHAR_MAX_LENGTH})"
 _DB2_TYPE_DISPATCHER = TypeDispatcher[str]()
@@ -216,6 +220,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
             return self._create_oracle_json_source(data, columns, alias)
+        if dialect == "teradata":
+            return self._create_teradata_select_source(data, alias)
         if dialect == "db2":
             return self._create_db2_select_source(data, columns, is_list, alias)
 
@@ -355,6 +361,89 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         if isinstance(value, str) and len(value) > _DB2_VARCHAR_MAX_LENGTH:
             return "CLOB"
         return _DB2_DEFAULT_TYPE
+
+    def _infer_teradata_column_type(self, values: Sequence[Any]) -> str:
+        """Choose one non-truncating type for every branch of a source column."""
+        values = [value for value in values if value is not None]
+        if not values:
+            return "VARCHAR(32000)"
+        if any(isinstance(value, (dict, list)) for value in values):
+            return "CLOB"
+        if all(isinstance(value, bool) for value in values):
+            return "BYTEINT"
+        decimals = [value for value in values if isinstance(value, Decimal)]
+        if any(not value.is_finite() for value in decimals):
+            msg = "Cannot infer Teradata DECIMAL type for non-finite Decimal value."
+            raise SQLBuilderError(msg)
+        if all(isinstance(value, (int, float, Decimal)) for value in values):
+            if any(isinstance(value, float) for value in values):
+                return "DOUBLE PRECISION"
+            if decimals:
+                decimals = [Decimal(value) for value in values]
+                scale = max(max(0, -int(value.as_tuple().exponent)) for value in decimals)
+                integer_digits = max(
+                    max(1, len(value.as_tuple().digits) + int(value.as_tuple().exponent)) for value in decimals
+                )
+                precision = max(18, integer_digits + scale)
+                if precision > _TERADATA_DECIMAL_MAX_PRECISION:
+                    msg = "Teradata DECIMAL precision exceeds 38 digits."
+                    raise SQLBuilderError(msg)
+                return f"DECIMAL({precision}, {scale})"
+            return "BIGINT"
+        if all(isinstance(value, datetime) for value in values):
+            return "TIMESTAMP WITH TIME ZONE" if any(value.tzinfo is not None for value in values) else "TIMESTAMP"
+        if all(isinstance(value, date) for value in values):
+            return "DATE"
+        if all(isinstance(value, time) for value in values):
+            return "TIME"
+        if all(isinstance(value, UUID) for value in values):
+            return "VARCHAR(36)"
+        if all(isinstance(value, (bytes, bytearray)) for value in values):
+            size = max(1, *(len(value) for value in values))
+            return "BLOB" if size > _TERADATA_VARBYTE_MAX_LENGTH else f"VARBYTE({size})"
+        size = max(1, *(len(str(value)) for value in values))
+        return "CLOB" if size > _TERADATA_VARCHAR_MAX_LENGTH else f"VARCHAR({size})"
+
+    def _create_teradata_select_source(self, rows: list[dict[str, Any]], alias: str | None) -> exp.Expr:
+        """Build tableless typed SELECT branches for Teradata MERGE sources."""
+        builder = cast("QueryBuilder", self)
+        columns = list(rows[0])
+        column_types = {
+            column: exp.DataType.build(
+                self._infer_teradata_column_type([
+                    row.get(column)
+                    for row in rows
+                    if resolve_value_expression(row.get(column), self, column.split(".")[-1]) is None
+                ]),
+                dialect="teradata",
+            )
+            for column in columns
+        }
+        query: exp.Expr | None = None
+        for row in rows:
+            projections: list[exp.Expr] = []
+            for column in columns:
+                value = row.get(column)
+                leaf = column.split(".")[-1]
+                resolved = resolve_value_expression(value, self, leaf)
+                if resolved is None:
+                    if isinstance(value, (dict, list)):
+                        value = to_json(value)
+                    elif isinstance(value, bytearray):
+                        value = bytes(value)
+                    placeholder, _ = builder.create_placeholder(value, leaf)
+                    resolved = exp.Cast(this=placeholder, to=column_types[column].copy())
+                projections.append(exp.alias_(resolved, column))
+            branch = exp.Select(expressions=projections)
+            query = branch if query is None else exp.Union(this=query, expression=branch, distinct=False)
+        if alias:
+            return exp.Subquery(
+                this=query,
+                alias=exp.TableAlias(
+                    this=exp.to_identifier(alias), columns=[exp.to_identifier(column) for column in columns]
+                ),
+            )
+        return exp.Paren(this=query)
 
     def _create_db2_select_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"

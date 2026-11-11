@@ -212,10 +212,10 @@ def test_upsert_sql_server_returns_insert() -> None:
     assert isinstance(builder, Insert)
 
 
-def test_upsert_teradata_returns_insert() -> None:
-    """Test sql.upsert() returns INSERT for Teradata (not in merge_supported list)."""
+def test_upsert_teradata_returns_merge() -> None:
+    """Test sql.upsert() returns MERGE for Teradata."""
     builder = sql.upsert("products", dialect="teradata")
-    assert isinstance(builder, Insert)
+    assert isinstance(builder, Merge)
 
 
 def test_upsert_with_complex_table_name() -> None:

@@ -106,6 +106,7 @@ _PARAMETER_VALIDATOR = ParameterValidator()
 _NON_IDENTIFIER_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\W+")
 _DIALECT_ALIASES: Final[dict[str, str]] = {
     "ase": "sybase",
+    "vantage": "teradata",
     "cockroach": "postgres",
     "cockroachdb": "postgres",
     "mariadb": "mysql",
@@ -840,6 +841,16 @@ def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None
     return dialect or default
 
 
+def _ensure_sqlspec_dialects_loaded(dialect_name: str) -> None:
+    """Load SQLSpec overlays before SQLGlot resolves built-in dialect names."""
+    classes = Dialect._classes
+    if dialect_name == "teradata":
+        module = importlib.import_module("sqlspec.dialects.teradata")
+        classes["teradata"] = module.Teradata
+    elif dialect_name in {"sybase", "sqlanywhere"} and dialect_name not in classes:
+        importlib.import_module("sqlspec.dialects.sybase")
+
+
 def _normalize_dialect(dialect: "DialectType | None") -> str | None:
     """Resolve public dialect aliases to SQLGlot dialect names."""
     if dialect is None:
@@ -851,8 +862,7 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
     else:
         name = type(dialect).__name__.lower()
     resolved = _DIALECT_ALIASES.get(name, name)
-    if resolved in {"sybase", "sqlanywhere"} and resolved not in Dialect.classes:
-        importlib.import_module("sqlspec.dialects.sybase")
+    _ensure_sqlspec_dialects_loaded(resolved)
     return resolved
 
 

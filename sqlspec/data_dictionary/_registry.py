@@ -26,6 +26,7 @@ DIALECT_ALIASES: dict[str, str] = {
     "sqlserver": "mssql",
     "ase": "sybase",
     "sa": "sqlanywhere",
+    "vantage": "teradata",
 }
 
 DIALECT_MODE_ALIASES: dict[tuple[str, str], str] = {
