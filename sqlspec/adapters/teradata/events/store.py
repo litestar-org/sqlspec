@@ -1,88 +1,59 @@
-"""Teradata event queue schema and catalog guarded lifecycle."""
+"""Teradata Vantage event queue store implementation."""
 
-from typing import Any, ClassVar
+from typing import Final
 
 from sqlspec.adapters.teradata.config import TeradataConfig
-from sqlspec.adapters.teradata.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_schema_and_table
+from sqlspec.adapters.teradata.core import split_schema_and_table
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import SchemaTarget
 
-__all__ = ("TeradataEventQueueStore", "TeradataSyncEventQueueStore")
+__all__ = ("TeradataEventQueueStore",)
 
-_MAX_VARCHAR_LENGTH = 32000
+TERADATA_EVENT_TABLE_DDL: Final[str] = (
+    "CREATE MULTISET TABLE {table} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, "
+    "channel VARCHAR(128) NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, "
+    "status VARCHAR(32) DEFAULT 'pending' NOT NULL, "
+    "available_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+    "lease_expires_at TIMESTAMP(6) WITH TIME ZONE, attempts INTEGER DEFAULT 0 NOT NULL, "
+    "created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+    "acknowledged_at TIMESTAMP(6) WITH TIME ZONE)"
+)
 
 
 class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
-    """Teradata JSON queue with independently reconciled secondary index."""
+    """Teradata Vantage event queue store with a catalog-checked secondary index.
+
+    The queue table and index use plain ``CREATE`` statements; the events migration checks the
+    catalog for the table and the index before running them.
+    """
 
     __slots__ = ()
-    dialect: ClassVar[str] = "teradata"
 
-    def _column_types(self) -> tuple[str, str, str]:
+    def _column_types(self) -> "tuple[str, str, str]":
+        """Return the payload, metadata, and timestamp column types."""
         return "JSON", "JSON", "TIMESTAMP(6) WITH TIME ZONE"
 
-    def _string_type(self, length: int) -> str:
-        return "CLOB" if length > _MAX_VARCHAR_LENGTH else f"VARCHAR({length})"
-
-    def _timestamp_default(self) -> str:
-        return "CURRENT_TIMESTAMP(6)"
-
     def _table_ddl(self) -> str:
-        return (
-            f"CREATE MULTISET TABLE {self.table_name} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, "
-            "channel VARCHAR(128) NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, "
-            "status VARCHAR(32) DEFAULT 'pending' NOT NULL, "
-            "available_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
-            "lease_expires_at TIMESTAMP(6) WITH TIME ZONE, attempts INTEGER DEFAULT 0 NOT NULL, "
-            "created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
-            "acknowledged_at TIMESTAMP(6) WITH TIME ZONE)"
-        )
+        """Return the MULTISET queue table DDL with a NOT NULL primary key."""
+        return TERADATA_EVENT_TABLE_DDL.format(table=self.table_name)
 
     def _index_ddl(self) -> str:
+        """Return the Teradata secondary index DDL for queue polling."""
         return f"CREATE INDEX {self._index_name()} (channel, status, available_at) ON {self.table_name}"
 
     def _schema_target(self) -> SchemaTarget:
+        """Build the schema target with the database-qualified queue identity."""
         schema, table = split_schema_and_table(self.table_name)
         return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
 
-    def _index_existence_target(self) -> tuple[str | None, str]:
+    def _index_existence_target(self) -> "tuple[str | None, str]":
+        """Return the catalog database and table used to check for the queue index."""
         return split_schema_and_table(self.table_name)
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        """Return the CREATE statement unchanged; existence is checked in the catalog."""
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:
+        """Return the DROP statement unchanged."""
         return statement
-
-    def create_table(self) -> None:
-        """Create missing queue objects using catalog probes."""
-        schema, table = self._index_existence_target()
-        with self._config.provide_session() as driver:
-            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
-                driver.execute(self._table_ddl())
-                driver.commit()
-            self.reconcile_companion_objects_sync(driver)
-            driver.commit()
-
-    def drop_table(self) -> None:
-        """Drop an existing queue table."""
-        schema, table = self._index_existence_target()
-        with self._config.provide_session() as driver:
-            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
-                driver.execute(f"DROP TABLE {self.table_name}")
-                driver.commit()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing indexes without committing the caller's transaction."""
-        schema, table = self._index_existence_target()
-        dictionary = getattr(driver, "data_dictionary", None)
-        if dictionary is not None:
-            rows = dictionary.get_indexes(driver, table=table, schema=schema)
-            exists = metadata_has_index(rows, table, self._index_name(), schema_name=schema)
-        else:
-            exists = driver.select_one_or_none(INDEX_EXISTS_SQL, (schema, table, self._index_name())) is not None
-        if not exists:
-            driver.execute(self._index_ddl())
-
-
-TeradataSyncEventQueueStore = TeradataEventQueueStore

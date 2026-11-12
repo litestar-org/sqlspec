@@ -271,7 +271,6 @@ def test_core_exports_profile_coercions_fastexport_and_table_ref() -> None:
 
     for exported in (
         "DEFAULT_TERADATA_PORT",
-        "INDEX_EXISTS_SQL",
         "TABLE_EXISTS_SQL",
         "default_statement_config",
         "driver_profile",

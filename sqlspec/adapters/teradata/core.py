@@ -28,7 +28,6 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 
 __all__ = (
     "DEFAULT_TERADATA_PORT",
-    "INDEX_EXISTS_SQL",
     "SCHEMA_EXISTS_SQL",
     "TABLE_EXISTS_SQL",
     "apply_driver_features",
@@ -97,12 +96,6 @@ TABLE_EXISTS_SQL = (
 )
 SCHEMA_EXISTS_SQL = (
     "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.DatabasesV WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(?))"
-)
-INDEX_EXISTS_SQL = (
-    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV "
-    "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
-    "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
-    "AND UPPER(TRIM(IndexName)) = UPPER(TRIM(?))"
 )
 
 

@@ -250,41 +250,32 @@ def test_teradata_adk_delete_rolls_back_and_restores_connection(teradata_connect
     assert conn.autocommit is True
 
 
-def test_teradata_event_queue_catalog_lifecycle(monkeypatch) -> None:
-    from contextlib import nullcontext
+@pytest.mark.parametrize("index_present", [True, False])
+def test_teradata_event_queue_statements_and_companion_index(index_present: bool) -> None:
     from types import SimpleNamespace
 
-    statements = []
-    tables = set()
-    indexes = set()
-
-    def select(_sql, params):
-        if "IndicesV" in _sql:
-            return {"found": 1} if params[-1] in indexes else None
-        return {"found": 1} if params[1] in tables else None
-
-    def execute(sql):
-        statements.append(sql)
-        if sql.startswith("CREATE MULTISET TABLE"):
-            tables.add("SQLSPEC_EVENT_QUEUE")
-        elif sql.startswith("CREATE INDEX"):
-            indexes.add("idx_sqlspec_event_queue_channel_status")
-        elif sql.startswith("DROP TABLE"):
-            tables.clear()
-            indexes.clear()
-
-    driver = SimpleNamespace(select_one_or_none=select, execute=execute, commit=lambda: None)
-    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
     store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
-    store.create_table()
-    assert len(statements) == 2
+    table_ddl, index_ddl = store.create_statements()
+    assert table_ddl.startswith("CREATE MULTISET TABLE sqlspec_event_queue (")
+    assert "payload_json JSON NOT NULL" in table_ddl
+    assert index_ddl == (
+        "CREATE INDEX idx_sqlspec_event_queue_channel_status (channel, status, available_at) ON sqlspec_event_queue"
+    )
+    assert store.drop_statements() == ["DROP TABLE sqlspec_event_queue"]
     assert store.get_schema_targets()[0].table_name == "SQLSPEC_EVENT_QUEUE"
-    store.create_table()
-    assert len(statements) == 2
-    store.drop_table()
-    store.drop_table()
-    assert statements[-1] == "DROP TABLE sqlspec_event_queue"
-    assert len(statements) == 3
+
+    lookups: list[dict[str, object]] = []
+    executed: list[str] = []
+    rows = [{"index_name": "idx_sqlspec_event_queue_channel_status"}] if index_present else []
+
+    def get_indexes(_driver: object, **kwargs: object) -> list[dict[str, str]]:
+        lookups.append(kwargs)
+        return rows
+
+    driver = SimpleNamespace(data_dictionary=SimpleNamespace(get_indexes=get_indexes), execute_script=executed.append)
+    store.reconcile_companion_objects_sync(driver)
+    assert lookups == [{"table": "SQLSPEC_EVENT_QUEUE", "schema": None}]
+    assert executed == ([] if index_present else [index_ddl])
 
 
 def test_teradata_adk_and_memory_catalog_lifecycle(monkeypatch) -> None:
@@ -612,32 +603,6 @@ def test_teradata_memory_dedup_prequery_and_tera_concurrent_race_recovery(monkey
     assert conn.autocommit is True
 
     assert store.insert_memory_entries([_make_entry(6, "existing_ev")]) == 0
-
-
-def test_teradata_event_queue_type_helpers_and_dictionary_reconcile(monkeypatch) -> None:
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
-    executed: list[str] = []
-    dictionary = SimpleNamespace(
-        get_indexes=lambda *_a, **_k: [{"index_name": "idx_sqlspec_event_queue_channel_status"}]
-    )
-    driver = SimpleNamespace(
-        select_one_or_none=lambda *_a: {"found": 1},
-        execute=executed.append,
-        commit=lambda: None,
-        data_dictionary=dictionary,
-    )
-    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
-    store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
-    assert store._column_types() == ("JSON", "JSON", "TIMESTAMP(6) WITH TIME ZONE")
-    assert store._string_type(128) == "VARCHAR(128)"
-    assert store._string_type(40000) == "CLOB"
-    assert store._timestamp_default() == "CURRENT_TIMESTAMP(6)"
-    assert store._wrap_create_statement("CREATE TABLE q", "table") == "CREATE TABLE q"
-    assert store._wrap_drop_statement("DROP TABLE q") == "DROP TABLE q"
-    store.reconcile_companion_objects_sync(driver)
-    assert executed == []
 
 
 def test_teradata_adk_remaining_branches_and_row_decoders(monkeypatch) -> None:
