@@ -9,7 +9,12 @@ from starlette.middleware import Middleware
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
-from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value, has_state_value
+from sqlspec.extensions.starlette._utils import (
+    get_or_create_driver_session,
+    get_or_create_session,
+    get_state_value,
+    has_state_value,
+)
 from sqlspec.extensions.starlette.middleware import (
     CorrelationMiddleware,
     SQLCommenterMiddleware,
@@ -298,7 +303,7 @@ class SQLSpecPlugin:
         existing = get_state_value(request.state, session_instance_key, None)
         if existing is not None:
             return existing
-        return cast("Any", get_or_create_session(request, config_state))
+        return cast("Any", get_or_create_driver_session(request, config_state))
 
     def get_connection(self, request: "Request", key: Any = None) -> Any:
         """Get database connection from request state, checking it out on first access.

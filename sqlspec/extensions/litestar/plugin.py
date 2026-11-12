@@ -837,10 +837,16 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             A driver session instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
+        deferred_key = f"{plugin_state.session_key}_deferred"
+        deferred = get_sqlspec_scope_state(scope, deferred_key)
+        if deferred is not None:
+            return cast("AsyncDriverAdapterBase", deferred)
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
             if plugin_state.config.is_async:
-                return cast("AsyncDriverAdapterBase", self._deferred_session(plugin_state, state, scope))
+                deferred = self._deferred_session(plugin_state, state, scope)
+                set_sqlspec_scope_state(scope, deferred_key, deferred)
+                return cast("AsyncDriverAdapterBase", deferred)
             self._raise_missing_connection(plugin_state.connection_key)
         return self._create_session(plugin_state, connection, scope)
 

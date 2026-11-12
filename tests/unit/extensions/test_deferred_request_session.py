@@ -187,25 +187,26 @@ def test_sync_session_accessor_opens_async_connection_on_first_await(framework: 
 
     async def nodb(access: Access, status: int) -> Any:
         session = access.session()
-        return {"dialect": session.dialect, "checkouts": len(checkouts)}
+        return {"dialect": session.dialect, "same": access.session() is session, "checkouts": len(checkouts)}
 
     async def write(access: Access, status: int) -> Any:
         session = access.session()
         before = len(checkouts)
         await session.begin()
         await session.execute("INSERT INTO items VALUES (:status)", {"status": status})
-        again = access.session()
         return {
             "before": before,
             "after": len(checkouts),
-            "shares_connection": again.connection is session.connection is access.connection(),
+            "same": access.session() is session,
+            "shares_connection": session.connection is access.connection(),
         }
 
     with _serve(framework, config, {"nodb": nodb, "write": write}) as run:
-        assert run("nodb", 200) == (200, {"dialect": "sqlite", "checkouts": 0})
+        assert run("nodb", 200) == (200, {"dialect": "sqlite", "same": True, "checkouts": 0})
         assert checkouts == []
-        assert run("write", 201) == (201, {"before": 0, "after": 1, "shares_connection": True})
-        assert run("write", 500) == (500, {"before": 1, "after": 2, "shares_connection": True})
+        written = {"same": True, "shares_connection": True}
+        assert run("write", 201) == (201, {"before": 0, "after": 1, **written})
+        assert run("write", 500) == (500, {"before": 1, "after": 2, **written})
     assert _stored(database) == [201]
 
 

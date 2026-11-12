@@ -227,15 +227,21 @@ class SQLSpecPlugin:
             Database session driver instance.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        session_key = self._deferred_session_key(config_state)
+        deferred = get_context_value(request.ctx, session_key, None)
+        if deferred is not None:
+            return deferred
         if not has_context_value(request.ctx, config_state.connection_key) and has_context_value(
             request.ctx, self._deferred_key(config_state)
         ):
             if config_state.config.is_async:
-                return self._deferred_session(request, key, config_state)
+                deferred = self._deferred_session(request, config_state)
+                set_context_value(request.ctx, session_key, deferred)
+                return deferred
             self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def _deferred_session(self, request: Any, key: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
         """Return a session that opens the asynchronous request connection on its first awaited call."""
 
         def current_session() -> Any:
@@ -245,7 +251,7 @@ class SQLSpecPlugin:
 
         return DeferredAsyncSession(
             config_state.config,
-            lambda: self.get_session_async(request, key),
+            lambda: self.get_session_async(request, config_state.config),
             current_session,
             "await plugin.get_session_async(request)",
         )
@@ -892,6 +898,7 @@ class SQLSpecPlugin:
         pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = pop_context_value(request.ctx, config_state.connection_key)
         pop_context_value(request.ctx, f"{config_state.session_key}_instance")
+        pop_context_value(request.ctx, self._deferred_session_key(config_state))
         connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
         payload_key = self._tenant_payload_key(config_state)
         has_payload = has_context_value(request.ctx, payload_key)
@@ -954,6 +961,9 @@ class SQLSpecPlugin:
 
     def _tenant_payload_key(self, config_state: SanicConfigState) -> str:
         return f"{config_state.connection_key}_tenant_payload"
+
+    def _deferred_session_key(self, config_state: SanicConfigState) -> str:
+        return f"{config_state.session_key}_deferred"
 
     def _deferred_key(self, config_state: SanicConfigState) -> str:
         return f"{config_state.connection_key}_deferred_tenant"

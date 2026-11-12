@@ -13,7 +13,9 @@ if TYPE_CHECKING:
     from sqlspec.extensions.starlette._state import SQLSpecConfigState
 
 __all__ = (
+    "deferred_session_key",
     "get_connection_from_request",
+    "get_or_create_driver_session",
     "get_or_create_session",
     "get_request_tenant",
     "get_scope_tenant",
@@ -81,7 +83,31 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     Sessions are cached per request to ensure the same session instance
     is returned for multiple calls within the same request. For an asynchronous
     configuration whose request connection is not open yet, the result is a
-    deferred session that opens the connection on its first awaited call.
+    deferred session that opens the connection on its first awaited call and
+    forwards to the driver session afterwards.
+
+    Args:
+        request: Starlette request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session (driver instance).
+    """
+    deferred_key = deferred_session_key(config_state)
+    deferred = get_state_value(request.state, deferred_key, None)
+    if deferred is not None:
+        return deferred
+    if config_state.config.is_async and not has_state_value(request.state, config_state.connection_key):
+        from sqlspec.extensions.starlette.middleware import deferred_request_session
+
+        deferred = deferred_request_session(request, config_state)
+        set_state_value(request.state, deferred_key, deferred)
+        return deferred
+    return get_or_create_driver_session(request, config_state)
+
+
+def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+    """Get or create the driver session bound to the request connection.
 
     Args:
         request: Starlette request instance.
@@ -95,10 +121,6 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     existing_session = get_state_value(request.state, session_instance_key, None)
     if existing_session is not None:
         return existing_session
-    if config_state.config.is_async and not has_state_value(request.state, config_state.connection_key):
-        from sqlspec.extensions.starlette.middleware import deferred_request_session
-
-        return deferred_request_session(request, config_state)
     session = config_state.config.driver_type(
         connection=get_connection_from_request(request, config_state),
         statement_config=config_state.config.statement_config,
@@ -106,6 +128,11 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     )
     set_state_value(request.state, session_instance_key, session)
     return session
+
+
+def deferred_session_key(config_state: "SQLSpecConfigState") -> str:
+    """Return the request-state key caching a configuration's deferred session."""
+    return f"{config_state.session_key}_deferred"
 
 
 def set_request_tenant(

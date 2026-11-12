@@ -13,7 +13,8 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.starlette._utils import (
-    get_or_create_session,
+    deferred_session_key,
+    get_or_create_driver_session,
     get_scope_tenant,
     get_state_value,
     has_state_value,
@@ -420,11 +421,11 @@ def deferred_request_session(request: "Request", config_state: "SQLSpecConfigSta
 
     async def open_session() -> Any:
         await acquire_pending_connection_async(request, config_state)
-        return get_or_create_session(request, config_state)
+        return get_or_create_driver_session(request, config_state)
 
     def current_session() -> Any:
         if has_state_value(request.state, config_state.connection_key):
-            return get_or_create_session(request, config_state)
+            return get_or_create_driver_session(request, config_state)
         return None
 
     return DeferredAsyncSession(
@@ -467,6 +468,7 @@ def _completes_response(message: "Message") -> bool:
 def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
     pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
     pop_state_value(request.state, f"{config_state.session_key}_instance")
+    pop_state_value(request.state, deferred_session_key(config_state))
     pop_state_value(request.state, config_state.connection_key)
 
 
