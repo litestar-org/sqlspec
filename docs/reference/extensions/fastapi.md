@@ -37,21 +37,13 @@ FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers
         - get_connection_async
         - provide_filters
 
-::: sqlspec.extensions.starlette._utils.set_request_tenant
-    options:
-      heading_level: 3
+### Shared Starlette Components
 
-::: sqlspec.utils.tenant.tenant_bypass
-    options:
-      heading_level: 3
+FastAPI reuses the Starlette request middleware and tenant helpers. They are documented once on the [Starlette Extension](starlette.md) page:
 
-::: sqlspec.extensions.starlette.middleware.SQLSpecAutocommitMiddleware
-    options:
-      heading_level: 3
-
-::: sqlspec.extensions.starlette.middleware.SQLSpecManualMiddleware
-    options:
-      heading_level: 3
+- [`SQLSpecAutocommitMiddleware`](starlette.md#sqlspec.extensions.starlette.middleware.SQLSpecAutocommitMiddleware) and [`SQLSpecManualMiddleware`](starlette.md#sqlspec.extensions.starlette.middleware.SQLSpecManualMiddleware) own the per-request connection and transaction.
+- [`set_request_tenant`](starlette.md#sqlspec.extensions.starlette._utils.set_request_tenant) records an authorized tenant receipt for the request.
+- [`tenant_bypass`](../tenant.md#sqlspec.utils.tenant.tenant_bypass) marks a route as a trusted cross-tenant route.
 
 ## Filter Dependency Providers
 
