@@ -457,11 +457,15 @@ class AiosqliteConnectionPool:
         return AiosqlitePoolConnectionContext(self)
 
     async def close(self) -> None:
-        """Close the connection pool and join every worker thread it started.
+        """Close the connection pool and join the worker threads it tracks.
 
-        Pooled connections are closed, then the worker threads of those connections and of
-        connections whose creation or retirement was interrupted are joined, so no worker
-        delivers a result to the event loop after this coroutine returns.
+        Registered connections are closed concurrently, each close bounded by the operation
+        timeout; a close that times out force-stops its worker. The worker threads of those
+        connections and of connections whose creation or retirement was interrupted are then
+        joined under one shared operation timeout. A worker still alive when that timeout
+        elapses is logged and left running. A connection whose creation is still in progress
+        is discarded by its creator, which joins its worker and raises
+        ``AiosqlitePoolClosedError``.
         """
         if self.is_closed:
             return
@@ -640,10 +644,17 @@ class AiosqliteConnectionPool:
     async def _create_connection(self) -> AiosqlitePoolConnection:
         """Create a new pooled connection and register it.
 
+        A connection whose creation finishes after the pool closed is closed and its worker
+        thread joined before the error is raised.
+
         Returns:
             New pool connection instance
+
+        Raises:
+            AiosqlitePoolClosedError: The pool closed while the connection was being created.
         """
         connection = await self.new_connection()
+        registered = False
         try:
             pool_connection = AiosqlitePoolConnection(connection)
             pool_connection.mark_as_idle()
@@ -653,21 +664,29 @@ class AiosqliteConnectionPool:
             raw_conn = getattr(connection, "_conn", None)
 
             async with self._lock:
-                if (
-                    is_shared_memory
-                    and self._anchor_connection is None
-                    and not self.is_closed
-                    and isinstance(raw_conn, sqlite3.Connection)
-                ):
-                    with suppress(Exception):
-                        sqlite_kwargs = {k: v for k, v in self._connection_parameters.items() if k != "iter_chunk_size"}
-                        sqlite_kwargs.setdefault("check_same_thread", False)
-                        self._anchor_connection = sqlite3.connect(**sqlite_kwargs)
-                self._connection_registry[pool_connection.id] = pool_connection
-        except BaseException:
-            await self._discard_connection(connection)
-            raise
+                if not self.is_closed:
+                    if (
+                        is_shared_memory
+                        and self._anchor_connection is None
+                        and isinstance(raw_conn, sqlite3.Connection)
+                    ):
+                        with suppress(Exception):
+                            sqlite_kwargs = {
+                                k: v for k, v in self._connection_parameters.items() if k != "iter_chunk_size"
+                            }
+                            sqlite_kwargs.setdefault("check_same_thread", False)
+                            self._anchor_connection = sqlite3.connect(**sqlite_kwargs)
+                    self._connection_registry[pool_connection.id] = pool_connection
+                    registered = True
+        finally:
+            if not registered:
+                await self._discard_connection(connection)
+                if self.is_closed:
+                    await self._join_abandoned_workers()
 
+        if not registered:
+            msg = "Pool closed during connection creation"
+            raise AiosqlitePoolClosedError(msg)
         return pool_connection
 
     async def _claim_if_healthy(self, connection: AiosqlitePoolConnection) -> bool:

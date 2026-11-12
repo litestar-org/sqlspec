@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 import anyio
 import pytest
 
-from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqlitePoolConnection
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqlitePoolClosedError, AiosqlitePoolConnection
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
@@ -177,3 +177,29 @@ async def test_close_stops_worker_of_connection_retired_in_cancelled_scope(tmp_p
     await pool.close()
 
     assert not worker.is_alive()
+
+
+async def test_connection_created_after_close_is_discarded_and_its_worker_joined(tmp_path: Path) -> None:
+    """A creation that finishes after close() raises and leaves no live worker thread."""
+    opening = Event()
+    proceed = Event()
+    opening_threads: list[Thread] = []
+
+    class _GatedOpenConnection(sqlite3.Connection):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            opening_threads.append(current_thread())
+            opening.set()
+            proceed.wait(timeout=5)
+            super().__init__(*args, **kwargs)
+
+    pool = AiosqliteConnectionPool({"database": str(tmp_path / "pool.db"), "factory": _GatedOpenConnection})
+    acquire = asyncio.ensure_future(pool.acquire())
+    await anyio.to_thread.run_sync(opening.wait)
+
+    await pool.close()
+    proceed.set()
+
+    with pytest.raises(AiosqlitePoolClosedError, match="connection creation"):
+        await acquire
+    assert pool.size() == 0
+    assert not opening_threads[0].is_alive()
