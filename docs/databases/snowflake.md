@@ -203,7 +203,11 @@ ALTER TABLE orders ADD ROW ACCESS POLICY tenant_rows ON (tenant_id);
 from sqlspec.adapters.snowflake import SnowflakeConfig
 
 config = SnowflakeConfig(
-    connection_config={"account": "my_org-my_account", "user": "APP_SERVICE", "warehouse": "APP_WH"},
+    connection_config={
+        "account": "my_org-my_account",
+        "user": "APP_SERVICE",
+        "warehouse": "APP_WH",
+    },
     driver_features={"tenant_strategy": "rls"},
 )
 
