@@ -1,7 +1,10 @@
 import asyncio
+import sys
+from typing import Any
 
 import pytest
 
+from sqlspec.driver._tenant import await_owned_disposal, await_owned_release
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext
 from tests.unit.driver.test_tenant_lifecycle import make_async_lease
@@ -211,8 +214,6 @@ async def test_async_bypass_finish_failure_disposes_once() -> None:
 
 
 async def test_owned_release_failure_takes_precedence_over_caller_cancellation() -> None:
-    from sqlspec.driver._tenant import await_owned_release
-
     started = asyncio.Event()
     proceed = asyncio.Event()
     failure = RuntimeError("release failed")
@@ -234,8 +235,6 @@ async def test_owned_release_failure_takes_precedence_over_caller_cancellation()
 
 
 async def test_owned_release_reraises_cancellation_only_after_the_work_finishes() -> None:
-    from sqlspec.driver._tenant import await_owned_release
-
     started = asyncio.Event()
     proceed = asyncio.Event()
     finished: list[bool] = []
@@ -258,8 +257,6 @@ async def test_owned_release_reraises_cancellation_only_after_the_work_finishes(
 
 
 async def test_owned_disposal_returns_failure_and_finishes_despite_cancellation() -> None:
-    from sqlspec.driver._tenant import await_owned_disposal
-
     started = asyncio.Event()
     proceed = asyncio.Event()
     failure = RuntimeError("disposal failed")
@@ -277,21 +274,28 @@ async def test_owned_disposal_returns_failure_and_finishes_despite_cancellation(
     assert await caller is failure
 
 
-async def test_owned_wait_deadline_reports_timeout_without_cancelling_the_work() -> None:
-    from sqlspec.driver._tenant import _await_owned, _start_owned
+@pytest.mark.parametrize("factory", [False, True])
+async def test_owned_release_starts_eagerly_only_without_a_task_factory(factory: bool) -> None:
+    loop = asyncio.get_running_loop()
+    ticks: list[str] = []
+    seen: list[list[str]] = []
+    created: list[str] = []
 
-    proceed = asyncio.Event()
-    finished: list[bool] = []
+    def task_factory(target_loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any) -> "asyncio.Task[Any]":
+        created.append("factory")
+        return asyncio.Task(coro, loop=target_loop, **kwargs)
 
-    async def slow() -> None:
-        await proceed.wait()
-        finished.append(True)
+    async def operation() -> None:
+        seen.append(list(ticks))
 
-    owned = _start_owned(slow())
-    error, cancellation = await _await_owned(owned, 0.01)
-    assert isinstance(error, TimeoutError)
-    assert cancellation is None
-    assert finished == []
-    proceed.set()
-    assert await _await_owned(owned) == (None, None)
-    assert finished == [True]
+    previous = loop.get_task_factory()
+    if factory:
+        loop.set_task_factory(task_factory)
+    try:
+        loop.call_soon(ticks.append, "tick")
+        await await_owned_release(operation())
+    finally:
+        loop.set_task_factory(previous)
+    eager = sys.version_info >= (3, 12) and not factory
+    assert seen == [[] if eager else ["tick"]]
+    assert created == (["factory"] if factory else [])

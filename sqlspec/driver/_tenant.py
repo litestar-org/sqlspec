@@ -4,7 +4,7 @@ import asyncio
 import math
 import sys
 from collections.abc import Awaitable, Mapping
-from typing import Any, Final, cast
+from typing import Any, Final
 
 from mypy_extensions import mypyc_attr
 
@@ -24,6 +24,7 @@ __all__ = (
 logger = get_logger("sqlspec.driver")
 DEFAULT_TENANT_CLEANUP_TIMEOUT: Final = 5.0
 _EAGER_TASKS: Final = sys.version_info >= (3, 12)
+_TASK_TYPE: Any = asyncio.Task
 
 
 def _lease_state(payload: TenantContextPayload, state: TenantLeaseState | Mapping[str, str | None]) -> TenantLeaseState:
@@ -125,17 +126,33 @@ class SyncTenantLease:
 class _Owned:
     """Owned work and the waiter its caller awaits instead of the work itself.
 
-    Caller cancellation cancels only the waiter, never the work. The work resolves the waiter
-    as it finishes, so the caller resumes one event-loop iteration later, as with a plain
-    ``await``.
+    Construction starts the work: eagerly on Python 3.12+ when the running loop has no task
+    factory, otherwise through ``loop.create_task`` so installed task factories apply. Caller
+    cancellation cancels only the waiter, never the work. The work resolves the waiter as it
+    finishes, so the caller resumes one event-loop iteration later, as with a plain ``await``.
     """
 
     __slots__ = ("task", "timed_out", "waiter")
 
-    def __init__(self) -> None:
-        self.task: asyncio.Future[Any] | None = None
+    def __init__(self, operation: Awaitable[Any]) -> None:
         self.waiter: asyncio.Future[None] | None = None
         self.timed_out = False
+        if isinstance(operation, asyncio.Future):
+            self.task: asyncio.Future[Any] = operation
+            operation.add_done_callback(self.wake)
+            return
+        loop = asyncio.get_running_loop()
+        runner = self._run(operation)
+        if _EAGER_TASKS and loop.get_task_factory() is None:
+            self.task = _TASK_TYPE(runner, loop=loop, eager_start=True)
+        else:
+            self.task = loop.create_task(runner)
+
+    async def _run(self, operation: Awaitable[Any]) -> Any:
+        try:
+            return await operation
+        finally:
+            self.wake()
 
     def wake(self, _task: object = None) -> None:
         waiter = self.waiter
@@ -146,73 +163,49 @@ class _Owned:
         self.timed_out = True
         self.wake()
 
+    def outcome(self) -> BaseException | None:
+        """Return the finished work's failure, or None when it succeeded."""
+        try:
+            self.task.result()
+        except BaseException as exc:
+            return exc
+        return None
 
-async def _run_owned(operation: Awaitable[Any], owned: _Owned) -> Any:
-    try:
-        return await operation
-    finally:
-        owned.wake()
+    async def join(self, timeout: float | None = None) -> tuple[BaseException | None, asyncio.CancelledError | None]:
+        """Wait for the work without letting caller cancellation abandon or interrupt it.
 
+        Caller cancellation is recorded and the wait resumes on a fresh waiter. One timer handle
+        bounds the wait without cancelling the work.
 
-def _start_owned(operation: Awaitable[Any]) -> _Owned:
-    """Start owned work, eagerly where the runtime supports it."""
-    owned = _Owned()
-    if isinstance(operation, asyncio.Future):
-        owned.task = operation
-        operation.add_done_callback(owned.wake)
-        return owned
-    loop = asyncio.get_running_loop()
-    runner = _run_owned(operation, owned)
-    if _EAGER_TASKS:
-        owned.task = cast("asyncio.Future[Any]", cast("Any", asyncio.Task)(runner, loop=loop, eager_start=True))
-    else:
-        owned.task = loop.create_task(runner)
-    return owned
-
-
-def _owned_outcome(task: "asyncio.Future[Any]") -> BaseException | None:
-    try:
-        task.result()
-    except BaseException as exc:
-        return exc
-    return None
-
-
-async def _await_owned(
-    owned: _Owned, timeout: float | None = None
-) -> tuple[BaseException | None, asyncio.CancelledError | None]:
-    """Wait for owned work without letting caller cancellation abandon or interrupt it.
-
-    Caller cancellation is recorded and the wait resumes on a fresh waiter. One timer handle
-    bounds the wait without cancelling the work.
-
-    Returns:
-        The work's failure (``TimeoutError`` when the deadline passed first) and any observed
-        caller cancellation.
-    """
-    task = cast("asyncio.Future[Any]", owned.task)
-    if task.done():
-        return _owned_outcome(task), None
-    loop = asyncio.get_running_loop()
-    cancellation: asyncio.CancelledError | None = None
-    owned.timed_out = False
-    owned.waiter = loop.create_future()
-    handle = None if timeout is None else loop.call_later(timeout, owned.expire)
-    try:
-        while not task.done() and not owned.timed_out:
-            try:
-                await owned.waiter
-            except asyncio.CancelledError as exc:
-                cancellation = exc
-                if owned.waiter.cancelled():
-                    owned.waiter = loop.create_future()
-    finally:
-        owned.waiter = None
-        if handle is not None:
-            handle.cancel()
-    if not task.done():
-        return TimeoutError(), cancellation
-    return _owned_outcome(task), cancellation
+        Returns:
+            The work's failure (``TimeoutError`` when the deadline passed first) and any observed
+            caller cancellation.
+        """
+        task = self.task
+        if task.done():
+            return self.outcome(), None
+        loop = asyncio.get_running_loop()
+        cancellation: asyncio.CancelledError | None = None
+        self.timed_out = False
+        waiter: asyncio.Future[None] = loop.create_future()
+        self.waiter = waiter
+        handle = None if timeout is None else loop.call_later(timeout, self.expire)
+        try:
+            while not task.done() and not self.timed_out:
+                try:
+                    await waiter
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    if waiter.cancelled():
+                        waiter = loop.create_future()
+                        self.waiter = waiter
+        finally:
+            self.waiter = None
+            if handle is not None:
+                handle.cancel()
+        if not task.done():
+            return TimeoutError(), cancellation
+        return self.outcome(), cancellation
 
 
 async def await_owned_release(operation: Awaitable[Any]) -> None:
@@ -221,7 +214,7 @@ async def await_owned_release(operation: Awaitable[Any]) -> None:
     Cancellation of the caller never abandons the operation. Its own failure
     takes precedence over a cancellation observed while waiting.
     """
-    error, cancellation = await _await_owned(_start_owned(operation))
+    error, cancellation = await _Owned(operation).join()
     if error is not None:
         raise error
     if cancellation is not None:
@@ -238,7 +231,7 @@ async def await_owned_disposal(operation: Awaitable[Any]) -> BaseException | Non
     Returns:
         The disposal failure, or None when disposal completed.
     """
-    error, _ = await _await_owned(_start_owned(operation))
+    error, _ = await _Owned(operation).join()
     return error
 
 
@@ -319,16 +312,14 @@ class AsyncTenantLease:
         self._connection, self._state = None, None
         if state is None:
             return
-        cleanup = _start_owned(self._cleanup(connection, state, kwargs.get("exc_type")))
-        cause, cancellation = await _await_owned(cleanup, self._cleanup_timeout)
-        task = cast("asyncio.Future[Any]", cleanup.task)
-        if not task.done():
-            task.cancel()
-            _, pending = await _await_owned(cleanup)
+        cleanup = _Owned(self._cleanup(connection, state, kwargs.get("exc_type")))
+        cause, cancellation = await cleanup.join(self._cleanup_timeout)
+        if not cleanup.task.done():
+            cleanup.task.cancel()
+            _, pending = await cleanup.join()
             cancellation = cancellation or pending
         if cause is not None:
-            disposal = _start_owned(self._invalidate(connection))
-            invalidation_error, pending = await _await_owned(disposal)
+            invalidation_error, pending = await _Owned(self._invalidate(connection)).join()
             cancellation = cancellation or pending
             _report_cleanup_failure(cause, cancellation or kwargs.get("exc_val"), invalidation_error)
         if cancellation is not None:
