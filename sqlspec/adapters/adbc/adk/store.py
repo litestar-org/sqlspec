@@ -15,7 +15,7 @@ from sqlspec.adapters.adbc.core import (
     _TERADATA_INDEX_EXISTS_SQL,
     _TERADATA_TABLE_EXISTS_SQL,
     RECONCILE_ADBC_DIALECTS,
-    create_mapped_exception,
+    create_teradata_mapped_exception,
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
@@ -3310,7 +3310,7 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
             except (AdbcNotSupportedError, NotImplementedError):
                 mode = None
             except AdbcNativeError as exc:
-                raise create_mapped_exception(exc) from exc
+                raise create_teradata_mapped_exception(exc) from exc
         previous = mode == "true" if mode in {"true", "false"} else getattr(connection, "_autocommit", None)
         if not callable(set_autocommit) or not isinstance(previous, bool):
             msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
