@@ -61,6 +61,29 @@ _DDL_PREFIX_PATTERN = re.compile(
     r"(?:CREATE|ALTER|DROP|RENAME|REPLACE|DATABASE|MODIFY|GIVE|GRANT|REVOKE)\b|COMMENT\s+ON\b|COLLECT\s+STATISTICS\b"
 )
 _QUERY_BAND_KEY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
+_ERROR_CODE_PATTERN = re.compile(r"\[Error\s+(\d+)\]", re.IGNORECASE)
+_ERROR_CODE_MAPPING: dict[int, type[SQLSpecError]] = {
+    **dict.fromkeys((2801, 2802, 2803), UniqueViolationError),
+    **dict.fromkeys((2700, 2701, 5312, 5313), ForeignKeyViolationError),
+    **dict.fromkeys((3604, 3811), NotNullViolationError),
+    5317: CheckViolationError,
+    2631: DeadlockError,
+    **dict.fromkeys((3110, 3156), QueryTimeoutError),
+    **dict.fromkeys((3523, 3524, 8017), PermissionDeniedError),
+    **dict.fromkeys((3706, 3707), SQLParsingError),
+    **dict.fromkeys((3802, 3807, 5628), NotFoundError),
+    **dict.fromkeys((2616, 2620, 2621, 2665, 6706, 6758, 6760), DataError),
+    **dict.fromkeys((2644, 2646, 2843, 3932), OperationalError),
+}
+_CONNECTION_ERROR_MARKERS = (
+    "unable to connect",
+    "connection refused",
+    "connection reset",
+    "hostname lookup failed",
+    "dial tcp",
+    "tls",
+    "closed connection",
+)
 
 DEFAULT_TERADATA_PORT = "1025"
 IMPLICIT_UPPER_COLUMN_PATTERN = re.compile(r"^(?!\d)[A-Z0-9_]+$")
@@ -322,45 +345,22 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: int |
 
 def extract_error_code(error: BaseException) -> int | None:
     """Extract the vendor database error number."""
-    match = re.search(r"\[Error\s+(\d+)\]", str(error), re.IGNORECASE)
+    match = _ERROR_CODE_PATTERN.search(str(error))
     return int(match[1]) if match else None
 
 
 def create_mapped_exception(error: BaseException, *, logger: Logger | None = None) -> SQLSpecError:
     """Map native database codes, retaining the original cause."""
-    _ = logger
     code = extract_error_code(error)
-    groups = (
-        (UniqueViolationError, {2801, 2802, 2803}),
-        (ForeignKeyViolationError, {2700, 2701, 5312, 5313}),
-        (NotNullViolationError, {3604, 3811}),
-        (CheckViolationError, {5317}),
-        (DeadlockError, {2631}),
-        (QueryTimeoutError, {3110, 3156}),
-        (PermissionDeniedError, {3523, 3524, 8017}),
-        (SQLParsingError, {3706, 3707}),
-        (NotFoundError, {3802, 3807, 5628}),
-        (DataError, {2616, 2620, 2621, 2665, 6706, 6758, 6760}),
-        (OperationalError, {2644, 2646, 2843, 3932}),
-    )
     cls: type[SQLSpecError] = SQLSpecError
-    for candidate, codes in groups:
-        if code in codes:
-            cls = candidate
-            break
+    mapped_cls = _ERROR_CODE_MAPPING.get(code) if code is not None else None
+    if mapped_cls is not None:
+        cls = mapped_cls
     else:
-        if any(
-            word in str(error).lower()
-            for word in (
-                "unable to connect",
-                "connection refused",
-                "connection reset",
-                "hostname lookup failed",
-                "dial tcp",
-                "tls",
-                "closed connection",
-            )
-        ):
+        if code is not None and logger is not None:
+            logger.debug("Unmapped Teradata error number: %s", code)
+        message = str(error).lower()
+        if any(marker in message for marker in _CONNECTION_ERROR_MARKERS):
             cls = DatabaseConnectionError
         elif type(error).__name__ == "OperationalError":
             cls = OperationalError

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
@@ -123,6 +124,12 @@ def test_unclassified_errors_preserve_generic_or_operational_family() -> None:
 
     assert type(create_mapped_exception(RuntimeError("[Error 9999] unknown"))) is SQLSpecError
     assert type(create_mapped_exception(vendor_error_type("request failed"))) is OperationalError
+
+
+def test_unmapped_error_code_is_logged_for_diagnostics() -> None:
+    logger = MagicMock()
+    create_mapped_exception(RuntimeError("[Error 9999] unknown"), logger=logger)
+    logger.debug.assert_called_once_with("Unmapped Teradata error number: %s", 9999)
 
 
 @pytest.mark.parametrize(
