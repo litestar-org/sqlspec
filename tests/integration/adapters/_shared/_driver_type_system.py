@@ -85,6 +85,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "on_connection_create",
         "events_backend",
+        "query_tag",
         "enable_statement_profiling",
     ),
     "aiomysql": (
