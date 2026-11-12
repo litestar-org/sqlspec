@@ -73,13 +73,7 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Tenant-Aware Requests
 
-When a database configuration enables `driver_features={"tenant_strategy": "rls"}`, FastAPI checks out the tenant connection only when a route resolves `Depends(db_ext.provide_session(...))`, after an authorization dependency calls `set_request_tenant(request, org_id, key=...)`. Public and login endpoints never acquire a tenant connection and can query user memberships through a separate auth bind or `config.provide_session(bypass_tenant=True)`. The runnable example uses in-memory SQLite, which has no tenant strategy, so it acquires eagerly and shows only the authorization and `set_request_tenant` flow; deferral applies once the tenant bind uses a tenant-enabled adapter such as `AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`:
-
-```{ .python title="docs/examples/frameworks/fastapi/tenant_setup.py" }
---8<-- "docs/examples/frameworks/fastapi/tenant_setup.py:example"
-```
-
-When upstream ASGI middleware already verifies the caller before SQLSpec runs, set a per-bind `tenant_extractor` in `extension_config["fastapi"]` ; SQLSpec calls it on first use. SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, an authorization dependency verifies membership and calls `set_request_tenant(request, org_id)`, and `Depends(db_ext.provide_session())` checks out the tenant connection only when a route resolves it. See [FastAPI Multi-Tenancy](../learn/recipes/multi-tenancy-fastapi.md) for single-database, separate auth database, and upfront extractor examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Declarative Filter Dependencies
 

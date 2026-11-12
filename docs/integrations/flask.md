@@ -48,43 +48,7 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 
 ## Tenant-Aware Requests
 
-SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
-
-Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`psycopg`, `asyncpg`, `psqlpy`, `cockroach_psycopg`, `cockroach_asyncpg`, `oracledb`, `mssql_python`, `pymssql`, `db2`; start with the role and policy setup in [Multi-Tenancy](../learn/recipes/multi-tenancy.md)).
-
-When no `tenant_extractor` is configured, Flask defers checking out the tenant connection until your view or `@app.before_request` hook verifies membership, calls `set_request_tenant(org_id)` (accepting `key=...` for multi-database binds), and calls `plugin.get_session()`. Unauthenticated endpoints such as `/login` or `/health` skip tenant checkout completely and can query user memberships through a dedicated auth bind or `config.provide_session(bypass_tenant=True)`:
-
-```python
-from typing import Any
-from flask import Flask, abort, g, jsonify
-from sqlspec.adapters.psycopg import PsycopgSyncConfig
-from sqlspec.extensions.flask import SQLSpecPlugin, set_request_tenant
-
-plugin = SQLSpecPlugin(
-    PsycopgSyncConfig(
-        connection_config={"conninfo": "postgresql://app_user@localhost/app"},
-        driver_features={"tenant_strategy": "rls"},
-        extension_config={"flask": {"commit_mode": "autocommit"}},
-    )
-)
-
-
-def register_routes(app: Flask) -> None:
-    plugin.init_app(app)
-
-    @app.get("/orgs/<org_id>/projects")
-    def list_projects(org_id: str) -> Any:
-        user = getattr(g, "user", None)
-        if user is None or org_id not in user.org_ids:
-            abort(403)
-        set_request_tenant(org_id)
-        session = plugin.get_session()
-        return jsonify(session.select("SELECT id, name FROM projects"))
-```
-
-When an upstream authentication hook registered before `plugin.init_app(app)` already sets `g.user`, you can instead configure a synchronous `tenant_extractor` per bind in `extension_config["flask"]` (taking either zero arguments or the Flask `Request` and returning a `TenantContextPayload`, `str`, `UUID`, or `None`; Flask rejects async extractors). Multiple database binds on one plugin can each configure their own extractor or use deferred `set_request_tenant(...)` independently.
-
-SQLSpec binds the verified tenant before opening a connection, forwards that captured payload into its portal for async drivers, and exits the lease during `teardown_appcontext` before restoring any outer scope. Calling `plugin.get_session()` on a tenant-enabled bind without an active tenant raises `TenantContextError` before taking a pool slot. Request sessions belong to the handling request; background threads should open independent leases via `config.provide_session(tenant=...)`. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask defers checkout until a view or `before_request` hook verifies membership, calls `set_request_tenant(org_id)`, and calls `plugin.get_session()`; a synchronous per-bind `tenant_extractor` can resolve the tenant from `g.user` instead. See [Flask Multi-Tenancy](../learn/recipes/multi-tenancy-flask.md) for complete examples and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Configuration Options
 

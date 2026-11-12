@@ -10,7 +10,7 @@ Keep each customer's rows in one `projects` table with PostgreSQL row-level secu
 | Schema per tenant | Separate namespaces in one database | A trusted schema resolver or dedicated schema configs |
 | Database per tenant | Separate databases and pools | One configuration per `bind_key` |
 
-This guide uses shared tables. For request auth, see [Tenant Framework Integration](multi-tenancy-frameworks.md). For worker tasks and server setup, see [Tenant Operations](multi-tenancy-operations.md).
+This guide uses shared tables. For request auth, see the [Tenant Request Contract](multi-tenancy-frameworks.md) and its [framework guides](multi-tenancy-frameworks.md#framework-guides). For worker tasks and server setup, see [Tenant Operations](multi-tenancy-operations.md).
 
 ## Create the Policy and Application Role
 

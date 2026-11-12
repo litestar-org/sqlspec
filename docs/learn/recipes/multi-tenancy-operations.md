@@ -2,7 +2,7 @@
 
 Run tenant work inside an explicit scope. Use a separate admin config and pool for migrations, stores, and queues. The app role still needs a database policy that checks tenant access; context and session settings alone do not hide rows.
 
-Start with the [PostgreSQL setup recipe](multi-tenancy.md) and use [Tenant Framework Integration](multi-tenancy-frameworks.md) to bind request identity.
+Start with the [PostgreSQL setup recipe](multi-tenancy.md) and use the [Tenant Request Contract](multi-tenancy-frameworks.md) to bind request identity.
 
 ## Worker and Thread Scopes
 

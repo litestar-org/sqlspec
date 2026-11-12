@@ -99,17 +99,7 @@ In custom guards, middleware, streaming iterators, or event hooks where standard
 
 ## Tenant-Aware Requests
 
-SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
-
-Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`, `mssql_python`, `pymssql`, `db2`) and configure tenant selector and user attribute names once in `extension_config["litestar"]`. Both injected sessions and `guards=[require_tenant()]` inherit those settings automatically from `app.state.sqlspec`:
-
-```python
---8<-- "docs/examples/extensions/litestar/tenant_resolution.py:example"
-```
-
-- Mark public or login routes under guarded controllers with `opt={"tenant_bypass": True}`, and query user credentials before a tenant exists with `config.provide_session(bypass_tenant=True)` (database RLS policies remain enforced unless linked to an explicit restricted auth lookup policy or separate auth bind).
-- In custom authorization guards or dependencies, verify membership and bind the selected organization via `set_connection_tenant(connection, org_id)`; pass `key=` with a session, connection, or bind key to scope the receipt to one database.
-- Applications using `litestar-security` resolve tenants directly from the authenticated `scope["user"]` and `scope["auth"]` values (including `AuthorizationSnapshot.tenant_ids`, `tenant_roles`, and `CredentialRestrictions(tenant_ids=...)`) without extra wiring. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete JWT, server-side session, and `litestar-security` guides.
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, injected `db_session` and `db_connection` dependencies and `guards=[require_tenant()]` resolve the request tenant from verified authentication state, using the selector and user attribute names set once in `extension_config["litestar"]`. Mark public routes with `opt={"tenant_bypass": True}`. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) for JWT, server-side session, separate auth database, and `litestar-security` examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 

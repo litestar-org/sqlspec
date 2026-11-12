@@ -49,7 +49,12 @@ nav = [
       { "Service Layer" = "learn/recipes/service-layer.md" },
       { "Multi-Tenancy" = [
         "learn/recipes/multi-tenancy.md",
-        { "Frameworks" = "learn/recipes/multi-tenancy-frameworks.md" },
+        { "Request Contract" = "learn/recipes/multi-tenancy-frameworks.md" },
+        { "Litestar" = "learn/recipes/multi-tenancy-litestar.md" },
+        { "FastAPI" = "learn/recipes/multi-tenancy-fastapi.md" },
+        { "Starlette" = "learn/recipes/multi-tenancy-starlette.md" },
+        { "Flask" = "learn/recipes/multi-tenancy-flask.md" },
+        { "Sanic" = "learn/recipes/multi-tenancy-sanic.md" },
         { "Operations" = "learn/recipes/multi-tenancy-operations.md" },
       ] },
       { "Health Checks" = "learn/recipes/health-checks.md" },

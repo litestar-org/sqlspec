@@ -46,37 +46,7 @@ Bind multiple async or sync configurations by specifying unique `session_key`, `
 
 ## Tenant-Aware Requests
 
-SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
-
-When a configuration sets `driver_features={"tenant_strategy": "rls"}`, Starlette defers connection acquisition until your route or auth middleware verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)` (or calls `db_plugin.get_session(request)` for sync adapters). Public and login routes skip tenant checkout entirely and can query user records through `config.provide_session(bypass_tenant=True)` or a dedicated auth bind:
-
-```python
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
-
-db_plugin = SQLSpecPlugin(
-    AsyncpgConfig(
-        connection_config={"dsn": "postgresql://app_user@localhost/app"},
-        driver_features={"tenant_strategy": "rls"},
-        extension_config={"starlette": {"commit_mode": "autocommit"}},
-    )
-)
-
-
-async def list_projects(request: Request) -> JSONResponse:
-    user = request.scope.get("user")
-    org_id = request.path_params["org_id"]
-    if user is None or org_id not in user.org_ids:
-        return JSONResponse({"detail": "Forbidden"}, status_code=403)
-    set_request_tenant(request, org_id)
-    session = await db_plugin.get_session_async(request)
-    rows = await session.select("SELECT id, name FROM projects")
-    return JSONResponse(rows)
-```
-
-Alternatively, configure an independent sync or async `tenant_extractor` per bind in `extension_config["starlette"]` when upstream ASGI authentication populates `scope` before SQLSpec runs. Request transaction finalization (`commit_mode`) executes under the captured tenant identity before resetting the connection lease. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md).
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starlette defers checkout until a route verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)`; a per-bind `tenant_extractor` can resolve the tenant from the verified ASGI scope instead. See [Starlette Multi-Tenancy](../learn/recipes/multi-tenancy-starlette.md) for complete examples and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Configuration Options
 

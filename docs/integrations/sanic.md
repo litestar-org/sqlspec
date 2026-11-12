@@ -88,44 +88,7 @@ For high-throughput endpoints that only acquire connections on demand rather tha
 
 ## Tenant-Aware Requests
 
-SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
-
-Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (such as `asyncpg`, `psqlpy`, `psycopg`, `cockroach_asyncpg`, or `oracledb`; see [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for database role and policy setup).
-
-When no `tenant_extractor` is set, Sanic defers checking out the tenant connection until an authentication middleware or route verifies membership, calls `set_request_tenant(request, org_id)` (accepting `key=...` for multi-database setups), and awaits `db_plugin.get_session_async(request)`. Public and login routes never check out a tenant connection and can look up users via a separate auth bind or `config.provide_session(bypass_tenant=True)`:
-
-```python
-from typing import Any
-from sanic import Sanic, json
-from sanic.exceptions import Forbidden
-from sqlspec.adapters.asyncpg import AsyncpgConfig
-from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
-
-db_plugin = SQLSpecPlugin(
-    AsyncpgConfig(
-        connection_config={"dsn": "postgresql://app_user@localhost/app"},
-        driver_features={"tenant_strategy": "rls"},
-        extension_config={"sanic": {"commit_mode": "autocommit"}},
-    )
-)
-
-
-def register_routes(app: Sanic[Any, Any]) -> None:
-    db_plugin.init_app(app)
-
-    @app.get("/orgs/<org_id:str>/projects")
-    async def list_projects(request: Any, org_id: str) -> Any:
-        user = getattr(request.ctx, "user", None)
-        if user is None or org_id not in user.org_ids:
-            raise Forbidden("Forbidden organization")
-        set_request_tenant(request, org_id)
-        session = await db_plugin.get_session_async(request)
-        return json(await session.select("SELECT id, name FROM projects"))
-```
-
-When your authentication middleware runs before SQLSpec's request hook and populates `request.ctx.user`, you can instead configure a sync or async `tenant_extractor` per bind in `extension_config["sanic"]` (returning `TenantContextPayload`, `str`, `UUID`, or `None`) so handlers can await `db_plugin.get_session_async(request)` without calling `set_request_tenant`; SQLSpec calls the extractor on first use. Multiple binds on one plugin can each define their own extractor or use deferred `set_request_tenant(...)` independently.
-
-Response cleanup and the `http.lifecycle.complete` signal listener exit every open tenant lease and restore outer scopes on normal responses, mapped exceptions, and cancellations. At cleanup, most tenant-enabled connection leases roll back open transactions (including in `"manual"` mode), while psycopg and CockroachDB psycopg connection leases commit a clean exit, so commit explicitly or set `commit_mode="autocommit"` to control persistence. The request connection is released when SQLSpec's response handling runs, which for a streaming handler is the `request.respond()` call; the request tenant stays in effect until the handler returns, so open a new session after `respond()` instead of reusing the request session. Always verify requested header or path selectors against trusted user memberships; explicit bypass payloads skip SQLSpec's session identity setup while keeping database RLS policies active. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Sanic defers checkout until middleware or a route verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)`; a per-bind `tenant_extractor` can resolve the tenant from `request.ctx.user` instead. See [Sanic Multi-Tenancy](../learn/recipes/multi-tenancy-sanic.md) for complete examples, including streaming and cleanup behavior, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Configuration Options
 
