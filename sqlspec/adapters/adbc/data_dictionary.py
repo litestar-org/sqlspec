@@ -95,6 +95,9 @@ _ADBC_STATISTICS_WARNING: Final = "ADBC statistics metadata may be approximate, 
 
 _ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
 _SNOWFLAKE_DATABASE_QUALIFIED_PARTS: Final = 3
+_OPTIONAL_FILTER_PATTERN: Final = re.compile(
+    r"(?:CAST\(\s*)?(?<![:\w]):(\w+)(?:\s+AS\s+\w+(?:\s*\(\s*\d+\s*\))?\s*\))?\s+IS\s+NULL\b", re.IGNORECASE
+)
 _SNOWFLAKE_IDENTIFIER_PART: Final = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
 
 
@@ -456,39 +459,39 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
 
     def get_schemas(self, driver: "AdbcDriver") -> "MetadataResult":
         """Get schema metadata from the dialect catalog pack."""
-        return self._select_catalog_domain(driver, "schemas", "list", schema=None)
+        return self._select_catalog_domain(driver, "schemas", schema=None)
 
     def get_objects(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
         """Get schema object metadata from the dialect catalog pack."""
-        return self._select_catalog_domain(driver, "objects", "by_schema", schema=schema)
+        return self._select_catalog_domain(driver, "objects", schema=schema)
 
     def get_views(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
         """Get view metadata from the dialect catalog pack."""
-        return self._select_catalog_domain(driver, "views", "by_schema", schema=schema)
+        return self._select_catalog_domain(driver, "views", schema=schema)
 
     def get_sequences(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
         """Get sequence metadata from the dialect catalog pack."""
-        return self._select_catalog_domain(driver, "sequences", "by_schema", schema=schema)
+        return self._select_catalog_domain(driver, "sequences", schema=schema)
 
     def get_routines(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
         """Get routine metadata from the dialect catalog pack."""
-        return self._select_catalog_domain(driver, "routines", "by_schema", schema=schema)
+        return self._select_catalog_domain(driver, "routines", schema=schema)
 
-    def _select_catalog_domain(
-        self, driver: "AdbcDriver", domain: str, operation: str, *, schema: str | None
-    ) -> "MetadataResult":
+    def _select_catalog_domain(self, driver: "AdbcDriver", domain: str, *, schema: str | None) -> "MetadataResult":
         dialect = self._normalize_dialect(driver)
-        if not self._has_schema_scoped_query(dialect, domain, operation):
+        query = self._schema_scoped_query(dialect, domain)
+        if query is None:
             return self._unsupported_metadata(domain)
-        query = self._get_query(dialect, domain, operation)
         if dialect == "snowflake" and domain != "schemas":
             database_name, schema_name, _ = self._resolve_snowflake_scope(driver, schema, None)
             query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
         else:
             schema_name = self._resolve_schema(dialect, schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation=domain)
-        parameter_names = _query_parameter_names(query.raw_sql, dialect)
-        rows = driver.select(query, schema_name=schema_name) if parameter_names else driver.select(query)
+        if "schema_name" in _query_parameter_names(query.raw_sql, dialect):
+            rows = driver.select(query, schema_name=schema_name)
+        else:
+            rows = driver.select(query)
         capability = MetadataCapability(
             domain=domain,
             support=MetadataSupport.SUPPORTED,
@@ -665,12 +668,24 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         except SQLFileNotFoundError:
             return None
 
-    def _has_schema_scoped_query(self, dialect: str, domain: str, operation: str) -> bool:
-        """Return whether a catalog query exists and binds at most ``schema_name``."""
-        query_text = self._get_query_text_or_none(dialect, domain, operation)
-        if query_text is None or "{" in query_text:
-            return False
-        return _query_parameter_names(query_text, dialect) <= {"schema_name"}
+    def _schema_scoped_query(self, dialect: str, domain: str) -> "SQL | None":
+        """Return the domain's catalog query bound only by ``schema_name``.
+
+        Optional ``(:name IS NULL OR ...)`` filters other than ``schema_name`` are rendered as ``NULL`` so the
+        query lists every object in the schema. Queries that require any other bind return ``None``.
+        """
+        operations = ("list", "by_schema") if domain == "schemas" else ("by_schema",)
+        for operation in operations:
+            query_text = self._get_query_text_or_none(dialect, domain, operation)
+            if query_text is None or "{" in query_text:
+                continue
+            extra_names = _query_parameter_names(query_text, dialect) - {"schema_name"}
+            if not extra_names <= _optional_filter_names(query_text):
+                return None
+            for name in extra_names:
+                query_text = re.sub(rf"(?<![:\w]):{re.escape(name)}\b", "NULL", query_text)
+            return self._get_query(dialect, domain, operation).copy(query_text)
+        return None
 
     def _resolve_schema(self, dialect: str, schema: "str | None") -> "str | None":
         try:
@@ -772,17 +787,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 source=MetadataSource.DRIVER_METADATA,
                 warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,),
             )
-        if domain in {"views", "routines", "sequences"} or (
-            domain in {"schemas", "objects"} and not (probes["objects"] or probes["table_types"])
-        ):
-            operation = "list" if domain == "schemas" else "by_schema"
-            if self._has_schema_scoped_query(dialect, domain, operation):
-                return MetadataCapability(
-                    domain=domain,
-                    support=MetadataSupport.SUPPORTED,
-                    fidelity=MetadataFidelity.NATIVE,
-                    source=MetadataSource.CATALOG,
-                )
+        if (
+            domain in {"views", "routines", "sequences"}
+            or (domain in {"schemas", "objects"} and not (probes["objects"] or probes["table_types"]))
+        ) and self._schema_scoped_query(dialect, domain) is not None:
+            return MetadataCapability(
+                domain=domain,
+                support=MetadataSupport.SUPPORTED,
+                fidelity=MetadataFidelity.NATIVE,
+                source=MetadataSource.CATALOG,
+            )
         if domain in {"views", "routines", "privileges", "dependencies"}:
             return MetadataCapability(
                 domain=domain,
@@ -984,6 +998,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
         rows = driver.select(query, **parameters)
         return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, "snowflake"))
+
+
+def _optional_filter_names(query_text: str) -> "set[str]":
+    """Return named placeholders the query only uses behind ``:name IS NULL OR ...`` guards."""
+    return {match.group(1) for match in _OPTIONAL_FILTER_PATTERN.finditer(query_text)}
 
 
 def _query_parameter_names(query_text: str, dialect: str) -> "set[str]":

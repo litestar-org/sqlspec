@@ -989,16 +989,22 @@ def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
             dictionary.get_columns(driver, table=bad_identifier)
 
 
-@pytest.mark.parametrize(("dialect", "domain"), [("oracle", "objects"), ("db2", "views"), ("teradata", "objects")])
-def test_catalog_domains_needing_extra_binds_report_unsupported(dialect: str, domain: str) -> None:
-    """Catalog queries that bind more than ``schema_name`` are reported unsupported instead of failing."""
+@pytest.mark.parametrize(
+    ("dialect", "schema", "bound_schema"), [("oracle", "app", "APP"), ("db2", "app", "APP"), ("teradata", "app", "app")]
+)
+def test_enterprise_get_objects_lists_schema_without_name_filter(dialect: str, schema: str, bound_schema: str) -> None:
+    """Optional object-name filters render as NULL so Oracle, Db2, and Teradata list every schema object."""
     driver = Mock()
     driver.dialect = dialect
+    driver.select.return_value = [{"OBJECT_NAME": "ORDERS", "SCHEMA_NAME": "APP"}]
 
-    result = getattr(AdbcDataDictionary(), f"get_{domain}")(driver)
+    result = AdbcDataDictionary().get_objects(driver, schema=schema)
 
-    assert result.capability.support == MetadataSupport.UNSUPPORTED
-    driver.select.assert_not_called()
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.items == ({"object_name": "ORDERS", "schema_name": "APP"},)
+    query = driver.select.call_args.args[0]
+    assert ":object_name" not in query.raw_sql
+    assert driver.select.call_args.kwargs == {"schema_name": bound_schema}
 
 
 def test_mysql_schema_listing_binds_declared_schema_parameter() -> None:
