@@ -15,6 +15,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
+from sqlspec.utils.portal import PortalProvider
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
@@ -288,8 +289,7 @@ def test_flask_defers_tenant_connection_and_supports_set_request_tenant(
             set_request_tenant(org_id)
             session = plugin.get_session()
             if asynchronous:
-                assert plugin._portal is not None
-                value = plugin._portal.portal.call(session.select_value, "SELECT 1")
+                value = cast("PortalProvider", plugin._portal).portal.call(session.select_value, "SELECT 1")
             else:
                 value = session.select_value("SELECT 1")
             return f"{org_id}:{value}"

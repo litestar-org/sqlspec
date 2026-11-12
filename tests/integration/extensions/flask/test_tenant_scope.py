@@ -9,6 +9,7 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.psycopg import PsycopgSyncConfig
 from sqlspec.extensions.flask import SQLSpecPlugin
+from sqlspec.utils.portal import PortalProvider
 from tests.integration.fixtures.tenant import tenant_policy_database as tenant_policy_database
 
 pytestmark = pytest.mark.xdist_group("postgres")
@@ -43,8 +44,7 @@ def test_flask_tenant_policy_isolation_and_missing_identity(
         session = plugin.get_session()
         query = f'SELECT value, pg_backend_pid() AS pid FROM "{table}"'
         if asynchronous:
-            assert plugin._portal is not None
-            values = plugin._portal.portal.call(session.select, query)
+            values = cast("PortalProvider", plugin._portal).portal.call(session.select, query)
         else:
             values = session.select(query)
         return {"rows": values}

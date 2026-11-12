@@ -637,14 +637,12 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
     )
     raw_tenant_cfg.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
     tenant_cfg = cast("DatabaseConfigProtocol[Any, Any, Any]", raw_tenant_cfg)
-    plugin_ref: SQLSpecPlugin | None = None
 
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"ok": True})
 
     async def projects(request: Request) -> JSONResponse:
-        assert plugin_ref is not None
-        auth_db = await plugin_ref.get_session_async(request, auth_cfg)
+        auth_db = await plugin.get_session_async(request, auth_cfg)
         probe = await auth_db.execute("SELECT 1 AS ok")
         assert probe.scalar() == 1
         org_id = request.path_params["org_id"]
@@ -653,25 +651,24 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
         if org_id not in {"acme", "globex"}:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         set_request_tenant(request, org_id, variables={"tier": "enterprise"})
-        session = await plugin_ref.get_session_async(request, "tenant_session")
-        cached = await plugin_ref.get_session_async(request, tenant_cfg)
-        conn = await plugin_ref.get_connection_async(request, "tenant_db")
+        session = await plugin.get_session_async(request, "tenant_session")
+        cached = await plugin.get_session_async(request, tenant_cfg)
+        conn = await plugin.get_connection_async(request, "tenant_db")
         assert session is cached
         assert session.connection is conn
         return JSONResponse({"tenant": session.connection.tenant_id})
 
     async def fail_route(request: Request) -> JSONResponse:
-        assert plugin_ref is not None
         set_request_tenant(request, "acme")
-        await plugin_ref.get_session_async(request, tenant_cfg)
+        await plugin.get_session_async(request, tenant_cfg)
         raise RuntimeError("boom")
 
     app = Starlette(
         routes=[Route("/health", health), Route("/orgs/{org_id}/projects", projects), Route("/fail", fail_route)]
     )
-    plugin_ref = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
-    assert plugin_ref.config == [auth_cfg, tenant_cfg]
-    assert plugin_ref.get_config("tenant_db") is tenant_cfg
+    plugin = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
+    assert plugin.config == [auth_cfg, tenant_cfg]
+    assert plugin.get_config("tenant_db") is tenant_cfg
 
     with TestClient(app, raise_server_exceptions=False) as client:
         assert client.get("/health").json() == {"ok": True}
