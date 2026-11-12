@@ -271,6 +271,8 @@ include = [
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
+  "sqlspec/storage/_staging_sql.py",               # Pure staged/checkpoint SQL and worker budget helpers
+  "sqlspec/storage/_ingest.py",                    # Compiled staged and multi-shard storage ingestion orchestration
   "sqlspec/storage/_arrow_stream.py",              # Pure Parquet streaming validation and row-group iteration
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes

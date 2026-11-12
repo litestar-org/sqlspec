@@ -128,7 +128,7 @@ When a route handler in `"manual"` mode returns cleanly without calling `commit(
 | Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
 | Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
 | Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
-| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`) | `psqlpy`, `db2`, `arrow_odbc`, `bigquery` |
+| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`; `teradata` rolls back uncommitted `autocommit=False` work on pool release) | `psqlpy`, `db2`, `teradata`, `arrow_odbc`, `bigquery` |
 | Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
 
 ## Declarative Query Filter Providers
@@ -204,7 +204,7 @@ extension_config = {
 
 | Adapter Family | Built-In Adapters | Reconcile Scope and Boundaries |
 | --- | --- | --- |
-| Embedded, OLTP, and Enterprise | `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `db2`, `sqlanywhere`, `sybase` | Creates missing session tables, adds safe missing nullable or defaulted columns, and converges the companion `expires_at` index (`dbo`-defaulted or schema-qualified on SQL Server and validated schema-qualified on Oracle). |
+| Embedded, OLTP, and Enterprise | `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `db2`, `sqlanywhere`, `sybase`, `teradata` | Creates missing session tables, adds safe missing nullable or defaulted columns, and converges the companion `expires_at` index (`dbo`-defaulted or schema-qualified on SQL Server and validated schema-qualified on Oracle). |
 | Arrow ODBC | `arrow_odbc` (`mssql`, `tsql`, `db2`) | Converges compound primary session and `<table_name>_chunks` tables and their companion expiry and chunk indexes across SQL Server and Db2 targets. |
 | Cloud Spanner and BigQuery | `spanner`, `bigquery` | Converges `litestar_session` tables and companion expiry indexes (`spanner` TTL/index DDL; `bigquery` nullable-only additive column repair on existing tables, refusing `NOT NULL` or defaulted column additions with `MigrationError`). |
 | Multi-backend ADBC | `adbc` | Converges session tables and companion expiry indexes across all ADBC backends with a resolved dialect. ADBC over FlightSQL needs an explicit `statement_config` dialect or `gizmosql_backend`. |

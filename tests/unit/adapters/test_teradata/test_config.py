@@ -1,5 +1,7 @@
 """Exercise session hooks and exceptional lease cleanup through public configs."""
 
+import sys
+from collections.abc import Generator
 from types import SimpleNamespace
 from typing import Any, NoReturn
 from unittest.mock import MagicMock
@@ -8,10 +10,11 @@ import pytest
 
 from sqlspec.adapters.teradata import TeradataConfig, TeradataDriver
 from sqlspec.exceptions import TransactionError
+from sqlspec.utils.module_loader import reset_dependency_cache
 
 
 @pytest.fixture
-def connections(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+def connections(monkeypatch: pytest.MonkeyPatch) -> Generator[list[Any], None, None]:
     result = []
 
     def connect(**kwargs: Any) -> Any:
@@ -20,8 +23,12 @@ def connections(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
         result.append(connection)
         return connection
 
-    monkeypatch.setattr("sqlspec.adapters.teradata.pool.import_optional", lambda name: SimpleNamespace(connect=connect))
-    return result
+    monkeypatch.setitem(sys.modules, "teradatasql", SimpleNamespace(connect=connect))
+    reset_dependency_cache("teradatasql")
+    try:
+        yield result
+    finally:
+        reset_dependency_cache("teradatasql")
 
 
 def test_config_session_releases_connection_after_success(connections: list[Any]) -> None:
@@ -96,5 +103,42 @@ def test_native_cursor_context_closes_after_use(error: bool) -> None:
     else:
         with TeradataCursor(connection) as cursor:
             cursor.execute("SELECT 1")
-    connection.cursor.return_value.execute.assert_called_once_with("SELECT 1")
+    assert connection.cursor.return_value.execute.call_args.args == ("SELECT 1",)
     connection.cursor.return_value.close.assert_called_once_with()
+
+
+def test_config_exports_oauth_logmechs_and_extended_connection_params() -> None:
+    from types import MappingProxyType
+    from typing import get_args
+
+    from sqlspec.adapters.teradata import config as config_mod
+
+    for name in ("TeradataLogMech", "TeradataSSLMode", "TeradataTransactionMode"):
+        assert name in config_mod.__all__
+
+    logmechs = set(get_args(config_mod.TeradataLogMech))
+    assert {"BEARER", "CODE", "CRED", "ROPC", "SECRET"} <= logmechs
+
+    params: config_mod.TeradataConnectionParams = {
+        "host": "td.local",
+        "logmech": "BEARER",
+        "account": "$M",
+        "logdata": "token",
+        "charset": "UTF8",
+        "sslca": "/etc/ssl/ca.pem",
+        "sslcapath": "/etc/ssl/certs",
+        "lob_support": True,
+        "connect_timeout": 10,
+        "request_timeout": 30.5,
+        "cop": True,
+        "coplast": False,
+        "https_port": 443,
+    }
+    features: config_mod.TeradataDriverFeatures = {"query_band": MappingProxyType({"app": "etl"})}
+    cfg = config_mod.TeradataConfig(connection_config=dict(params), driver_features=features)
+    assert cfg.connection_config["cop"] == "true"
+    assert cfg.connection_config["coplast"] == "false"
+    assert cfg.connection_config["https_port"] == 443
+    hints = cfg.get_event_runtime_hints()
+    assert hints.poll_interval == 0.5
+    cfg.close_pool()

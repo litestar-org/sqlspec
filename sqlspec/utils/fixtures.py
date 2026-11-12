@@ -90,6 +90,7 @@ _JSON_TYPE_NAMES: Final["frozenset[str]"] = frozenset({"json", "jsonb"})
 _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "binary",
     "blob",
+    "byte",
     "bytea",
     "image",
     "long binary",
@@ -99,7 +100,17 @@ _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "raw",
     "tinyblob",
     "varbinary",
+    "varbyte",
 })
+_BINARY_TYPE_PREFIXES: Final["tuple[str, ...]"] = ("binary(", "varbinary(", "byte(", "varbyte(")
+
+
+def _is_binary_type_info(data_type: str) -> bool:
+    """Return whether a normalized column data-type label represents raw binary data."""
+    normalized = data_type.strip().lower()
+    return normalized in _BINARY_TYPES or normalized.startswith(_BINARY_TYPE_PREFIXES)
+
+
 _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "box",
     "circle",
@@ -1656,7 +1667,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return _decode_generic_vector
     if data_type.endswith("]"):
         return None
-    if data_type in _BINARY_TYPES or data_type.startswith(("binary(", "varbinary(")):
+    if _is_binary_type_info(data_type):
         return _decode_bytes
     if data_type in _JSON_TYPE_NAMES:
         return encode_json if family in _JSON_VALUE_FAMILIES else None

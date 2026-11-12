@@ -19,6 +19,7 @@ _FAMILY_ADAPTERS = {
     "spanner": frozenset({"spanner"}),
     "sqlanywhere": frozenset({"sqlanywhere"}),
     "sqlite": frozenset({"aiosqlite", "sqlite"}),
+    "teradata": frozenset({"teradata"}),
 }
 _SHARED_TEST_FAMILIES = frozenset((*_FAMILY_ADAPTERS, "gizmosql", "snowflake"))
 _FAMILY_XDIST_GROUPS = {family: "cockroachdb" if family == "cockroach" else family for family in _SHARED_TEST_FAMILIES}
@@ -118,6 +119,8 @@ def _case_family(value: object) -> str | None:
             return "db2"
         if "snowflake" in identity:
             return "snowflake"
+        if "teradata" in identity:
+            return "teradata"
         return "postgres"
     for family, adapters in _FAMILY_ADAPTERS.items():
         if adapter in adapters:

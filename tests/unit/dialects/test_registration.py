@@ -15,6 +15,7 @@ DIALECT_ENTRY_POINTS = {
     "pgvector": "sqlspec.dialects.postgres",
     "spangres": "sqlspec.dialects.spanner",
     "spanner": "sqlspec.dialects.spanner",
+    "teradata": "sqlspec.dialects.teradata",
 }
 
 
@@ -59,10 +60,11 @@ def test_importing_sqlspec_does_not_eagerly_load_dialect_machinery() -> None:
 def test_lazy_dialects_attribute_still_works() -> None:
     code = (
         "import sqlspec\n"
-        "from sqlspec.dialects import DB2, Spanner, Spangres, PGVector, ParadeDB, PGTextSearch\n"
+        "from sqlspec.dialects import DB2, Spanner, Spangres, PGVector, ParadeDB, PGTextSearch, Teradata\n"
         "assert sqlspec.dialects.DB2 is DB2\n"
         "assert sqlspec.dialects.Spanner is Spanner\n"
         "assert sqlspec.dialects.PGTextSearch is PGTextSearch\n"
+        "assert sqlspec.dialects.Teradata is Teradata\n"
         "from sqlglot.dialects.dialect import Dialect\n"
         "assert Dialect.get('db2') is DB2\n"
         "assert Dialect.get('spanner') is Spanner\n"
@@ -70,10 +72,34 @@ def test_lazy_dialects_attribute_still_works() -> None:
         "assert Dialect.get('pgvector') is PGVector\n"
         "assert Dialect.get('paradedb') is ParadeDB\n"
         "assert Dialect.get('pg_textsearch') is PGTextSearch\n"
+        "assert Dialect.get('teradata') is Teradata\n"
         "print('ok')\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_teradata_registration_overrides_builtin_without_mutating_shared_generator() -> None:
+    """SQLSpec Teradata registration replaces Dialect['teradata'] while leaving TeradataGenerator untouched."""
+    code = (
+        "import sqlglot\n"
+        "from sqlglot.dialects.dialect import Dialect\n"
+        "from sqlglot.dialects.teradata import Teradata as StockTeradata\n"
+        "from sqlglot.generators.teradata import TeradataGenerator\n"
+        "transforms_before = dict(TeradataGenerator.TRANSFORMS)\n"
+        "types_before = dict(TeradataGenerator.TYPE_MAPPING)\n"
+        "from sqlspec.dialects import Teradata\n"
+        "assert Dialect.get('teradata') is Teradata\n"
+        "rendered = sqlglot.transpile('SELECT id FROM users LIMIT 5 OFFSET 10', write='teradata')[0]\n"
+        "assert rendered == 'SELECT id FROM users QUALIFY ROW_NUMBER() OVER (ORDER BY 1) BETWEEN 11 AND 15'\n"
+        "assert TeradataGenerator.TRANSFORMS == transforms_before\n"
+        "assert TeradataGenerator.TYPE_MAPPING == types_before\n"
+        "assert sqlglot.transpile('SELECT CAST(x AS BOOLEAN)', write=StockTeradata)[0] == 'SELECT CAST(x AS BOOLEAN)'\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
 
 
 def test_postgres_extension_operator_registration_is_idempotent() -> None:

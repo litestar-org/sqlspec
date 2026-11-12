@@ -151,9 +151,9 @@ When `strict=True`, `ensure_schema_sync` and `ensure_schema_async` raise `Migrat
 
 Built-in reconcilers (`litestar`, `events`, and `adk`) run across:
 
-- **20 unconditional adapters**: `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `bigquery`, `db2`, `sqlanywhere`, and `sybase`.
+- **21 unconditional adapters**: `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `bigquery`, `db2`, `sqlanywhere`, `sybase`, and `teradata`.
 - **Arrow ODBC (`arrow_odbc`)**: Supported when `statement_config.dialect` is `"mssql"`, `"tsql"`, or `"db2"`.
-- **Apache Arrow ADBC (`adbc`)**: Supported on every backend with a resolved dialect (`postgresql`, `sqlite`, `duckdb`, `bigquery`, `snowflake`, `mssql`, `oracle`, `db2`, and `mysql`).
+- **Apache Arrow ADBC (`adbc`)**: Supported on every backend with a resolved dialect (`postgresql`, `sqlite`, `duckdb`, `bigquery`, `snowflake`, `mssql`, `oracle`, `db2`, `teradata`, and `mysql`).
 
 Remaining built-in refusals and their remedies:
 

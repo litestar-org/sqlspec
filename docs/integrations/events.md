@@ -127,7 +127,7 @@ When `backend="notify"` (transient PostgreSQL `LISTEN`/`NOTIFY`), reconciliation
 | --- | --- | --- |
 | PostgreSQL | `asyncpg`, `psycopg`, `psqlpy` | No-op when `backend="notify"`; converges `sqlspec_event_queue`, companion polling index, and `fillfactor`/autovacuum storage options for `"poll_queue"` and `"notify_queue"`. |
 | Oracle | `oracledb` | Converges version-detected JSON/BLOB queue tables and companion indexes for `"poll_queue"`, plus native `DBMS_AQADM` JSON queue tables and started queues (`aq_queue` and `aq_channels`) for `"aq"` and `"txeventq"`. |
-| Embedded, OLTP, and Arrow ODBC | `sqlite`, `aiosqlite`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `db2`, `sqlanywhere`, `sybase`, `arrow_odbc` (`mssql`, `tsql`, `db2`) | Converges `poll_queue` tables, additive columns, and companion claim/polling indexes. |
+| Embedded, OLTP, and Arrow ODBC | `sqlite`, `aiosqlite`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `db2`, `sqlanywhere`, `sybase`, `teradata`, `arrow_odbc` (`mssql`, `tsql`, `db2`) | Converges `poll_queue` tables, additive columns, and companion claim/polling indexes. |
 | Cloud Spanner and BigQuery | `spanner`, `bigquery` | Converges `poll_queue` tables (`shard_count` prefixing and TTL-compatible indexes on `spanner`; partitioned queue tables and nullable-only additive column repair on `bigquery`). |
 | Multi-backend ADBC | `adbc` | Converges `poll_queue` tables and companion indexes across all ADBC backends with a resolved dialect. ADBC over FlightSQL needs an explicit `statement_config` dialect or `gizmosql_backend`. |
 

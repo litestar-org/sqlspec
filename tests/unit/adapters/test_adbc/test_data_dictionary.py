@@ -824,3 +824,13 @@ def test_teradata_sql_index_flags(flag: str, expected: bool) -> None:
             "is_primary": False,
         }
     ]
+
+
+@pytest.mark.parametrize("raw_dialect", ["teradata", "vantage"])
+def test_teradata_vantage_dialect_normalization_in_data_dictionary(raw_dialect: str) -> None:
+    """AdbcDataDictionary normalizes both teradata and vantage driver dialects to teradata."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = raw_dialect
+    assert dictionary._normalize_dialect(driver) == "teradata"
+    assert dictionary.resolve_ddl_dialect(driver) == "teradata"

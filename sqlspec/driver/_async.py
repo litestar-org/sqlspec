@@ -32,6 +32,7 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
+from sqlspec.data_dictionary._index_ddl import AsyncWithoutIndexesContext
 from sqlspec.driver._common import (
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
@@ -49,17 +50,19 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import (
-    AsyncWithoutIndexesContext,
-    execute_load_from_storage_async,
-    execute_staged_load_async,
-    stringify_storage_target,
-)
 from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
-from sqlspec.storage import AsyncStoragePipeline, StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-from sqlspec.storage.pipeline import close_async_arrow_result_resources
+from sqlspec.storage._ingest import execute_load_from_storage_async, execute_staged_load_async
+from sqlspec.storage.pipeline import (
+    AsyncStoragePipeline,
+    StorageBridgeJob,
+    StorageDestination,
+    StorageFormat,
+    StorageTelemetry,
+    close_async_arrow_result_resources,
+    stringify_storage_target,
+)
 from sqlspec.utils.arrow_helpers import arrow_batches_from_async_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -1640,10 +1643,12 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime is None or runtime.is_idle:
             return await runner(**runner_kwargs)
         driver_name = type(self).__name__
+        db_system = self.observability_db_system
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
+            "db_system": db_system,
             "operation": operation,
             "is_many": is_many,
             "is_script": is_script,
@@ -1654,7 +1659,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
             sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash)
+        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1682,6 +1687,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             started_at=started,
             precomputed_sql_hash=sql_hash,
             profile=profile,
+            db_system=db_system,
         )
         return result
 

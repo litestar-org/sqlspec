@@ -17,14 +17,14 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sybase import SybaseDriver
 from sqlspec.adapters.sybase._typing import SybaseConnection
 from sqlspec.adapters.sybase.core import default_statement_config as sybase_statement_config
-from sqlspec.driver._storage_helpers import (
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage import StorageBridgeJob
+from sqlspec.storage._staging_sql import (
     build_drop_stage_table_sql,
     build_stage_merge_sql,
     build_stage_table_ddl,
     resolve_stage_table_name,
 )
-from sqlspec.exceptions import SQLSpecError
-from sqlspec.storage import StorageBridgeJob
 
 
 def test_resolve_stage_table_name_auto_and_custom() -> None:

@@ -773,3 +773,13 @@ def _strip_ansi(text: str) -> str:
         String with ANSI escape codes removed.
     """
     return ANSI_ESCAPE_PATTERN.sub("", text)
+
+
+@pytest.mark.parametrize("dialect", ["teradata", "vantage"])
+def test_quote_identifier_for_dialect_uppercases_unquoted_teradata_identifiers(dialect: str) -> None:
+    """Teradata and Vantage quote unquoted tokens in uppercase while preserving explicitly quoted case."""
+    from sqlspec.cli import _quote_identifier_for_dialect
+
+    assert _quote_identifier_for_dialect("adk_memory", dialect) == '"ADK_MEMORY"'
+    assert _quote_identifier_for_dialect("mart.adk_memory", dialect) == '"MART"."ADK_MEMORY"'
+    assert _quote_identifier_for_dialect('"mart"."adk_memory"', dialect) == '"mart"."adk_memory"'

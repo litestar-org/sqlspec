@@ -50,6 +50,7 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
+from sqlspec.observability import ObservabilityRuntime, resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
@@ -63,7 +64,6 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -509,11 +509,26 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._stream_closers.extend((source.close, stream.close))
         return stream
 
-    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
-        """Attach runtime and expose the concrete ADBC backend to telemetry."""
-        super().attach_observability(runtime)
+    @property
+    def observability(self) -> ObservabilityRuntime:
+        """Return the observability runtime, naming the concrete ADBC dialect when known."""
+        if self._observability is None:
+            config_name = (
+                f"AdbcDriver[{self._dialect_name}]"
+                if self._dialect_name and self._dialect_name != "sql"
+                else type(self).__name__
+            )
+            self._observability = ObservabilityRuntime(config_name=config_name)
+        return self._observability
+
+    @property
+    def observability_db_system(self) -> str | None:
+        """Return a concrete backend db.system override for multi-backend ADBC sessions."""
         if self._dialect_name and self._dialect_name != "sql":
-            runtime.set_db_system_hint(self._dialect_name)
+            resolved = resolve_db_system(self._dialect_name)
+            if resolved not in {"other_sql", "adbc"}:
+                return resolved
+        return None
 
     def begin(self) -> None:
         """Begin a transaction, disabling native autocommit when its state is available."""

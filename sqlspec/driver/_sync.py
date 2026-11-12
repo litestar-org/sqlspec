@@ -31,6 +31,7 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
+from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -48,17 +49,19 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import (
-    SyncWithoutIndexesContext,
-    execute_load_from_storage_sync,
-    execute_staged_load_sync,
-    stringify_storage_target,
-)
 from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
-from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
-from sqlspec.storage.pipeline import close_sync_arrow_source
+from sqlspec.storage._ingest import execute_load_from_storage_sync, execute_staged_load_sync
+from sqlspec.storage.pipeline import (
+    StorageBridgeJob,
+    StorageDestination,
+    StorageFormat,
+    StorageTelemetry,
+    SyncStoragePipeline,
+    close_sync_arrow_source,
+    stringify_storage_target,
+)
 from sqlspec.utils.arrow_helpers import arrow_batches_from_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -1621,10 +1624,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime is None or runtime.is_idle:
             return runner(**runner_kwargs)
         driver_name = type(self).__name__
+        db_system = self.observability_db_system
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
+            "db_system": db_system,
             "operation": operation,
             "is_many": is_many,
             "is_script": is_script,
@@ -1635,7 +1640,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
             sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash)
+        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1663,6 +1668,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             started_at=started,
             precomputed_sql_hash=sql_hash,
             profile=profile,
+            db_system=db_system,
         )
         return result
 

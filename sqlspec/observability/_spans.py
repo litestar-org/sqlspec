@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import Any
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.observability._common import redact_sql_literals, resolve_db_system
+from sqlspec.observability._common import redact_sql_literals, resolve_db_system, resolve_effective_db_system
 from sqlspec.observability._config import TelemetryConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_opentelemetry
@@ -64,22 +64,18 @@ class SpanManager:
         connection_info: dict[str, Any] | None = None,
         storage_backend: str | None = None,
         correlation_id: str | None = None,
-        db_system_hint: str | None = None,
+        db_system: str | None = None,
     ) -> Any:
         """Start a query span with SQLSpec semantic attributes."""
 
         if not self._enabled:
             return None
-        db_system = resolve_db_system(adapter)
-        if db_system in {"other_sql", "adbc"}:
-            for candidate in (driver, db_system_hint):
-                if candidate:
-                    candidate_system = resolve_db_system(candidate)
-                    if db_system == "other_sql" or candidate_system not in {"other_sql", "adbc"}:
-                        db_system = candidate_system
-                        if candidate_system not in {"other_sql", "adbc"}:
-                            break
-        attributes: dict[str, Any] = {"db.system": db_system, "db.operation": operation, "sqlspec.driver": driver}
+        resolved_db_system = resolve_effective_db_system(adapter, driver, db_system)
+        attributes: dict[str, Any] = {
+            "db.system": resolved_db_system,
+            "db.operation": operation,
+            "sqlspec.driver": driver,
+        }
         if sql:
             attributes["db.statement"] = sql
         if bind_key:

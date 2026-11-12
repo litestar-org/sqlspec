@@ -133,10 +133,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     def set_expression(self, expression: exp.Expr) -> None: ...
     def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
+        builder = cast("QueryBuilder", self)
+        is_teradata = builder.dialect_name == "teradata"
         source_expr: exp.Expr
         unwrapped_source = unwrap_expression_source(source, builder=cast("SQLBuilderProtocol", self))
         if isinstance(source, str):
-            source_expr = _parse_table_reference(source, alias, cast("QueryBuilder", self).dialect)
+            source_expr = _parse_table_reference(source, alias, builder.dialect)
         elif isinstance(source, (dict, list)):
             paren_expr = self._create_dict_source_expression(source, alias)
             if alias and isinstance(paren_expr, exp.Paren):
@@ -144,25 +146,43 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             else:
                 source_expr = paren_expr
         elif isinstance(source, QueryBuilder):
-            builder = cast("QueryBuilder", self)
-            subquery_expression_source = builder._embed_subquery(source, alias_hint=alias or "using_src")
-            if alias:
-                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
+            effective_alias = alias or ("src" if is_teradata else None)
+            subquery_expression_source = builder._embed_subquery(source, alias_hint=effective_alias or "using_src")
+            if isinstance(subquery_expression_source, exp.Subquery):
+                if alias:
+                    source_expr = subquery_expression_source.copy()
+                    source_expr.set("alias", exp.to_identifier(alias))
+                elif effective_alias and not subquery_expression_source.alias:
+                    source_expr = subquery_expression_source.copy()
+                    source_expr.set("alias", exp.to_identifier(effective_alias))
+                else:
+                    source_expr = subquery_expression_source
+            elif effective_alias:
+                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(effective_alias))
             else:
                 source_expr = exp.paren(subquery_expression_source)
         elif unwrapped_source is not None:
-            if isinstance(unwrapped_source, exp.Select):
+            effective_alias = alias or ("src" if is_teradata else None)
+            if isinstance(unwrapped_source, (exp.Select, exp.SetOperation)):
                 source_expr = (
-                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(alias))
-                    if alias
+                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(effective_alias))
+                    if effective_alias
                     else exp.paren(unwrapped_source)
                 )
-            elif isinstance(unwrapped_source, exp.Paren) and alias:
+            elif isinstance(unwrapped_source, exp.Paren) and (
+                alias or (is_teradata and isinstance(unwrapped_source.this, (exp.Select, exp.SetOperation)))
+            ):
                 inner = unwrapped_source.this
-                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
-            elif isinstance(unwrapped_source, exp.Subquery) and alias:
-                unwrapped_source.set("alias", exp.to_identifier(alias))
-                source_expr = unwrapped_source
+                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(effective_alias or "src"))
+            elif isinstance(unwrapped_source, exp.Subquery):
+                if alias:
+                    source_expr = unwrapped_source.copy()
+                    source_expr.set("alias", exp.to_identifier(alias))
+                elif is_teradata and not unwrapped_source.alias:
+                    source_expr = unwrapped_source.copy()
+                    source_expr.set("alias", exp.to_identifier("src"))
+                else:
+                    source_expr = unwrapped_source
             else:
                 source_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
         else:
@@ -390,9 +410,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     raise SQLBuilderError(msg)
                 return f"DECIMAL({precision}, {scale})"
             return "BIGINT"
-        if all(isinstance(value, datetime) for value in values):
-            return "TIMESTAMP WITH TIME ZONE" if any(value.tzinfo is not None for value in values) else "TIMESTAMP"
         if all(isinstance(value, date) for value in values):
+            datetimes = [value for value in values if isinstance(value, datetime)]
+            if datetimes:
+                return (
+                    "TIMESTAMP WITH TIME ZONE" if any(value.tzinfo is not None for value in datetimes) else "TIMESTAMP"
+                )
             return "DATE"
         if all(isinstance(value, time) for value in values):
             return "TIME"
@@ -436,14 +459,13 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 projections.append(exp.alias_(resolved, column))
             branch = exp.Select(expressions=projections)
             query = branch if query is None else exp.Union(this=query, expression=branch, distinct=False)
-        if alias:
-            return exp.Subquery(
-                this=query,
-                alias=exp.TableAlias(
-                    this=exp.to_identifier(alias), columns=[exp.to_identifier(column) for column in columns]
-                ),
-            )
-        return exp.Paren(this=query)
+        effective_alias = alias or "src"
+        return exp.Subquery(
+            this=query,
+            alias=exp.TableAlias(
+                this=exp.to_identifier(effective_alias), columns=[exp.to_identifier(column) for column in columns]
+            ),
+        )
 
     def _create_db2_select_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
@@ -780,7 +802,21 @@ class Merge(
             if not copy:
                 expression = expression.copy()
             self._move_oracle_when_conditions_on_expr(expression)
+        elif resolved_dialect == "teradata":
+            if not copy:
+                expression = expression.copy()
+            self._ensure_teradata_using_alias_on_expr(expression)
         return expression
+
+    def _ensure_teradata_using_alias_on_expr(self, merge_expr: exp.Expr) -> None:
+        """Ensure subquery USING sources carry a correlation alias on Teradata."""
+        if not isinstance(merge_expr, exp.Merge):
+            return
+        using_expr = merge_expr.args.get("using")
+        if isinstance(using_expr, exp.Paren) and isinstance(using_expr.this, (exp.Select, exp.SetOperation)):
+            merge_expr.set("using", exp.Subquery(this=using_expr.this, alias=exp.to_identifier("src")))
+        elif isinstance(using_expr, exp.Subquery) and not using_expr.alias:
+            using_expr.set("alias", exp.to_identifier("src"))
 
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.

@@ -71,6 +71,14 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Storage orchestration compiles after PyArrow payload encode/decode moved to _arrow_payload.py.",
     },
+    "sqlspec/storage/_staging_sql.py": {
+        "classification": "compile_now",
+        "reason": "Pure staged/checkpoint SQL builders and worker thread-budget math compile without Arrow dependencies.",
+    },
+    "sqlspec/storage/_ingest.py": {
+        "classification": "compile_now",
+        "reason": "Staged bulk-load and multi-shard storage ingestion orchestration compiles with _arrow_payload worker boundary split out.",
+    },
     "sqlspec/storage/_paths.py": {
         "classification": "compile_now",
         "reason": "Pure path resolution split away from optional PyArrow import helpers.",
@@ -94,6 +102,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/data_dictionary/_loader.py": {
         "classification": "compile_now",
         "reason": "Uses importlib.resources instead of direct __file__ path discovery.",
+    },
+    "sqlspec/data_dictionary/_index_ddl.py": {
+        "classification": "compile_now",
+        "reason": "Dialect-aware secondary index DDL builders and slotted without-indexes context managers compile cleanly.",
     },
     "sqlspec/data_dictionary/dialects/postgres/config.py": {
         "classification": "compile_now",

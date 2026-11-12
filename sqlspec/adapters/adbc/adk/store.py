@@ -3005,7 +3005,7 @@ def _oracle_store_sql(sql: str) -> str:
 def _metadata_key_column(dialect: str) -> str:
     if dialect == DIALECT_MSSQL:
         return "[key]"
-    if dialect == DIALECT_DB2:
+    if dialect in {DIALECT_DB2, DIALECT_TERADATA}:
         return '"KEY"'
     return "key"
 
@@ -3039,6 +3039,8 @@ def _adbc_index_slug(table_name: str) -> str:
 
 
 def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, str]:
+    if dialect == DIALECT_TERADATA:
+        return split_teradata_table_name(table_name)
     if dialect == DIALECT_DB2:
         return _split_db2_table_name(table_name)
     raw_schema, dot, raw_table = table_name.rpartition(".")
@@ -3250,7 +3252,8 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
     Raises:
         TransactionError: If the Teradata connection cannot provide transactions.
     """
-    with config.provide_connection() as connection:
+    with config.provide_connection() as raw_connection:
+        connection: Any = raw_connection
         if dialect != DIALECT_TERADATA:
             yield connection
             return
@@ -3265,16 +3268,39 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
         if not callable(set_autocommit) or not isinstance(previous, bool):
             msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
             raise TransactionError(msg)
+        prev_commit_supported = getattr(connection, "_commit_supported", None)
         try:
             set_autocommit(False)
         except (AdbcNotSupportedError, NotImplementedError) as exc:
             msg = "ADBC Teradata supports autocommit-only operations; this compound mutation requires a transaction."
             raise TransactionError(msg) from exc
+        if previous is True and prev_commit_supported is False:
+            connection._commit_supported = True
+        failed = False
         try:
             yield connection
         except BaseException:
-            connection.rollback()
+            failed = True
+            rolled_back = False
+            native_rollback = getattr(native, "rollback", None)
+            if callable(native_rollback):
+                try:
+                    native_rollback()
+                    rolled_back = True
+                except Exception:
+                    rolled_back = False
+            if not rolled_back:
+                conn_rollback = getattr(connection, "rollback", None)
+                if callable(conn_rollback):
+                    with contextlib.suppress(Exception):
+                        conn_rollback()
             raise
         finally:
-            if previous:
-                set_autocommit(True)
+            if prev_commit_supported is not None:
+                connection._commit_supported = prev_commit_supported
+            if previous is True:
+                if failed:
+                    with contextlib.suppress(Exception):
+                        set_autocommit(True)
+                else:
+                    set_autocommit(True)

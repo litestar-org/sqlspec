@@ -4,6 +4,7 @@ import contextlib
 import functools
 import gzip
 import http.server
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -16,6 +17,7 @@ from pytest_databases.docker.snowflake import SNOWFLAKE_HTTP_PORT, SnowflakeServ
 from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
+from sqlspec.core import StatementConfig
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -45,6 +47,10 @@ __all__ = (
     "adbc_snowflake_session",
     "adbc_sqlite_config",
     "adbc_sqlite_session",
+    "adbc_teradata_config",
+    "adbc_teradata_flightsql_config",
+    "adbc_teradata_flightsql_session",
+    "adbc_teradata_session",
     "snowflake_service",
     "xfail_if_driver_missing",
 )
@@ -653,8 +659,6 @@ def _prepare_gizmosql_test_table(session: AdbcDriver) -> None:
 @pytest.fixture
 def adbc_teradata_config() -> Generator[AdbcConfig, None, None]:
     """Yield a native Columnar Teradata configuration when explicitly configured."""
-    import os
-
     uri = os.getenv("SQLSPEC_TERADATA_ADBC_URI", "").strip()
     if not uri:
         pytest.skip("SQLSPEC_TERADATA_ADBC_URI is not set")
@@ -676,10 +680,6 @@ def adbc_teradata_session(adbc_teradata_config: AdbcConfig) -> Generator[AdbcDri
 @pytest.fixture
 def adbc_teradata_flightsql_config() -> Generator[AdbcConfig, None, None]:
     """Yield a Teradata Flight SQL configuration when explicitly configured."""
-    import os
-
-    from sqlspec import StatementConfig
-
     uri = os.getenv("SQLSPEC_TERADATA_FLIGHTSQL_URI", "").strip()
     if not uri:
         pytest.skip("SQLSPEC_TERADATA_FLIGHTSQL_URI is not set")

@@ -19,13 +19,17 @@ from sqlspec.driver._common import (
     ExecutionResult,
     SyncExceptionHandler,
 )
-from sqlspec.driver._storage_helpers import arrow_batch_to_rows, coerce_arrow_batches, ingest_telemetry_from_batches
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.exceptions import StorageCapabilityError
-from sqlspec.storage.pipeline import StorageBridgeJob, StorageTelemetry, SyncStoragePipeline
+from sqlspec.storage.pipeline import (
+    StorageBridgeJob,
+    StorageTelemetry,
+    SyncStoragePipeline,
+    ingest_telemetry_from_batches,
+)
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
+from sqlspec.utils.arrow_helpers import arrow_batch_to_rows, arrow_reader_with_deferred_close, coerce_arrow_batches
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 

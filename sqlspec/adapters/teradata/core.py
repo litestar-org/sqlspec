@@ -27,6 +27,9 @@ from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 __all__ = (
+    "DEFAULT_TERADATA_PORT",
+    "INDEX_EXISTS_SQL",
+    "TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
     "build_insert_statement",
@@ -35,24 +38,44 @@ __all__ = (
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
-    "extract_teradata_error_code",
+    "default_statement_config",
+    "driver_profile",
+    "extract_error_code",
     "format_identifier",
     "format_query_band",
+    "format_table_ref",
     "is_ddl_or_session_band_sql",
+    "maybe_prefix_fastexport",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
-    "split_teradata_table_name",
+    "split_schema_and_table",
 )
 
 
 _MAX_PORT = 65535
 _IDENTIFIER_PARTS = 2
 _COLUMN_CACHE_SIZE = 256
+_LEADING_COMMENT_PATTERN = re.compile(r"\A\s*(?:(?:/\*.*?\*/|--[^\n]*(?:\n|$))\s*)*", re.DOTALL)
+_DDL_PREFIX_PATTERN = re.compile(
+    r"(?:CREATE|ALTER|DROP|RENAME|REPLACE|DATABASE|MODIFY|GIVE|GRANT|REVOKE)\b|COMMENT\s+ON\b|COLLECT\s+STATISTICS\b"
+)
+_QUERY_BAND_KEY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 
 DEFAULT_TERADATA_PORT = "1025"
 IMPLICIT_UPPER_COLUMN_PATTERN = re.compile(r"^(?!\d)[A-Z0-9_]+$")
-TABLE_EXISTS_SQL = "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.TablesV WHERE DatabaseName = COALESCE(CAST(? AS VARCHAR(128)), DATABASE) AND TableName = ?"
+TABLE_EXISTS_SQL = (
+    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.TablesV "
+    "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
+    "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
+    "AND TableKind IN ('T', 'O')"
+)
+INDEX_EXISTS_SQL = (
+    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV "
+    "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
+    "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
+    "AND UPPER(TRIM(IndexName)) = UPPER(TRIM(?))"
+)
 
 
 def build_profile() -> DriverParameterProfile:
@@ -75,7 +98,7 @@ def build_profile() -> DriverParameterProfile:
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
-        custom_type_coercions={bool: int, **build_uuid_coercions()},
+        custom_type_coercions={bool: int, bytearray: bytes, memoryview: bytes, **build_uuid_coercions()},
         default_dialect="teradata",
     )
 
@@ -145,35 +168,39 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
             result.setdefault("dbs_port", DEFAULT_TERADATA_PORT)
         result.setdefault("charset", "UTF8")
         result.setdefault("encryptdata", "true")
-    for key in ("encryptdata", "lob_support", "column_name", "teradata_values"):
+    for key in ("encryptdata", "lob_support", "column_name", "teradata_values", "cop", "coplast"):
         if isinstance(result.get(key), bool):
             result[key] = str(result[key]).lower()
     return {k: v for k, v in result.items() if v is not None}
+
+
+def _validate_query_band_pair(key: str, value: str) -> str:
+    """Validate a single query-band key/value pair and escape SQL single quotes."""
+    if not _QUERY_BAND_KEY_PATTERN.fullmatch(key) or any(c in value for c in ";\r\n\x00"):
+        msg = "Invalid query band key or value"
+        raise ImproperConfigurationError(msg)
+    return f"{key}={value.replace(chr(39), chr(39) * 2)}"
 
 
 def format_query_band(query_band: Mapping[str, str] | str) -> str:
     """Validate query-band values and escape SQL literals."""
     if isinstance(query_band, str):
         body = query_band.strip().removesuffix(";")
-        if body.upper() == "NONE":
+        if body.strip().upper() == "NONE":
             return ""
-        pairs = [body.split("=", 1)]
-    else:
-        pairs = [[str(k), str(v)] for k, v in query_band.items()]
-    if not pairs:
+        segments = body.split(";")
+        formatted: list[str] = []
+        for segment in segments:
+            if not segment or "=" not in segment:
+                msg = "Invalid query band key or value"
+                raise ImproperConfigurationError(msg)
+            key, value = segment.split("=", 1)
+            formatted.append(_validate_query_band_pair(key, value))
+        return ";".join(formatted) + ";"
+    if not query_band:
         msg = "Query band must contain key=value pairs"
         raise ImproperConfigurationError(msg)
-    result = []
-    for pair in pairs:
-        if (
-            len(pair) != _IDENTIFIER_PARTS
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+", pair[0])
-            or any(c in pair[1] for c in ";\r\n\x00")
-        ):
-            msg = "Invalid query band key or value"
-            raise ImproperConfigurationError(msg)
-        result.append(f"{pair[0]}={pair[1].replace(chr(39), chr(39) * 2)};")
-    return "".join(result)
+    return ";".join(_validate_query_band_pair(str(k), str(v)) for k, v in query_band.items()) + ";"
 
 
 def build_set_query_band_sql(query_band: Mapping[str, str] | str, *, transaction: bool = False) -> str:
@@ -185,16 +212,21 @@ def build_set_query_band_sql(query_band: Mapping[str, str] | str, *, transaction
 
 def is_ddl_or_session_band_sql(sql_text: str) -> bool:
     """Recognize DDL and session band requests requiring immediate commit."""
-    sql = re.sub(r"\A\s*(?:(?:/\*.*?\*/|--[^\n]*(?:\n|$))\s*)*", "", sql_text, flags=re.DOTALL).upper()
-    return bool(
-        re.match(
-            r"(?:CREATE|ALTER|DROP|RENAME|REPLACE|DATABASE|MODIFY|GIVE|GRANT|REVOKE)\b|COMMENT\s+ON\b|COLLECT\s+STATISTICS\b",
-            sql,
-        )
-    ) or (sql.startswith("SET QUERY_BAND") and "FOR SESSION" in sql)
+    sql = _LEADING_COMMENT_PATTERN.sub("", sql_text).upper()
+    return bool(_DDL_PREFIX_PATTERN.match(sql)) or (sql.startswith("SET QUERY_BAND") and "FOR SESSION" in sql)
 
 
-def split_teradata_table_name(identifier: str) -> tuple[str | None, str]:
+def maybe_prefix_fastexport(sql: str, *, enable_fastexport: bool, in_transaction: bool) -> str:
+    """Prefix eligible read requests with the opt-in native FastExport escape."""
+    if not enable_fastexport or in_transaction:
+        return sql
+    stripped = _LEADING_COMMENT_PATTERN.sub("", sql).upper()
+    if stripped.startswith(("SELECT", "WITH", "LOCKING")) and "TERADATA_TRY_FASTEXPORT" not in stripped:
+        return f"{{fn teradata_try_fastexport}} {sql}"
+    return sql
+
+
+def split_schema_and_table(identifier: str) -> tuple[str | None, str]:
     """Split a quoted database and table reference."""
     parts = split_qualified_identifier(identifier.strip(), quote_chars='"', allow_bracket_quotes=True)
     if not parts or len(parts) > _IDENTIFIER_PARTS:
@@ -216,6 +248,19 @@ def format_identifier(identifier: str) -> str:
     return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
+def format_table_ref(table_name: str, *, allow_schema: bool = True) -> str:
+    """Quote a Teradata table or database.table reference preserving catalog case rules."""
+    schema_name, bare_table_name = split_schema_and_table(table_name)
+    if schema_name is not None and not allow_schema:
+        msg = "Schema-qualified table name is not allowed"
+        raise SQLSpecError(msg)
+    quoted_table = '"' + bare_table_name.replace('"', '""') + '"'
+    if schema_name is not None:
+        quoted_schema = '"' + schema_name.replace('"', '""') + '"'
+        return f"{quoted_schema}.{quoted_table}"
+    return quoted_table
+
+
 def build_insert_statement(table: str, columns: list[str]) -> str:
     """Build a native parameterized INSERT."""
     names = ", ".join(format_identifier(col) for col in columns)
@@ -225,14 +270,15 @@ def build_insert_statement(table: str, columns: list[str]) -> str:
 
 def resolve_column_names(
     description: Sequence[Any] | None,
-    cache: dict[int, tuple[Any, list[str]]],
+    cache: dict[tuple[int, bool], tuple[Any, list[str]]],
     *,
     enable_lowercase_column_names: bool = True,
 ) -> list[str]:
     """Resolve column labels, folding only implicit uppercase names."""
     if not description:
         return []
-    cached = cache.get(id(description))
+    cache_key = (id(description), enable_lowercase_column_names)
+    cached = cache.get(cache_key)
     if cached is not None and cached[0] is description:
         return cached[1]
     names = [
@@ -241,14 +287,14 @@ def resolve_column_names(
     ]
     if len(cache) >= _COLUMN_CACHE_SIZE:
         cache.pop(next(iter(cache)))
-    cache[id(description)] = description, names
+    cache[cache_key] = description, names
     return names
 
 
 def collect_rows(
     fetched_data: Sequence[Any] | None,
     description: Sequence[Any] | None,
-    cache: dict[int, tuple[Any, list[str]]],
+    cache: dict[tuple[int, bool], tuple[Any, list[str]]],
     *,
     enable_lowercase_column_names: bool = True,
 ) -> tuple[list[Any], list[str], Literal["dict", "tuple"]]:
@@ -274,7 +320,7 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: int |
     )
 
 
-def extract_teradata_error_code(error: BaseException) -> int | None:
+def extract_error_code(error: BaseException) -> int | None:
     """Extract the vendor database error number."""
     match = re.search(r"\[Error\s+(\d+)\]", str(error), re.IGNORECASE)
     return int(match[1]) if match else None
@@ -283,7 +329,7 @@ def extract_teradata_error_code(error: BaseException) -> int | None:
 def create_mapped_exception(error: BaseException, *, logger: Logger | None = None) -> SQLSpecError:
     """Map native database codes, retaining the original cause."""
     _ = logger
-    code = extract_teradata_error_code(error)
+    code = extract_error_code(error)
     groups = (
         (UniqueViolationError, {2801, 2802, 2803}),
         (ForeignKeyViolationError, {2700, 2701, 5312, 5313}),

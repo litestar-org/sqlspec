@@ -207,7 +207,16 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
             rows = driver.select(self.get_query("columns", "by_table"), schema_name=schema_name, table_name=table_name)
         if table is not None and rows and any(row.get("data_type") in (None, "", "UNKNOWN") for row in rows):
-            query = "LOCKING ROW FOR ACCESS SELECT TRIM(ColumnName) AS column_name, TRIM(ColumnType) AS raw_type_code, ColumnLength AS max_length, DecimalTotalDigits AS numeric_precision, DecimalFractionalDigits AS numeric_scale, Nullable AS is_nullable, CharType AS char_type FROM DBC.ColumnsQV WHERE DatabaseName = COALESCE(CAST(? AS VARCHAR(128)), DATABASE) AND TableName = ? ORDER BY ColumnId"
+            query = (
+                "LOCKING ROW FOR ACCESS SELECT TRIM(ColumnName) AS column_name, "
+                "TRIM(ColumnType) AS raw_type_code, TRIM(ColumnUDTName) AS column_udt_name, "
+                "ColumnLength AS max_length, DecimalTotalDigits AS numeric_precision, "
+                "DecimalFractionalDigits AS numeric_scale, Nullable AS is_nullable, "
+                "CharType AS char_type FROM DBC.ColumnsQV "
+                "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
+                "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
+                "ORDER BY ColumnId"
+            )
             try:
                 details = driver.select(query, schema_name, self.resolve_identifier(table))
             except SQLSpecError:
@@ -221,7 +230,7 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
                 "I2": "SMALLINT",
                 "I1": "BYTEINT",
                 "D": "DECIMAL",
-                "F": "FLOAT",
+                "F": "DOUBLE PRECISION",
                 "DA": "DATE",
                 "TS": "TIMESTAMP",
                 "SZ": "TIMESTAMP WITH TIME ZONE",
@@ -246,7 +255,11 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
                 detail = by_name.get(str(row["column_name"]).strip().upper())
                 if detail and row.get("data_type") in (None, "", "UNKNOWN"):
                     item.update(detail)
-                    item["data_type"] = type_map.get(str(detail.get("raw_type_code", "")).strip(), "UNKNOWN")
+                    code = str(detail.get("raw_type_code", "")).strip()
+                    if code == "UT":
+                        item["data_type"] = str(detail.get("column_udt_name") or "").strip() or "UDT"
+                    else:
+                        item["data_type"] = type_map.get(code, "UNKNOWN")
                     item["is_nullable"] = detail.get("is_nullable") in (True, 1, "Y", "YES")
                     if (
                         item["data_type"] in {"VARCHAR", "CHAR"}

@@ -548,10 +548,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         )
 
     def _normalize_dialect(self, driver: "AdbcDriver") -> str:
-        dialect_value = str(driver.dialect)
-        if str(dialect_value).strip().lower() == "vantage":
-            return "teradata"
-        return normalize_dialect_name(dialect_value)
+        return normalize_dialect_name(str(driver.dialect))
 
     def _get_query(self, dialect: str, domain: str, operation: str) -> "SQL":
         loader = get_data_dictionary_loader()

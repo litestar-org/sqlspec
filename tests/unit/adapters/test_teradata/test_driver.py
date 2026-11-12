@@ -169,3 +169,81 @@ def test_teradata_session_release_closes_stream_and_rolls_back_open_work() -> No
     connection.rollback.assert_called_once_with()
     assert released == [connection]
     assert connection.autocommit is True
+
+
+def test_teradata_cached_select_preserves_fastexport_casing_and_row_coercion() -> None:
+    connection = MagicMock()
+    connection.autocommit = True
+    cursor = connection.cursor.return_value
+    cursor.description = [("ID", int, None, None, None, None, False), ("PAYLOAD", bytes, None, None, None, None, True)]
+    cursor.fetchmany.side_effect = [[(1, bytearray(b"first"))], [], [(2, memoryview(b"second"))], []]
+    driver = TeradataDriver(
+        connection, driver_features={"enable_fastexport": True, "enable_lowercase_column_names": False}
+    )
+    first = driver.execute("SELECT id, payload FROM orders")
+    cursor.description = [("ID", int, None, None, None, None, False), ("PAYLOAD", bytes, None, None, None, None, True)]
+    second = driver.execute("SELECT id, payload FROM orders")
+    assert first.column_names == ["ID", "PAYLOAD"]
+    assert second.column_names == ["ID", "PAYLOAD"]
+    assert first.get_data() == [{"ID": 1, "PAYLOAD": b"first"}]
+    assert second.get_data() == [{"ID": 2, "PAYLOAD": b"second"}]
+    assert [c.args for c in cursor.execute.call_args_list] == [
+        ("{fn teradata_try_fastexport} SELECT id, payload FROM orders", ()),
+        ("{fn teradata_try_fastexport} SELECT id, payload FROM orders", ()),
+    ]
+
+
+def test_teradata_cached_ddl_and_dml_commit_rules_and_bytearray_params() -> None:
+    connection = MagicMock()
+    connection.autocommit = False
+    cursor = connection.cursor.return_value
+    cursor.description = None
+    cursor.rowcount = 1
+    driver = TeradataDriver(connection)
+    driver.execute("CREATE MULTISET TABLE orders (id INTEGER)")
+    driver.execute("CREATE MULTISET TABLE orders (id INTEGER)")
+    assert connection.commit.call_count == 2
+
+    driver.execute("INSERT INTO blobs VALUES (?)", (bytearray(b"raw"),))
+    driver.execute("INSERT INTO blobs VALUES (?)", (memoryview(b"raw2"),))
+    assert cursor.execute.call_args_list[-2].args == ("INSERT INTO blobs VALUES (?)", (b"raw",))
+    assert cursor.execute.call_args_list[-1].args == ("INSERT INTO blobs VALUES (?)", (b"raw2",))
+    assert connection.commit.call_count == 2
+
+
+def test_teradata_collect_rows_stream_casing_and_nested_exception_paths() -> None:
+    from sqlspec.adapters.teradata.driver import TeradataExceptionHandler, TeradataStreamSource
+
+    connection = MagicMock()
+    connection.autocommit = True
+    cursor = connection.cursor.return_value
+    cursor.description = [
+        ("ORDER_ID", int, None, None, None, None, False),
+        ("RAW", bytes, None, None, None, None, True),
+    ]
+    driver = TeradataDriver(connection, driver_features={"enable_lowercase_column_names": False})
+
+    rows, cols, count = driver.collect_rows(cursor, [(7, bytearray(b"bin"))])
+    assert (rows, cols, count) == ([(7, b"bin")], ["ORDER_ID", "RAW"], 1)
+    assert driver.resolve_rowcount(cursor) == 0
+    assert driver.data_dictionary is driver.data_dictionary
+
+    from sqlspec.core import SQL
+
+    assert driver.dispatch_select_stream(SQL("DELETE FROM orders"), 10) is None
+
+    cursor.fetchmany.side_effect = [[(9, bytearray(b"chunk"))], []]
+    source = TeradataStreamSource(driver, "SELECT order_id, raw FROM orders", (1,), 10)
+    assert source.fetch_chunk() == []
+    try:
+        raise ValueError("active outer exception")
+    except ValueError:
+        source.start()
+        source._column_names = None
+        assert source.fetch_chunk() == [{"ORDER_ID": 9, "RAW": b"chunk"}]
+        assert source.fetch_chunk() == []
+    source.close()
+
+    handler = TeradataExceptionHandler()
+    assert handler._handle_exception(None, RuntimeError("ignored")) is False
+    assert handler._handle_exception(UniqueViolationError, UniqueViolationError("already mapped")) is False

@@ -33,6 +33,7 @@ Curated API reference for all SQLSpec database adapters (`sqlspec.adapters.*`). 
 | `sqlspec.adapters.sybase` | [sybase](sybase.md) | `SybaseConfig` | `SybaseDriver` | [Sybase ASE](../../databases/sybase.md) |
 | `sqlspec.adapters.sqlanywhere` | [sqlanywhere](sqlanywhere.md) | `SqlanywhereConfig` | `SqlanywhereDriver` | [SAP SQL Anywhere](../../databases/sqlanywhere.md) |
 | `sqlspec.adapters.db2` | [db2](db2.md) | `Db2SyncConfig`, `Db2AsyncConfig` | `Db2SyncDriver`, `Db2AsyncDriver` | [IBM Db2](../../databases/db2.md) |
+| `sqlspec.adapters.teradata` | [teradata](teradata.md) | `TeradataConfig` | `TeradataDriver` | [Teradata Vantage](../../databases/teradata.md) |
 
 ## Cloud, Analytics & Arrow Connectors
 

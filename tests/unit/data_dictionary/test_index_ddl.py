@@ -8,7 +8,13 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.driver._storage_helpers import build_create_index_sql, build_drop_index_sql, filter_droppable_table_indexes
+from sqlspec.data_dictionary._index_ddl import (
+    AsyncWithoutIndexesContext,
+    SyncWithoutIndexesContext,
+    build_create_index_sql,
+    build_drop_index_sql,
+    filter_droppable_table_indexes,
+)
 
 
 def test_filter_droppable_table_indexes_preserves_primary_and_constraints() -> None:
@@ -130,3 +136,102 @@ def test_sap_indexes_quote_owner_table_and_index_separately(
     assert build_create_index_sql(dialect, metadata, table, schema=schema) == (
         f'CREATE INDEX "idx""value" ON {qualified} (value)'
     )
+
+
+def test_index_ddl_edge_cases_and_constraint_matching() -> None:
+    """Index helpers skip indexless dialects, constraint-matched names, and empty definitions."""
+    indexes: list[dict[str, Any]] = [
+        {"index_name": ""},
+        {"index_name": "sqlite_autoindex_users_1", "columns": ["id"]},
+        {"index_name": "pk_users", "columns": ["id"], "constraint_type": "PRIMARY KEY"},
+        {"index_name": "uq_email_constraint", "columns": ["email"]},
+        {"index_name": "idx_users_status", "columns": "status, updated_at"},
+    ]
+    constraints = [{"constraint_name": "uq_email_constraint"}]
+    droppable = filter_droppable_table_indexes(indexes, constraints)
+    assert [row["index_name"] for row in droppable] == ["idx_users_status"]
+
+    assert build_drop_index_sql("bigquery", {"index_name": "idx_x"}, "users") is None
+    assert build_drop_index_sql("postgres", {"index_name": ""}, "users") is None
+    assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX idx_x"
+    assert build_create_index_sql("bigquery", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
+    assert build_create_index_sql("postgres", {"index_name": "idx_x", "columns": []}, "users") is None
+    unique_concurrent = build_create_index_sql(
+        "postgres", {"index_name": "idx_u", "columns": "email, tenant_id", "is_unique": True}, "users", concurrent=True
+    )
+    assert unique_concurrent == 'CREATE UNIQUE INDEX CONCURRENTLY "idx_u" ON users (email, tenant_id)'
+
+
+@pytest.mark.anyio
+async def test_without_indexes_ddl_override_transaction_and_rebuild_error() -> None:
+    """Sync and async contexts honor get_ddl overrides, strip CONCURRENTLY inside transactions, and surface rebuild errors."""
+    executed_sync: list[str] = []
+    in_tx = False
+    fail_rebuild = False
+
+    class _SyncDD:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            assert (schema, table) == ("public", "orders")
+            return ({"index_name": "idx_custom", "columns": ["customer_id"]},)
+
+        def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+        def get_ddl(self, _driver: Any, name: str, *, schema: str | None, object_type: str) -> list[dict[str, str]]:
+            assert (name, schema, object_type) == ("idx_custom", "public", "INDEX")
+            return [{"ddl": "CREATE INDEX CONCURRENTLY idx_custom ON public.orders (customer_id)"}]
+
+    class _SyncDriver:
+        dialect = "postgres"
+        data_dictionary = _SyncDD()
+
+        def is_in_transaction(self) -> bool:
+            return in_tx
+
+        def execute(self, sql: str) -> None:
+            if fail_rebuild and sql.startswith("CREATE "):
+                raise RuntimeError("rebuild failed")
+            executed_sync.append(sql)
+
+    driver = _SyncDriver()
+    with SyncWithoutIndexesContext(driver, "public.orders", concurrent=True):
+        in_tx = True
+    assert executed_sync == [
+        'DROP INDEX IF EXISTS "public"."idx_custom"',
+        "CREATE INDEX idx_custom ON public.orders (customer_id)",
+    ]
+
+    in_tx = False
+    fail_rebuild = True
+    with pytest.raises(RuntimeError, match="rebuild failed"):
+        with SyncWithoutIndexesContext(driver, "orders", schema="public"):
+            pass
+
+    executed_async: list[str] = []
+
+    class _AsyncDD:
+        async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            return ({"index_name": "idx_async_custom", "columns": ["customer_id"]},)
+
+        async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+        async def get_ddl(self, _driver: Any, name: str, *, schema: str | None, object_type: str) -> str:
+            return "CREATE INDEX CONCURRENTLY idx_async_custom ON public.orders (customer_id)"
+
+    class _AsyncDriver:
+        dialect = "postgres"
+        data_dictionary = _AsyncDD()
+
+        def is_in_transaction(self) -> bool:
+            return True
+
+        async def execute(self, sql: str) -> None:
+            executed_async.append(sql)
+
+    async with AsyncWithoutIndexesContext(_AsyncDriver(), "public.orders", concurrent=True):
+        pass
+    assert executed_async == [
+        'DROP INDEX IF EXISTS "public"."idx_async_custom"',
+        "CREATE INDEX idx_async_custom ON public.orders (customer_id)",
+    ]

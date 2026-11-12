@@ -1,6 +1,6 @@
 # Data Dictionary
 
-Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, and Cloud Spanner.
+Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Teradata Vantage, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, and Cloud Spanner.
 
 ```mermaid
 flowchart LR

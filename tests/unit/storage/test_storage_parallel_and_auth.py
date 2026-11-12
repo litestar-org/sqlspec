@@ -19,12 +19,12 @@ from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psqlpy.core import build_connection_config as build_psqlpy_connection_config
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.driver._storage_helpers import (
+from sqlspec.storage._arrow_payload import init_spawn_worker_thread_budget
+from sqlspec.storage._staging_sql import (
     build_checkpoint_insert_sql,
     build_checkpoint_select_sql,
     build_checkpoint_table_ddl,
     compute_worker_thread_budget,
-    init_spawn_worker_thread_budget,
 )
 
 
@@ -333,3 +333,60 @@ def test_duckdb_secret_value_provider_and_gcs_bearer_token_and_globs() -> None:
 )
 def test_sap_checkpoint_ddl_uses_native_types_and_existence_syntax(dialect: str, expected: str) -> None:
     assert build_checkpoint_table_ddl(dialect, "audit.checkpoints") == expected
+
+
+@pytest.mark.anyio
+async def test_multi_shard_glob_staged_load_from_storage_sync_and_async(tmp_path: Path) -> None:
+    """Multi-shard glob load_from_storage exercises process/thread shard decoding, stage merge, and index restore."""
+    shard_dir = tmp_path / "shards"
+    shard_dir.mkdir()
+    pq.write_table(pa.table({"id": [1, 2], "label": ["a", "b"]}), shard_dir / "part_0.parquet")
+    pq.write_table(pa.table({"id": [2, 3], "label": ["b_new", "c"]}), shard_dir / "part_1.parquet")
+    glob_pattern = f"{shard_dir}/*.parquet"
+    expected_shards = 2
+
+    sync_cfg = SqliteConfig(connection_config={"database": str(tmp_path / "sync_ingest.db")})
+    try:
+        with sync_cfg.provide_session() as session:
+            session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+            session.execute("CREATE INDEX idx_items_label ON items (label)")
+            session.commit()
+            job = session.load_from_storage(
+                "items",
+                glob_pattern,
+                file_format="parquet",
+                stage_table=True,
+                conflict_keys=["id"],
+                drop_indexes=True,
+                checkpoint_table="_sync_ckpt",
+                max_workers=expected_shards,
+                executor="process",
+            )
+            assert job.telemetry["shards_processed"] == expected_shards
+            rows = session.select("SELECT id, label FROM items ORDER BY id")
+            assert rows == [{"id": 1, "label": "a"}, {"id": 2, "label": "b_new"}, {"id": 3, "label": "c"}]
+    finally:
+        sync_cfg.close_pool()
+
+    async_cfg = AiosqliteConfig(connection_config={"database": str(tmp_path / "async_ingest.db")})
+    try:
+        async with async_cfg.provide_session() as async_session:
+            await async_session.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+            await async_session.execute("CREATE INDEX idx_async_items_label ON items (label)")
+            await async_session.commit()
+            async_job = await async_session.load_from_storage(
+                "items",
+                glob_pattern,
+                file_format="parquet",
+                stage_table=True,
+                conflict_keys=["id"],
+                drop_indexes=True,
+                checkpoint_table="_async_ckpt",
+                max_workers=expected_shards,
+                executor="thread",
+            )
+            assert async_job.telemetry["shards_processed"] == expected_shards
+            async_rows = await async_session.select("SELECT id, label FROM items ORDER BY id")
+            assert async_rows == [{"id": 1, "label": "a"}, {"id": 2, "label": "b_new"}, {"id": 3, "label": "c"}]
+    finally:
+        await async_cfg.close_pool()

@@ -5,10 +5,13 @@ import collections
 import concurrent.futures
 import contextlib
 import itertools
+import os
 import threading
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.exceptions import StorageCapabilityError
+from sqlspec.storage._staging_sql import compute_worker_thread_budget
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_csv, import_pyarrow_json, import_pyarrow_parquet
 from sqlspec.utils.serializers import from_json
 
@@ -19,10 +22,13 @@ if TYPE_CHECKING:
 __all__ = (
     "StorageFormat",
     "decode_arrow_payload",
+    "decode_shard_in_process_worker",
     "encode_arrow_payload",
     "encode_arrow_to_async_sink",
     "encode_arrow_to_sink",
+    "init_spawn_worker_thread_budget",
     "join_shielded",
+    "read_shard_bytes_and_decode",
     "resolve_parquet_use_dictionary",
     "validate_arrow_write_options",
 )
@@ -730,6 +736,63 @@ def decode_arrow_payload(payload: bytes, format_choice: StorageFormat, *, arrow_
         )
     msg = f"Unsupported storage format for Arrow decoding: {format_choice}"
     raise ValueError(msg)
+
+
+def init_spawn_worker_thread_budget(max_workers: int, cpu_count: int | None = None, *, reserve_cpus: int = 0) -> None:
+    """Initialize thread-budget environment variables inside a spawned worker process.
+
+    Args:
+        max_workers: Number of concurrent ingestion workers.
+        cpu_count: Optional logical CPU count override.
+        reserve_cpus: Number of CPU cores reserved for the host OS and main event loop.
+    """
+    for key, val in compute_worker_thread_budget(max_workers, cpu_count=cpu_count, reserve_cpus=reserve_cpus).items():
+        os.environ[key] = val
+
+
+def read_shard_bytes_and_decode(
+    shard_uri: str, file_format: StorageFormat, storage_options: dict[str, Any] | None, arrow_schema: Any
+) -> tuple[str, Any, int, float]:
+    """Read a single storage shard synchronously and decode it into an Arrow table.
+
+    Args:
+        shard_uri: Storage URI or path of the shard.
+        file_format: Payload serialization format.
+        storage_options: Optional backend options.
+        arrow_schema: Optional target PyArrow schema.
+
+    Returns:
+        Tuple of ``(shard_uri, arrow_table, byte_length, elapsed_seconds)``.
+    """
+    from sqlspec.storage.pipeline import SyncStoragePipeline
+
+    t0 = perf_counter()
+    pipeline = SyncStoragePipeline()
+    payload = pipeline.read_bytes_sync(shard_uri, storage_options=storage_options)
+    table = decode_arrow_payload(payload, file_format, arrow_schema=arrow_schema)
+    return shard_uri, table, len(payload), perf_counter() - t0
+
+
+def decode_shard_in_process_worker(
+    args: tuple[str, StorageFormat, dict[str, Any] | None],
+) -> tuple[str, bytes, int, float]:
+    """Read and decode a storage shard inside a spawned worker process and re-encode as Arrow IPC.
+
+    Args:
+        args: Tuple of ``(shard_uri, file_format, storage_options)``.
+
+    Returns:
+        Tuple of ``(shard_uri, arrow_ipc_bytes, raw_byte_length, elapsed_seconds)``.
+    """
+    from sqlspec.storage.pipeline import SyncStoragePipeline
+
+    shard_uri, file_format, storage_options = args
+    t0 = perf_counter()
+    pipeline = SyncStoragePipeline()
+    payload = pipeline.read_bytes_sync(shard_uri, storage_options=storage_options)
+    table = decode_arrow_payload(payload, file_format)
+    ipc_bytes = encode_arrow_payload(table, "arrow-ipc", compression=None)
+    return shard_uri, ipc_bytes, len(payload), perf_counter() - t0
 
 
 def _is_float_vector_field(field: Any, pa: Any) -> bool:

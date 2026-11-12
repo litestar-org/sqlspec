@@ -103,6 +103,7 @@ _AWARE_TIMESTAMP_TYPES: "dict[str, str]" = {
     "mssql": "DATETIMEOFFSET(6)",
     "sybase": "BIGDATETIME",
     "sqlanywhere": "TIMESTAMP WITH TIME ZONE",
+    "teradata": "TIMESTAMP(6) WITH TIME ZONE",
 }
 _BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({
     "mysql",
@@ -112,6 +113,7 @@ _BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({
     "db2",
     "sybase",
     "sqlanywhere",
+    "teradata",
 })
 _KEY_TEXT_LENGTH = 255
 _DEFAULT_DECIMAL_PRECISION = 38
@@ -128,6 +130,7 @@ _DECIMAL_MAX_PRECISION: "dict[str, int]" = {
     "postgres": 1000,
     "cockroachdb": 1000,
     "bigquery": 76,
+    "teradata": 38,
 }
 _SPANNER_NUMERIC_SCALE = 9
 _SPANNER_NUMERIC_INTEGER_DIGITS = 29
@@ -1515,8 +1518,11 @@ def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
 def _resolve_dialect_config(dialect: str | None) -> "DialectConfig | None":
     if not dialect:
         return None
+    normalized = str(dialect).strip().lower()
+    if normalized == "vantage":
+        normalized = "teradata"
     with contextlib.suppress(ValueError):
-        return get_dialect_config(str(dialect))
+        return get_dialect_config(normalized)
     return None
 
 

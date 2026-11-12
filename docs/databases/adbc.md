@@ -17,6 +17,7 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 | Google Cloud BigQuery | `adbc-driver-bigquery` | `bigquery://` | `"bigquery"`, `"bq"` |
 | Oracle Database | `adbc-driver-oracle` | `oracle://` (pure Go wire driver) | `"oracle"`, `"oracledb"` |
 | IBM Db2 | `adbc-driver-db2` | `db2://` (pure Go DRDA wire driver) | `"db2"`, `"ibmdb2"`, `"ibm_db"` |
+| Teradata Vantage | `dbc install teradata` (Columnar `dbc` CLI + Teradata Tools & Utilities `TTU` ODBC/CLI libraries) or `adbc-driver-flightsql` (`statement_config=StatementConfig(dialect="teradata")`) | `teradata://`, `grpc+tls://`, `grpc://` | `"teradata"`, `"flightsql"` |
 
 ## Installation & Quickstart
 
@@ -85,7 +86,7 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 | Driver | Underlying Engine | Arrow Path | Pool / Reuse Model |
 | --- | --- | --- | --- |
 | `AdbcConfig` (`driver="postgres"`) | `adbc-driver-postgresql` | C Data Interface (`__arrow_c_stream__` + binary `COPY` ingest) | Optional `AdbcConnectionPool` via `pool_config={"max_size": 4, "timeout": 30.0}` (`DISCARD ALL` reset on return; `pool_config=None` opens per-session connections). |
-| `AdbcConfig` (`duckdb`, `sqlite`, `snowflake`, `bigquery`, `oracle`, `db2`, `flightsql`) | Respective ADBC C/Go/C++ driver | C Data Interface (`__arrow_c_stream__` + `adbc_ingest`) | Per-session connection (or caller-managed `connection_instance`); supports dynamic `auth_token_provider` in `connection_config`. |
+| `AdbcConfig` (`duckdb`, `sqlite`, `snowflake`, `bigquery`, `oracle`, `db2`, `teradata`, `flightsql`) | Respective ADBC C/Go/C++ driver | C Data Interface (`__arrow_c_stream__` + `adbc_ingest`) | Per-session connection (or caller-managed `connection_instance`); supports dynamic `auth_token_provider` in `connection_config`. |
 | [`ArrowOdbcConfig`](arrow-odbc.md) | Rust `arrow-odbc` over unixODBC / Windows ODBC | Pre-allocated Rust ODBC columnar batch buffers | Process-wide ODBC Driver Manager connection pooling (`driver_features={"enable_pooling": True}`). |
 
 ### Connection and Pool Parameters
@@ -182,23 +183,13 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 | `TIMESTAMP` / `DATE` | `datetime.datetime` / `datetime.date` | Arrow timestamp arrays with timezone metadata preserved. |
 
 - **Zero-Copy adbc_ingest**: `session.load_from_arrow(table, arrow_table_or_reader)` passes `pyarrow.Table` and `pyarrow.RecordBatchReader` objects straight to `cursor.adbc_ingest` over `__arrow_c_stream__` without materializing intermediate rows.
-- **Cross-Engine Placeholder Rewriting**: Although `adbc_driver_manager` binds parameters as positional Arrow `RecordBatch` columns, SQLSpec translates `:named` parameters to `$1` (`postgres`), `:1` (`oracle`), or `?` (`sqlite`, `duckdb`, `db2`) automatically.
+- **Cross-Engine Placeholder Rewriting**: Although `adbc_driver_manager` binds parameters as positional Arrow `RecordBatch` columns, SQLSpec translates `:named` parameters to `$1` (`postgres`), `:1` (`oracle`), or `?` `qmark` (`sqlite`, `duckdb`, `db2`, `teradata`) automatically.
 - **DuckDB ADBC COPY TO Parameters**: DuckDB over ADBC only inlines a bound parameter in `COPY (...) TO :output_path` when `:output_path` is the statement's sole parameter. When combining `COPY` with filter parameters, set filter values via `SET VARIABLE cutoff = :val` beforehand and reference `getvariable('cutoff')` inside the query.
-- **Enterprise Error and Savepoint Parity**: `AdbcDriver` translates Oracle `ORA-xxxxx` and Db2 `SQLCODE` errors into SQLSpec exceptions and emits dialect-native savepoints (`ON ROLLBACK RETAIN CURSORS` on Db2).
-
-## See Also
-
-- [ADBC API Reference](/reference/adapters/adbc/)
-- [Arrow ODBC Guide](arrow-odbc.md)
-- [PostgreSQL Dialect Reference](/reference/data-dictionary/dialects/postgres/)
-- [DuckDB Dialect Reference](/reference/data-dictionary/dialects/duckdb/)
-- [BigQuery Dialect Reference](/reference/data-dictionary/dialects/bigquery/)
-- [Oracle Dialect Reference](/reference/data-dictionary/dialects/oracle/)
-- [IBM Db2 Dialect Reference](/reference/data-dictionary/dialects/db2/)
+- **Enterprise Error and Savepoint Parity**: `AdbcDriver` translates Oracle `ORA-xxxxx`, Db2 `SQLCODE`, and Teradata `[Error NNNN]` errors into SQLSpec exceptions and emits dialect-native savepoints (`ON ROLLBACK RETAIN CURSORS` on Db2).
 
 ## Teradata
 
-Teradata ADBC uses Columnar's `dbc` driver manifest rather than a PyPI `adbc-driver-teradata` package. Install the Teradata driver and its required TTU native libraries through your approved `dbc` installation, then use a `teradata://` URI with `AdbcConfig`. Keep credentials out of logged URIs.
+Teradata ADBC uses Columnar's `dbc` driver manifest (`dbc install teradata`) rather than a PyPI `adbc-driver-teradata` package. Install the Teradata driver and its required Teradata Tools & Utilities (`TTU`) ODBC/CLI native libraries through your approved `dbc` installation, then use a `teradata://` URI with `AdbcConfig`. Keep credentials out of logged URIs.
 
 ```python
 import os
@@ -217,8 +208,20 @@ with config.provide_session() as session:
     )
 ```
 
-For an Arrow Flight SQL endpoint, select the Flight SQL driver and explicitly provide `StatementConfig(dialect="teradata")`. The SQL dialect controls parameter handling, catalog SQL fallback, and extension DDL. Flight SQL endpoint credentials and TLS settings belong in the driver's connection options.
+For an Arrow Flight SQL endpoint (`adbc-driver-flightsql`), select the Flight SQL driver and explicitly provide `statement_config=StatementConfig(dialect="teradata")`. The SQL dialect controls `?` (`qmark`) parameter handling, catalog SQL fallback, and extension DDL. Flight SQL endpoint credentials and TLS settings belong in the driver's connection options.
 
 Columnar Teradata driver v0.1.1 supports autocommit only. Explicit `begin()` raises `TransactionError` when the driver refuses transaction mode; savepoints are unavailable. Native Arrow ingestion depends on the installed driver and server capabilities. The native [Teradata adapter](teradata.md) is available when DB-API transaction support is required.
 
 Live ADBC tests use `SQLSPEC_TERADATA_ADBC_URI`; Flight SQL tests use `SQLSPEC_TERADATA_FLIGHTSQL_URI`. Both skip when their URI is unset.
+
+## See Also
+
+- [ADBC API Reference](/reference/adapters/adbc/)
+- [Arrow ODBC Guide](arrow-odbc.md)
+- [Teradata Vantage](teradata.md)
+- [PostgreSQL Dialect Reference](/reference/data-dictionary/dialects/postgres/)
+- [DuckDB Dialect Reference](/reference/data-dictionary/dialects/duckdb/)
+- [BigQuery Dialect Reference](/reference/data-dictionary/dialects/bigquery/)
+- [Oracle Dialect Reference](/reference/data-dictionary/dialects/oracle/)
+- [IBM Db2 Dialect Reference](/reference/data-dictionary/dialects/db2/)
+- [Teradata Data Dictionary Catalog](../reference/data-dictionary/dialects/teradata.md)

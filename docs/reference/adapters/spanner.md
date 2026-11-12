@@ -1,6 +1,20 @@
 # spanner Adapter
 
-Sync and async Google Cloud Spanner adapters: GoogleSQL (`spanner`), PostgreSQL (`spangres`), multiplexed sessions, timestamp snapshots, and CommitResponse mutation tracking. See [setup](../../databases/spanner.md), inherited [sync](../driver/sync.md) and [async](../driver/async.md) methods, and [GoogleSQL](../data-dictionary/dialects/spanner.md) / [PostgreSQL](../data-dictionary/dialects/index.md) catalogs.
+```python
+from sqlspec.adapters.spanner import (
+    SpannerAsyncConfig,
+    SpannerAsyncDriver,
+    SpannerAsyncExceptionHandler,
+    SpannerConnectionParams,
+    SpannerDriverFeatures,
+    SpannerPoolParams,
+    SpannerSyncConfig,
+    SpannerSyncDriver,
+    SpannerSyncExceptionHandler,
+)
+```
+
+Synchronous and asynchronous Google Cloud Spanner adapters supporting both GoogleSQL (`spanner`) and PostgreSQL (`spangres`) dialects, multiplexed sessions, read-only timestamp snapshots, and CommitResponse mutation tracking. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). See the [Cloud Spanner Setup Guide](../../databases/spanner.md) for usage examples and the [Spanner (GoogleSQL)](../data-dictionary/dialects/spanner.md) and [Spangres (PostgreSQL)](../data-dictionary/dialects/index.md) Data Dictionary SQL Catalogs.
 
 ## Configuration & Parameters
 
@@ -37,6 +51,7 @@ Sync and async Google Cloud Spanner adapters: GoogleSQL (`spanner`), PostgreSQL 
 ::: sqlspec.adapters.spanner.SpannerSyncDriver
     options:
       heading_level: 3
+      show_bases: false
       members:
         - run_in_transaction
         - execute_partitioned_dml
@@ -49,6 +64,7 @@ Sync and async Google Cloud Spanner adapters: GoogleSQL (`spanner`), PostgreSQL 
 ::: sqlspec.adapters.spanner.SpannerAsyncDriver
     options:
       heading_level: 3
+      show_bases: false
       members:
         - run_in_transaction
         - execute_partitioned_dml

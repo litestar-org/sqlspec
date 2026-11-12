@@ -19,6 +19,7 @@ from sqlspec.adapters.teradata.core import (
     driver_profile,
     format_identifier,
     is_ddl_or_session_band_sql,
+    maybe_prefix_fastexport,
     resolve_column_names,
     resolve_many_rowcount,
     resolve_rowcount,
@@ -31,6 +32,7 @@ from sqlspec.adapters.teradata.type_converter import (
 )
 from sqlspec.core import (
     SQL,
+    SQLResult,
     StatementConfig,
     build_arrow_result_from_reader,
     create_arrow_result,
@@ -57,7 +59,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.teradata._typing import TeradataQueryParams as QueryParams
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, CachedQuery, Statement, StatementFilter
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
@@ -94,6 +96,7 @@ class TeradataStreamSource:
         "_column_names",
         "_cursor_manager",
         "_driver",
+        "_enable_lowercase_column_names",
         "_parameters",
         "_sql",
         "column_names",
@@ -105,6 +108,7 @@ class TeradataStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._enable_lowercase_column_names = bool(driver.driver_features.get("enable_lowercase_column_names", True))
         self._cursor_manager: TeradataCursor | None = None
         self._column_names: list[str] | None = None
         self.column_names: list[str] = []
@@ -138,7 +142,7 @@ class TeradataStreamSource:
         self.column_names = resolve_column_names(
             cursor.description,
             self._driver._column_name_cache,
-            enable_lowercase_column_names=bool(self._driver.driver_features.get("enable_lowercase_column_names", True)),
+            enable_lowercase_column_names=self._enable_lowercase_column_names,
         )
         self._column_names = self.column_names
         self.column_types = extract_arrow_column_types(cursor.description, column_names=self.column_names)
@@ -160,7 +164,11 @@ class TeradataStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names = resolve_column_names(cursor.description or None, self._driver._column_name_cache)
+            column_names = resolve_column_names(
+                cursor.description or None,
+                self._driver._column_name_cache,
+                enable_lowercase_column_names=self._enable_lowercase_column_names,
+            )
             self._column_names = column_names
         return rows_to_dicts([coerce_teradata_row(row, description=cursor.description) for row in rows], column_names)
 
@@ -200,7 +208,7 @@ class TeradataDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: TeradataSyncDataDictionary | None = None
-        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._column_name_cache: dict[tuple[int, bool], tuple[Any, list[str]]] = {}
         self._stream_sources: list[TeradataStreamSource] = []
         self._transaction_active = False
         self._previous_autocommit: bool | None = None
@@ -215,7 +223,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         sql, parameters = self._compiled_sql(statement, self.statement_config)
         cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
         if statement.returns_rows():
-            sql = _maybe_prefix_fastexport(
+            sql = maybe_prefix_fastexport(
                 sql,
                 enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
                 in_transaction=self._connection_in_transaction(),
@@ -243,6 +251,71 @@ class TeradataDriver(SyncDriverAdapterBase):
         if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(sql):
             self.connection.commit()
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a compiled cache hit while preserving FastExport, row coercion, and DDL commit rules."""
+        _ = sql
+        compiled_sql = cached.compiled_sql
+        returns_rows = cached.operation_profile.returns_rows
+        exec_sql = (
+            maybe_prefix_fastexport(
+                compiled_sql,
+                enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
+                in_transaction=self._connection_in_transaction(),
+            )
+            if returns_rows
+            else compiled_sql
+        )
+        prepared_params = prepare_teradata_parameters(params)
+        rows: list[tuple[Any, ...]] = []
+        names: list[str] = []
+        column_types: dict[str, str] = {}
+        affected = 0
+        exc_handler = self.handle_database_exceptions()
+
+        def _run(cursor: "TeradataRawCursor") -> None:
+            nonlocal names, column_types, affected
+            cursor.arraysize = int(self.driver_features.get("arraysize", 2048))
+            cursor.execute(exec_sql, prepared_params)
+            if returns_rows:
+                description = cursor.description or None
+                names = resolve_column_names(
+                    description,
+                    self._column_name_cache,
+                    enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
+                )
+                while chunk := cursor.fetchmany(cursor.arraysize):
+                    rows.extend(coerce_teradata_row(row, description=description) for row in chunk)
+                column_types = extract_arrow_column_types(description, column_names=names)
+                return
+            if getattr(self.connection, "autocommit", True) is False and is_ddl_or_session_band_sql(compiled_sql):
+                self.connection.commit()
+            affected = resolve_rowcount(cursor)
+
+        with self.with_cursor(self.connection) as cursor:
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    _run(cursor)
+            else:
+                self._run_with_exception_handler(exc_handler, _run, cursor)
+        self._check_pending_exception(exc_handler)
+
+        if returns_rows:
+            return SQLResult(
+                statement=None,
+                data=rows,
+                rows_affected=len(rows),
+                operation_type=cached.operation_type,
+                column_names=names,
+                total_count=len(rows),
+                row_format="tuple",
+                metadata={"column_types": column_types},
+            )
+        return SQLResult(
+            statement=None, data=[], rows_affected=affected, operation_type=cached.operation_type, total_count=0
+        )
 
     def dispatch_execute_many(self, cursor: "TeradataRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, parameters = self._compiled_sql(statement, self.statement_config)
@@ -343,7 +416,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        sql = _maybe_prefix_fastexport(
+        sql = maybe_prefix_fastexport(
             sql,
             enable_fastexport=bool(self.driver_features.get("enable_fastexport", False)),
             in_transaction=self._connection_in_transaction(),
@@ -413,7 +486,7 @@ class TeradataDriver(SyncDriverAdapterBase):
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )
         sql, params = self._compiled_sql(prepared, prepared.statement_config)
-        sql = _maybe_prefix_fastexport(sql, enable_fastexport=fast, in_transaction=self._connection_in_transaction())
+        sql = maybe_prefix_fastexport(sql, enable_fastexport=fast, in_transaction=self._connection_in_transaction())
         source = TeradataStreamSource(self, sql, params, size)
         stream: SyncRowStream[dict[str, Any]] = SyncRowStream(source)
         try:
@@ -514,20 +587,14 @@ class TeradataDriver(SyncDriverAdapterBase):
                 type_casts=type_casts,
             )
         arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            statement = f"DELETE FROM {format_identifier(table)}"
-            exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor:
-                if sys.exc_info()[1] is None:
-                    with exc_handler:
-                        cursor.execute(statement)
-                else:
-                    self._run_with_exception_handler(exc_handler, cursor.execute, statement)
-            self._check_pending_exception(exc_handler)
-
         columns, records = self._arrow_table_to_rows(arrow_table)
+        fastload = bool(self.driver_features.get("enable_fastload", False)) and not overwrite and bool(records)
+        insert_sql = ""
+        normalized_records: tuple[Any, ...] | list[Any] = ()
         if records:
             insert_sql = build_insert_statement(table, columns)
+            if fastload:
+                insert_sql = f"{{fn teradata_try_fastload}} {insert_sql}"
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             prepared_records = (
                 self.prepare_driver_parameters(records, self.statement_config, is_many=True)
@@ -535,16 +602,46 @@ class TeradataDriver(SyncDriverAdapterBase):
                 else records
             )
             normalized_records = prepare_teradata_parameters(prepared_records, is_many=True)
-            exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor:
-                if sys.exc_info()[1] is None:
-                    with exc_handler:
-                        cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
-                else:
-                    self._run_with_exception_handler(
-                        exc_handler, cursor.executemany, insert_sql, cast("Sequence[QueryParams]", normalized_records)
-                    )
-            self._check_pending_exception(exc_handler)
+
+        if overwrite or records:
+            previous_autocommit = getattr(self.connection, "autocommit", True)
+            owns_transaction = (overwrite or fastload) and previous_autocommit is True
+            if owns_transaction or fastload:
+                self.connection.autocommit = False
+            try:
+                if overwrite:
+                    statement = f"DELETE FROM {format_identifier(table)}"
+                    exc_handler = self.handle_database_exceptions()
+                    with self.with_cursor(self.connection) as cursor:
+                        if sys.exc_info()[1] is None:
+                            with exc_handler:
+                                cursor.execute(statement)
+                        else:
+                            self._run_with_exception_handler(exc_handler, cursor.execute, statement)
+                    self._check_pending_exception(exc_handler)
+                if records:
+                    exc_handler = self.handle_database_exceptions()
+                    with self.with_cursor(self.connection) as cursor:
+                        if sys.exc_info()[1] is None:
+                            with exc_handler:
+                                cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
+                        else:
+                            self._run_with_exception_handler(
+                                exc_handler,
+                                cursor.executemany,
+                                insert_sql,
+                                cast("Sequence[QueryParams]", normalized_records),
+                            )
+                    self._check_pending_exception(exc_handler)
+                if owns_transaction:
+                    self.connection.commit()
+            except BaseException:
+                if owns_transaction:
+                    self.connection.rollback()
+                raise
+            finally:
+                if owns_transaction or fastload:
+                    self.connection.autocommit = previous_autocommit
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -570,8 +667,17 @@ class TeradataDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     def collect_rows(self, cursor: "TeradataRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        rows, column_names, _row_format = collect_rows(fetched, cursor.description or None, self._column_name_cache)
-        return rows, column_names, len(rows)
+        description = cursor.description or None
+        raw_rows, column_names, _row_format = collect_rows(
+            fetched,
+            description,
+            self._column_name_cache,
+            enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
+        )
+        coerced_rows = [
+            coerce_teradata_row(row, description=description) if not isinstance(row, dict) else row for row in raw_rows
+        ]
+        return coerced_rows, column_names, len(coerced_rows)
 
     def resolve_rowcount(self, cursor: "TeradataRawCursor") -> int:
         return resolve_rowcount(cursor)
@@ -582,18 +688,3 @@ class TeradataDriver(SyncDriverAdapterBase):
 
 
 register_driver_profile("teradata", driver_profile)
-
-
-def _maybe_prefix_fastexport(sql: str, *, enable_fastexport: bool, in_transaction: bool) -> str:
-    """Prefix eligible read requests with the opt-in native FastExport escape."""
-    import re
-
-    stripped = re.sub(r"\A\s*(?:(?:/\*.*?\*/|--[^\n]*(?:\n|$))\s*)*", "", sql, flags=re.DOTALL).upper()
-    if (
-        enable_fastexport
-        and not in_transaction
-        and stripped.startswith(("SELECT", "WITH", "LOCKING"))
-        and "TERADATA_TRY_FASTEXPORT" not in stripped
-    ):
-        return "{fn teradata_try_fastexport} " + sql
-    return sql

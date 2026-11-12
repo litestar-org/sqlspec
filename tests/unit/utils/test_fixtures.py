@@ -3184,3 +3184,22 @@ def test_teradata_lob_export_ordering(tmp_path: Path, dialect: str) -> None:
     driver.select.return_value = []
     export_table_fixtures_sync(driver, tmp_path, ["docs"], compress=False)
     assert driver.select.call_args.args[0].partition("ORDER BY")[2].strip() == '"id"'
+
+
+@pytest.mark.parametrize("type_label", ["BYTE", "VARBYTE", "BYTE(16)", "VARBYTE(64)"])
+def test_teradata_byte_and_varbyte_columns_decode_base64_payloads(type_label: str) -> None:
+    import base64
+
+    encoded = base64.b64encode(b"\x01\x02\xff").decode("ascii")
+    col = fixture_module._TableColumn(
+        name="payload",
+        data_type=type_label,
+        is_primary=False,
+        is_identity=False,
+        identity_always=False,
+        sequence_name=None,
+        is_generated=False,
+    )
+    rows: list[dict[str, Any]] = [{"payload": encoded}]
+    fixture_module._decode_row_values(rows, "teradata", [col])
+    assert rows == [{"payload": b"\x01\x02\xff"}]

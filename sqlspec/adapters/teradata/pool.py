@@ -48,38 +48,46 @@ class TeradataConnectionPool:
         self,
         connection_config: Mapping[str, Any],
         *,
-        min_size: int = 1,
-        max_size: int = 4,
-        timeout: float = 30.0,
-        recycle_seconds: int = 1800,
-        health_check_interval: float = 60.0,
+        min_size: object = 1,
+        max_size: object = 4,
+        timeout: object = 30.0,
+        recycle_seconds: object = 1800,
+        health_check_interval: object = 60.0,
         on_connection_create: Callable[[Any], None] | None = None,
         session_query_band: Mapping[str, str] | str | None = None,
     ) -> None:
+        """Configure a lazy bounded pool before compiled integer argument coercion."""
         if (
             isinstance(min_size, bool)
             or isinstance(max_size, bool)
+            or isinstance(timeout, bool)
+            or isinstance(recycle_seconds, bool)
+            or isinstance(health_check_interval, bool)
             or not isinstance(min_size, int)
             or not isinstance(max_size, int)
+            or not isinstance(timeout, (int, float))
+            or not isinstance(recycle_seconds, int)
+            or not isinstance(health_check_interval, (int, float))
             or min_size < 0
             or max_size < 1
             or min_size > max_size
             or not math.isfinite(timeout)
             or timeout < 0
-            or not math.isfinite(recycle_seconds)
             or recycle_seconds < 0
             or not math.isfinite(health_check_interval)
             or health_check_interval < 0
         ):
             msg = "Invalid Teradata pool bounds or timeout"
             raise ImproperConfigurationError(msg)
+        timeout_seconds = float(timeout)
+        health_interval_seconds = float(health_check_interval)
         self._connection_config = build_connection_config(connection_config)
         self._autocommit_baseline = self._connection_config.pop("autocommit", True)
         self._closed = False
         self._condition = threading.Condition()
         self._creating = 0
         self._generation = 0
-        self._health_check_interval = health_check_interval
+        self._health_check_interval = health_interval_seconds
         self._in_use: dict[int, tuple[Any, float, float]] = {}
         self._pool: list[tuple[Any, float, float]] = []
         self._max_size = max_size
@@ -89,7 +97,7 @@ class TeradataConnectionPool:
         self._recycle_seconds = recycle_seconds
         self._session_query_band = format_query_band(session_query_band) if session_query_band is not None else None
         self._thread_local = threading.local()
-        self._timeout = timeout
+        self._timeout = timeout_seconds
 
     def check_pid(self) -> None:
         """Refuse inherited driver handles before acquiring inherited locks."""

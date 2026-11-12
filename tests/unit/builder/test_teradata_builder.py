@@ -1,9 +1,10 @@
 """Teradata public builder contracts."""
 
-from datetime import UTC
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
+from sqlglot import exp, parse_one
 
 from sqlspec.builder import sql
 from sqlspec.exceptions import SQLBuilderError
@@ -47,8 +48,6 @@ def test_teradata_merge_rejects_unrepresentable_decimal(amount: Decimal) -> None
 
 
 def test_teradata_merge_large_and_structured_values() -> None:
-    from datetime import datetime
-
     query = (
         sql
         .merge(dialect="teradata")
@@ -74,6 +73,87 @@ def test_teradata_merge_large_and_structured_values() -> None:
     assert "VARBYTE(2)" in query.sql
     assert query.parameters["doc"] == '{"a":1}'
     assert query.parameters["small"] == b"xy"
+
+
+def test_teradata_merge_mixed_date_and_datetime_columns() -> None:
+    naive_query = (
+        sql
+        .merge(dialect="teradata")
+        .into("t")
+        .using(
+            [
+                {"id": 1, "event_at": date(2026, 1, 1), "only_date": date(2026, 1, 1)},
+                {"id": 2, "event_at": datetime(2026, 1, 2, 12, 0), "only_date": date(2026, 1, 2)},
+            ],
+            alias="src",
+        )
+        .on("t.id = src.id")
+        .when_matched_then_delete()
+        .build()
+    )
+    assert naive_query.sql.count("AS TIMESTAMP)") == 2
+    assert naive_query.sql.count("AS DATE)") == 2
+    assert "TIMESTAMP WITH TIME ZONE" not in naive_query.sql
+
+    aware_query = (
+        sql
+        .merge(dialect="teradata")
+        .into("t")
+        .using(
+            [{"id": 1, "event_at": date(2026, 1, 1)}, {"id": 2, "event_at": datetime(2026, 1, 2, 12, 0, tzinfo=UTC)}],
+            alias="src",
+        )
+        .on("t.id = src.id")
+        .when_matched_then_delete()
+        .build()
+    )
+    assert aware_query.sql.count("AS TIMESTAMP WITH TIME ZONE)") == 2
+    assert "AS DATE)" not in aware_query.sql
+
+
+def test_teradata_merge_using_subquery_defaults_correlation_alias() -> None:
+    select_source = sql.select("id", "name").from_("staging")
+    built = (
+        sql
+        .merge(dialect="teradata")
+        .into("t")
+        .using(select_source)
+        .on("t.id = src.id")
+        .when_matched_then_update({"name": sql.column("name", table="src")})
+        .when_not_matched_then_insert(["id", "name"])
+        .build()
+    )
+    normalized = " ".join(built.sql.split())
+    assert 'USING ( SELECT "id", "name" FROM "staging" ) AS "src"' in normalized
+    assert 'VALUES ("src"."id", "src"."name")' in normalized
+
+    unaliased_subquery = exp.Subquery(this=parse_one("SELECT id, name FROM staging"))
+    subquery_built = (
+        sql
+        .merge(dialect="teradata")
+        .into("t")
+        .using(unaliased_subquery)
+        .on("t.id = src.id")
+        .when_matched_then_delete()
+        .build()
+    )
+    assert 'AS "src"' in subquery_built.sql
+    assert unaliased_subquery.alias == ""
+
+    pre_aliased_subquery = exp.Subquery(
+        this=parse_one("SELECT id, name FROM staging"), alias=exp.TableAlias(this=exp.to_identifier("custom_src"))
+    )
+    preserved_built = (
+        sql
+        .merge(dialect="teradata")
+        .into("t")
+        .using(pre_aliased_subquery)
+        .on("t.id = custom_src.id")
+        .when_matched_then_delete()
+        .build()
+    )
+    assert 'AS "custom_src"' in preserved_built.sql
+    assert 'AS "src"' not in preserved_built.sql
 
 
 @pytest.mark.parametrize("dialect", ["teradata", "vantage"])

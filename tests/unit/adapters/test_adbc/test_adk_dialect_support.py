@@ -2,16 +2,19 @@
 
 import logging
 import struct
+from contextlib import nullcontext
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from adbc_driver_manager import AdbcStatusCode, IntegrityError
+from adbc_driver_manager import AdbcStatusCode, IntegrityError, NotSupportedError
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKConfig, AdbcADKMemoryStore, AdbcADKStore
 from sqlspec.adapters.adbc.adk.store import (
+    _adbc_atomic_connection,
     _oracle_store_sql,
     _postgresql_store_sql,
     decode_adbc_pgvector,
@@ -22,7 +25,7 @@ from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
 from sqlspec.core import StatementConfig
-from sqlspec.exceptions import ImproperConfigurationError, MigrationError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, TransactionError
 from sqlspec.extensions.adk import StoredMemory
 from sqlspec.extensions.adk.migrations.reconcile import reconcile
 from sqlspec.migrations.context import MigrationContext
@@ -1210,14 +1213,9 @@ def test_teradata_adk_schema_targets() -> None:
         "append_event_and_update_state",
     ],
 )
-def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, operation: str) -> None:
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
-    from adbc_driver_manager import NotSupportedError
-
-    from sqlspec.exceptions import TransactionError
-
+def test_teradata_adk_refuses_autocommit_only_compound_mutation(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
     native = SimpleNamespace(
         get_option=lambda _: "true", set_autocommit=MagicMock(side_effect=NotSupportedError("autocommit only"))
     )
@@ -1234,7 +1232,7 @@ def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, ope
         "timestamp": now,
         "event_data": {},
     }
-    args = {
+    args: dict[str, tuple[Any, ...]] = {
         "upsert_app_state": ("app", {}),
         "upsert_user_state": ("app", "user", {}),
         "set_metadata": ("key", "value"),
@@ -1248,11 +1246,10 @@ def test_teradata_adk_refuses_autocommit_only_compound_mutation(monkeypatch, ope
 
 
 @pytest.mark.parametrize("initial_mode", ["true", "false"])
-def test_teradata_flightsql_adk_compound_transaction_restores_mode(monkeypatch, initial_mode: str) -> None:
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
-    modes = []
+def test_teradata_flightsql_adk_compound_transaction_restores_mode(
+    monkeypatch: pytest.MonkeyPatch, initial_mode: str
+) -> None:
+    modes: list[bool] = []
     native = SimpleNamespace(get_option=lambda _: initial_mode, set_autocommit=lambda value: modes.append(value))
     cursor = MagicMock()
     conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
@@ -1268,3 +1265,117 @@ def test_teradata_flightsql_adk_compound_transaction_restores_mode(monkeypatch, 
         store.upsert_user_state("app", "user", {})
     conn.rollback.assert_called_once()
     assert modes[-1] is (initial_mode == "true")
+
+
+def test_teradata_adk_metadata_queries_quote_reserved_key_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcADKStore quotes the reserved KEY column on Teradata in metadata SELECT, DELETE, and INSERT."""
+    executed_sql: list[tuple[str, tuple[Any, ...]]] = []
+    native = SimpleNamespace(get_option=lambda _: "false", set_autocommit=lambda _value: None, rollback=MagicMock())
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("1",)
+    cursor.execute.side_effect = lambda sql, params: executed_sql.append((sql, tuple(params)))
+    conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"}))
+    assert store._get_metadata("schema_version") == "1"
+    store._set_metadata("schema_version", "2")
+
+    assert executed_sql == [
+        ('SELECT value FROM adk_internal_metadata WHERE "KEY" = ?', ("schema_version",)),
+        ('DELETE FROM adk_internal_metadata WHERE "KEY" = ?', ("schema_version",)),
+        ('INSERT INTO adk_internal_metadata ("KEY", value) VALUES (?, ?)', ("schema_version", "2")),
+    ]
+    conn.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("failure_cls", [RuntimeError, KeyboardInterrupt])
+def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_autocommit(
+    monkeypatch: pytest.MonkeyPatch, failure_cls: type[BaseException]
+) -> None:
+    """_adbc_atomic_connection enables _commit_supported and runs native.rollback before set_autocommit(True)."""
+    call_order: list[str] = []
+
+    class _FakeConnection:
+        def __init__(self) -> None:
+            self._autocommit = True
+            self._commit_supported = False
+            self.adbc_connection = SimpleNamespace(
+                get_option=lambda _: "true", set_autocommit=self._set_autocommit, rollback=self._native_rollback
+            )
+
+        def _set_autocommit(self, enabled: bool) -> None:
+            call_order.append(f"set_autocommit:{enabled}")
+
+        def _native_rollback(self) -> None:
+            call_order.append("native_rollback")
+
+        def commit(self) -> None:
+            if not self._commit_supported:
+                call_order.append("commit_noop")
+                return
+            call_order.append("commit_executed")
+
+        def rollback(self) -> None:
+            call_order.append("conn_rollback")
+
+    fake_conn = _FakeConnection()
+    config = AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"})
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(fake_conn))
+
+    with _adbc_atomic_connection(config, "teradata") as conn:
+        assert conn._commit_supported is True
+        conn.commit()
+    assert fake_conn._commit_supported is False
+    assert call_order == ["set_autocommit:False", "commit_executed", "set_autocommit:True"]
+
+    call_order.clear()
+    with pytest.raises(failure_cls, match="aborted"), _adbc_atomic_connection(config, "teradata") as conn:
+        assert conn._commit_supported is True
+        raise failure_cls("aborted")
+
+    assert fake_conn._commit_supported is False
+    assert call_order == ["set_autocommit:False", "native_rollback", "set_autocommit:True"]
+
+
+def test_adbc_atomic_connection_prevents_partial_autocommit_on_real_dbapi_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Real DBAPI connection starting in autocommit=True commits atomically and rolls back partial writes on error."""
+    adbc_sqlite = pytest.importorskip("adbc_driver_sqlite.dbapi")
+    db_uri = f"file:{tmp_path / 'atomic_teradata.sqlite'}"
+    config = AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"})
+
+    raw_conn = adbc_sqlite.connect(db_uri, autocommit=True)
+    try:
+        setup_cur = raw_conn.cursor()
+        setup_cur.execute('CREATE TABLE kv ("KEY" TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        setup_cur.close()
+        assert raw_conn._commit_supported is False
+
+        monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(raw_conn))
+
+        with _adbc_atomic_connection(config, "teradata") as conn:
+            cur = conn.cursor()
+            cur.execute('INSERT INTO kv ("KEY", value) VALUES (?, ?)', ("k1", "initial"))
+            cur.close()
+            conn.commit()
+
+        assert raw_conn._commit_supported is False
+        assert raw_conn.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+        with pytest.raises(RuntimeError, match="boom"), _adbc_atomic_connection(config, "teradata") as conn:
+            cur = conn.cursor()
+            cur.execute('DELETE FROM kv WHERE "KEY" = ?', ("k1",))
+            cur.close()
+            raise RuntimeError("boom")
+
+        assert raw_conn._commit_supported is False
+        assert raw_conn.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+        verify_cur = raw_conn.cursor()
+        verify_cur.execute('SELECT value FROM kv WHERE "KEY" = ?', ("k1",))
+        assert verify_cur.fetchone() == ("initial",)
+        verify_cur.close()
+    finally:
+        raw_conn.close()

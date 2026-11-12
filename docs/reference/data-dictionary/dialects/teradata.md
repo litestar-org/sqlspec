@@ -49,7 +49,8 @@ Introspects modern Unicode DBC.*V views using LOCKING ROW FOR ACCESS; columns su
 
 ## Adapter Data Dictionary Classes
 
-- [`TeradataSyncDataDictionary`](../../adapters/teradata.md)
+- [`TeradataDataDictionary`](../../adapters/teradata.md)
+- [`AdbcDataDictionary`](../../adapters/adbc.md)
 
 ## Catalog SQL Queries
 

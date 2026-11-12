@@ -1435,7 +1435,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
 
 _BACKTICK_QUOTE_DIALECTS: frozenset[str] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
 _BRACKET_QUOTE_DIALECTS: frozenset[str] = frozenset({"tsql", "mssql", "sybase"})
-_UPPERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({"oracle", "db2", "snowflake"})
+_UPPERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({"oracle", "db2", "snowflake", "teradata", "vantage"})
 _LOWERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({
     "postgres",
     "postgresql",

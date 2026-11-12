@@ -78,6 +78,22 @@ def test_teradata_native_byte_types() -> None:
             "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id LIMIT 2",
             "SELECT TOP 2 * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _sqlspec_paged ORDER BY id",
         ),
+        (
+            "SELECT t1.id FROM t1 UNION SELECT t2.id FROM t2 ORDER BY t1.id LIMIT 5",
+            "SELECT TOP 5 * FROM (SELECT t1.id FROM t1 UNION SELECT t2.id FROM t2) AS _sqlspec_paged ORDER BY id",
+        ),
+        (
+            "SELECT db1.t1.id FROM db1.t1 INTERSECT SELECT db1.t2.id FROM db1.t2 ORDER BY db1.t1.id LIMIT 5",
+            "SELECT TOP 5 * FROM (SELECT db1.t1.id FROM db1.t1 INTERSECT SELECT db1.t2.id FROM db1.t2) AS _sqlspec_paged ORDER BY id",
+        ),
+        (
+            "SELECT a FROM t1 UNION SELECT a FROM t2 OFFSET 5 ROWS FETCH FIRST ROW ONLY",
+            "SELECT * FROM (SELECT a FROM t1 UNION SELECT a FROM t2) AS _sqlspec_paged QUALIFY ROW_NUMBER() OVER (ORDER BY 1) BETWEEN 6 AND 6",
+        ),
+        (
+            "SELECT a FROM t1 UNION SELECT a FROM t2 OFFSET :offset ROWS FETCH FIRST ROW ONLY",
+            "SELECT * FROM (SELECT a FROM t1 UNION SELECT a FROM t2) AS _sqlspec_paged QUALIFY ROW_NUMBER() OVER (ORDER BY 1) BETWEEN :offset + 1 AND :offset + 1",
+        ),
         ("SELECT id FROM a UNION ALL SELECT id FROM b", "SELECT id FROM a UNION ALL SELECT id FROM b"),
         ("SELECT id FROM a FETCH FIRST 2 ROWS ONLY", "SELECT TOP 2 id FROM a"),
     ],
@@ -89,3 +105,29 @@ def test_teradata_set_limits_and_fetch(source: str, expected: str) -> None:
     original = node.copy()
     assert node.sql(dialect=Teradata) == expected
     assert node == original
+
+
+def test_teradata_stock_dialect_isolation() -> None:
+    from sqlglot.dialects.teradata import Teradata as StockTeradata
+    from sqlglot.generators.teradata import TeradataGenerator
+
+    from sqlspec.dialects.teradata import Teradata
+
+    transforms_before = dict(TeradataGenerator.TRANSFORMS)
+    type_mapping_before = dict(TeradataGenerator.TYPE_MAPPING)
+
+    assert transpile("SELECT CAST(x AS BOOLEAN)", write=Teradata)[0] == "SELECT CAST(x AS BYTEINT)"
+    assert (
+        transpile("SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 20", write=Teradata)[0]
+        == "SELECT id FROM users QUALIFY ROW_NUMBER() OVER (ORDER BY id) BETWEEN 21 AND 30"
+    )
+
+    assert TeradataGenerator.TRANSFORMS == transforms_before
+    assert TeradataGenerator.TYPE_MAPPING == type_mapping_before
+    assert transpile("SELECT CAST(x AS BOOLEAN)", write=StockTeradata)[0] == "SELECT CAST(x AS BOOLEAN)"
+    assert transpile("SELECT CAST(x AS BOOLEAN)", write="postgres")[0] == "SELECT CAST(x AS BOOLEAN)"
+    assert (
+        transpile("SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 20", write="postgres")[0]
+        == "SELECT id FROM users ORDER BY id NULLS FIRST LIMIT 10 OFFSET 20"
+    )
+    assert transpile("SELECT id FROM users LIMIT 5", write="tsql")[0] == "SELECT TOP 5 id FROM users"

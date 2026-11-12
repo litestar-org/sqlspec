@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_identifier, split_teradata_table_name
+from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_identifier, format_table_ref, split_schema_and_table
 from sqlspec.builder import CreateTable, sql
 from sqlspec.migrations.tracker import SyncMigrationTracker
 
@@ -32,7 +32,7 @@ class TeradataSyncMigrationTracker(SyncMigrationTracker):
 
     def _tracking_table_exists_sql(self) -> tuple[str, tuple[str | None, str]]:
         """Return the parameterized catalog probe and exact object identity."""
-        return TABLE_EXISTS_SQL, split_teradata_table_name(self.version_table)
+        return TABLE_EXISTS_SQL, split_schema_and_table(self.version_table)
 
     def _tracking_table_create_sql(self) -> str:
         """Render native MULTISET DDL without unsupported IF NOT EXISTS."""
@@ -42,12 +42,17 @@ class TeradataSyncMigrationTracker(SyncMigrationTracker):
             required = " NOT NULL" if col.not_null or col.primary_key else ""
             primary = " PRIMARY KEY" if col.primary_key else ""
             columns.append(f"{format_identifier(col.name)} {col.dtype}{default}{required}{primary}")
-        return f"CREATE MULTISET TABLE {format_identifier(self.version_table)} (" + ", ".join(columns) + ")"
+        table_ref = format_table_ref(self.version_table, allow_schema=True)
+        return f"CREATE MULTISET TABLE {table_ref} (" + ", ".join(columns) + ")"
 
-    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
-        """Create the tracker when missing, then reconcile existing columns."""
+    def _ensure_tracking_table_exists(self, driver: "SyncDriverAdapterBase") -> None:
+        """Probe DBC.TablesV and create the tracking table only when absent."""
         probe, parameters = self._tracking_table_exists_sql()
         if driver.select_one_or_none(probe, *parameters) is None:
             driver.execute_script(self._tracking_table_create_sql())
             self._safe_commit(driver)
+
+    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
+        """Create the tracker when missing, then reconcile existing columns."""
+        self._ensure_tracking_table_exists(driver)
         self._migrate_schema_if_needed(driver)

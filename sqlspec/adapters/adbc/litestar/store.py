@@ -21,8 +21,10 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
+    _TERADATA_TABLE_EXISTS_SQL,
     is_postgres_dialect,
     resolve_reconcile_adbc_dialect,
+    split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.exceptions import IntegrityError
@@ -70,6 +72,17 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         super().__init__(config)
         self._dialect: str | None = None
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate bare or schema-qualified session table names for SQL safety."""
+        if "." in table_name:
+            schema_part, _, table_part = table_name.partition(".")
+            if schema_part and table_part and "." not in table_part:
+                BaseSQLSpecStore._ensure_table_name(schema_part)
+                BaseSQLSpecStore._ensure_table_name(table_part)
+                return
+        BaseSQLSpecStore._ensure_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -182,6 +195,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
         dialect = self._resolve_schema_dialect()
         parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "teradata":
+            schema_name, catalog_table = split_teradata_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
             return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
@@ -218,14 +234,12 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
 
         if dialect == "teradata":
-            schema, _, table = self._table_name.rpartition(".")
-            name = f"idx_{self._table_name.replace('.', '_')}_expires_at"
+            schema, table = split_teradata_table_name(self._table_name)
+            slug = self._table_name.replace(".", "_").replace('"', "")
+            name = f"idx_{slug}_expires_at"
             return [
                 CompanionIndex(
-                    name=name,
-                    table=table,
-                    schema=schema or None,
-                    ddl=f"CREATE INDEX {name} (expires_at) ON {self._table_name}",
+                    name=name, table=table, schema=schema, ddl=f"CREATE INDEX {name} (expires_at) ON {self._table_name}"
                 )
             ]
 
@@ -449,14 +463,18 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """Synchronous implementation of create_table using ADBC driver."""
         dialect = self._get_dialect()
         if dialect == "teradata":
-            from sqlspec.adapters.adbc.core import _TERADATA_TABLE_EXISTS_SQL, split_teradata_table_name
-
             schema, table = split_teradata_table_name(self._table_name)
             with self._config.provide_session() as driver:
-                if driver.select_one_or_none(_TERADATA_TABLE_EXISTS_SQL, (schema, table)) is None:
-                    driver.execute(self._table_ddl())
+                try:
+                    if driver.select_one_or_none(_TERADATA_TABLE_EXISTS_SQL, (schema, table)) is None:
+                        driver.execute(self._table_ddl())
+                        driver.commit()
+                    self.reconcile_companion_objects_sync(driver)
                     driver.commit()
-                self.reconcile_companion_objects_sync(driver)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
             self._log_table_created()
             return
         if dialect == "oracle":

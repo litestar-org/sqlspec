@@ -31,11 +31,14 @@ __all__ = (
     "TeradataConnectionContext",
     "TeradataConnectionParams",
     "TeradataDriverFeatures",
+    "TeradataLogMech",
     "TeradataPoolParams",
+    "TeradataSSLMode",
+    "TeradataTransactionMode",
 )
 
 
-TeradataLogMech = Literal["TD2", "LDAP", "TDNEGO", "KRB5", "BROWSER", "JWT"]
+TeradataLogMech = Literal["TD2", "LDAP", "TDNEGO", "KRB5", "BROWSER", "JWT", "BEARER", "CODE", "CRED", "ROPC", "SECRET"]
 TeradataSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 TeradataTransactionMode = Literal["ANSI", "TERA", "DEFAULT"]
 
@@ -67,6 +70,30 @@ class TeradataConnectionParams(TypedDict, total=False):
     """TLS verification mode."""
     encryptdata: bool | str
     """Enable encrypted data transport."""
+    account: NotRequired[str]
+    """Teradata workload management account string."""
+    logdata: NotRequired[str]
+    """Mechanism-specific authentication payload."""
+    charset: NotRequired[str]
+    """Session character set."""
+    sslca: NotRequired[str]
+    """Path to CA certificate bundle file."""
+    sslcapath: NotRequired[str]
+    """Path to CA certificate directory."""
+    lob_support: NotRequired[bool | str]
+    """Enable LOB streaming support."""
+    connect_timeout: NotRequired[int | float | str]
+    """Connection establishment timeout."""
+    request_timeout: NotRequired[int | float | str]
+    """Statement request timeout."""
+    sJson: NotRequired[str]
+    """Raw teradatasql JSON connection payload."""
+    cop: NotRequired[bool | str]
+    """Enable COP discovery."""
+    coplast: NotRequired[bool | str]
+    """Retry last COP entry."""
+    https_port: NotRequired[int | str]
+    """HTTPS port for TLS/OAuth connections."""
     extra: dict[str, Any]
     """Additional vendor options."""
 
@@ -103,7 +130,7 @@ class TeradataDriverFeatures(TypedDict):
     """Attempt native FastExport for reads."""
     enable_fastload: NotRequired[bool]
     """Attempt native FastLoad for inserts."""
-    query_band: NotRequired[dict[str, str] | str]
+    query_band: NotRequired[Mapping[str, str] | str]
     """Session query-band metadata."""
     enable_events: NotRequired[bool]
     """Enable database event listening."""

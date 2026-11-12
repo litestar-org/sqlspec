@@ -3,15 +3,13 @@
 from typing import Any, ClassVar
 
 from sqlspec.adapters.teradata.config import TeradataConfig
-from sqlspec.adapters.teradata.core import split_teradata_table_name
+from sqlspec.adapters.teradata.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_schema_and_table
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 
 __all__ = ("TeradataEventQueueStore", "TeradataSyncEventQueueStore")
 
 _MAX_VARCHAR_LENGTH = 32000
-_TABLE_EXISTS_SQL = "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.TablesV WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND TableKind IN ('T', 'O')"
-_INDEX_EXISTS_SQL = "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND IndexName = ?"
 
 
 class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
@@ -44,11 +42,11 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
         return f"CREATE INDEX {self._index_name()} (channel, status, available_at) ON {self.table_name}"
 
     def _schema_target(self) -> SchemaTarget:
-        schema, table = split_teradata_table_name(self.table_name)
+        schema, table = split_schema_and_table(self.table_name)
         return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
 
     def _index_existence_target(self) -> tuple[str | None, str]:
-        return split_teradata_table_name(self.table_name)
+        return split_schema_and_table(self.table_name)
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
         return statement
@@ -60,7 +58,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
         """Create missing queue objects using catalog probes."""
         schema, table = self._index_existence_target()
         with self._config.provide_session() as driver:
-            if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is None:
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
                 driver.execute(self._table_ddl())
                 driver.commit()
             self.reconcile_companion_objects_sync(driver)
@@ -70,7 +68,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
         """Drop an existing queue table."""
         schema, table = self._index_existence_target()
         with self._config.provide_session() as driver:
-            if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is not None:
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
                 driver.execute(f"DROP TABLE {self.table_name}")
                 driver.commit()
 
@@ -82,7 +80,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
             rows = dictionary.get_indexes(driver, table=table, schema=schema)
             exists = metadata_has_index(rows, table, self._index_name(), schema_name=schema)
         else:
-            exists = driver.select_one_or_none(_INDEX_EXISTS_SQL, (schema, table, self._index_name())) is not None
+            exists = driver.select_one_or_none(INDEX_EXISTS_SQL, (schema, table, self._index_name())) is not None
         if not exists:
             driver.execute(self._index_ddl())
 

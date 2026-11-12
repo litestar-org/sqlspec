@@ -28,11 +28,11 @@ finally:
     config.close_pool()
 ```
 
-`teradatasql` is loaded when a connection is opened. Importing the adapter and constructing a configuration do not require an installed driver or open a network connection. The default character set is UTF-8. Pass driver authentication and TLS options in `connection_config` using the names accepted by `teradatasql`, such as `logmech`, `logdata`, and `sslmode`.
+`teradatasql` is loaded when a connection is opened. Importing the adapter and constructing a configuration do not require an installed driver or open a network connection. `build_connection_config` defaults the character set to UTF-8 and sets `encryptdata` to `"true"` unless overridden in `connection_config`. Pass driver authentication and TLS options in `connection_config` using the names accepted by `teradatasql`, such as `encryptdata`, `logmech`, `logdata`, and `sslmode`.
 
 ## Transactions and pooling
 
-Teradata supports `TERA` and `ANSI` session transaction modes. Select the mode before opening connections. Use explicit `begin()`, `commit()`, and `rollback()` for units of work. The driver commits DDL and session query-band requests before subsequent statements to avoid Teradata error 3932; these operations also commit an enclosing unit of work, so keep them outside application transactions. Savepoints are unavailable.
+Teradata supports `TERA` (default) and `ANSI` session transaction modes; select `tmode` in `connection_config` before opening connections. Use explicit `begin()`, `commit()`, and `rollback()` for multi-statement units of work. Transaction-abort behavior differs by session mode: in default `TERA` mode, server-side uniqueness or constraint errors abort and roll back the entire active `autocommit=False` transaction, whereas `ANSI` mode rolls back only the failing statement. The driver commits DDL and session query-band requests before subsequent statements to avoid Teradata error 3932; these operations also commit an enclosing unit of work, so keep them outside application transactions. Savepoints are unavailable.
 
 A session owns its checked-out connection until the context exits. Size pools conservatively against your database's TASM session limits, and close the pool during application shutdown. Connections must not cross process boundaries.
 

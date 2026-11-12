@@ -46,23 +46,43 @@ def teradata_datatype_sql(gen: generator.Generator, expression: exp.DataType) ->
     return f"{rendered} COLLATE {collate}" if collate else rendered
 
 
+def _strip_order_table_qualifiers(query: exp.Query, order: exp.Expr | None) -> None:
+    """Strip inner table qualifiers from outer ORDER BY columns on wrapped queries."""
+    if order is None:
+        return
+    projected = {item.alias_or_name for item in query.selects}
+    inner_tables = (
+        {table.alias_or_name for table in query.find_all(exp.Table)}
+        if any(item.is_star for item in query.selects)
+        else set()
+    )
+    for column in order.find_all(exp.Column):
+        if column.name in projected or (column.table and column.table in inner_tables):
+            column.set("table", None)
+            column.set("db", None)
+            column.set("catalog", None)
+
+
 def _page_query(expression: exp.Query) -> exp.Select:
     query = expression.copy()
     offset = query.args.pop("offset")
     limit = query.args.pop("limit", None)
     order = query.args.pop("order", None)
     start = simplify(exp.Add(this=offset.expression.copy(), expression=exp.Literal.number(1)))
-    count = limit.expression if isinstance(limit, exp.Limit) else limit.args.get("count") if limit else None
+    count: exp.Expr | None
+    if isinstance(limit, exp.Limit):
+        count = limit.expression
+    elif isinstance(limit, exp.Fetch):
+        fetch_count = cast("exp.Expr | None", limit.args.get("count"))
+        count = fetch_count if fetch_count is not None else exp.Literal.number(1)
+    else:
+        count = None
     wrap = isinstance(query, exp.SetOperation) or any(
         query.args.get(key) for key in ("distinct", "group", "having", "qualify")
     )
     cte = query.args.pop("with_", None) if wrap else None
     if wrap:
-        projected = {item.alias_or_name for item in query.selects}
-        if order is not None:
-            for column in order.find_all(exp.Column):
-                if column.name in projected:
-                    column.set("table", None)
+        _strip_order_table_qualifiers(query, order)
         result = exp.select("*").from_(
             exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
         )
@@ -104,6 +124,7 @@ def teradata_set_operation_sql(gen: generator.Generator, expression: exp.SetOper
         limit = query.args.pop("limit")
         order = query.args.pop("order", None)
         cte = query.args.pop("with_", None)
+        _strip_order_table_qualifiers(query, order)
         result = exp.select("*").from_(
             exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
         )

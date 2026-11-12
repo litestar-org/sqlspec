@@ -129,7 +129,12 @@ def test_unclassified_errors_preserve_generic_or_operational_family() -> None:
     "band",
     [
         {},
+        "",
+        ";",
         "missing-equals",
+        "app=etl;;",
+        "app=etl;missing_equals",
+        "app=etl; bad=1",
         {"bad key": "value"},
         {"key": "bad;value"},
         {"key": "bad\nvalue"},
@@ -153,6 +158,10 @@ def test_query_band_multiple_mapping_values_and_transaction_scope() -> None:
         == "SET QUERY_BAND = 'app=etl;client=O''Reilly;' FOR TRANSACTION;"
     )
     assert build_set_query_band_sql("app=etl;") == "SET QUERY_BAND = 'app=etl;' FOR SESSION;"
+    assert (
+        build_set_query_band_sql("app=etl;client=O'Reilly;")
+        == "SET QUERY_BAND = 'app=etl;client=O''Reilly;' FOR SESSION;"
+    )
 
 
 def test_connection_options_merge_extra_without_overwriting_explicit_values() -> None:
@@ -209,10 +218,10 @@ def test_ddl_boundary_classification(sql_text: str, expected: bool) -> None:
 
 
 def test_qualified_identifier_quoting_and_insert_bindings() -> None:
-    from sqlspec.adapters.teradata.core import build_insert_statement, format_identifier, split_teradata_table_name
+    from sqlspec.adapters.teradata.core import build_insert_statement, format_identifier, split_schema_and_table
 
-    assert split_teradata_table_name('"analytics"."odd.table"') == ("analytics", "odd.table")
-    assert split_teradata_table_name("orders") == (None, "ORDERS")
+    assert split_schema_and_table('"analytics"."odd.table"') == ("analytics", "odd.table")
+    assert split_schema_and_table("orders") == (None, "ORDERS")
     assert format_identifier('"analytics"."odd""table"') == '"analytics"."odd""table"'
     assert (
         build_insert_statement("analytics.orders", ["id", "total"])
@@ -232,17 +241,60 @@ def test_identifier_rejects_invalid_qualification(identifier: str) -> None:
 def test_column_labels_preserve_explicit_case_across_cache_reuse() -> None:
     from sqlspec.adapters.teradata.core import collect_rows, resolve_column_names
 
-    cache: dict[int, tuple[Any, list[str]]] = {}
+    cache: dict[tuple[int, bool], tuple[Any, list[str]]] = {}
     description = [("ID",), ("MixedCase",), ("1UPPER",)]
     assert resolve_column_names(description, cache) == ["id", "MixedCase", "1UPPER"]
+    assert resolve_column_names(description, cache, enable_lowercase_column_names=False) == [
+        "ID",
+        "MixedCase",
+        "1UPPER",
+    ]
     assert resolve_column_names(description, cache) == ["id", "MixedCase", "1UPPER"]
     for number in range(257):
         assert resolve_column_names([(f"VALUE_{number}",)], cache) == [f"value_{number}"]
     assert resolve_column_names(description, cache) == ["id", "MixedCase", "1UPPER"]
     assert resolve_column_names(None, cache) == []
-    assert resolve_column_names(description, {}, enable_lowercase_column_names=False) == ["ID", "MixedCase", "1UPPER"]
     assert collect_rows([{"id": 1}], description, cache) == ([{"id": 1}], ["id", "MixedCase", "1UPPER"], "dict")
     assert collect_rows([], description, cache) == ([], ["id", "MixedCase", "1UPPER"], "tuple")
+
+
+def test_core_exports_profile_coercions_fastexport_and_table_ref() -> None:
+    from sqlspec.adapters.teradata import core
+    from sqlspec.exceptions import SQLSpecError
+
+    for exported in (
+        "DEFAULT_TERADATA_PORT",
+        "INDEX_EXISTS_SQL",
+        "TABLE_EXISTS_SQL",
+        "default_statement_config",
+        "driver_profile",
+        "format_table_ref",
+        "maybe_prefix_fastexport",
+    ):
+        assert exported in core.__all__
+
+    coercions = core.driver_profile.custom_type_coercions
+    assert coercions[bytearray](bytearray(b"abc")) == b"abc"
+    assert coercions[memoryview](memoryview(b"xyz")) == b"xyz"
+
+    assert core.maybe_prefix_fastexport("SELECT 1", enable_fastexport=False, in_transaction=False) == "SELECT 1"
+    assert core.maybe_prefix_fastexport("SELECT 1", enable_fastexport=True, in_transaction=True) == "SELECT 1"
+    assert (
+        core.maybe_prefix_fastexport(
+            "/* c */\nLOCKING ROW FOR ACCESS SELECT 1", enable_fastexport=True, in_transaction=False
+        )
+        == "{fn teradata_try_fastexport} /* c */\nLOCKING ROW FOR ACCESS SELECT 1"
+    )
+    assert (
+        core.maybe_prefix_fastexport("UPDATE t SET a = 1", enable_fastexport=True, in_transaction=False)
+        == "UPDATE t SET a = 1"
+    )
+
+    assert core.format_table_ref("mart.orders") == '"MART"."ORDERS"'
+    assert core.format_table_ref('"mart"."odd.table"') == '"mart"."odd.table"'
+    assert core.format_table_ref("orders", allow_schema=False) == '"ORDERS"'
+    with pytest.raises(SQLSpecError, match="Schema-qualified"):
+        core.format_table_ref("mart.orders", allow_schema=False)
 
 
 @pytest.mark.parametrize(

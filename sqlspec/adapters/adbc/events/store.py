@@ -19,7 +19,9 @@ from sqlspec.adapters.adbc.core import (
     RECONCILE_ADBC_DIALECTS,
     is_postgres_dialect,
     resolve_dialect_from_config,
+    resolve_reconcile_adbc_dialect,
     split_db2_table_name,
+    split_teradata_table_name,
 )
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.extensions.events import BaseEventQueueStore
@@ -135,8 +137,6 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             Dialect identifier for DDL generation.
         """
         connection_config = self._config.connection_config
-        from sqlspec.adapters.adbc.core import resolve_reconcile_adbc_dialect
-
         classified = resolve_reconcile_adbc_dialect(
             connection_config, getattr(self._config, "explicit_statement_dialect", None)
         )
@@ -154,6 +154,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             if normalized_gizmo in {DIALECT_DUCKDB, DIALECT_SQLITE}:
                 return normalized_gizmo
 
+        statement_config = self._config.statement_config
         is_flight_or_grpc = (
             "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith(("grpc://", "grpc+tls://"))
         )
@@ -163,6 +164,10 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 normalized_explicit = normalize_dialect_name(explicit_dialect.strip())
                 if normalized_explicit in RECONCILE_ADBC_DIALECTS and normalized_explicit != DIALECT_SQLITE:
                     return normalized_explicit
+            if statement_config and statement_config.dialect is not None:
+                stmt_dialect = str(statement_config.dialect).lower()
+                if "teradata" in stmt_dialect or "vantage" in stmt_dialect:
+                    return DIALECT_TERADATA
             if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
                 return DIALECT_FLIGHTSQL
 
@@ -171,7 +176,14 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             return DIALECT_POSTGRESQL
         if resolved in {"mssql", "tsql"}:
             return DIALECT_MSSQL
-        if resolved in {DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE, DIALECT_ORACLE, DIALECT_DB2}:
+        if resolved in {
+            DIALECT_DUCKDB,
+            DIALECT_BIGQUERY,
+            DIALECT_SNOWFLAKE,
+            DIALECT_ORACLE,
+            DIALECT_DB2,
+            DIALECT_TERADATA,
+        }:
             return resolved
         if resolved == DIALECT_SQLITE and (
             "sqlite" in driver_lower
@@ -180,9 +192,10 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         ):
             return DIALECT_SQLITE
 
-        statement_config = self._config.statement_config
         if statement_config and statement_config.dialect is not None:
             dialect_str = str(statement_config.dialect).lower()
+            if "teradata" in dialect_str or "vantage" in dialect_str:
+                return DIALECT_TERADATA
             if is_postgres_dialect(dialect_str):
                 return DIALECT_POSTGRESQL
             if dialect_str in {"mssql", "tsql"}:
@@ -330,6 +343,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
     def _schema_target(self) -> SchemaTarget:
         """Build a queue SchemaTarget using the resolved ADBC backend dialect."""
         dialect = self.dialect
+        if dialect == DIALECT_TERADATA:
+            schema, table = split_teradata_table_name(self.table_name)
+            return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="teradata")
         if dialect == DIALECT_DB2:
             schema, table = split_db2_table_name(self.table_name)
             return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="db2")
@@ -340,6 +356,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Return optional schema and table name for companion queue index catalog lookup."""
         if self._index_ddl() is None:
             return None
+        if self.dialect == DIALECT_TERADATA:
+            return split_teradata_table_name(self.table_name)
         if self.dialect == DIALECT_DB2:
             return split_db2_table_name(self.table_name)
         raw_schema, dot, raw_table = self.table_name.partition(".")

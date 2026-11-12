@@ -4,10 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.teradata._typing import TeradataCursor
-from sqlspec.adapters.teradata.core import format_identifier as quote_double_identifier
-from sqlspec.adapters.teradata.core import resolve_rowcount
-from sqlspec.adapters.teradata.core import split_teradata_table_name as split_schema_and_table
-from sqlspec.adapters.teradata.events.store import _TABLE_EXISTS_SQL
+from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_table_ref, resolve_rowcount, split_schema_and_table
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.migrations.schema import SchemaTarget
@@ -53,7 +50,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
     def _drop_table(self) -> None:
         schema, table = split_schema_and_table(self._table_name)
         with self._config.provide_session() as driver:
-            if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is not None:
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
                 driver.execute(self._drop_table_sql()[0])
                 driver.commit()
 
@@ -87,7 +84,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
 
     def _table_ddl(self) -> str:
         return (
-            f"CREATE MULTISET TABLE {_table_ref(self._table_name)} ("
+            f"CREATE MULTISET TABLE {format_table_ref(self._table_name)} ("
             "session_id VARCHAR(255) NOT NULL PRIMARY KEY, data BLOB NOT NULL, "
             "expires_at TIMESTAMP(6) WITH TIME ZONE)"
         )
@@ -104,17 +101,17 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
                 name=name,
                 table=table,
                 schema=schema,
-                ddl=f"CREATE INDEX {name} (expires_at) ON {_table_ref(self._table_name)}",
+                ddl=f"CREATE INDEX {name} (expires_at) ON {format_table_ref(self._table_name)}",
             )
         ]
 
     def _drop_table_sql(self) -> list[str]:
-        return [f"DROP TABLE {_table_ref(self._table_name)}"]
+        return [f"DROP TABLE {format_table_ref(self._table_name)}"]
 
     def _create_table(self) -> None:
         schema, table = split_schema_and_table(self._table_name)
         with self._config.provide_session() as driver:
-            if driver.select_one_or_none(_TABLE_EXISTS_SQL, (schema, table)) is None:
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
                 driver.execute(self._table_ddl())
                 driver.commit()
             self.reconcile_companion_objects_sync(driver)
@@ -122,7 +119,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         sql = f"""
         SELECT data, expires_at FROM {table_ref}
         WHERE session_id = ?
@@ -149,39 +146,43 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    conn.commit()
+                    _commit_if_manual(conn)
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
+        merge_sql = (
+            f"MERGE INTO {table_ref} AS tgt "
+            "USING (SELECT CAST(? AS VARCHAR(255)) AS session_id, "
+            "CAST(? AS BLOB) AS data, "
+            "CAST(? AS TIMESTAMP(6) WITH TIME ZONE) AS expires_at) AS src "
+            "ON tgt.session_id = src.session_id "
+            "WHEN MATCHED THEN UPDATE SET data = src.data, expires_at = src.expires_at "
+            "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
+            "VALUES (src.session_id, src.data, src.expires_at)"
+        )
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
-            cursor.execute(
-                f"UPDATE {table_ref} SET data = ?, expires_at = ? WHERE session_id = ?", (data, expires_at, key)
-            )
-            if resolve_rowcount(cursor) == 0:
-                cursor.execute(
-                    f"INSERT INTO {table_ref} (session_id, data, expires_at) VALUES (?, ?, ?)", (key, data, expires_at)
-                )
-            conn.commit()
+            cursor.execute(merge_sql, (key, data, expires_at))
+            _commit_if_manual(conn)
 
     def _delete(self, key: str) -> None:
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
-            conn.commit()
+            _commit_if_manual(conn)
 
     def _delete_all(self) -> None:
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(f"DELETE FROM {table_ref} ALL")
-            conn.commit()
+            _commit_if_manual(conn)
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         sql = f"""
         SELECT 1 FROM {table_ref}
         WHERE session_id = ?
@@ -192,7 +193,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
             return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> "int | None":
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         sql = f"""
         SELECT expires_at FROM {table_ref}
         WHERE session_id = ?
@@ -214,24 +215,20 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         return int((expires_at - now).total_seconds())
 
     def _delete_expired(self) -> int:
-        table_ref = _table_ref(self._table_name)
+        table_ref = format_table_ref(self._table_name)
         sql = f"DELETE FROM {table_ref} WHERE expires_at <= CURRENT_TIMESTAMP(6)"
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql)
-            conn.commit()
+            _commit_if_manual(conn)
             count = resolve_rowcount(cursor)
         if count > 0:
             self._log_delete_expired(count)
         return count
 
 
-def _table_ref(table_name: str) -> str:
-    schema_name, bare_table_name = split_schema_and_table(table_name)
-    return (
-        f"{quote_double_identifier(schema_name)}.{quote_double_identifier(bare_table_name)}"
-        if schema_name
-        else quote_double_identifier(bare_table_name)
-    )
+def _commit_if_manual(conn: Any) -> None:
+    if getattr(conn, "autocommit", True) is False:
+        conn.commit()
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:

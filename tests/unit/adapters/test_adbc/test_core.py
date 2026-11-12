@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pyarrow as pa
 import pytest
+import sqlglot
 from adbc_driver_manager import AdbcStatusCode, DatabaseError, NotSupportedError
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -18,6 +19,8 @@ from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc import driver as adbc_driver_mod
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _TERADATA_INDEX_EXISTS_SQL,
+    _TERADATA_TABLE_EXISTS_SQL,
     build_connection_config,
     collect_rows,
     driver_from_uri,
@@ -30,6 +33,8 @@ from sqlspec.adapters.adbc.core import (
     resolve_column_names,
     resolve_dialect_from_config,
     resolve_many_rowcount,
+    resolve_reconcile_adbc_dialect,
+    split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
@@ -41,6 +46,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
@@ -51,6 +57,7 @@ from sqlspec.exceptions import (
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 
@@ -1065,8 +1072,6 @@ def test_teradata_error_mapping(code: int, expected: type[SQLSpecError]) -> None
 
 @pytest.mark.parametrize("port", [0, 70000, True, "bad"])
 def test_teradata_invalid_port(port: Any) -> None:
-    from sqlspec.exceptions import ImproperConfigurationError
-
     with pytest.raises(ImproperConfigurationError, match="port"):
         build_connection_config({"driver": "teradata", "host": "td.corp", "port": port})
 
@@ -1120,8 +1125,6 @@ def test_teradata_uri_encoding(config: dict[str, Any], expected: str) -> None:
 
 @pytest.mark.parametrize("option_supported", [True, False])
 def test_teradata_autocommit_only_begin(option_supported: bool) -> None:
-    from sqlspec.exceptions import TransactionError
-
     error = NotSupportedError("autocommit only")
     native = Mock()
     if option_supported:
@@ -1137,3 +1140,46 @@ def test_teradata_autocommit_only_begin(option_supported: bool) -> None:
     with pytest.raises(TransactionError, match="autocommit"):
         driver.begin()
     assert native.set_autocommit.call_args_list == [call(False), call(False)]
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("litestar_session", (None, "LITESTAR_SESSION")),
+        ("my_db.litestar_session", ("MY_DB", "LITESTAR_SESSION")),
+        ('"MixedDb"."MixedTable"', ("MixedDb", "MixedTable")),
+        ('my_db."Mixed""Table"', ("MY_DB", 'Mixed"Table')),
+        ('"Dot.Db".plain_table', ("Dot.Db", "PLAIN_TABLE")),
+    ],
+)
+def test_split_teradata_table_name_normalizes_identifiers(raw_name: str, expected: tuple[str | None, str]) -> None:
+    """split_teradata_table_name uppercases unquoted segments and preserves double-quoted identifiers."""
+    assert split_teradata_table_name(raw_name) == expected
+
+
+@pytest.mark.parametrize(
+    "invalid_name", ["", "   ", ".tbl", "db.", "cat.db.tbl", "db..tbl", '"unterminated', 'db.""', 'db.bad"quote']
+)
+def test_split_teradata_table_name_rejects_invalid_identifiers(invalid_name: str) -> None:
+    """split_teradata_table_name rejects empty, malformed, and multi-dot table names."""
+    with pytest.raises(ImproperConfigurationError, match="Invalid Teradata table name"):
+        split_teradata_table_name(invalid_name)
+
+
+def test_teradata_existence_sql_uses_locking_trim_and_typed_placeholders() -> None:
+    """Teradata catalog existence probes use LOCKING ROW FOR ACCESS, TRIM, UPPER, and typed CAST(? AS VARCHAR(128))."""
+    for sql in (_TERADATA_TABLE_EXISTS_SQL, _TERADATA_INDEX_EXISTS_SQL):
+        assert sql.startswith("LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.")
+        assert "UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE)))" in sql
+        assert "UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))" in sql
+        parsed = sqlglot.parse_one(sql, read="teradata")
+        assert parsed.sql("teradata")
+    assert "UPPER(TRIM(IndexName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))" in _TERADATA_INDEX_EXISTS_SQL
+
+
+def test_resolve_reconcile_adbc_dialect_normalizes_vantage() -> None:
+    """resolve_reconcile_adbc_dialect maps vantage hints and FlightSQL statement dialects to teradata."""
+    assert resolve_reconcile_adbc_dialect({"uri": "grpc+tls://host:443", "adbc_dialect": "vantage"}, None) == "teradata"
+    assert (
+        resolve_reconcile_adbc_dialect({"driver": "flightsql", "uri": "grpc+tls://host:443"}, "vantage") == "teradata"
+    )

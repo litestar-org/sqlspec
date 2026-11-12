@@ -1,6 +1,9 @@
 """Exercise native pool ownership and cleanup through public leases."""
 
 import os
+import sys
+import time
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any
@@ -10,10 +13,11 @@ import pytest
 
 from sqlspec.adapters.teradata.pool import TeradataConnectionPool
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
+from sqlspec.utils.module_loader import reset_dependency_cache
 
 
 @pytest.fixture
-def sdk_connections(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+def sdk_connections(monkeypatch: pytest.MonkeyPatch) -> Generator[list[Any], None, None]:
     connections: list[Any] = []
 
     def connect(**kwargs: Any) -> Any:
@@ -22,8 +26,12 @@ def sdk_connections(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
         connections.append(connection)
         return connection
 
-    monkeypatch.setattr("sqlspec.adapters.teradata.pool.import_optional", lambda name: SimpleNamespace(connect=connect))
-    return connections
+    monkeypatch.setitem(sys.modules, "teradatasql", SimpleNamespace(connect=connect))
+    reset_dependency_cache("teradatasql")
+    try:
+        yield connections
+    finally:
+        reset_dependency_cache("teradatasql")
 
 
 def test_pool_capacity_is_exclusive_and_times_out(sdk_connections: list[Any]) -> None:
@@ -78,7 +86,7 @@ def test_pool_refuses_forked_process_without_touching_connection(
     connection = pool.acquire()
     parent_pid = os.getpid()
     with monkeypatch.context() as context:
-        context.setattr("sqlspec.adapters.teradata.pool.os.getpid", lambda: parent_pid + 1)
+        context.setattr(os, "getpid", lambda: parent_pid + 1)
         for operation in (pool.acquire, pool.close, lambda: pool.release(connection)):
             with pytest.raises(DatabaseConnectionError, match="forked"):
                 operation()
@@ -170,13 +178,17 @@ def test_pool_rejects_invalid_bounds(options: dict[str, Any]) -> None:
 def test_pool_defers_missing_dependency_until_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlspec.exceptions import MissingDependencyError
 
-    monkeypatch.setattr("sqlspec.adapters.teradata.pool.import_optional", lambda name: None)
-    pool = TeradataConnectionPool({})
-    assert pool.size() == 0
-    with pytest.raises(MissingDependencyError):
-        pool.acquire()
-    assert pool.size() == 0
-    pool.close()
+    monkeypatch.setitem(sys.modules, "teradatasql", None)
+    reset_dependency_cache("teradatasql")
+    try:
+        pool = TeradataConnectionPool({})
+        assert pool.size() == 0
+        with pytest.raises(MissingDependencyError):
+            pool.acquire()
+        assert pool.size() == 0
+        pool.close()
+    finally:
+        reset_dependency_cache("teradatasql")
 
 
 @pytest.mark.parametrize("failed_ping", [False, True])
@@ -184,7 +196,7 @@ def test_pool_health_check_reuses_or_replaces_connection(
     sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch, failed_ping: bool
 ) -> None:
     clock = [100.0]
-    monkeypatch.setattr("sqlspec.adapters.teradata.pool.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     pool = TeradataConnectionPool({}, health_check_interval=5, recycle_seconds=0)
     first = pool.acquire()
     cursor = first.cursor.return_value
@@ -209,7 +221,7 @@ def test_pool_recycles_expired_connection_without_ping(
     sdk_connections: list[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [100.0]
-    monkeypatch.setattr("sqlspec.adapters.teradata.pool.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     pool = TeradataConnectionPool({}, recycle_seconds=5, health_check_interval=1)
     first = pool.acquire()
     pool.release(first)

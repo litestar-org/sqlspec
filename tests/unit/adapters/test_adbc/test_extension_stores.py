@@ -9,6 +9,7 @@ import pytest
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
 from sqlspec.adapters.adbc.litestar.store import AdbcStore
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import IntegrityError
 
 __all__ = ()
@@ -174,3 +175,100 @@ def test_adbc_teradata_extension_targets(connection_config: dict[str, str]) -> N
         == "CREATE INDEX idx_sqlspec_event_queue_channel_status (channel, status, available_at) ON sqlspec_event_queue"
     )
     assert queue.drop_statements() == ["DROP TABLE sqlspec_event_queue"]
+
+
+@pytest.mark.parametrize("stmt_dialect", ["teradata", "vantage"])
+def test_adbc_event_queue_store_flightsql_statement_dialect_detection(stmt_dialect: str) -> None:
+    """AdbcEventQueueStore resolves FlightSQL and mutated statement_config Teradata dialects to teradata."""
+    flight_cfg = AdbcConfig(
+        connection_config={"driver": "flightsql", "uri": "grpc+tls://host:443"},
+        statement_config=StatementConfig(dialect=stmt_dialect),
+    )
+    assert AdbcEventQueueStore(flight_cfg).dialect == "teradata"
+
+    fallback_stub = SimpleNamespace(
+        connection_config={"driver": "flightsql", "uri": "grpc+tls://host:443"},
+        statement_config=StatementConfig(dialect=stmt_dialect),
+        extension_config={"events": {}},
+    )
+    assert AdbcEventQueueStore(cast("Any", fallback_stub)).dialect == "teradata"
+
+    bare_stub = SimpleNamespace(
+        connection_config={}, statement_config=StatementConfig(dialect=stmt_dialect), extension_config={"events": {}}
+    )
+    assert AdbcEventQueueStore(cast("Any", bare_stub)).dialect == "teradata"
+
+
+def test_adbc_teradata_schema_qualified_extension_targets() -> None:
+    """Teradata Litestar and Events stores split and normalize database-qualified table names."""
+    config = AdbcConfig(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={
+            "litestar": {"session_table": "my_db.my_sessions"},
+            "events": {"queue_table": "my_db.my_queue"},
+        },
+    )
+    store = AdbcStore(config)
+    queue = AdbcEventQueueStore(config)
+
+    session_target = store.get_schema_targets()[0]
+    assert session_target.schema == "MY_DB"
+    assert session_target.table_name == "MY_SESSIONS"
+
+    companion = store.get_companion_indexes()[0]
+    assert companion.schema == "MY_DB"
+    assert companion.table == "MY_SESSIONS"
+    assert companion.ddl == "CREATE INDEX idx_my_db_my_sessions_expires_at (expires_at) ON my_db.my_sessions"
+
+    queue_target = queue.get_schema_targets()[0]
+    assert queue_target.schema == "MY_DB"
+    assert queue_target.table_name == "MY_QUEUE"
+    assert queue._index_existence_target() == ("MY_DB", "MY_QUEUE")
+
+
+def test_adbc_litestar_store_teradata_create_table_commits_after_companion_reconcile() -> None:
+    """AdbcStore._create_table commits companion index creation and rolls back on failure for Teradata."""
+    events: list[str] = []
+
+    class _DataDictionaryStub:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None = None) -> list[dict[str, Any]]:
+            events.append(f"get_indexes:{schema}:{table}")
+            return []
+
+    class _DriverStub:
+        dialect = "teradata"
+        data_dictionary = _DataDictionaryStub()
+
+        def select_one_or_none(self, _sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+            events.append(f"probe:{params[0]}:{params[1]}")
+            return None
+
+        def execute(self, sql: str) -> None:
+            events.append(f"execute:{sql.split()[3]}")
+
+        def execute_script(self, sql: str) -> None:
+            events.append(f"execute_script:{sql.split()[2]}")
+
+        def commit(self) -> None:
+            events.append("commit")
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+    driver_stub = _DriverStub()
+    config_stub = SimpleNamespace(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={"litestar": {"session_table": "my_db.my_sessions"}},
+        provide_session=lambda: nullcontext(driver_stub),
+    )
+    store = AdbcStore(cast("Any", config_stub))
+    store._create_table()
+
+    assert events == [
+        "probe:MY_DB:MY_SESSIONS",
+        "execute:my_db.my_sessions",
+        "commit",
+        "get_indexes:MY_DB:MY_SESSIONS",
+        "execute_script:idx_my_db_my_sessions_expires_at",
+        "commit",
+    ]

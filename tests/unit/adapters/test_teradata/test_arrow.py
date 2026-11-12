@@ -56,7 +56,8 @@ def test_select_to_arrow_preserves_decimal_schema_and_nulls(empty: bool) -> None
     connection = _connection(chunks)
     result = TeradataDriver(connection).select_to_arrow("SELECT id, total FROM orders", batch_size=2)
     table = result.get_data()
-    assert table.schema == pa.schema([("id", pa.int64()), ("total", pa.decimal128(12, 2))])
+    fields: list[tuple[str, pa.DataType]] = [("id", pa.int64()), ("total", pa.decimal128(12, 2))]
+    assert table.schema == pa.schema(fields)
     assert table.to_pydict() == (
         {"id": [], "total": []} if empty else {"id": [1, 2], "total": [Decimal("12.50"), None]}
     )
@@ -164,7 +165,11 @@ def test_arrow_reader_close_releases_cursor_before_exhaustion() -> None:
 
 def test_arrow_export_explicit_schema_is_preserved() -> None:
     connection = _connection([[(1, Decimal("1.25"))], []])
-    schema = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("total", pa.decimal128(14, 2))])
+    schema_fields: list[pa.Field[Any]] = [
+        pa.field("id", pa.int64(), nullable=False),
+        pa.field("total", pa.decimal128(14, 2)),
+    ]
+    schema = pa.schema(schema_fields)
     table = TeradataDriver(connection).select_to_arrow("SELECT id, total FROM orders", arrow_schema=schema).get_data()
     assert table.schema == schema
     assert table.to_pydict() == {"id": [1], "total": [Decimal("1.25")]}
@@ -236,7 +241,7 @@ def test_arrow_staged_load_emits_teradata_update_insert_and_cleans_stage() -> No
     sql_statements = [item.args[0] for item in cursor.execute.call_args_list]
     assert sql_statements == [
         "CREATE MULTISET TABLE stage_orders AS orders WITH NO DATA",
-        "UPDATE orders FROM stage_orders stg SET total = stg.total WHERE orders.id = stg.id",
+        "UPDATE tgt FROM orders tgt, stage_orders src SET total = src.total WHERE tgt.id = src.id",
         "INSERT INTO orders (id, total) SELECT stg.id, stg.total FROM stage_orders stg WHERE NOT EXISTS (SELECT 1 FROM orders tgt WHERE tgt.id = stg.id)",
         "DROP TABLE stage_orders",
     ]
@@ -249,3 +254,54 @@ def test_arrow_export_fetch_failure_closes_cursor() -> None:
     with pytest.raises(UniqueViolationError):
         TeradataDriver(connection).select_to_arrow("SELECT id, total FROM orders")
     connection.cursor.return_value.close.assert_called_once_with()
+
+
+def test_load_from_arrow_overwrite_rolls_back_delete_on_insert_failure() -> None:
+    states_during_rollback: list[bool] = []
+    connection = _connection([])
+    connection.rollback.side_effect = lambda: states_during_rollback.append(connection.autocommit)
+    connection.cursor.return_value.executemany.side_effect = RuntimeError("[Teradata] [Error 2801] duplicate")
+    driver = TeradataDriver(connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}})
+    with pytest.raises(UniqueViolationError, match="2801"):
+        driver.load_from_arrow("orders", pa.table({"id": [1]}), overwrite=True)
+    assert states_during_rollback == [False]
+    assert connection.autocommit is True
+    connection.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_load_from_arrow_honors_enable_fastload_outside_overwrite(failure: bool) -> None:
+    states_during_finish: list[bool] = []
+    connection = _connection([])
+    connection.commit.side_effect = lambda: states_during_finish.append(connection.autocommit)
+    connection.rollback.side_effect = lambda: states_during_finish.append(connection.autocommit)
+    if failure:
+        connection.cursor.return_value.executemany.side_effect = RuntimeError("[Teradata] [Error 2801] duplicate")
+    driver = TeradataDriver(
+        connection, driver_features={"enable_fastload": True, "storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    if failure:
+        with pytest.raises(UniqueViolationError):
+            driver.load_from_arrow("orders", pa.table({"id": [1]}))
+        connection.rollback.assert_called_once_with()
+    else:
+        job = driver.load_from_arrow("orders", pa.table({"id": [1]}))
+        assert job.status == "completed"
+        connection.commit.assert_called_once_with()
+    assert states_during_finish == [False]
+    assert connection.autocommit is True
+    assert connection.cursor.return_value.executemany.call_args.args[0] == (
+        '{fn teradata_try_fastload} INSERT INTO "orders" ("id") VALUES (?)'
+    )
+
+
+@pytest.mark.parametrize("dialect", ["teradata", "vantage"])
+def test_arrow_helpers_teradata_and_vantage_type_mappings(dialect: str) -> None:
+    from sqlspec.exceptions import SQLBuilderError
+    from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
+
+    assert sql_type_from_arrow_type(pa.timestamp("us", tz="UTC"), dialect=dialect) == "TIMESTAMP(6) WITH TIME ZONE"
+    assert sql_type_for_category("key_text", dialect=dialect) == "VARCHAR(255)"
+    assert sql_type_from_arrow_type(pa.decimal128(38, 6), dialect=dialect) == "DECIMAL(38, 6)"
+    with pytest.raises(SQLBuilderError, match="38"):
+        sql_type_from_arrow_type(pa.decimal256(40, 6), dialect=dialect)

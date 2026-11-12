@@ -575,11 +575,10 @@ class SQL:
         if op_type in RETURNS_ROWS_OPERATIONS:
             return True
 
-        if state.parsed_expression:
-            expr = state.parsed_expression
-            if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
-                returning = expr.args.get("returning")
-                return bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
+        expr = state.parsed_expression
+        if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
+            returning = expr.args.get("returning")
+            return bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
 
         return False
 
@@ -1604,12 +1603,16 @@ class SQL:
                     return parsed
             except ParseError:
                 pass
-        if state is not Empty and state.parsed_expression is not None:
-            return state.parsed_expression.copy()
-        if self.statement_expression is not None:
-            return self.statement_expression.copy()
-        if self._raw_expression is not None:
-            return self._raw_expression.copy()
+        if state is not Empty:
+            parsed_expr = state.parsed_expression
+            if parsed_expr is not None:
+                return parsed_expr.copy()
+        stmt_expr = self.statement_expression
+        if stmt_expr is not None:
+            return stmt_expr.copy()
+        raw_expr = self._raw_expression
+        if raw_expr is not None:
+            return raw_expr.copy()
         if not self._statement_config.enable_parsing:
             return self._wrapped_raw_sql_expression(raw_sql)
         try:

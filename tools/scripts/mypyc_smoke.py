@@ -48,6 +48,8 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
     SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
+    SmokeImport("storage_staging_sql", "sqlspec.storage._staging_sql", "build_stage_merge_sql", True),
+    SmokeImport("storage_ingest", "sqlspec.storage._ingest", "execute_load_from_storage_sync", True),
     SmokeImport("storage_backend_local", "sqlspec.storage.backends.local", "LocalStore", True),
     SmokeImport("storage_backend_fsspec", "sqlspec.storage.backends.fsspec", "FSSpecBackend", True),
     SmokeImport("storage_backend_obstore", "sqlspec.storage.backends.obstore", "ObStoreBackend", True),
@@ -56,6 +58,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("sqlanywhere_pool", "sqlspec.adapters.sqlanywhere.pool", "SqlanywhereConnectionPool", True, "sqlanydb"),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
+    SmokeImport("data_dictionary_index_ddl", "sqlspec.data_dictionary._index_ddl", "SyncWithoutIndexesContext", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
     SmokeImport("db2_dialect", "sqlspec.dialects.db2", "DB2"),
@@ -630,6 +633,40 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                     decoded_empty = decode_arrow(empty_dest.read_bytes(), "parquet")
                     assert decoded_empty.num_rows == 0
                     assert decoded_empty.column_names == ["id", "label"]
+
+                    shard_a = local_dir / "shard_a.parquet"
+                    shard_b = local_dir / "shard_b.parquet"
+                    sync_p.write_arrow(pa.table({"id": [1, 2], "label": ["a", "b"]}), shard_a, format_hint="parquet")
+                    sync_p.write_arrow(
+                        pa.table({"id": [2, 3], "label": ["b_updated", "c"]}), shard_b, format_hint="parquet"
+                    )
+                    sqlite_session.execute("CREATE TABLE smoke_ingest (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+                    sqlite_session.execute("CREATE INDEX idx_smoke_ingest_label ON smoke_ingest (label)")
+                    sqlite_session.commit()
+                    shards = [shard_a, shard_b]
+                    ingest_job = sqlite_session.load_from_storage(
+                        "smoke_ingest",
+                        shards,
+                        file_format="parquet",
+                        stage_table=True,
+                        conflict_keys=["id"],
+                        drop_indexes=True,
+                        checkpoint_table="_smoke_ckpt",
+                        max_workers=len(shards),
+                        executor="process",
+                    )
+                    assert ingest_job.telemetry["shards_processed"] == len(shards)
+                    ingested_rows = sqlite_session.select("SELECT id, label FROM smoke_ingest ORDER BY id")
+                    assert ingested_rows == [
+                        {"id": 1, "label": "a"},
+                        {"id": 2, "label": "b_updated"},
+                        {"id": 3, "label": "c"},
+                    ]
+                    restored_indexes = {
+                        idx["index_name"]
+                        for idx in sqlite_session.data_dictionary.get_indexes(sqlite_session, "smoke_ingest")
+                    }
+                    assert "idx_smoke_ingest_label" in restored_indexes
             finally:
                 sqlite_cfg.close_pool()
     except Exception as exc:

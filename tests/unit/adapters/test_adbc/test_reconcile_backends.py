@@ -83,12 +83,18 @@ def test_adbc_litestar_standalone_index_dialects_extract_companion_index(
             "idx_litestar_session_expires_at",
             "SELECT 1 FROM sys.indexes",
         ),
+        (
+            {"uri": "teradata://localhost:1025/app"},
+            "LITESTAR_SESSION",
+            "idx_litestar_session_expires_at",
+            "CREATE INDEX idx_litestar_session_expires_at (expires_at) ON litestar_session",
+        ),
     ],
 )
 def test_adbc_litestar_procedural_and_catalog_dialects_probe_before_repair(
     connection_config: dict[str, Any], expected_table: str, expected_index: str, ddl_marker: str
 ) -> None:
-    """Oracle, Db2, and SQL Server return one catalog-probed companion index."""
+    """Oracle, Db2, SQL Server, and Teradata return one catalog-probed companion index."""
     config = AdbcConfig(connection_config=connection_config)
     store = AdbcStore(config)
 
@@ -236,6 +242,7 @@ def test_adbc_local_backends_reconcile_and_repair_dropped_indexes_end_to_end(bac
         ({"uri": "oracle://localhost:1521/FREEPDB1"}, "oracle"),
         ({"uri": "db2://localhost:50000/testdb"}, "db2"),
         ({"driver_name": "mssql", "uri": "mssql://localhost:1433/app"}, "mssql"),
+        ({"uri": "teradata://localhost:1025/app"}, "teradata"),
     ],
 )
 def test_adbc_adk_targets_parse_for_every_classified_dialect(
@@ -405,6 +412,10 @@ def test_adbc_adk_flightsql_explicit_dialect_and_gizmosql_backend_select_matchin
         ({"uri": "db2://localhost:50000/testdb"}, "CREATE INDEX idx_adk_session_app_user ON adk_session"),
         ({"driver_name": "mssql", "uri": "mssql://localhost:1433/app"}, "SELECT 1 FROM sys.indexes"),
         ({"driver_name": "duckdb", "path": ":memory:"}, "CREATE INDEX IF NOT EXISTS idx_adk_session_app_user"),
+        (
+            {"uri": "teradata://localhost:1025/app"},
+            "CREATE INDEX idx_adk_session_app_user (app_name, user_id) ON adk_session",
+        ),
     ],
 )
 def test_adbc_adk_companion_repair_probes_catalog_on_non_sqlite_indexed_backends(
@@ -563,6 +574,8 @@ def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
         ("oracle", "oracle"),
         ("db2", "db2"),
         ("tsql", "mssql"),
+        ("teradata", "teradata"),
+        ("vantage", "teradata"),
     ],
 )
 def test_adbc_adk_store_mutated_statement_config_dialect_and_qualified_names(

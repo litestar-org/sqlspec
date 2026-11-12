@@ -77,26 +77,6 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.driver._storage_helpers import (
-    CAPABILITY_HINTS,
-    arrow_batch_to_rows,
-    arrow_table_needs_parameter_preparation,
-    arrow_table_to_rows,
-    attach_partition_telemetry,
-    build_ingest_telemetry,
-    coerce_arrow_batches,
-    coerce_arrow_table,
-    create_storage_job,
-    encode_arrow_batch_pg_binary,
-    execute_load_from_storage_async,
-    execute_load_from_storage_sync,
-    execute_staged_load_async,
-    execute_staged_load_sync,
-    ingest_telemetry_from_batches,
-    iter_pgcopy_binary_chunks,
-    iter_pgcopy_binary_chunks_async,
-    records_to_arrow_table,
-)
 from sqlspec.exceptions import (
     ImproperConfigurationError,
     NotFoundError,
@@ -107,6 +87,30 @@ from sqlspec.exceptions import (
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
 from sqlspec.protocols import StatementProtocol
+from sqlspec.storage._ingest import (
+    execute_load_from_storage_async,
+    execute_load_from_storage_sync,
+    execute_staged_load_async,
+    execute_staged_load_sync,
+)
+from sqlspec.storage.pipeline import (
+    CAPABILITY_HINTS,
+    attach_partition_telemetry,
+    create_storage_job,
+    ingest_telemetry_from_batches,
+)
+from sqlspec.utils.arrow_helpers import (
+    arrow_batch_to_rows,
+    arrow_table_needs_parameter_preparation,
+    arrow_table_to_rows,
+    build_ingest_telemetry,
+    coerce_arrow_batches,
+    coerce_arrow_table,
+    encode_arrow_batch_pg_binary,
+    iter_pgcopy_binary_chunks,
+    iter_pgcopy_binary_chunks_async,
+    records_to_arrow_table,
+)
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import to_schema as _to_schema_impl
 from sqlspec.utils.serializers import from_json as decode_json
@@ -1803,6 +1807,11 @@ class CommonDriverAttributesMixin:
         return self._observability
 
     @property
+    def observability_db_system(self) -> str | None:
+        """Return a backend identity override for multi-backend adapters."""
+        return None
+
+    @property
     def is_async(self) -> bool:
         """Return whether the driver executes asynchronously.
 
@@ -2306,6 +2315,7 @@ class CommonDriverAttributesMixin:
             script_ordinal=script_ordinal,
             script_statement_index=script_ordinal,
             script_statement_count=script_statement_count,
+            db_system=self.observability_db_system,
         )
 
     def _cached_execution(

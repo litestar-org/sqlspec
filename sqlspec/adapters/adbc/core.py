@@ -631,8 +631,7 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     """
     override = connection_config.get("adbc_dialect")
     if isinstance(override, str) and override.strip():
-        normalized = override.strip().lower()
-        return "teradata" if normalized == "vantage" else normalize_dialect_name(normalized)
+        return normalize_dialect_name(override.strip())
     backend = connection_config.get("gizmosql_backend")
     if isinstance(backend, str):
         lowered_backend = backend.lower()
@@ -746,9 +745,9 @@ def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", state
     """
     hint = connection_config.get("adbc_dialect")
     if isinstance(hint, str) and hint.strip():
-        normalized_hint = (
-            "teradata" if hint.strip().lower() == "vantage" else normalize_dialect_name(hint.strip().lower())
-        )
+        normalized_hint = normalize_dialect_name(hint.strip())
+        if normalized_hint == "teradata":
+            import_optional("sqlspec.dialects.teradata")
         return normalized_hint if normalized_hint in RECONCILE_ADBC_DIALECTS else None
 
     backend = connection_config.get("gizmosql_backend")
@@ -787,12 +786,16 @@ def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", state
     if driver_kind not in {"flightsql", "grpc"}:
         resolved = normalize_dialect_name(resolve_dialect_from_config(connection_config))
         if resolved in RECONCILE_ADBC_DIALECTS and resolved != "sqlite":
+            if resolved == "teradata":
+                import_optional("sqlspec.dialects.teradata")
             return resolved
         return None
 
     if isinstance(statement_dialect, str) and statement_dialect.strip():
         normalized_statement = normalize_dialect_name(statement_dialect.strip())
         if normalized_statement in RECONCILE_ADBC_DIALECTS and normalized_statement != "sqlite":
+            if normalized_statement == "teradata":
+                import_optional("sqlspec.dialects.teradata")
             return normalized_statement
 
     return None
@@ -2509,18 +2512,97 @@ def _build_or_augment_teradata_uri(config: dict[str, Any]) -> None:
 
 _TERADATA_TABLE_EXISTS_SQL: Final[str] = (
     "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.TablesV "
-    "WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND TableKind IN ('T', 'O')"
+    "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
+    "AND UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128)))) "
+    "AND TableKind IN ('T', 'O')"
 )
 _TERADATA_INDEX_EXISTS_SQL: Final[str] = (
     "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV "
-    "WHERE DatabaseName = COALESCE(?, DATABASE) AND TableName = ? AND IndexName = ?"
+    "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
+    "AND UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128)))) "
+    "AND UPPER(TRIM(IndexName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))"
 )
+_MAX_TERADATA_QUALIFIED_PARTS: Final[int] = 2
+
+
+def _normalize_teradata_identifier_segment(segment: str, raw_table_name: str) -> str:
+    """Normalize one Teradata identifier segment, preserving double-quoted case and unescaping quotes."""
+    stripped = segment.strip()
+    if not stripped:
+        msg = f"Invalid Teradata table name: {raw_table_name!r}"
+        raise ImproperConfigurationError(msg)
+    if stripped.startswith('"') or stripped.endswith('"'):
+        if len(stripped) < _MIN_QUALIFIED_PARTS or not (stripped.startswith('"') and stripped.endswith('"')):
+            msg = f"Invalid Teradata table name: {raw_table_name!r}"
+            raise ImproperConfigurationError(msg)
+        inner = stripped[1:-1]
+        if '"' in inner.replace('""', ""):
+            msg = f"Invalid Teradata table name: {raw_table_name!r}"
+            raise ImproperConfigurationError(msg)
+        unquoted = inner.replace('""', '"')
+        if not unquoted:
+            msg = f"Invalid Teradata table name: {raw_table_name!r}"
+            raise ImproperConfigurationError(msg)
+        return unquoted
+    if '"' in stripped:
+        msg = f"Invalid Teradata table name: {raw_table_name!r}"
+        raise ImproperConfigurationError(msg)
+    return stripped.upper()
+
+
+def _split_raw_teradata_segments(table_name: str) -> list[str]:
+    """Split a Teradata table reference on unquoted dots while preserving raw segment quotes."""
+    segments: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    idx = 0
+    length = len(table_name)
+    while idx < length:
+        ch = table_name[idx]
+        if ch == '"':
+            buf.append(ch)
+            if in_quotes and idx + 1 < length and table_name[idx + 1] == '"':
+                buf.append('"')
+                idx += 2
+                continue
+            in_quotes = not in_quotes
+        elif ch == "." and not in_quotes:
+            segments.append("".join(buf))
+            buf.clear()
+        else:
+            buf.append(ch)
+        idx += 1
+    if in_quotes:
+        msg = f"Invalid Teradata table name: {table_name!r}"
+        raise ImproperConfigurationError(msg)
+    segments.append("".join(buf))
+    return segments
 
 
 def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
-    """Split a qualified Teradata table name into optional database and table identifiers."""
-    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
-    if len(parts) >= _MIN_QUALIFIED_PARTS:
-        return parts[-2].strip('"') or None, parts[-1].strip('"')
-    raw = parts[0] if parts else table_name
-    return None, raw.strip('"')
+    """Split a qualified Teradata table name into optional database and table identifiers.
+
+    Args:
+        table_name: Bare or database-qualified Teradata table name.
+
+    Returns:
+        Tuple of ``(database_or_none, table)`` with unquoted segments uppercased
+        and double-quoted segments preserved with ``""`` unescaped.
+
+    Raises:
+        ImproperConfigurationError: If the table name is empty, malformed, or has more than two parts.
+    """
+    cleaned = table_name.strip()
+    if not cleaned or cleaned.startswith(".") or cleaned.endswith("."):
+        msg = f"Invalid Teradata table name: {table_name!r}"
+        raise ImproperConfigurationError(msg)
+    parts = _split_raw_teradata_segments(cleaned)
+    if not parts or len(parts) > _MAX_TERADATA_QUALIFIED_PARTS or any(not part.strip() for part in parts):
+        msg = f"Invalid Teradata table name {table_name!r}: expected '[database.]table'"
+        raise ImproperConfigurationError(msg)
+    if len(parts) == _MAX_TERADATA_QUALIFIED_PARTS:
+        return (
+            _normalize_teradata_identifier_segment(parts[0], table_name),
+            _normalize_teradata_identifier_segment(parts[1], table_name),
+        )
+    return None, _normalize_teradata_identifier_segment(parts[0], table_name)

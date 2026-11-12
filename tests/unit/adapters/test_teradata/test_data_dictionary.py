@@ -117,6 +117,9 @@ def test_view_type_probe_is_scoped_and_permission_failure_keeps_columns() -> Non
     assert column.get("is_nullable") is True
     query, schema, table = driver.select.call_args.args
     assert "FROM DBC.ColumnsQV" in query
+    assert "UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE)))" in query
+    assert "UPPER(TRIM(TableName)) = UPPER(TRIM(?))" in query
+    assert "TRIM(ColumnUDTName) AS column_udt_name" in query
     assert (schema, table) == ("mart", "v_orders")
     driver.select.side_effect = [[row], OperationalError("[Error 3523] Permission denied")]
     assert dictionary.get_columns(driver, "v_orders", "mart")[0].get("column_name") == "amount"
@@ -148,21 +151,34 @@ def test_catalog_domains_preserve_rows(operation: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "code,expected",
+    "code,udt_name,expected",
     [
-        ("CV", "VARCHAR"),
-        ("TZ", "TIME WITH TIME ZONE"),
-        ("PT", "PERIOD(TIME)"),
-        ("PM", "PERIOD(TIMESTAMP WITH TIME ZONE)"),
-        ("N", "NUMBER"),
-        ("XM", "XML"),
+        ("CV", None, "VARCHAR"),
+        ("F", None, "DOUBLE PRECISION"),
+        ("UT", "SYSUDTLIB.ST_GEOMETRY", "SYSUDTLIB.ST_GEOMETRY"),
+        ("UT", "   ", "UDT"),
+        ("UT", None, "UDT"),
+        ("TZ", None, "TIME WITH TIME ZONE"),
+        ("PT", None, "PERIOD(TIME)"),
+        ("PM", None, "PERIOD(TIMESTAMP WITH TIME ZONE)"),
+        ("N", None, "NUMBER"),
+        ("XM", None, "XML"),
     ],
 )
-def test_view_fallback_enriches_type_and_unicode_length(code: str, expected: str) -> None:
+def test_view_fallback_enriches_type_and_unicode_length(code: str, udt_name: str | None, expected: str) -> None:
     driver = MagicMock()
     driver.select.side_effect = [
         [{"column_name": "value", "data_type": None}],
-        [{"column_name": "value", "raw_type_code": code, "max_length": 200, "char_type": 2, "is_nullable": "N"}],
+        [
+            {
+                "column_name": "value",
+                "raw_type_code": code,
+                "column_udt_name": udt_name,
+                "max_length": 200,
+                "char_type": 2,
+                "is_nullable": "N",
+            }
+        ],
     ]
     column = TeradataDataDictionary().get_columns(driver, "v_data", "mart")[0]
     assert column.get("data_type") == expected

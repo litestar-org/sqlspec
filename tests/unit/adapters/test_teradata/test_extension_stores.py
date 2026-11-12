@@ -32,18 +32,17 @@ def test_teradata_extension_schema_targets() -> None:
 def test_teradata_adk_public_pagination_and_atomic_delete(monkeypatch) -> None:
     from contextlib import contextmanager
     from types import SimpleNamespace
+    from typing import Any
 
-    statements = []
-    states = []
+    statements: list[tuple[str, tuple[Any, ...]]] = []
+    states: list[bool] = []
     conn = SimpleNamespace(autocommit=True)
-    cursor = SimpleNamespace(
-        execute=lambda sql, params=(): (
-            statements.append((" ".join(sql.split()), params)),
-            states.append(conn.autocommit),
-        ),
-        fetchall=list,
-        close=lambda: None,
-    )
+
+    def _execute(sql: str, params: tuple[Any, ...] = ()) -> None:
+        statements.append((" ".join(sql.split()), params))
+        states.append(conn.autocommit)
+
+    cursor = SimpleNamespace(execute=_execute, fetchall=list, close=lambda: None)
     conn.cursor = lambda: cursor
     conn.commit = lambda: None
     conn.rollback = lambda: None
@@ -89,7 +88,9 @@ async def test_teradata_litestar_crud(teradata_connection) -> None:
     conn, cursor = teradata_connection
     store = TeradataStore(TeradataConfig(connection_config={"host": "localhost"}))
     await store.set("session", b"data", expires_in=60)
-    assert cursor.execute.call_args.args[1][0] == b"data"
+    executed_sql, executed_params = cursor.execute.call_args.args
+    assert executed_sql.startswith('MERGE INTO "LITESTAR_SESSION" AS tgt USING')
+    assert executed_params[:2] == ("session", b"data")
     cursor.fetchone.return_value = (b"data", datetime.now(UTC) + timedelta(minutes=2))
     assert await store.get("session", renew_for=60) == b"data"
     assert await store.exists("session") is True
@@ -105,7 +106,12 @@ async def test_teradata_litestar_crud(teradata_connection) -> None:
     assert await store.get("missing") is None
     assert await store.exists("missing") is False
     assert await store.expires_in("missing") is None
-    assert conn.commit.call_count >= 4
+    assert conn.commit.call_count == 0
+
+    conn.autocommit = False
+    await store.set("session", b"data", expires_in=60)
+    await store.delete("session")
+    assert conn.commit.call_count == 2
 
 
 def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
@@ -491,3 +497,192 @@ def test_teradata_extension_targets_preserve_database_qualifier() -> None:
         ("APP", "HTTP_SESSIONS"),
         ("APP", "QUEUE"),
     ]
+
+
+def test_teradata_adk_transaction_rolls_back_before_restoring_autocommit(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    rollback_autocommit_states: list[bool] = []
+    cursor = SimpleNamespace(execute=lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")), close=lambda: None)
+    conn = SimpleNamespace(autocommit=True)
+    conn.cursor = lambda: cursor
+    conn.commit = lambda: None
+    conn.rollback = lambda: rollback_autocommit_states.append(conn.autocommit)
+    monkeypatch.setattr(TeradataConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
+    with pytest.raises(RuntimeError, match="boom"):
+        store.delete_session("app", "user", "session")
+    assert rollback_autocommit_states == [False]
+    assert conn.autocommit is True
+
+
+def test_teradata_memory_dedup_prequery_and_tera_concurrent_race_recovery(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from typing import Any
+
+    now = datetime.now(UTC)
+    persisted: list[str] = ["existing_ev"]
+    staged_in_txn: list[str] = []
+    inject_race_once = {"armed": True}
+
+    def _make_entry(idx: int, event_id: str) -> StoredMemory:
+        return {
+            "id": f"mem_{idx}",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "u1",
+            "scope": "user",
+            "event_id": event_id,
+            "author": "agent",
+            "timestamp": now,
+            "content_json": {"i": idx},
+            "content_text": f"entry {idx}",
+            "metadata_json": None,
+            "inserted_at": now,
+            "embedding": None,
+        }
+
+    fetch_results: list[list[tuple[str]]] = []
+
+    def _execute(sql: str, params: tuple[Any, ...] = ()) -> None:
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT event_id FROM"):
+            fetch_results.clear()
+            fetch_results.append([(ev,) for ev in persisted if ev in params])
+            return
+        if normalized.startswith("INSERT INTO"):
+            ev_id = str(params[5])
+            if ev_id == "raced_ev" and inject_race_once["armed"]:
+                inject_race_once["armed"] = False
+                persisted.append("raced_ev")
+                staged_in_txn.clear()
+                raise RuntimeError("[Teradata Database] [Error 2801] Duplicate unique prime key")
+            if ev_id in persisted:
+                staged_in_txn.clear()
+                raise RuntimeError("[Teradata Database] [Error 2801] Duplicate unique prime key")
+            staged_in_txn.append(ev_id)
+
+    def _commit() -> None:
+        persisted.extend(staged_in_txn)
+        staged_in_txn.clear()
+
+    conn = SimpleNamespace(autocommit=True)
+    cursor = SimpleNamespace(
+        execute=_execute,
+        fetchall=lambda: list(fetch_results[0]) if fetch_results else [],
+        rowcount=1,
+        close=lambda: None,
+    )
+    conn.cursor = lambda: cursor
+    conn.commit = _commit
+    conn.rollback = staged_in_txn.clear
+    monkeypatch.setattr(TeradataConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    store = TeradataADKMemoryStore(
+        TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
+    )
+    entries = [
+        _make_entry(1, "existing_ev"),
+        _make_entry(2, "new_ev_1"),
+        _make_entry(3, "new_ev_1"),
+        _make_entry(4, "raced_ev"),
+        _make_entry(5, "new_ev_2"),
+    ]
+    inserted = store.insert_memory_entries(entries)
+    assert inserted == 2
+    assert persisted == ["existing_ev", "raced_ev", "new_ev_1", "new_ev_2"]
+    assert conn.autocommit is True
+
+    assert store.insert_memory_entries([_make_entry(6, "existing_ev")]) == 0
+
+
+def test_teradata_event_queue_type_helpers_and_dictionary_reconcile(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    executed: list[str] = []
+    dictionary = SimpleNamespace(
+        get_indexes=lambda *_a, **_k: [{"index_name": "idx_sqlspec_event_queue_channel_status"}]
+    )
+    driver = SimpleNamespace(
+        select_one_or_none=lambda *_a: {"found": 1},
+        execute=executed.append,
+        commit=lambda: None,
+        data_dictionary=dictionary,
+    )
+    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
+    store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
+    assert store._column_types() == ("JSON", "JSON", "TIMESTAMP(6) WITH TIME ZONE")
+    assert store._string_type(128) == "VARCHAR(128)"
+    assert store._string_type(40000) == "CLOB"
+    assert store._timestamp_default() == "CURRENT_TIMESTAMP(6)"
+    assert store._wrap_create_statement("CREATE TABLE q", "table") == "CREATE TABLE q"
+    assert store._wrap_drop_statement("DROP TABLE q") == "DROP TABLE q"
+    store.reconcile_companion_objects_sync(driver)
+    assert executed == []
+
+
+def test_teradata_adk_remaining_branches_and_row_decoders(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from sqlspec.adapters.teradata.adk import store as adk_mod
+
+    now = datetime.now(UTC)
+    dict_row = {
+        "ID": "s1",
+        "app_name": "app",
+        "USER_ID": "u1",
+        "state": bytearray(b'{"a":1}'),
+        "create_time": now,
+        "update_time": now,
+    }
+    parsed = adk_mod._session_record_from_row(dict_row)
+    assert parsed["id"] == "s1"
+    assert parsed["state"] == {"a": 1}
+    assert adk_mod._row_value({"other": 1}, "missing", 0) is None
+    assert adk_mod._row_value(SimpleNamespace(custom="ok"), "custom", 5) == "ok"
+    assert adk_mod._json_dict(None) == {}
+    assert adk_mod._json_dict({"k": 2}) == {"k": 2}
+
+    executed_session_sql: list[str] = []
+    driver = SimpleNamespace(
+        select_one_or_none=lambda *_a: {"found": 1},
+        execute=executed_session_sql.append,
+        commit=lambda: None,
+        data_dictionary=SimpleNamespace(get_indexes=lambda *_a, **_k: [], get_columns=lambda *_a, **_k: []),
+    )
+    monkeypatch.setattr(TeradataConfig, "provide_session", lambda _: nullcontext(driver))
+    cfg = TeradataConfig(
+        connection_config={"host": "localhost"},
+        extension_config={"adk": {"enable_memory": True, "create_schema": False}},
+    )
+    s_store = TeradataADKStore(cfg)
+    m_store = TeradataADKMemoryStore(cfg)
+    s_store.drop_tables()
+    m_store.drop_tables()
+    assert any(stmt.startswith("DROP TABLE") for stmt in executed_session_sql)
+
+    cursor = SimpleNamespace(
+        execute=lambda *_a: None,
+        fetchone=lambda: ("s1", "app", "u1", {"x": 1}, now, now),
+        fetchall=lambda: [],
+        rowcount=1,
+        close=lambda: None,
+    )
+    conn = SimpleNamespace(autocommit=False, cursor=lambda: cursor, commit=lambda: None, rollback=lambda: None)
+    monkeypatch.setattr(TeradataConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    assert s_store.get_session("app", "u1", "s1", renew_for=60) is not None
+    assert s_store.list_sessions("app", limit=0) == []
+    assert s_store.list_sessions("app", limit=None) == []
+    assert s_store.list_sessions("app", offset=5, limit=10) == []
+    assert s_store.get_events("app", "u1", "s1", after_timestamp=now) == []
+    assert m_store.search_entries("hello", "app", "u1", scope_filter="user") == []
+    assert m_store.search_entries("hello", "app", "u1", scope_filter="app") == []
+    assert m_store.delete_entries_older_than(7) == 1

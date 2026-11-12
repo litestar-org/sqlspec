@@ -5,7 +5,13 @@ import hashlib
 import re
 from typing import Any
 
-__all__ = ("compute_sql_hash", "get_trace_context", "redact_sql_literals", "resolve_db_system")
+__all__ = (
+    "compute_sql_hash",
+    "get_trace_context",
+    "redact_sql_literals",
+    "resolve_db_system",
+    "resolve_effective_db_system",
+)
 
 _LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
 
@@ -52,6 +58,25 @@ def resolve_db_system(adapter_or_driver: str) -> str:
         if needle in normalized:
             return system
     return "other_sql"
+
+
+def resolve_effective_db_system(adapter: str, driver: str | None = None, db_system: str | None = None) -> str:
+    """Resolve effective OTel db.system from explicit override, adapter, or driver.
+
+    Args:
+        adapter: Adapter or configuration class name.
+        driver: Optional driver class name used when adapter resolves to ``other_sql``.
+        db_system: Optional explicit backend system override from a session driver.
+
+    Returns:
+        Resolved OTel db.system value.
+    """
+    if db_system is not None:
+        return db_system
+    resolved = resolve_db_system(adapter)
+    if resolved == "other_sql" and driver:
+        return resolve_db_system(driver)
+    return resolved
 
 
 def get_trace_context() -> "tuple[str | None, str | None]":
