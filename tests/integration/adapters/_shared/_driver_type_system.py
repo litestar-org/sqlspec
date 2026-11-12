@@ -76,6 +76,7 @@ DRIVER_FEATURE_CONSUMED_KEYS: dict[str, tuple[str, ...]] = dict.fromkeys(DRIVER_
 
 DRIVER_FEATURE_CONSUMED_KEYS.update({
     "snowflake": (
+        "tenant_strategy",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",

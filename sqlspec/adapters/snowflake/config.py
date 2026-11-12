@@ -9,8 +9,10 @@ from sqlspec.adapters.snowflake.core import apply_driver_features, default_state
 from sqlspec.adapters.snowflake.driver import SnowflakeDriver
 from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
+from sqlspec.adapters.snowflake.tenant import SnowflakeSessionAttributeStrategy, SnowflakeTenantLease
 from sqlspec.config import ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -144,6 +146,8 @@ class SnowflakeDriverFeatures(TypedDict):
     """Enable SQLSpec table-backed event channels."""
     events_backend: NotRequired[Literal["poll_queue"]]
     """Event backend used for Snowflake table queues (``'poll_queue'``)."""
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
+    """Opt-in tenant strategy, or the ``"session_attributes"`` shorthand, applied to every session and connection lease."""
 
 
 class SnowflakePoolConnectionContext(SyncPoolConnectionContext):
@@ -165,6 +169,10 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
     connection_type: "ClassVar[type[SnowflakeConnection]]" = SnowflakeConnection
     driver_type: ClassVar[type[SnowflakeDriver]] = SnowflakeDriver
     migration_tracker_type: ClassVar[type[Any]] = SnowflakeSyncMigrationTracker
+    supports_tenant_strategy: ClassVar[bool] = True
+    tenant_strategy_shorthands: ClassVar[frozenset[str]] = frozenset({"default", "rls", "session_attributes"})
+    tenant_strategy_type: ClassVar[type[Any] | None] = SnowflakeSessionAttributeStrategy
+    tenant_lease_type: ClassVar[type[Any] | None] = SnowflakeTenantLease
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
     supports_native_arrow_export: ClassVar[bool] = True
@@ -225,6 +233,7 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
 
     def create_connection(self) -> "SnowflakeConnection":
         """Open a standalone connection whose lifecycle belongs to the caller."""
+        self._require_leased_tenant_connection()
         connector = import_optional("snowflake.connector")
         if connector is None:
             raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")

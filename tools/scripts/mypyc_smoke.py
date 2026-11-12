@@ -62,6 +62,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
             ("psqlpy", "psqlpy"),
             ("psycopg", "psycopg"),
             ("pymssql", "pymssql"),
+            ("snowflake", "snowflake.connector"),
         )
     ),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),

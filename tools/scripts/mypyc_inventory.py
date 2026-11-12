@@ -382,6 +382,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
             "psqlpy",
             "psycopg",
             "pymssql",
+            "snowflake",
         )
     },
     **{

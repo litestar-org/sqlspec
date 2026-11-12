@@ -136,6 +136,26 @@ class SnowflakeConnectionPool:
         else:
             return connection
 
+    def new_connection(self) -> "SnowflakeConnection":
+        """Open a standalone connection configured like a pooled one.
+
+        The connection is owned by the caller: it does not count against pool capacity and is not
+        closed by pool shutdown.
+
+        Returns:
+            A newly opened physical connection.
+        """
+        self.check_pid()
+        connection = self._open_connection()
+        try:
+            if self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_create_sync(connection)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                connection.close()
+            raise
+        return connection
+
     def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
         try:
             if self._observability_runtime is not None:

@@ -13,6 +13,7 @@ from sqlspec.adapters.snowflake.core import (
     DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
     build_empty_arrow_table_from_description,
     collect_rows,
+    connection_paramstyle,
     create_mapped_exception,
     default_statement_config,
     descriptor_column_name,
@@ -75,12 +76,6 @@ def _insert_uses_select(sql: str) -> bool:
             elif insert_seen:
                 return keyword == "SELECT"
     return False
-
-
-def _connection_paramstyle(connection: Any) -> str:
-    """Return the paramstyle a connector connection binds parameters with, defaulting to ``qmark``."""
-    style = str(getattr(connection, "paramstyle", None) or getattr(connection, "_paramstyle", None) or "qmark")
-    return style.lower() if style.lower() in {"qmark", "numeric", "pyformat", "format"} else "qmark"
 
 
 def _session_query_tag(connection: Any) -> str | None:
@@ -222,7 +217,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
         self._migration_schema_restore: str | None = None
         self._async_statements: dict[str, SQL] = {}
-        self._paramstyle = _connection_paramstyle(connection)
+        self._paramstyle = connection_paramstyle(connection)
         self._session_query_tag: str | None = (
             _session_query_tag(connection) if self.driver_features.get("enable_query_tag_correlation") else None
         )

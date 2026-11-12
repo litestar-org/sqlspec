@@ -41,6 +41,7 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "collect_rows",
+    "connection_paramstyle",
     "create_mapped_exception",
     "default_statement_config",
     "descriptor_column_name",
@@ -613,3 +614,16 @@ def format_snowflake_identifier(identifier: str) -> str:
         msg = "Snowflake identifier must not be empty"
         raise SQLSpecError(msg)
     return ".".join(parts)
+
+
+def connection_paramstyle(connection: Any) -> str:
+    """Return the paramstyle a connector connection binds parameters with.
+
+    Args:
+        connection: Snowflake connector connection.
+
+    Returns:
+        ``qmark``, ``numeric``, ``pyformat``, or ``format``; ``qmark`` when the connection reports none.
+    """
+    style = str(getattr(connection, "paramstyle", None) or getattr(connection, "_paramstyle", None) or "qmark").lower()
+    return style if style in {"qmark", "numeric", "pyformat", "format"} else "qmark"

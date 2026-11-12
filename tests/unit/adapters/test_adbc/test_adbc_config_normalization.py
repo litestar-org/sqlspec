@@ -1685,3 +1685,15 @@ def test_snowflake_user_alias_maps_to_username(options: dict[str, str], expected
 
     assert "user" not in config
     assert config["db_kwargs"]["username"] == expected
+
+
+@pytest.mark.parametrize("strategy", [True, "rls", "session_attributes"])
+def test_snowflake_adbc_rejects_tenant_strategies(strategy: object) -> None:
+    """ADBC Snowflake has no tenant lease; the native Snowflake adapter provides session-attribute tenancy."""
+    from sqlspec.adapters.adbc import AdbcConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError, match="tenant_strategy"):
+        AdbcConfig(
+            connection_config={"driver": "snowflake", "account": "acct"}, driver_features={"tenant_strategy": strategy}
+        )

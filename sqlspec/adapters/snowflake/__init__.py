@@ -12,6 +12,7 @@ from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictiona
 from sqlspec.adapters.snowflake.driver import SnowflakeDriver, SnowflakeExceptionHandler
 from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
+from sqlspec.adapters.snowflake.tenant import SnowflakeSessionAttributeStrategy
 from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
 
 __all__ = (
@@ -25,6 +26,7 @@ __all__ = (
     "SnowflakeExceptionHandler",
     "SnowflakeOutputConverter",
     "SnowflakePoolParams",
+    "SnowflakeSessionAttributeStrategy",
     "SnowflakeSessionContext",
     "SnowflakeSyncDataDictionary",
     "SnowflakeSyncMigrationTracker",

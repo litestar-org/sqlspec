@@ -59,7 +59,7 @@ class AsyncTenantStrategy(Protocol):
 
 TenantStrategy: TypeAlias = SyncTenantStrategy | AsyncTenantStrategy
 TenantStrategyShorthand: TypeAlias = (
-    Literal["default", "rls", "session_context", "identifier", "rcac", "global_variable"] | bool
+    Literal["default", "rls", "session_context", "identifier", "rcac", "global_variable", "session_attributes"] | bool
 )
 
 
