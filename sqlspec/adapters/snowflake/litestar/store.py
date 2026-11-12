@@ -85,20 +85,20 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
 
     def _get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
         sql = (
-            f"SELECT data, expires_at FROM {self._table_name} WHERE session_id = ? "
+            f'SELECT data AS "data", expires_at AS "expires_at" FROM {self._table_name} WHERE session_id = ? '
             "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP())"
         )
         with self._config.provide_session() as driver:
             row = driver.select_one_or_none(sql, (key,))
             if row is None:
                 return None
-            expires_at = row.get("expires_at", row.get("EXPIRES_AT"))
+            expires_at = row["expires_at"]
             if renew_for is not None and expires_at is not None:
                 renewed = self._calculate_expires_at(renew_for)
                 if renewed is not None:
                     driver.execute(f"UPDATE {self._table_name} SET expires_at = ? WHERE session_id = ?", (renewed, key))
                     driver.commit()
-            return self._decode_binary(row.get("data", row.get("DATA")))
+            return self._decode_binary(row["data"])
 
     def _set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
         sql = (
@@ -133,10 +133,12 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
 
     def _expires_in(self, key: str) -> int | None:
         with self._config.provide_session() as driver:
-            row = driver.select_one_or_none(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
+            row = driver.select_one_or_none(
+                f'SELECT expires_at AS "expires_at" FROM {self._table_name} WHERE session_id = ?', (key,)
+            )
         if row is None:
             return None
-        expires_at = self._timestamp_to_datetime(row.get("expires_at", row.get("EXPIRES_AT")))
+        expires_at = self._timestamp_to_datetime(row["expires_at"])
         return None if expires_at is None else max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
 
     def _delete_expired(self) -> int:

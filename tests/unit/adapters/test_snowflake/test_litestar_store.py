@@ -103,7 +103,7 @@ async def test_litestar_get_decodes_binary_and_preserves_permanent_session(
     monkeypatch: pytest.MonkeyPatch, raw: object
 ) -> None:
     config, driver = store_config(monkeypatch)
-    driver.select_one_or_none.return_value = {"DATA": raw, "EXPIRES_AT": None}
+    driver.select_one_or_none.return_value = {"data": raw, "expires_at": None}
     assert await SnowflakeStore(config).get("sid", renew_for=60) == b"hi"
     driver.execute.assert_not_called()
 
@@ -131,7 +131,7 @@ async def test_litestar_ttl_missing_permanent_expired_and_future(monkeypatch: py
     assert await store.expires_in("permanent") is None
     driver.select_one_or_none.return_value = {"expires_at": datetime.now(UTC) - timedelta(seconds=5)}
     assert await store.expires_in("expired") == 0
-    driver.select_one_or_none.return_value = {"EXPIRES_AT": (datetime.now(UTC) + timedelta(seconds=90)).isoformat()}
+    driver.select_one_or_none.return_value = {"expires_at": (datetime.now(UTC) + timedelta(seconds=90)).isoformat()}
     assert await store.exists("active") is True
     assert await store.expires_in("active") in {89, 90}
 

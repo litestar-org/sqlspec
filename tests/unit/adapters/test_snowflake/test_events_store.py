@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
-from sqlspec.adapters.snowflake.events import SnowflakeEventQueueStore, SnowflakeSyncEventQueueStore
+from sqlspec.adapters.snowflake.events import SnowflakeEventQueueStore
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLParsingError
 from sqlspec.extensions.events import EventMessage, SyncEventChannel, SyncTableEventQueue
@@ -138,7 +138,6 @@ def test_event_channel_native_batch_rolls_back_partial_scalar_failure(
 
 def test_events_store_resolution_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     config, driver = store_config(monkeypatch, {"events": {"queue_table": "app_events", "backend": "poll_queue"}})
-    assert SnowflakeSyncEventQueueStore is SnowflakeEventQueueStore
     assert (
         resolve_extension_store_class(
             config, extension="events", store_attr="events_store_class", store_suffix="EventQueueStore"

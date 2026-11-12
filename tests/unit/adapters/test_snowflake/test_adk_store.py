@@ -10,7 +10,7 @@ import pytest
 from sqlspec.adapters.snowflake.adk import SnowflakeADKMemoryStore, SnowflakeADKStore
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.extensions.adk._types import StoredEvent
 from sqlspec.extensions.adk.memory._types import StoredMemory
 from sqlspec.extensions.adk.migrations.reconcile import downgrade, reconcile
@@ -274,9 +274,9 @@ def test_adk_state_and_metadata_upserts_use_merge(monkeypatch: pytest.MonkeyPatc
 def test_adk_missing_tables_are_empty_but_other_errors_propagate(monkeypatch: pytest.MonkeyPatch) -> None:
     config, driver = store_config(monkeypatch)
     store = SnowflakeADKStore(config)
-    driver.select_one_or_none.side_effect = SQLSpecError("Table does not exist")
-    driver.select.side_effect = SQLSpecError("Table does not exist")
-    driver.execute.side_effect = SQLSpecError("Table does not exist")
+    driver.select_one_or_none.side_effect = NotFoundError("Table does not exist")
+    driver.select.side_effect = NotFoundError("Table does not exist")
+    driver.execute.side_effect = NotFoundError("Table does not exist")
     assert store.get_session("app", "u1", "s1") is None
     assert store.get_app_state("app") is None
     assert store.get_metadata("schema") is None
@@ -286,6 +286,9 @@ def test_adk_missing_tables_are_empty_but_other_errors_propagate(monkeypatch: py
     assert store.delete_idle_user_states(datetime.now(UTC)) == 0
     assert store.delete_idle_sessions(datetime.now(UTC)) == 0
     store.delete_session("app", "u1", "s1")
+    driver.select_one_or_none.side_effect = SQLSpecError("Warehouse 'WH' does not exist or not authorized")
+    with pytest.raises(SQLSpecError, match="Warehouse"):
+        store.get_session("app", "u1", "s1")
     driver.select_one_or_none.side_effect = SQLSpecError("permission denied")
     with pytest.raises(SQLSpecError, match="permission denied"):
         store.get_session("app", "u1", "s1")
@@ -423,8 +426,8 @@ def test_memory_creation_owner_column_and_null_metadata(monkeypatch: pytest.Monk
 def test_memory_missing_tables_and_other_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     config, driver = store_config(monkeypatch)
     store = SnowflakeADKMemoryStore(config)
-    driver.select.side_effect = SQLSpecError("Table does not exist")
-    driver.execute.side_effect = SQLSpecError("Table does not exist")
+    driver.select.side_effect = NotFoundError("Table does not exist")
+    driver.execute.side_effect = NotFoundError("Table does not exist")
     assert store.search_entries("budget", "app", "u1") == []
     assert store.delete_entries_by_session("s1") == 0
     assert store.delete_entries_older_than(7) == 0

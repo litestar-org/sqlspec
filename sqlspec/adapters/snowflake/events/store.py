@@ -5,7 +5,7 @@ from typing import ClassVar
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("SnowflakeEventQueueStore", "SnowflakeSyncEventQueueStore")
+__all__ = ("SnowflakeEventQueueStore",)
 
 
 class SnowflakeEventQueueStore(BaseEventQueueStore[SnowflakeConfig]):
@@ -26,6 +26,3 @@ class SnowflakeEventQueueStore(BaseEventQueueStore[SnowflakeConfig]):
     def drop_statements(self) -> list[str]:
         """Return the queue table drop statement."""
         return [f"DROP TABLE IF EXISTS {self.table_name}"]
-
-
-SnowflakeSyncEventQueueStore = SnowflakeEventQueueStore

@@ -91,11 +91,6 @@ See the [Snowflake setup guide](../../databases/snowflake.md) and [Snowflake cat
       heading_level: 4
       members: false
 
-::: sqlspec.adapters.snowflake.events.SnowflakeSyncEventQueueStore
-    options:
-      heading_level: 4
-      members: false
-
 ::: sqlspec.adapters.snowflake.adk.SnowflakeADKStore
     options:
       heading_level: 4

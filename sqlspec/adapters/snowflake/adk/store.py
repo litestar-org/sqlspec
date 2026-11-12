@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, Literal
 
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import NotFoundError, SQLSpecError
 from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 from sqlspec.extensions.adk.memory._types import StoredMemory
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -36,7 +36,7 @@ def _normalize_utc(value: str | datetime) -> datetime:
 
 
 def _missing_table(exc: SQLSpecError) -> bool:
-    return "does not exist" in str(exc).lower()
+    return isinstance(exc, NotFoundError) and "does not exist" in str(exc).lower()
 
 
 def _lower_row(row: dict[str, Any]) -> dict[str, Any]:
