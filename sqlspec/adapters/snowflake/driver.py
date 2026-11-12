@@ -96,6 +96,17 @@ def _format_identifier(identifier: str) -> str:
     return ".".join(parts)
 
 
+def _session_query_tag(connection: Any) -> str | None:
+    """Return the ``QUERY_TAG`` session parameter a connector session was opened with."""
+    session_parameters = getattr(getattr(connection, "config", None), "session_parameters", None)
+    if not isinstance(session_parameters, Mapping):
+        session_parameters = getattr(connection, "_session_parameters", None)
+    if not isinstance(session_parameters, Mapping):
+        return None
+    tag = session_parameters.get("QUERY_TAG")
+    return tag if isinstance(tag, str) and tag else None
+
+
 def _normalize_arrow_table(table: Any, features: Mapping[str, Any]) -> Any:
     names = normalize_column_names(
         table.column_names, enable_lowercase_column_names=bool(features.get("enable_lowercase_column_names", True))
@@ -195,7 +206,7 @@ class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
 class SnowflakeDriver(SyncDriverAdapterBase):
     """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
 
-    __slots__ = ("_active_stream_cursors", "_column_name_cache", "_data_dictionary")
+    __slots__ = ("_active_stream_cursors", "_column_name_cache", "_data_dictionary", "_session_query_tag")
     dialect = "snowflake"
     native_arrow_export: ClassVar[bool] = True
 
@@ -224,6 +235,9 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         self._data_dictionary: SnowflakeSyncDataDictionary | None = None
         self._active_stream_cursors: dict[int, Any] = {}
         self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
+        self._session_query_tag: str | None = (
+            _session_query_tag(connection) if self.driver_features.get("enable_query_tag_correlation") else None
+        )
 
     def close(self) -> None:
         """Close outstanding native Arrow cursors before returning the connection."""
@@ -268,7 +282,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     def _statement_execute_options(self) -> dict[str, Any]:
         options: dict[str, Any] = {}
         if self.driver_features.get("enable_query_tag_correlation") and (correlation := CorrelationContext.get()):
-            tag = self.driver_features.get("query_tag")
+            tag = self._session_query_tag
             options["_statement_params"] = {"QUERY_TAG": f"{tag}:{correlation}" if tag else correlation}
         return options
 

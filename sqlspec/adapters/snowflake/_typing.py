@@ -7,13 +7,11 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.module_loader import import_optional_attr
-
 if TYPE_CHECKING:
     from snowflake.connector.connection import SnowflakeConnection as _SnowflakeConnection
     from snowflake.connector.cursor import SnowflakeCursor as _SnowflakeRawCursor
 
+    from sqlspec.adapters.snowflake.driver import SnowflakeDriver
     from sqlspec.core import StatementConfig
 
     SnowflakeConnection: TypeAlias = _SnowflakeConnection
@@ -65,7 +63,7 @@ class SnowflakeSessionContext:
         release_connection: Callable[..., Any],
         statement_config: "StatementConfig",
         driver_features: dict[str, Any],
-        prepare_driver: Callable[[Any], Any],
+        prepare_driver: "Callable[[SnowflakeDriver], SnowflakeDriver]",
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
@@ -73,17 +71,15 @@ class SnowflakeSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: SnowflakeConnection | None = None
-        self._driver: Any = None
+        self._driver: SnowflakeDriver | None = None
 
-    def __enter__(self) -> Any:
-        driver_cls = import_optional_attr("sqlspec.adapters.snowflake.driver", "SnowflakeDriver")
-        if driver_cls is None:
-            msg = "SnowflakeDriver is unavailable"
-            raise ImproperConfigurationError(msg)
+    def __enter__(self) -> "SnowflakeDriver":
+        from sqlspec.adapters.snowflake.driver import SnowflakeDriver
+
         connection = self._acquire_connection()
         self._connection = connection
         try:
-            self._driver = driver_cls(
+            self._driver = SnowflakeDriver(
                 connection=connection, statement_config=self._statement_config, driver_features=self._driver_features
             )
             return self._prepare_driver(self._driver)

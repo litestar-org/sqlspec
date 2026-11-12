@@ -175,6 +175,7 @@ def test_config_preserves_query_tag_when_correlating_cached_statements(
 
     def connect(**kwargs: Any) -> Any:
         connected.append(kwargs)
+        snowflake_connection.config = SimpleNamespace(session_parameters=dict(kwargs.get("session_parameters", {})))
         snowflake_connection.is_closed = lambda: False
         snowflake_connection.close = lambda: None
         return snowflake_connection
@@ -231,3 +232,12 @@ def test_named_profile_query_tag_is_preserved_for_correlation(
         assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "profile-report:request-a"}}
     finally:
         config.close_pool()
+
+
+def test_derive_pool_routes_query_tag_to_session_parameters() -> None:
+    """A derived pool forwards an overridden query tag to the connector session."""
+    derived = SnowflakeConfig(connection_config={"account": "acct", "user": "u"}).derive_pool(query_tag="etl")
+
+    assert derived.connection_config["query_tag"] == "etl"
+    assert "query_tag" not in derived.driver_features
+    assert normalize_connection_params(derived.connection_config)["session_parameters"]["QUERY_TAG"] == "etl"

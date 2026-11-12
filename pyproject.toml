@@ -574,7 +574,6 @@ module = "tests.*"
 
 
 [tool.pyright]
-executionEnvironments = [{ root = "sqlspec/adapters/snowflake", reportMissingImports = "none" }]
 disableBytesTypePromotions = true
 exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs", "**/.*"]
 include = ["sqlspec", "tests"]

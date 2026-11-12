@@ -1,5 +1,6 @@
 """Snowflake public execution, transaction, and migration behavior."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -47,9 +48,8 @@ def test_script_preserves_snowflake_blocks_and_closes_all_cursors(snowflake_conn
 
 def test_query_tag_applies_on_repeated_queries(snowflake_connection: Any) -> None:
     snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
-    driver = SnowflakeDriver(
-        snowflake_connection, driver_features={"enable_query_tag_correlation": True, "query_tag": "worker"}
-    )
+    snowflake_connection.config = SimpleNamespace(session_parameters={"QUERY_TAG": "worker"})
+    driver = SnowflakeDriver(snowflake_connection, driver_features={"enable_query_tag_correlation": True})
     with CorrelationContext.context("request-a"):
         driver.select("SELECT 1 AS ID")
     with CorrelationContext.context("request-b"):
@@ -309,13 +309,13 @@ def test_dict_cursor_rows_and_async_query_tag_correlation(
         ],
         "rows": [{"ID": 9, "MixedName": "kept", "PAYLOAD": '{"flag":1}'}],
     }
+    snowflake_connection.config = SimpleNamespace(session_parameters={"QUERY_TAG": "batch"})
     driver = SnowflakeDriver(
         snowflake_connection,
         driver_features={
             "enable_json_deserialization": enable_json_deserialization,
             "enable_lowercase_column_names": enable_lowercase_column_names,
             "enable_query_tag_correlation": True,
-            "query_tag": "batch",
         },
     )
     assert driver.driver_features["storage_capabilities"]["partition_strategies"] == ["fixed", "rows_per_chunk"]
@@ -329,3 +329,4 @@ def test_dict_cursor_rows_and_async_query_tag_correlation(
         query_id = driver.execute_async_query("SELECT :val", val=1)
     assert query_id == "sfqid-123"
     assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "batch:job-42"}}
+

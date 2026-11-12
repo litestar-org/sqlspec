@@ -7,8 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import sqlspec.adapters.snowflake as snowflake_package
-from sqlspec.adapters.snowflake import _typing
+from sqlspec.adapters.snowflake import driver as snowflake_driver_module
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import (
     DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
@@ -49,7 +48,7 @@ def test_cursor_closes_without_masking_query_exception() -> None:
 def test_session_prepare_failure_releases_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     connection, release = Mock(), Mock()
     driver = Mock()
-    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: Mock(return_value=driver))
+    monkeypatch.setattr(snowflake_driver_module, "SnowflakeDriver", Mock(return_value=driver))
 
     def prepare(_: Any) -> Any:
         raise ValueError("prepare failed")
@@ -65,7 +64,7 @@ def test_session_prepare_failure_releases_connection(monkeypatch: pytest.MonkeyP
 
 def test_session_success_closes_driver_and_releases(monkeypatch: pytest.MonkeyPatch) -> None:
     connection, release, driver = Mock(), Mock(), Mock()
-    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: Mock(return_value=driver))
+    monkeypatch.setattr(snowflake_driver_module, "SnowflakeDriver", Mock(return_value=driver))
     context = SnowflakeSessionContext(lambda: connection, release, build_statement_config(), {}, lambda value: value)
     with context as session:
         assert session is driver
@@ -102,6 +101,7 @@ def test_error_metadata_mapping(errno: int | None, state: str | None, expected: 
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, expected)
     assert "[sfqid=query-123]" in str(mapped)
+    assert mapped.__cause__ is error
 
 
 def test_empty_arrow_schema_supports_attribute_metadata() -> None:
@@ -237,25 +237,12 @@ def test_column_name_cache_bounds_and_empty_description() -> None:
     assert DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS == 1000
 
 
-def test_snowflake_package_lazy_exports_and_unknown_attribute() -> None:
-    tracker_cls = snowflake_package.SnowflakeSyncMigrationTracker
-    assert tracker_cls.__name__ == "SnowflakeSyncMigrationTracker"
-    with pytest.raises(AttributeError, match="NonExistentSnowflakeExport"):
-        _ = snowflake_package.NonExistentSnowflakeExport
-
-
-def test_session_context_unavailable_driver_and_close_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_session_context_releases_connection_when_driver_close_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     release = Mock()
-    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: None)
-    unavailable = SnowflakeSessionContext(Mock(), release, build_statement_config(), {}, lambda value: value)
-    with pytest.raises(ImproperConfigurationError, match="SnowflakeDriver is unavailable"):
-        with unavailable:
-            pytest.fail("unavailable driver must not enter session")
-
     connection = Mock()
     failing_driver = Mock()
     failing_driver.close.side_effect = RuntimeError("close exploded")
-    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: Mock(return_value=failing_driver))
+    monkeypatch.setattr(snowflake_driver_module, "SnowflakeDriver", Mock(return_value=failing_driver))
     closing_ctx = SnowflakeSessionContext(
         lambda: connection, release, build_statement_config(), {}, lambda value: value
     )

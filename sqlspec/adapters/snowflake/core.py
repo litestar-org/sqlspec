@@ -84,6 +84,7 @@ _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _FORBIDDEN_ERRNO: Final[int] = 250005
 _OBJECT_NOT_FOUND_ERRNO: Final[int] = 2003
 _QUERY_CANCELLED_ERRNO: Final[int] = 604
+_CONNECTION_ERRNOS: Final[frozenset[int]] = frozenset({250001, 250002, 250003, 250004, 250006})
 _MAX_INT64_DECIMAL_PRECISION: Final[int] = 18
 _TIME_TYPE_CODE: Final[int] = 12
 _TYPED_BINDING_SIZE: Final[int] = 2
@@ -201,6 +202,7 @@ def apply_driver_features(
         ("enable_lowercase_column_names", True),
         ("enable_stage_parquet_load", True),
         ("stage_parquet_threshold_rows", DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS),
+        ("enable_json_deserialization", True),
         ("enable_query_tag_correlation", False),
         ("enable_events", True),
         ("events_backend", "poll_queue"),
@@ -490,7 +492,7 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
         exception_type = NotFoundError
     elif errno == _QUERY_CANCELLED_ERRNO or sqlstate == "57014":
         exception_type = QueryTimeoutError
-    elif errno in {250001, 250002, 250003, 250004, 250006} or sqlstate.startswith("08"):
+    elif errno in _CONNECTION_ERRNOS or sqlstate.startswith("08"):
         exception_type = DatabaseConnectionError
     elif sqlstate in {"23505", "23503", "23502", "23514"}:
         exception_type = {
@@ -513,7 +515,9 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
     query_id = getattr(error, "sfqid", None)
     if query_id:
         message += f" [sfqid={query_id}]"
-    return exception_type(message)
+    mapped = exception_type(message)
+    mapped.__cause__ = error
+    return mapped
 
 
 def snowflake_type_code_to_arrow_type(

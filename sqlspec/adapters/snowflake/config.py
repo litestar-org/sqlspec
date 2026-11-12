@@ -4,22 +4,19 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
-from mypy_extensions import mypyc_attr
-
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import apply_driver_features, default_statement_config, normalize_connection_params
+from sqlspec.adapters.snowflake.driver import SnowflakeDriver
 from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
 from sqlspec.config import ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
-from sqlspec.driver import SyncDriverAdapterBase, SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import import_optional
-from sqlspec.utils.module_loader import import_optional_attr
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.snowflake.driver import SnowflakeDriver
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
@@ -146,12 +143,14 @@ class SnowflakeDriverFeatures(TypedDict):
     """Enable temporary-stage Parquet uploads for large Arrow loads."""
     stage_parquet_threshold_rows: NotRequired[int]
     """Minimum row count selecting stage-based loads; defaults to ``1000``."""
+    enable_json_deserialization: NotRequired[bool]
+    """Decode VARIANT, OBJECT, and ARRAY result values with ``json_deserializer``; defaults to ``True``."""
     enable_query_tag_correlation: NotRequired[bool]
     """Attach statement correlation information to Snowflake query tags."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channels."""
-    events_backend: NotRequired[str]
-    """Event backend used for Snowflake table queues."""
+    events_backend: NotRequired[Literal["poll_queue"]]
+    """Event backend used for Snowflake table queues (``'poll_queue'``)."""
 
 
 class SnowflakePoolConnectionContext(SyncPoolConnectionContext):
@@ -166,15 +165,12 @@ class SnowflakePoolSessionFactory(SyncPoolSessionFactory):
     __slots__ = ()
 
 
-@mypyc_attr(native_class=False)
-class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectionPool, "SnowflakeDriver"]):
+class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectionPool, SnowflakeDriver]):
     """Configure Snowflake sessions, authentication, and bounded pooling."""
 
-    __slots__ = ()
-
     adapter_name: ClassVar[str | None] = "snowflake"
-    connection_type: ClassVar[type[Any]] = object
-    driver_type: ClassVar[type["SnowflakeDriver"]] = cast("type[SnowflakeDriver]", SyncDriverAdapterBase)
+    connection_type: "ClassVar[type[SnowflakeConnection]]" = SnowflakeConnection
+    driver_type: ClassVar[type[SnowflakeDriver]] = SnowflakeDriver
     migration_tracker_type: ClassVar[type[Any]] = SnowflakeSyncMigrationTracker
     supports_transactional_ddl: ClassVar[bool] = False
     supports_migration_schemas: ClassVar[bool] = True
@@ -222,11 +218,6 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
         processed_statement, features = apply_driver_features(
             statement_config, driver_features, paramstyle=normalized_static["paramstyle"]
         )
-        features["query_tag"] = normalized_static.get("session_parameters", {}).get("QUERY_TAG")
-        type(self).driver_type = cast(
-            "type[SnowflakeDriver]",
-            (import_optional_attr("sqlspec.adapters.snowflake.driver", "SnowflakeDriver") or SyncDriverAdapterBase),
-        )
         super().__init__(
             connection_config=raw,
             connection_instance=connection_instance,
@@ -268,20 +259,6 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
-
-    def _prepare_driver(self, driver: "SnowflakeDriver") -> "SnowflakeDriver":
-        driver = super()._prepare_driver(driver)
-        if (
-            driver.driver_features.get("enable_query_tag_correlation")
-            and driver.driver_features.get("query_tag") is None
-        ):
-            connector_config = getattr(driver.connection, "config", None)
-            session_parameters = getattr(connector_config, "session_parameters", None)
-            if not isinstance(session_parameters, Mapping):
-                session_parameters = getattr(driver.connection, "_session_parameters", None)
-            if isinstance(session_parameters, Mapping):
-                driver.driver_features["query_tag"] = session_parameters.get("QUERY_TAG")
-        return driver
 
     def get_event_runtime_hints(self) -> EventRuntimeHints:
         """Return polling and lease defaults suitable for Snowflake warehouses."""
@@ -332,7 +309,7 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
             "SnowflakeConnectionParams": SnowflakeConnectionParams,
             "SnowflakeConnectionPool": SnowflakeConnectionPool,
             "SnowflakeCursor": SnowflakeCursor,
-            "SnowflakeDriver": self.driver_type,
+            "SnowflakeDriver": SnowflakeDriver,
             "SnowflakeDriverFeatures": SnowflakeDriverFeatures,
             "SnowflakePoolParams": SnowflakePoolParams,
             "SnowflakeSessionContext": SnowflakeSessionContext,

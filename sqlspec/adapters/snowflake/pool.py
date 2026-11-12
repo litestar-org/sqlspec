@@ -5,7 +5,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
@@ -34,7 +34,6 @@ class SnowflakeConnectionPool:
         "_max_size",
         "_min_size",
         "_observability_runtime",
-        "_on_connection_create",
         "_recycle_seconds",
         "_thread_local",
         "_timeout",
@@ -50,10 +49,9 @@ class SnowflakeConnectionPool:
         timeout: object = 30.0,
         recycle_seconds: object = 3600,
         health_check_interval: object = 60.0,
-        on_connection_create: "Callable[[SnowflakeConnection], None] | None" = None,
         observability_runtime: "ObservabilityRuntime | None" = None,
     ) -> None:
-        """Configure capacity, idle health checks, and connection lifecycle callbacks."""
+        """Configure capacity, idle health checks, recycling, and connection observability."""
         if (
             isinstance(min_size, bool)
             or not isinstance(min_size, int)
@@ -88,7 +86,7 @@ class SnowflakeConnectionPool:
         self._min_size, self._max_size = min_size, max_size
         self._timeout, self._recycle_seconds = float(timeout), recycle_seconds
         self._health_check_interval = float(health_check_interval)
-        self._on_connection_create, self._observability_runtime = on_connection_create, observability_runtime
+        self._observability_runtime = observability_runtime
         self._created_pid = os.getpid()
         self._condition = threading.Condition(threading.Lock())
         self._thread_local = threading.local()
@@ -124,8 +122,6 @@ class SnowflakeConnectionPool:
         connection: SnowflakeConnection | None = None
         try:
             connection = self._open_connection()
-            if self._on_connection_create is not None:
-                self._on_connection_create(connection)
             if self._observability_runtime is not None:
                 self._observability_runtime.emit_connection_create_sync(connection)
         except BaseException:
@@ -213,8 +209,7 @@ class SnowflakeConnectionPool:
         created_at = entry[1]
         try:
             if not discard:
-                if getattr(connection, "autocommit", None) is not True:
-                    connection.rollback()
+                connection.rollback()
                 discard = connection.is_closed()
         except Exception:
             discard = True

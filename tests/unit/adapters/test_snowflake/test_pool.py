@@ -80,7 +80,7 @@ def test_nested_error_discards_handle_even_when_caught(monkeypatch: pytest.Monke
 def test_failed_connect_and_hook_restore_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
     connector, connections = make_connector(monkeypatch)
     hook = Mock(side_effect=ValueError("hook failed"))
-    pool = SnowflakeConnectionPool({}, max_size=1, on_connection_create=hook)
+    pool = SnowflakeConnectionPool({}, max_size=1, observability_runtime=Mock(emit_connection_create_sync=hook))
     with pytest.raises(ValueError, match="hook failed"):
         pool.acquire()
     assert pool.size() == 0

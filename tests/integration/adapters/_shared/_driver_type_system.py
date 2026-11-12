@@ -43,6 +43,7 @@ DRIVER_FEATURE_TYPED_DICTS: dict[str, tuple[str, str]] = {
     "psycopg": ("sqlspec.adapters.psycopg.config", "PsycopgDriverFeatures"),
     "pymssql": ("sqlspec.adapters.pymssql.config", "PymssqlDriverFeatures"),
     "pymysql": ("sqlspec.adapters.pymysql.config", "PyMysqlDriverFeatures"),
+    "snowflake": ("sqlspec.adapters.snowflake.config", "SnowflakeDriverFeatures"),
     "spanner": ("sqlspec.adapters.spanner.config", "SpannerDriverFeatures"),
     "sqlite": ("sqlspec.adapters.sqlite.config", "SqliteDriverFeatures"),
 }
@@ -66,6 +67,7 @@ _MIGRATED_DRIVER_FEATURE_ADAPTERS = (
     "psycopg",
     "pymssql",
     "pymysql",
+    "snowflake",
     "spanner",
     "sqlite",
 )
@@ -73,6 +75,18 @@ _MIGRATED_DRIVER_FEATURE_ADAPTERS = (
 DRIVER_FEATURE_CONSUMED_KEYS: dict[str, tuple[str, ...]] = dict.fromkeys(DRIVER_FEATURE_TYPED_DICTS, ())
 
 DRIVER_FEATURE_CONSUMED_KEYS.update({
+    "snowflake": (
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_lowercase_column_names",
+        "enable_stage_parquet_load",
+        "stage_parquet_threshold_rows",
+        "enable_json_deserialization",
+        "enable_query_tag_correlation",
+        "enable_events",
+        "events_backend",
+    ),
     "adbc": (
         "json_serializer",
         "enable_cast_detection",

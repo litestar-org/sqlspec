@@ -1,7 +1,5 @@
 """Snowflake connector adapter for SQLSpec."""
 
-from typing import TYPE_CHECKING, Any
-
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.config import (
     SnowflakeConfig,
@@ -18,14 +16,11 @@ from sqlspec.adapters.snowflake.core import (
     driver_profile,
     normalize_connection_params,
 )
+from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
+from sqlspec.adapters.snowflake.driver import SnowflakeDriver, SnowflakeExceptionHandler
+from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
 from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
-from sqlspec.utils.module_loader import import_optional_attr
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
-    from sqlspec.adapters.snowflake.driver import SnowflakeDriver, SnowflakeExceptionHandler
-    from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 
 __all__ = (
     "SnowflakeConfig",
@@ -49,19 +44,3 @@ __all__ = (
     "driver_profile",
     "normalize_connection_params",
 )
-
-
-def __getattr__(name: str) -> Any:
-    modules = {
-        "SnowflakeDriver": "sqlspec.adapters.snowflake.driver",
-        "SnowflakeExceptionHandler": "sqlspec.adapters.snowflake.driver",
-        "SnowflakeSyncDataDictionary": "sqlspec.adapters.snowflake.data_dictionary",
-        "SnowflakeSyncMigrationTracker": "sqlspec.adapters.snowflake.migrations",
-    }
-    if name in modules:
-        resolved = import_optional_attr(modules[name], name)
-        if resolved is not None:
-            globals()[name] = resolved
-            return resolved
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
