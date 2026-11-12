@@ -532,22 +532,22 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         """
 
         existing_event_ids: set[str] = set()
-        try:
-            all_event_ids = [entry["event_id"] for entry in deduped_entries]
-            for start in range(0, len(all_event_ids), _EVENT_ID_CHUNK_SIZE):
-                chunk = all_event_ids[start : start + _EVENT_ID_CHUNK_SIZE]
-                placeholders = ", ".join("?" for _ in chunk)
-                rows = self._execute_fetchall(
-                    f"SELECT event_id FROM {table_ref} WHERE event_id IN ({placeholders})", tuple(chunk)
-                )
-                for row in rows:
-                    val = _row_value(row, "event_id", 0)
-                    if val is not None:
-                        existing_event_ids.add(str(val))
-            candidates = [entry for entry in deduped_entries if entry["event_id"] not in existing_event_ids]
-            if not candidates:
-                return 0
+        all_event_ids = [entry["event_id"] for entry in deduped_entries]
+        for start in range(0, len(all_event_ids), _EVENT_ID_CHUNK_SIZE):
+            chunk = all_event_ids[start : start + _EVENT_ID_CHUNK_SIZE]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = self._execute_fetchall(
+                f"SELECT event_id FROM {table_ref} WHERE event_id IN ({placeholders})", tuple(chunk)
+            )
+            for row in rows:
+                val = _row_value(row, "event_id", 0)
+                if val is not None:
+                    existing_event_ids.add(str(val))
+        candidates = [entry for entry in deduped_entries if entry["event_id"] not in existing_event_ids]
+        if not candidates:
+            return 0
 
+        try:
             inserted = 0
             with _transaction(self._config) as (conn, cursor):
                 for entry in candidates:
@@ -558,7 +558,6 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         except Exception as exc:
             if extract_error_code(exc) not in _DUPLICATE_KEY_CODES:
                 raise
-            candidates = [entry for entry in deduped_entries if entry["event_id"] not in existing_event_ids]
         else:
             return inserted
 
@@ -572,9 +571,15 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
                     conn.commit()
                     inserted += row_delta
             except Exception as item_exc:
-                if extract_error_code(item_exc) not in _DUPLICATE_KEY_CODES:
+                if extract_error_code(item_exc) not in _DUPLICATE_KEY_CODES or not self._event_id_exists(
+                    table_ref, entry["event_id"]
+                ):
                     raise
         return inserted
+
+    def _event_id_exists(self, table_ref: str, event_id: str) -> bool:
+        """Return whether a memory row already stores ``event_id``."""
+        return self._execute_fetchall(f"SELECT event_id FROM {table_ref} WHERE event_id = ?", (event_id,)) != []
 
     def search_entries(
         self,

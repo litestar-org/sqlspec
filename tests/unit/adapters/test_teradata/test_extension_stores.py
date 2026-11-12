@@ -410,9 +410,23 @@ def test_teradata_memory_disabled_missing_and_duplicates(teradata_connection) ->
         "inserted_at": now,
         "embedding": None,
     }
-    cursor.execute.side_effect = RuntimeError("[Error 2801] Duplicate unique key")
+    stored_event_ids: list[tuple[str]] = []
+
+    def _duplicate_on_insert(sql: str, params: object = ()) -> None:
+        if sql.lstrip().startswith("INSERT"):
+            raise RuntimeError("[Error 2801] Duplicate unique key")
+
+    cursor.execute.side_effect = _duplicate_on_insert
+    cursor.fetchall.side_effect = lambda: list(stored_event_ids)
+    with pytest.raises(RuntimeError, match="2801"):
+        enabled.insert_memory_entries([entry], owner_id=5)
+    assert conn.autocommit is True
+    original_fetchall = cursor.fetchall.side_effect
+    probes = iter([[], [("event",)]])
+    cursor.fetchall.side_effect = lambda: next(probes)
     assert enabled.insert_memory_entries([entry], owner_id=5) == 0
     assert conn.autocommit is True
+    cursor.fetchall.side_effect = original_fetchall
     cursor.execute.side_effect = RuntimeError("connection failed")
     with pytest.raises(RuntimeError, match="connection failed"):
         enabled.insert_memory_entries([entry])
