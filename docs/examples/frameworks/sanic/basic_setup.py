@@ -4,30 +4,26 @@
 from sanic import Request, Sanic, response
 from sanic.response import HTTPResponse
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.extensions.sanic import SQLSpecPlugin
 
 
 def create_app() -> Sanic:
     """Create a Sanic application wired with SQLSpecPlugin."""
-    spec = SQLSpec()
-    spec.add_config(
+    app = Sanic("SQLSpecSanicBasicExample")
+    db_plugin = SQLSpecPlugin(
         AiosqliteConfig(
             connection_config={"database": ":memory:"},
             extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
-        )
+        ),
+        app,
     )
-
-    db_plugin = SQLSpecPlugin(spec)
-    app = Sanic("SQLSpecSanicBasicExample")
 
     @app.get("/health")
     async def health(request: Request) -> HTTPResponse:
-        db: AiosqliteDriver = db_plugin.get_session(request, "db")
+        db: AiosqliteDriver = await db_plugin.get_session_async(request, "db")
         return response.json(await db.select_one("SELECT 1 AS ok"))
 
-    db_plugin.init_app(app)
     return app
 
 

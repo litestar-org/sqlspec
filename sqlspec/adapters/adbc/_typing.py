@@ -11,6 +11,7 @@ from adbc_driver_manager import AdbcStatusCode
 from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
 from adbc_driver_manager import OperationalError as AdbcOperationalError
+from adbc_driver_manager import ProgrammingError as AdbcProgrammingError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
@@ -18,7 +19,7 @@ from sqlspec.adapters.adbc.core import resolve_dialect_name
 from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from adbc_driver_flightsql import DatabaseOptions as AdbcFlightSqlDatabaseOptions
@@ -37,6 +38,7 @@ __all__ = (
     "AdbcNativeError",
     "AdbcNotSupportedError",
     "AdbcOperationalError",
+    "AdbcProgrammingError",
     "AdbcRawCursor",
     "AdbcSessionContext",
     "AdbcStatusCode",
@@ -46,17 +48,22 @@ __all__ = (
 class AdbcCursor:
     """Context manager for cursor management."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("adbc_stmt_kwargs", "connection", "cursor")
 
-    def __init__(self, connection: "AdbcConnection") -> None:
+    def __init__(self, connection: "AdbcConnection", *, adbc_stmt_kwargs: "Mapping[str, Any] | None" = None) -> None:
         self.connection = connection
+        self.adbc_stmt_kwargs = adbc_stmt_kwargs
         self.cursor: AdbcRawCursor | None = None
 
     def __enter__(self) -> "AdbcRawCursor":
-        self.cursor = self.connection.cursor()
+        self.cursor = (
+            self.connection.cursor(adbc_stmt_kwargs=dict(self.adbc_stmt_kwargs))
+            if self.adbc_stmt_kwargs
+            else self.connection.cursor()
+        )
         return self.cursor
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 self.cursor.close()

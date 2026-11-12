@@ -31,6 +31,7 @@ from sqlspec.data_dictionary import (
     system_metadata_gated_result,
     unsupported_system_metadata_capability,
 )
+from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -48,17 +49,19 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
-from sqlspec.driver._storage_helpers import (
-    SyncWithoutIndexesContext,
-    execute_load_from_storage_sync,
-    execute_staged_load_sync,
-    stringify_storage_target,
-)
 from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
-from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
-from sqlspec.storage.pipeline import close_sync_arrow_source
+from sqlspec.storage._ingest import execute_load_from_storage_sync, execute_staged_load_sync
+from sqlspec.storage.pipeline import (
+    StorageBridgeJob,
+    StorageDestination,
+    StorageFormat,
+    StorageTelemetry,
+    SyncStoragePipeline,
+    close_sync_arrow_source,
+    stringify_storage_target,
+)
 from sqlspec.utils.arrow_helpers import arrow_batches_from_rows, convert_dict_to_arrow_with_schema
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.schema import ValueT, to_value_type
@@ -100,13 +103,23 @@ class SyncPoolConnectionContext:
     Subclass per adapter for type-safe ``provide_connection()`` return annotations.
     """
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_config", "_ctx", "_tenant_lease")
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, tenant_lease: Any = None) -> None:
+        """Bind the configuration and the tenant lease for this context.
+
+        Args:
+            config: Database configuration that provides the pool.
+            tenant_lease: Lease owned by an enclosing session handler; a new connection lease is
+                created when omitted and the configuration has a tenant strategy.
+        """
         self._config = config
         self._ctx: Any = None
+        self._tenant_lease: Any = tenant_lease if tenant_lease is not None else config._create_tenant_lease()
 
     def __enter__(self) -> Any:
+        if self._tenant_lease is not None:
+            return self._tenant_lease.acquire()
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
         return self._ctx.__enter__()
@@ -114,6 +127,9 @@ class SyncPoolConnectionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
@@ -126,18 +142,24 @@ class SyncPoolSessionFactory:
     Subclass per adapter for type-safe ``acquire_connection()`` return annotations.
     """
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_config", "_ctx", "_tenant_lease")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._ctx: Any = None
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     def acquire_connection(self) -> Any:
+        if self._tenant_lease is not None:
+            return self._tenant_lease.acquire()
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
         return self._ctx.__enter__()
 
     def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
+            return
         if self._ctx is None:
             return
         self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
@@ -1621,6 +1643,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime is None or runtime.is_idle:
             return runner(**runner_kwargs)
         driver_name = type(self).__name__
+        db_system = self.observability_db_system
         query_context = {
             "sql": compiled_sql,
             "parameters": execution_parameters,
@@ -1629,13 +1652,15 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             "is_many": is_many,
             "is_script": is_script,
         }
+        if db_system is not None:
+            query_context["db_system"] = db_system
         runtime.emit_query_start_sync(**query_context)
         sql_hash = None
         if runtime.span_manager.is_enabled or (
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
             sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash)
+        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1663,6 +1688,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             started_at=started,
             precomputed_sql_hash=sql_hash,
             profile=profile,
+            db_system=db_system,
         )
         return result
 

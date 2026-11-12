@@ -17,14 +17,16 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sybase import SybaseDriver
 from sqlspec.adapters.sybase._typing import SybaseConnection
 from sqlspec.adapters.sybase.core import default_statement_config as sybase_statement_config
-from sqlspec.driver._storage_helpers import (
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage import StorageBridgeJob
+from sqlspec.storage._staging_sql import (
+    build_create_table_from_arrow_schema,
     build_drop_stage_table_sql,
     build_stage_merge_sql,
     build_stage_table_ddl,
+    format_storage_identifier,
     resolve_stage_table_name,
 )
-from sqlspec.exceptions import SQLSpecError
-from sqlspec.storage import StorageBridgeJob
 
 
 def test_resolve_stage_table_name_auto_and_custom() -> None:
@@ -426,3 +428,40 @@ async def test_sybase_staged_upserts_execute_native_inserts_and_always_cleanup(
     assert native.statements == expected
     assert native.inserted_rows == [(1, "value")]
     assert native.open_cursors == 0
+
+
+def test_snowflake_staging_sql_identifiers_arrow_ddl_and_merge_quoting() -> None:
+    """Snowflake staging SQL helpers validate identifiers, Arrow DDL, and quoted merge columns."""
+    assert format_storage_identifier("analytics.events", allow_qualified=True) == "analytics.events"
+    assert format_storage_identifier('"Mixed""Schema"."Order Items"', allow_qualified=True) == (
+        '"Mixed""Schema"."Order Items"'
+    )
+    assert format_storage_identifier("order-items") == '"order-items"'
+
+    for bad_identifier in ("", "   ", "bad\x00name", "schema.  .table"):
+        with pytest.raises(ValueError, match="Storage identifier"):
+            format_storage_identifier(bad_identifier, allow_qualified=True)
+
+    arrow_table = pa.table({"id": [1], "order total": [9.5]})
+    assert build_create_table_from_arrow_schema("sales.orders", arrow_table) == (
+        'CREATE TABLE IF NOT EXISTS sales.orders (id BIGINT, "order total" DOUBLE PRECISION)'
+    )
+    assert build_create_table_from_arrow_schema("sales.orders", arrow_table.schema, if_not_exists=False) == (
+        'CREATE TABLE sales.orders (id BIGINT, "order total" DOUBLE PRECISION)'
+    )
+    with pytest.raises(ValueError, match="at least one field"):
+        build_create_table_from_arrow_schema("sales.orders", pa.schema([]))
+
+    snowflake_merge = build_stage_merge_sql(
+        "snowflake",
+        "sales.orders",
+        "sales.orders_stage",
+        ["id", "payload", "created_at"],
+        conflict_keys=["id"],
+        exclude_update_columns=["created_at"],
+        type_casts={"payload": "VARIANT"},
+    )
+    assert 'ON (tgt."id" = stg."id")' in snowflake_merge
+    assert 'UPDATE SET tgt."payload" = CAST(stg."payload" AS VARIANT)' in snowflake_merge
+    assert "created_at = stg" not in snowflake_merge
+    assert 'CAST(stg."payload" AS VARIANT)' in snowflake_merge

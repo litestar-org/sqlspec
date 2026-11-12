@@ -527,6 +527,9 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         if isinstance(direct_dsn, str) and direct_dsn and callable(derive_fn):
             config = cast("ConfigT", derive_fn())
         self.config = config
+        if self.config.driver_features.get("tenant_strategy") is not None:
+            msg = "Migrations cannot use tenant_strategy; use a separate configuration without tenant_strategy"
+            raise MigrationError(msg)
         migration_config = self._get_migration_config()
 
         self.version_table = migration_config.get("version_table_name", "ddl_migrations")

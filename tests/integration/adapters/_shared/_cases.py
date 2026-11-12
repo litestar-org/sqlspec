@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.util import find_spec
 from typing import Any, Literal
 
 import pytest
@@ -575,6 +576,38 @@ SYNC_DRIVER_CASES = (
             "driver_features:bigquery_job_controls",
             "streaming_native:bigquery",
         ),
+    ),
+    DriverCase(
+        id="snowflake-sync",
+        fixture_name="snowflake_session",
+        config_factory_fixture="lifecycle_config_snowflake",
+        adapter="snowflake",
+        dialect="snowflake",
+        mode="sync",
+        marks=(
+            pytest.mark.snowflake,
+            pytest.mark.snowflake_connector,
+            pytest.mark.xdist_group("snowflake"),
+            pytest.mark.skipif(
+                find_spec("snowflake") is None or find_spec("snowflake.connector") is None,
+                reason="snowflake-connector-python is not installed",
+            ),
+        ),
+        integration_status="local-only",
+        table=DUCKDB_CONTRACT_TABLE,
+        supports_arrow=True,
+        supports_arrow_streaming=True,
+        supports_native_arrow=True,
+        supports_json=True,
+        supports_json_native=True,
+        supports_merge=True,
+        supports_copy=True,
+        supports_pooling=True,
+        supports_multi_schema_migrations=True,
+        supports_data_dictionary=True,
+        supports_savepoints=False,
+        supports_for_update=False,
+        invalid_sql_error_policy="database",
     ),
 )
 

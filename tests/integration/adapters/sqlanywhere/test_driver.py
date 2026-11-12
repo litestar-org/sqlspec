@@ -7,8 +7,8 @@ import pytest
 pytest.importorskip("sqlanydb")
 
 from sqlspec.adapters.sqlanywhere import SqlanywhereConfig, SqlanywhereDriver
-from sqlspec.driver._storage_helpers import build_checkpoint_insert_sql, build_checkpoint_table_ddl
 from sqlspec.exceptions import NotNullViolationError, UniqueViolationError
+from sqlspec.storage._staging_sql import build_checkpoint_insert_sql, build_checkpoint_table_ddl
 from sqlspec.utils.arrow_helpers import sql_type_for_category, sql_type_from_arrow_type
 
 pytestmark = [pytest.mark.sqlanywhere, pytest.mark.xdist_group("sqlanywhere")]

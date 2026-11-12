@@ -1,6 +1,6 @@
 # Data Dictionary
 
-Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, and Cloud Spanner.
+Every SQLSpec driver exposes `session.data_dictionary`—a dialect-aware catalog introspection and DDL synthesis interface returning normalized typed metadata (`TableMetadata`, `ColumnMetadata`, `IndexMetadata`, `ForeignKeyMetadata`, `ColumnProfileMetadata`, `DDLResult`, `VersionInfo`) across SQLite, PostgreSQL, CockroachDB, MySQL, MariaDB, Oracle, SQL Server, Teradata Vantage, Sybase ASE, SAP SQL Anywhere, IBM Db2, DuckDB, BigQuery, Snowflake, and Cloud Spanner.
 
 ```mermaid
 flowchart LR
@@ -95,7 +95,7 @@ with spec.provide_session(config) as session:
 
 ## DDL Extraction, Cross-Dialect Synthesis, and Table Profiling
 
-`get_ddl` and `get_schema_ddl` prefer native catalog DDL where supported (SQLite `sqlite_master`, DuckDB `duckdb_tables()`, CockroachDB `SHOW CREATE`, BigQuery `INFORMATION_SCHEMA.TABLES`) and synthesize dialect-valid AST DDL from catalog metadata otherwise—with optional cross-dialect transpilation via `target_dialect`:
+`get_ddl` and `get_schema_ddl` prefer native catalog DDL where supported (SQLite `sqlite_master`, DuckDB `duckdb_tables()`, CockroachDB `SHOW CREATE`, BigQuery `INFORMATION_SCHEMA.TABLES`, Snowflake `GET_DDL`) and synthesize dialect-valid AST DDL from catalog metadata otherwise—with optional cross-dialect transpilation via `target_dialect`:
 
 ```{ .python title="docs/examples/patterns/schema_ddl_and_inference.py" }
 --8<-- "docs/examples/patterns/schema_ddl_and_inference.py:example"

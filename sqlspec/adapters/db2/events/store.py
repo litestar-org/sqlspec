@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING, Final
 
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import split_db2_table_name
+from sqlspec.adapters.db2.migrations import build_guarded_drop_table
 from sqlspec.extensions.events import BaseEventQueueStore
+
+if TYPE_CHECKING:
+    from sqlspec.migrations.schema import DropStatement
 
 __all__ = ("Db2AsyncEventQueueStore", "Db2SyncEventQueueStore")
 
@@ -31,6 +35,8 @@ class _Db2EventStoreMixin:
         @property
         def table_name(self) -> str: ...
 
+        def drop_statements(self) -> "list[str]": ...
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return the payload, metadata, and timestamp column types."""
         return "CLOB", "CLOB", "TIMESTAMP"
@@ -46,6 +52,10 @@ class _Db2EventStoreMixin:
     def _wrap_drop_statement(self, statement: str) -> str:
         """Return the DROP statement unchanged."""
         return statement
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the queue table."""
+        return [build_guarded_drop_table(self.table_name, statement) for statement in self.drop_statements()]
 
     def _index_existence_target(self) -> "tuple[str | None, str]":
         """Return the catalog schema and table used to check for the queue index.

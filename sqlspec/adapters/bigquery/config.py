@@ -26,12 +26,14 @@ from sqlspec.utils.config_tools import normalize_connection_config
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.adapters.bigquery._typing import BigQueryClientInfo as ClientInfo
     from sqlspec.adapters.bigquery._typing import BigQueryClientOptions as ClientOptions
     from sqlspec.adapters.bigquery._typing import BigQueryCredentials as Credentials
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures", "build_connection_config")
 
@@ -373,18 +375,28 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         return BigQueryConnectionContext(self)
 
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "BigQuerySessionContext":
         """Provide a BigQuery driver session context manager.
 
         Args:
-            *_args: Additional arguments.
+            *args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
+            tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
+            bypass_tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             A BigQuery driver session context manager.
         """
+        if tenant is not None or bypass_tenant:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         handler = _BigQuerySessionConnectionHandler(self)
 
         return BigQuerySessionContext(

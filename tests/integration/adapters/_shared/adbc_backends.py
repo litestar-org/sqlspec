@@ -217,3 +217,10 @@ def test_duckdb_specific_features(duckdb_session: AdbcDriver) -> None:
     assert analytical_result.get_data()[0]["array_len"] == 5
     assert analytical_result.get_data()[0]["numbers_sum"] == 15
     assert analytical_result.get_data()[0]["json_type"] == "test"
+
+
+@pytest.mark.teradata
+def test_teradata_specific_features(adbc_teradata_session: AdbcDriver) -> None:
+    """Teradata BYTEINT and QUALIFY execute through the ADBC dialect."""
+    rows = adbc_teradata_session.select("SELECT CAST(1 AS BYTEINT) AS flag QUALIFY ROW_NUMBER() OVER (ORDER BY 1) = 1")
+    assert rows == [{"flag": 1}]

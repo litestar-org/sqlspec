@@ -145,6 +145,17 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
         ),
     ),
     DialectDocSpec(
+        dialect="teradata",
+        title="Teradata Vantage",
+        ddl_strategy="DBC.TableTextV object text and catalog-backed AST synthesis",
+        guide_link="../../../databases/teradata.md",
+        summary="Introspects modern Unicode DBC.*V views using LOCKING ROW FOR ACCESS; columns support scoped ColumnsQV fallback.",
+        adapter_classes=(
+            "sqlspec.adapters.teradata.data_dictionary.TeradataDataDictionary",
+            "sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary",
+        ),
+    ),
+    DialectDocSpec(
         dialect="sybase",
         title="Sybase ASE",
         ddl_strategy="AST synthesis + `dbo.syscomments` object text reassembly",
@@ -159,6 +170,17 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
         guide_link="../../../databases/sqlanywhere.md",
         summary="Introspects SAP SQL Anywhere `SYS` catalog views (`SYS.SYSTAB`, `SYS.SYSTABCOL`, `SYS.SYSIDX`, `SYS.SYSIDXCOL`, `SYS.SYSFKEY`, `SYS.SYSCONSTRAINT`, `SYS.SYSVIEW`, `SYS.SYSPROCEDURE`, `SYS.SYSTRIGGER`, `SYS.SYSSEQUENCE`).",
         adapter_classes=("sqlspec.adapters.sqlanywhere.data_dictionary.SqlanywhereSyncDataDictionary",),
+    ),
+    DialectDocSpec(
+        dialect="snowflake",
+        title="Snowflake",
+        ddl_strategy="Native GET_DDL and SHOW KEYS metadata",
+        guide_link="../../../databases/snowflake.md",
+        summary="Queries Snowflake INFORMATION_SCHEMA, GET_DDL, and SHOW PRIMARY, UNIQUE, and IMPORTED KEYS through the native connector and ADBC adapters.",
+        adapter_classes=(
+            "sqlspec.adapters.snowflake.data_dictionary.SnowflakeSyncDataDictionary",
+            "sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary",
+        ),
     ),
     DialectDocSpec(
         dialect="db2",

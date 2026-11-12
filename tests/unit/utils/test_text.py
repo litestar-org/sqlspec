@@ -6,7 +6,15 @@ camelCase conversion, and snake_case conversion.
 
 import pytest
 
-from sqlspec.utils.text import camelize, normalize_identifier, slugify, snake_case, split_qualified_identifier
+from sqlspec.exceptions import AmbiguousIdentifierError
+from sqlspec.utils.text import (
+    camelize,
+    normalize_identifier,
+    resolve_catalog_identifier,
+    slugify,
+    snake_case,
+    split_qualified_identifier,
+)
 
 
 def test_slugify_basic() -> None:
@@ -300,3 +308,22 @@ def test_performance_text_utilities() -> None:
 
     assert snake_cache_info.hits > 0
     assert camel_cache_info.hits > 0
+
+
+@pytest.mark.parametrize(
+    ("requested", "candidates", "expected"),
+    [
+        ("ORDERS", ["orders", "ORDERS"], "ORDERS"),
+        ("ORDERS", ["orders"], "orders"),
+        ("ORDERS", ["customers"], None),
+        ("ORDERS", [], None),
+    ],
+    ids=["exact-wins", "unique-case-insensitive", "no-match", "empty-catalog"],
+)
+def test_resolve_catalog_identifier(requested: str, candidates: list[str], expected: str | None) -> None:
+    assert resolve_catalog_identifier(requested, candidates) == expected
+
+
+def test_resolve_catalog_identifier_rejects_ambiguous_case_insensitive_matches() -> None:
+    with pytest.raises(AmbiguousIdentifierError, match="Orders"):
+        resolve_catalog_identifier("ORDERS", ["orders", "Orders", "orders"])

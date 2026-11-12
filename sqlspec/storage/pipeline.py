@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, NotRequired, TypeAlias, cast
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "CAPABILITY_HINTS",
     "AsyncStoragePipeline",
     "PartitionStrategyConfig",
     "ResolvedStorageTarget",
@@ -54,13 +55,17 @@ __all__ = (
     "StorageTelemetry",
     "SyncStoragePipeline",
     "aggregate_storage_telemetry",
+    "attach_partition_telemetry",
     "create_storage_bridge_job",
+    "create_storage_job",
     "get_recent_storage_events",
     "get_storage_bridge_diagnostics",
     "get_storage_bridge_metrics",
+    "ingest_telemetry_from_batches",
     "record_storage_diagnostic_event",
     "reset_storage_bridge_events",
     "reset_storage_bridge_metrics",
+    "stringify_storage_target",
 )
 
 StorageDestination: TypeAlias = str | Path | Sequence[str | Path]
@@ -255,6 +260,124 @@ def create_storage_bridge_job(status: str, telemetry: StorageTelemetry) -> Stora
     return job
 
 
+CAPABILITY_HINTS: Final[dict[str, str]] = {
+    "arrow_export_enabled": "native Arrow export",
+    "arrow_import_enabled": "native Arrow import",
+    "parquet_export_enabled": "native Parquet export",
+    "parquet_import_enabled": "native Parquet import",
+}
+
+
+def stringify_storage_target(target: StorageDestination | None) -> str | None:
+    """Convert a storage destination path or URI into its string form.
+
+    Args:
+        target: Storage destination path, URI, or ``None``.
+
+    Returns:
+        Normalized string representation or ``None``.
+    """
+    if target is None:
+        return None
+    if isinstance(target, Path):
+        return target.as_posix()
+    return str(target)
+
+
+def ingest_telemetry_from_batches(
+    rows_processed: int,
+    bytes_processed: int,
+    *,
+    duration_s: float | None = None,
+    format_label: str = "arrow",
+    read_duration_s: float | None = None,
+    encode_duration_s: float | None = None,
+    write_duration_s: float | None = None,
+    commit_duration_s: float | None = None,
+    shards_processed: int | None = None,
+    shards_skipped: int | None = None,
+    wal_bytes: int | None = None,
+) -> StorageTelemetry:
+    """Build a ``StorageTelemetry`` payload from accumulated batch metrics.
+
+    Args:
+        rows_processed: Total number of rows processed across all batches.
+        bytes_processed: Total uncompressed or wire bytes processed across all batches.
+        duration_s: Optional total wall-clock duration in seconds.
+        format_label: Payload format label (default ``"arrow"``).
+        read_duration_s: Optional source read time in seconds.
+        encode_duration_s: Optional payload encoding time in seconds.
+        write_duration_s: Optional database or storage write time in seconds.
+        commit_duration_s: Optional commit or finalization time in seconds.
+        shards_processed: Optional count of processed storage shards.
+        shards_skipped: Optional count of checkpoint-skipped storage shards.
+        wal_bytes: Optional WAL byte delta recorded during ingestion.
+
+    Returns:
+        Populated ``StorageTelemetry`` dictionary.
+    """
+    telemetry: StorageTelemetry = {
+        "rows_processed": int(rows_processed),
+        "bytes_processed": int(bytes_processed),
+        "format": format_label,
+    }
+    if duration_s is not None:
+        telemetry["duration_s"] = float(duration_s)
+    if read_duration_s is not None:
+        telemetry["read_duration_s"] = float(read_duration_s)
+    if encode_duration_s is not None:
+        telemetry["encode_duration_s"] = float(encode_duration_s)
+    if write_duration_s is not None:
+        telemetry["write_duration_s"] = float(write_duration_s)
+    if commit_duration_s is not None:
+        telemetry["commit_duration_s"] = float(commit_duration_s)
+    if shards_processed is not None:
+        telemetry["shards_processed"] = int(shards_processed)
+    if shards_skipped is not None:
+        telemetry["shards_skipped"] = int(shards_skipped)
+    if wal_bytes is not None:
+        telemetry["wal_bytes"] = int(wal_bytes)
+    return telemetry
+
+
+def attach_partition_telemetry(telemetry: StorageTelemetry, partitioner: "dict[str, object] | None") -> None:
+    """Attach partitioner configuration metadata to ``telemetry`` in place.
+
+    Args:
+        telemetry: Telemetry dictionary to update.
+        partitioner: Partitioner configuration or ``None``.
+    """
+    if not partitioner:
+        return
+    extra = dict(telemetry.get("extra", {}))
+    extra["partitioner"] = partitioner
+    telemetry["extra"] = extra
+
+
+def create_storage_job(
+    produced: StorageTelemetry, provided: StorageTelemetry | None = None, *, status: str = "completed"
+) -> StorageBridgeJob:
+    """Create a ``StorageBridgeJob`` merging produced and optional inbound telemetry.
+
+    Args:
+        produced: Telemetry from the write or ingestion side of the operation.
+        provided: Optional telemetry from an upstream storage read.
+        status: Job status string.
+
+    Returns:
+        ``StorageBridgeJob`` handle with recorded diagnostic event.
+    """
+    merged = cast("StorageTelemetry", dict(produced))
+    if provided:
+        source_bytes = provided.get("bytes_processed")
+        if source_bytes is not None:
+            merged["bytes_processed"] = int(merged.get("bytes_processed", 0)) + int(source_bytes)
+        extra = dict(merged.get("extra", {}))
+        extra["source"] = provided
+        merged["extra"] = extra
+    return create_storage_bridge_job(status, merged)
+
+
 def get_storage_bridge_diagnostics() -> "StorageDiagnostics":
     """Return aggregated storage bridge + serializer cache metrics."""
 
@@ -439,6 +562,19 @@ class SyncStoragePipeline(_StoragePipelineBase):
             "backend": backend_name,
         }
         return table, telemetry
+
+    def read_bytes_sync(self, source: StorageDestination, *, storage_options: "dict[str, Any] | None" = None) -> bytes:
+        """Read raw bytes from a storage source synchronously.
+
+        Args:
+            source: Storage destination URI, alias, or local path.
+            storage_options: Optional backend configuration overrides.
+
+        Returns:
+            Raw object payload bytes.
+        """
+        backend, path, backend_name = self._backend(source, storage_options)
+        return _read_backend_sync(backend, path, backend_name=backend_name)
 
     def stream_read(
         self,

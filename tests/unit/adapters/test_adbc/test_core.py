@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pyarrow as pa
 import pytest
+import sqlglot
 from adbc_driver_manager import AdbcStatusCode, DatabaseError, NotSupportedError
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
@@ -18,6 +19,8 @@ from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc import driver as adbc_driver_mod
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
+    _TERADATA_INDEX_EXISTS_SQL,
+    _TERADATA_TABLE_EXISTS_SQL,
     build_connection_config,
     collect_rows,
     driver_from_uri,
@@ -30,6 +33,8 @@ from sqlspec.adapters.adbc.core import (
     resolve_column_names,
     resolve_dialect_from_config,
     resolve_many_rowcount,
+    resolve_reconcile_adbc_dialect,
+    split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
@@ -41,6 +46,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
@@ -51,6 +57,7 @@ from sqlspec.exceptions import (
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 
@@ -1006,3 +1013,474 @@ def test_adbc_exception_isolation() -> None:
         mp.setattr(adbc_driver_mod, "_fetch_record_batch", lambda _c: iter([batch]))
         source.start()
         assert source._reader is not None
+
+
+@pytest.mark.parametrize("driver", ["teradata", "vantage", "/opt/libadbc_driver_teradata.so"])
+def test_teradata_dialect_routing(driver: str) -> None:
+    assert resolve_dialect_from_config({"driver": driver}) == "teradata"
+
+
+def test_teradata_flightsql_dialect_override() -> None:
+    assert resolve_dialect_from_config({"driver": "flightsql", "adbc_dialect": "vantage"}) == "teradata"
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (2801, UniqueViolationError),
+        (3807, NotFoundError),
+        (2631, DeadlockError),
+        (3706, SQLParsingError),
+        (2646, OperationalError),
+        (2616, DataError),
+        (2620, DataError),
+        (2621, DataError),
+        (2665, DataError),
+        (6706, DataError),
+        (6758, DataError),
+        (6760, DataError),
+        (2700, ForeignKeyViolationError),
+        (2701, ForeignKeyViolationError),
+        (5312, ForeignKeyViolationError),
+        (5313, ForeignKeyViolationError),
+        (2802, UniqueViolationError),
+        (2803, UniqueViolationError),
+        (2644, OperationalError),
+        (2843, OperationalError),
+        (3932, OperationalError),
+        (3110, QueryTimeoutError),
+        (3156, QueryTimeoutError),
+        (3523, PermissionDeniedError),
+        (3524, PermissionDeniedError),
+        (8017, PermissionDeniedError),
+        (3604, NotNullViolationError),
+        (3811, NotNullViolationError),
+        (3707, SQLParsingError),
+        (3802, NotFoundError),
+        (5628, NotFoundError),
+        (5317, CheckViolationError),
+    ],
+)
+def test_teradata_error_mapping(code: int, expected: type[SQLSpecError]) -> None:
+    error = DatabaseError(
+        f"[Teradata Database] [Error {code}] request failed", status_code=AdbcStatusCode.INTERNAL, sqlstate="HY000"
+    )
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected)
+    assert mapped.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("sql", "parameters", "expected_sql", "expected_parameters"),
+    [
+        ("SELECT :name AS name", {"name": "ada"}, "SELECT ? AS name", ["ada"]),
+        ("SELECT :1 AS value", [7], "SELECT ? AS value", [7]),
+        (
+            "SELECT $1 FROM @stage WHERE $1 = :expected",
+            {"expected": "ok"},
+            "SELECT $1 FROM @stage WHERE $1 = ?",
+            ["ok"],
+        ),
+    ],
+)
+def test_snowflake_adbc_compiles_to_qmark(
+    sql: str, parameters: Any, expected_sql: str, expected_parameters: list[Any]
+) -> None:
+    """Snowflake source markers convert to qmarks while stage ordinals remain SQL tokens."""
+    statement = SQL(sql, parameters, statement_config=get_statement_config("snowflake"))
+    compiled_sql, compiled_parameters = statement.compile()
+    assert compiled_sql == expected_sql
+    assert list(compiled_parameters) == expected_parameters
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("002003", NotFoundError),
+        ("000604", QueryTimeoutError),
+        ("000606", OperationalError),
+        ("250001", DatabaseConnectionError),
+    ],
+)
+@pytest.mark.parametrize("diagnostic", ["message", "vendor_code"])
+def test_snowflake_vendor_diagnostics(code: str, expected: type[SQLSpecError], diagnostic: str) -> None:
+    """Snowflake vendor diagnostics take precedence over generic SQLSTATE fallbacks."""
+    error = Exception(
+        f"INTERNAL: [Snowflake] {code} (42000): operation failed"
+        if diagnostic == "message"
+        else "INTERNAL: [Snowflake] operation failed"
+    )
+    setattr(error, "sqlstate", "42000")
+    if diagnostic == "vendor_code":
+        setattr(error, "vendor_code", int(code))
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected)
+    assert mapped.__cause__ is error
+
+
+def test_snowflake_vendor_codes_ignore_other_backends() -> None:
+    """Vendor codes from non-Snowflake drivers never select Snowflake error classes."""
+    error = Exception("Can't connect to MySQL server on 'db' (111)")
+    setattr(error, "vendor_code", 2003)
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert not isinstance(mapped, NotFoundError)
+
+
+@pytest.mark.parametrize("port", [0, 70000, True, "bad"])
+def test_teradata_invalid_port(port: Any) -> None:
+    with pytest.raises(ImproperConfigurationError, match="port"):
+        build_connection_config({"driver": "teradata", "host": "td.corp", "port": port})
+
+
+@pytest.mark.parametrize(
+    "config,expected",
+    [
+        (
+            {
+                "driver": "teradata",
+                "host": "td.corp",
+                "username": "u:1",
+                "password": "p@ss/w?rd#1%2",
+                "database": "mart",
+            },
+            "teradata://u%3A1:p%40ss%2Fw%3Frd%231%252@td.corp:1025/mart",
+        ),
+        ({"uri": "TERADATA://u%3A1:p%40ss@td.corp:1025/prod"}, "TERADATA://u%3A1:p%40ss@td.corp:1025/prod"),
+        (
+            {
+                "uri": "teradata://old:old@td.corp:1025/prod?mode=x#f",
+                "username": "u@1",
+                "password": "p#1",
+                "database": " /new db",
+            },
+            "teradata://u%401:p%231@td.corp:1025/new%20db?mode=x#f",
+        ),
+        (
+            {"driver": "vantage", "host": "::1", "user": "dbc", "password": "dbc", "port": 1026},
+            "teradata://dbc:dbc@[::1]:1026",
+        ),
+        (
+            {
+                "uri": "teradata://td.corp:1025",
+                "user": "svc",
+                "auth_token_provider": lambda: "t@k#1",
+                "database": "sales",
+            },
+            "teradata://svc:t%40k%231@td.corp:1025/sales",
+        ),
+        (
+            {"driver": "teradata", "db_kwargs": {"uri": "teradata://td.corp:1025"}, "user": "svc"},
+            "teradata://svc@td.corp:1025",
+        ),
+    ],
+)
+def test_teradata_uri_encoding(config: dict[str, Any], expected: str) -> None:
+    result = build_connection_config(config)
+    assert result == {"driver": "teradata", "db_kwargs": {"uri": expected}}
+
+
+@pytest.mark.parametrize("option_supported", [True, False])
+def test_teradata_autocommit_only_begin(option_supported: bool) -> None:
+    error = NotSupportedError("autocommit only")
+    native = Mock()
+    if option_supported:
+        native.get_option.return_value = "true"
+    else:
+        native.get_option.side_effect = error
+    native.set_autocommit.side_effect = error
+    connection = Mock(adbc_connection=native, _autocommit=True)
+    driver = AdbcDriver(connection, dialect="teradata")
+    with pytest.raises(TransactionError, match="autocommit") as exc:
+        driver.begin()
+    assert exc.value.__cause__ is error
+    with pytest.raises(TransactionError, match="autocommit"):
+        driver.begin()
+    assert native.set_autocommit.call_args_list == [call(False), call(False)]
+
+
+def test_begin_without_autocommit_option_is_noop_for_non_teradata_backends() -> None:
+    native = Mock()
+    native.get_option.side_effect = NotSupportedError("option unavailable")
+    connection = Mock(adbc_connection=native, _autocommit=True)
+    driver = AdbcDriver(connection, dialect="postgres")
+    driver.begin()
+    native.set_autocommit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("litestar_session", (None, "LITESTAR_SESSION")),
+        ("my_db.litestar_session", ("MY_DB", "LITESTAR_SESSION")),
+        ('"MixedDb"."MixedTable"', ("MixedDb", "MixedTable")),
+        ('my_db."Mixed""Table"', ("MY_DB", 'Mixed"Table')),
+        ('"Dot.Db".plain_table', ("Dot.Db", "PLAIN_TABLE")),
+    ],
+)
+def test_split_teradata_table_name_normalizes_identifiers(raw_name: str, expected: tuple[str | None, str]) -> None:
+    """split_teradata_table_name uppercases unquoted segments and preserves double-quoted identifiers."""
+    assert split_teradata_table_name(raw_name) == expected
+
+
+@pytest.mark.parametrize(
+    "invalid_name", ["", "   ", ".tbl", "db.", "cat.db.tbl", "db..tbl", '"unterminated', 'db.""', 'db.bad"quote']
+)
+def test_split_teradata_table_name_rejects_invalid_identifiers(invalid_name: str) -> None:
+    """split_teradata_table_name rejects empty, malformed, and multi-dot table names."""
+    with pytest.raises(ImproperConfigurationError, match="Invalid Teradata table name"):
+        split_teradata_table_name(invalid_name)
+
+
+def test_teradata_existence_sql_uses_locking_trim_and_typed_placeholders() -> None:
+    """Teradata catalog existence probes use LOCKING ROW FOR ACCESS, TRIM, UPPER, and typed CAST(? AS VARCHAR(128))."""
+    for sql in (_TERADATA_TABLE_EXISTS_SQL, _TERADATA_INDEX_EXISTS_SQL):
+        assert sql.startswith("LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.")
+        assert "UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE)))" in sql
+        assert "UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))" in sql
+        parsed = sqlglot.parse_one(sql, read="teradata")
+        assert parsed.sql("teradata")
+    assert "UPPER(TRIM(IndexName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))" in _TERADATA_INDEX_EXISTS_SQL
+
+
+def test_resolve_reconcile_adbc_dialect_normalizes_vantage() -> None:
+    """resolve_reconcile_adbc_dialect maps vantage hints and FlightSQL statement dialects to teradata."""
+    assert resolve_reconcile_adbc_dialect({"uri": "grpc+tls://host:443", "adbc_dialect": "vantage"}, None) == "teradata"
+    assert (
+        resolve_reconcile_adbc_dialect({"driver": "flightsql", "uri": "grpc+tls://host:443"}, "vantage") == "teradata"
+    )
+
+
+@pytest.mark.parametrize("detected", ["teradata", "vantage"])
+def test_teradata_statement_config_uses_vantage_sqlglot_dialect(detected: str) -> None:
+    from sqlglot.dialects.dialect import Dialect
+
+    from sqlspec.adapters.adbc.core import get_statement_config
+
+    assert get_statement_config(detected).dialect == "vantage"
+    assert Dialect.get("vantage") is not None
+
+
+def test_teradata_driver_reports_teradata_for_vantage_statement_config() -> None:
+    from sqlspec.adapters.adbc.core import get_statement_config
+
+    def _marker(expression: Any, context: Any) -> Any:
+        return expression
+
+    statement_config = get_statement_config("teradata").replace(statement_transformers=(_marker,))
+    driver = AdbcDriver(Mock(adbc_connection=None), statement_config=statement_config)
+    assert driver.statement_config.statement_transformers == (_marker,)
+    assert driver.dialect == "vantage"
+    assert driver._dialect_name == "teradata"
+
+
+def test_teradata_error_codes_map_only_for_teradata_sources() -> None:
+    from adbc_driver_manager import OperationalError
+
+    from sqlspec.adapters.adbc.core import create_mapped_exception, create_teradata_mapped_exception
+    from sqlspec.adapters.adbc.driver import AdbcExceptionHandler
+    from sqlspec.exceptions import PermissionDeniedError
+
+    def make_error(message: str) -> OperationalError:
+        return OperationalError(message, status_code=AdbcStatusCode.UNKNOWN, vendor_code=None, sqlstate=None)
+
+    unmarked = make_error("[Error 3523] request rejected")
+    assert type(create_mapped_exception(unmarked)) is SQLSpecError
+    assert isinstance(create_teradata_mapped_exception(unmarked), PermissionDeniedError)
+    assert isinstance(
+        create_mapped_exception(make_error("[Teradata Database] [Error 3523] denied")), PermissionDeniedError
+    )
+
+    for dialect, expected in (("teradata", PermissionDeniedError), ("postgres", SQLSpecError)):
+        handler = AdbcExceptionHandler(dialect)
+        with handler:
+            raise make_error("[Error 3523] request rejected")
+        assert type(handler.pending_exception) is expected
+
+
+def test_snowflake_script_binds_only_real_placeholders() -> None:
+    """Stages, pipe ordinals, and comment markers do not consume subsequent statement binds."""
+    executed: list[tuple[str, Any]] = []
+    cursor = SimpleNamespace(
+        execute=lambda sql, parameters=None: executed.append((sql, parameters)),
+        close=lambda: None,
+        rowcount=0,
+        description=None,
+    )
+    connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
+    result = driver.execute_script("SELECT $1 FROM @stage; SELECT ? AS value; SELECT ? AS other", (7, 8))
+    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT 7 AS value", None), ("SELECT 8 AS other", None)]
+    assert result.successful_statements == 3
+
+
+def test_adbc_snowflake_observability_and_statement_query_tags() -> None:
+    """Per-session Snowflake telemetry and correlation tags preserve shared runtime identity."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+    from sqlspec.utils.correlation import CorrelationContext
+
+    calls: list[dict[str, Any]] = []
+    events: list[Any] = []
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"OK": [1]}),
+        description=[("OK",)],
+        rowcount=1,
+    )
+
+    def make_cursor(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return cursor
+
+    connection = SimpleNamespace(cursor=make_cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake", driver_features={"query_tag": "etl"})
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+    with CorrelationContext.context("req-7"):
+        assert driver.select_one("SELECT 1 AS ok") == {"ok": 1}
+    driver.execute("SELECT 1 AS ok")
+    assert calls == [
+        {"adbc_stmt_kwargs": {"adbc.snowflake.statement.query_tag": "etl:req-7"}},
+        {"adbc_stmt_kwargs": {"adbc.snowflake.statement.query_tag": "etl"}},
+    ]
+    assert [event.db_system for event in events] == ["snowflake", "snowflake"]
+    assert events[0].correlation_id == "req-7"
+    assert runtime.config_name == "AdbcConfig"
+
+
+def test_adbc_non_snowflake_cursor_has_no_statement_options() -> None:
+    """Other ADBC backends retain the zero-keyword cursor contract."""
+    calls: list[dict[str, Any]] = []
+    cursor: Any = SimpleNamespace(close=lambda: None)
+
+    def make_cursor(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return cursor
+
+    connection = SimpleNamespace(cursor=make_cursor, adbc_get_info=lambda: {"vendor_name": "SQLite"})
+    driver = AdbcDriver(cast("Any", connection), dialect="sqlite", driver_features={"query_tag": "unused"})
+    with driver.with_cursor(cast("Any", connection)) as opened:
+        assert opened is cursor
+    assert calls == [{}]
+
+
+def test_adbc_snowflake_observability_observes_hooks_registered_after_attach() -> None:
+    """Attaching an idle runtime preserves later hook registration and backend identity."""
+    from sqlspec.observability import ObservabilityRuntime
+
+    queries: list[dict[str, Any]] = []
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"OK": [1]}),
+        description=[("OK",)],
+        rowcount=1,
+    )
+    connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
+    runtime = ObservabilityRuntime(config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+    runtime.register_lifecycle_hook("on_query_start", queries.append)
+
+    assert driver.select_one("SELECT 1 AS ok") == {"ok": 1}
+    assert len(queries) == 1
+    assert driver.observability is runtime
+    assert queries[0]["sql"] == "SELECT 1 AS ok"
+    assert queries[0]["driver"] == "AdbcDriver"
+    event = runtime.create_statement_event(
+        sql=queries[0]["sql"],
+        parameters=None,
+        driver=queries[0]["driver"],
+        db_system=queries[0]["db_system"],
+        operation="SELECT",
+    )
+    assert event.db_system == "snowflake"
+    assert runtime.config_name == "AdbcConfig"
+
+
+def test_adbc_backend_identity_does_not_leak_across_shared_runtime() -> None:
+    """One live runtime attributes Snowflake sessions without leaking that identity to other ADBC backends."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    started: list[dict[str, Any]] = []
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"VALUE": [1]}),
+        description=[("VALUE",)],
+        rowcount=1,
+    )
+    snowflake_connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    sqlite_connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "SQLite"})
+    snowflake = AdbcDriver(cast("Any", snowflake_connection), dialect="snowflake")
+    sqlite = AdbcDriver(cast("Any", sqlite_connection), dialect="sqlite")
+    snowflake.attach_observability(runtime)
+    sqlite.attach_observability(runtime)
+    runtime.register_lifecycle_hook("on_query_start", started.append)
+    for driver in (snowflake, sqlite, snowflake):
+        assert driver.select_value("SELECT 1 AS value") == 1
+    assert [event.db_system for event in events] == ["snowflake", "adbc", "snowflake"]
+    assert [event.driver for event in events] == ["AdbcDriver", "AdbcDriver", "AdbcDriver"]
+    assert len(started) == 3
+
+
+def test_adbc_snowflake_script_parameter_slicing_and_stream_cleanup() -> None:
+    """Snowflake multi-statement scripts slice positional parameters per statement and emit observer events."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    executed: list[tuple[str, Any]] = []
+    events: list[Any] = []
+    cursor = SimpleNamespace(
+        execute=lambda sql, parameters=None: executed.append((sql, parameters)),
+        close=lambda: None,
+        description=None,
+        rowcount=1,
+    )
+    connection = SimpleNamespace(cursor=lambda **_kw: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(
+        cast("Any", connection), statement_config=get_statement_config("snowflake"), dialect="snowflake"
+    )
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+
+    stmt = SQL(
+        "INSERT INTO t VALUES (?); INSERT INTO t VALUES (?, ?);",
+        10,
+        20,
+        30,
+        statement_config=driver.statement_config,
+        is_script=True,
+    )
+    result = driver.dispatch_statement_execution(stmt, cast("Any", connection))
+    assert result.total_statements == 2
+    assert executed == [("INSERT INTO t VALUES (?)", [10]), ("INSERT INTO t VALUES (?, ?)", [20, 30])]
+    assert [event.db_system for event in events] == ["snowflake", "snowflake", "snowflake"]
+
+    closed_steps: list[str] = []
+
+    def fail_first() -> None:
+        closed_steps.append("first")
+        raise RuntimeError("close boom")
+
+    driver._stream_closers.extend([fail_first, lambda: closed_steps.append("second")])
+    with pytest.raises(RuntimeError, match="close boom"):
+        driver.close_streams()
+    assert closed_steps == ["first", "second"]
+    assert runtime.config_name == "AdbcConfig"
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "snowflake"])
+def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
+    """Drivers that cannot bind null-typed Arrow parameters receive NULL literals instead."""
+    config = get_statement_config(dialect)
+
+    compiled_sql, parameters = SQL(
+        "INSERT INTO items (name, note) VALUES (:name, :note)", {"name": "x", "note": None}, statement_config=config
+    ).compile()
+
+    assert "NULL" in compiled_sql.upper()
+    assert list(parameters) == ["x"]

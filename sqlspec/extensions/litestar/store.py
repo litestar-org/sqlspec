@@ -8,7 +8,13 @@ from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 from litestar.stores.base import Store
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync, metadata_has_index
+from sqlspec.migrations.schema import (
+    DropStatement,
+    SchemaTarget,
+    ensure_schema_async,
+    ensure_schema_sync,
+    metadata_has_index,
+)
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
@@ -99,7 +105,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         self._config = config
         self._validate_extension_config()
         self._table_name = self._table_name_from_config()
-        self._ensure_table_name(self._table_name)
+        self._validate_table_name(self._table_name)
 
     @property
     def config(self) -> ConfigT:
@@ -281,6 +287,10 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         """
         raise NotImplementedError
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the session table and its indexes."""
+        return [DropStatement(statement) for statement in self._drop_table_sql()]
+
     def _log_table_created(self) -> None:
         logger.debug(
             "Litestar session table ready",
@@ -334,6 +344,14 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         if isinstance(value, str):
             return value.encode("utf-8")
         return value
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate the configured session table name; adapters may accept qualified names.
+
+        Args:
+            table_name: Table name to validate.
+        """
+        self._ensure_table_name(table_name)
 
     @staticmethod
     def _ensure_table_name(table_name: str) -> None:

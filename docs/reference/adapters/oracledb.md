@@ -14,12 +14,18 @@ from sqlspec.adapters.oracledb import (
     OracleSyncDriver,
     OracleSyncExceptionHandler,
     OracleTopologyConfig,
+    OracleSyncIdentifierStrategy,
+    OracleAsyncIdentifierStrategy,
+    OracleSyncVPDStrategy,
+    OracleAsyncVPDStrategy,
 )
 ```
 
 Synchronous and asynchronous Oracle Database adapters built on `python-oracledb` (Thin and Thick modes) with `VECTOR`, `JSON`, `LOB`, and Advanced Queuing support. Inherited execution methods are documented on [`SyncDriverAdapterBase`](../driver/sync.md) and [`AsyncDriverAdapterBase`](../driver/async.md). See the [Oracle Database Setup Guide](../../databases/oracledb.md) for wallet, pool, and vector configuration, and the [Oracle Data Dictionary & SQL Catalog](../data-dictionary/dialects/oracle.md).
 
 ## Configuration & Parameters
+
+The [connection and pool parameter table](../../databases/oracledb.md#connection-and-pool-parameters) lists every supported key, type, and default.
 
 ::: sqlspec.adapters.oracledb.OracleSyncConfig
     options:
@@ -34,12 +40,14 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 ::: sqlspec.adapters.oracledb.OracleConnectionParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 
 ::: sqlspec.adapters.oracledb.OraclePoolParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 
@@ -64,6 +72,34 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
       heading_level: 4
       members: false
 
+## Tenant Strategies
+
+Set `tenant_strategy` to `"default"`, `"identifier"`, or `True` for client-identifier metadata. VPD requires an explicit mode-specific VPD strategy with trusted `set_procedure`, `clear_procedure`, `namespace`, and `attribute` names, plus an administrator-provisioned package and database policy. Confirm edition and licensing with your DBA. Identity alone does not enforce row access.
+
+The strategy composes existing session hooks (automatically binding `driver_features["session_context_hook"]` when no explicit strategy-level hook is passed, and rejecting mismatched explicit hooks), preserves NLS/edition/time-zone behavior, and verifies the server identifier and VPD context. Oracle identifiers must fit in 64 UTF-8 bytes. Cleanup failure physically drops pooled connections. Both providers require an explicit tenant or bypass; standalone `create_connection()` is rejected in tenant mode. Hook calls and server verification can require multiple round trips.
+
+Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
+
+::: sqlspec.adapters.oracledb.OracleSyncIdentifierStrategy
+    options:
+      heading_level: 4
+      members: [__init__, checkout, checkin]
+
+::: sqlspec.adapters.oracledb.OracleAsyncIdentifierStrategy
+    options:
+      heading_level: 4
+      members: [__init__, checkout, checkin]
+
+::: sqlspec.adapters.oracledb.OracleSyncVPDStrategy
+    options:
+      heading_level: 4
+      members: [__init__, checkout, checkin]
+
+::: sqlspec.adapters.oracledb.OracleAsyncVPDStrategy
+    options:
+      heading_level: 4
+      members: [__init__, checkout, checkin]
+
 ## Driver, Pool & Data Dictionary
 
 ::: sqlspec.adapters.oracledb.OracleSyncDriver
@@ -78,12 +114,12 @@ Synchronous and asynchronous Oracle Database adapters built on `python-oracledb`
 
 ::: sqlspec.adapters.oracledb.OracleSyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.oracledb.OracleAsyncExceptionHandler
     options:
-      heading_level: 3
+      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.oracledb.data_dictionary.OracledbSyncDataDictionary

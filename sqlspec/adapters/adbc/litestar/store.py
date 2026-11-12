@@ -21,13 +21,16 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
+    _TERADATA_TABLE_EXISTS_SQL,
     is_postgres_dialect,
+    resolve_dialect_name,
     resolve_reconcile_adbc_dialect,
+    split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.exceptions import IntegrityError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
@@ -70,6 +73,28 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         super().__init__(config)
         self._dialect: str | None = None
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
+
+        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
+        """
+        if "." in table_name and self._configured_dialect() == "teradata":
+            schema_part, _, table_part = table_name.partition(".")
+            if schema_part and table_part and "." not in table_part:
+                BaseSQLSpecStore._ensure_table_name(schema_part)
+                BaseSQLSpecStore._ensure_table_name(table_part)
+                return
+        BaseSQLSpecStore._ensure_table_name(table_name)
+
+    def _configured_dialect(self) -> "str | None":
+        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
+        connection_config = getattr(self._config, "connection_config", None)
+        if not isinstance(connection_config, Mapping):
+            return None
+        return resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -149,13 +174,15 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             return
         connection_config = getattr(self._config, "connection_config", None)
         explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
-        if isinstance(connection_config, Mapping) and (connection_config.get("gizmosql_backend") or explicit_dialect):
+        if isinstance(connection_config, Mapping) and (
+            connection_config.get("gizmosql_backend") or connection_config.get("adbc_dialect") or explicit_dialect
+        ):
             resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
             if resolved is not None:
                 self._dialect = resolved
                 return
         dialect_value = getattr(driver, "dialect", None)
-        raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+        raw_dialect = resolve_dialect_name(dialect_value) if dialect_value else "postgres"
         if raw_dialect in {"tsql", "sqlserver"}:
             self._dialect = "mssql"
         elif raw_dialect == "postgresql":
@@ -180,6 +207,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
         dialect = self._resolve_schema_dialect()
         parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "teradata":
+            schema_name, catalog_table = split_teradata_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
             return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
@@ -214,6 +244,16 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             END;
             """.strip()
             return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+        if dialect == "teradata":
+            schema, table = split_teradata_table_name(self._table_name)
+            slug = self._table_name.replace(".", "_").replace('"', "")
+            name = f"idx_{slug}_expires_at"
+            return [
+                CompanionIndex(
+                    name=name, table=table, schema=schema, ddl=f"CREATE INDEX {name} (expires_at) ON {self._table_name}"
+                )
+            ]
 
         if dialect == "db2":
             schema_name, catalog_table = _split_db2_table_name(self._table_name)
@@ -251,7 +291,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         with self._config.provide_session() as driver:
             dialect_value = driver.dialect
-            raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+            raw_dialect = resolve_dialect_name(dialect_value) if dialect_value else "postgres"
             self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
 
         assert self._dialect is not None
@@ -264,6 +304,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             SQL statement to create the sessions table with proper indexes.
         """
         dialect = self._get_dialect()
+
+        if dialect == "teradata":
+            return (
+                f"CREATE MULTISET TABLE {self._table_name} ("
+                "session_id VARCHAR(255) NOT NULL PRIMARY KEY, data BLOB NOT NULL, "
+                "expires_at TIMESTAMP(6) WITH TIME ZONE)"
+            )
 
         if is_postgres_dialect(dialect):
             return f"""
@@ -427,6 +474,21 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
     def _create_table(self) -> None:
         """Synchronous implementation of create_table using ADBC driver."""
         dialect = self._get_dialect()
+        if dialect == "teradata":
+            schema, table = split_teradata_table_name(self._table_name)
+            with self._config.provide_session() as driver:
+                try:
+                    if driver.select_one_or_none(_TERADATA_TABLE_EXISTS_SQL, (schema, table)) is None:
+                        driver.execute(self._table_ddl())
+                        driver.commit()
+                    self.reconcile_companion_objects_sync(driver)
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+            self._log_table_created()
+            return
         if dialect == "oracle":
             table_block = self._table_ddl().strip()
             index_block = f"""
@@ -481,6 +543,19 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
         self._log_table_created()
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._get_dialect() != "teradata":
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self._table_name),
+            )
+            for statement in self._drop_table_sql()
+        ]
+
     def _drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.
 
@@ -488,6 +563,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             List of SQL statements to drop indexes and table.
         """
         dialect = self._get_dialect()
+
+        if dialect == "teradata":
+            return [f"DROP TABLE {self._table_name}"]
 
         if dialect in {"bigquery", "snowflake"}:
             return [f"DROP TABLE IF EXISTS {self._table_name}"]
@@ -616,15 +694,47 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             VALUES ({p1}, {p2}, {p3})
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
-        elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
-            bind_data: bytes | str = data.hex() if dialect == "snowflake" else data
-            insert_data_expr = f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
-            update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
+        elif dialect == "snowflake":
+            bind_hex = data.hex()
+            if expires_at is None:
+                sql = (
+                    f"MERGE INTO {self._table_name} t "
+                    f"USING (SELECT {p1} AS session_id, TO_BINARY({p2}, 'HEX') AS data, NULL AS expires_at) s "
+                    "ON t.session_id = s.session_id "
+                    "WHEN MATCHED THEN UPDATE SET data = s.data, expires_at = s.expires_at "
+                    "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
+                    "VALUES (s.session_id, s.data, s.expires_at)"
+                )
+                merge_params: tuple[Any, ...] = (key, bind_hex)
+            else:
+                sql = (
+                    f"MERGE INTO {self._table_name} t "
+                    f"USING (SELECT {p1} AS session_id, TO_BINARY({p2}, 'HEX') AS data, {p3} AS expires_at) s "
+                    "ON t.session_id = s.session_id "
+                    "WHEN MATCHED THEN UPDATE SET data = s.data, expires_at = s.expires_at "
+                    "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
+                    "VALUES (s.session_id, s.data, s.expires_at)"
+                )
+                merge_params = (key, bind_hex, expires_at)
             with self._config.provide_session() as driver:
                 try:
-                    check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
+                    driver.execute(sql, *merge_params)
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+            return
+        elif dialect in {"bigquery", "oracle", "db2", "mssql", "teradata"}:
+            bind_data: bytes | str = data
+            insert_data_expr = p2
+            update_data_expr = p1
+            with self._config.provide_session() as driver:
+                try:
+                    count_alias = _count_alias(dialect)
+                    check_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = _count_value(result, count_alias)
                     exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
@@ -777,13 +887,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         if is_postgres_dialect(dialect):
             sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts} RETURNING session_id"
         else:
-            count_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE expires_at <= {current_ts}"
+            count_alias = _count_alias(dialect)
+            count_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE expires_at <= {current_ts}"
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = _count_value(result, count_alias)
                     count = int(raw_count) if raw_count else 0
 
                     if count > 0:
@@ -810,3 +921,15 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
             else:
                 return count
+
+
+def _count_alias(dialect: str) -> str:
+    """Return the COUNT(*) column alias, avoiding Teradata's reserved COUNT keyword."""
+    return "row_count" if dialect == "teradata" else "count"
+
+
+def _count_value(row: "dict[str, Any] | None", alias: str) -> Any:
+    """Return a COUNT alias from a row regardless of the backend's label case."""
+    if not row:
+        return 0
+    return row.get(alias, row.get(alias.upper(), 0))

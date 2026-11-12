@@ -9,9 +9,9 @@ from sqlspec.extensions.fastapi.providers import provide_filters as _provide_fil
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
-    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+    from sqlspec.config import AsyncDatabaseConfig, DriverT, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
     from sqlspec.core import FilterTypes
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.extensions.fastapi.providers import DependencyDefaults, FilterConfig
@@ -37,68 +37,82 @@ class SQLSpecPlugin(_StarlettePlugin):
     @overload
     def provide_session(
         self, key: None = None
-    ) -> "Callable[[Request], AsyncDriverAdapterBase | SyncDriverAdapterBase]": ...
+    ) -> "Callable[[Request], Awaitable[AsyncDriverAdapterBase | SyncDriverAdapterBase]]": ...
     @overload
-    def provide_session(self, key: str) -> "Callable[[Request], AsyncDriverAdapterBase | SyncDriverAdapterBase]": ...
+    def provide_session(
+        self, key: str
+    ) -> "Callable[[Request], Awaitable[AsyncDriverAdapterBase | SyncDriverAdapterBase]]": ...
     @overload
-    def provide_session(self, key: "type[AsyncDatabaseConfig]") -> "Callable[[Request], AsyncDriverAdapterBase]": ...
+    def provide_session(
+        self, key: "type[AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]]"
+    ) -> "Callable[[Request], Awaitable[DriverT]]": ...
     @overload
-    def provide_session(self, key: "type[SyncDatabaseConfig]") -> "Callable[[Request], SyncDriverAdapterBase]": ...
+    def provide_session(
+        self, key: "type[SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]]"
+    ) -> "Callable[[Request], Awaitable[DriverT]]": ...
     @overload
-    def provide_session(self, key: "AsyncDatabaseConfig") -> "Callable[[Request], AsyncDriverAdapterBase]": ...
+    def provide_session(
+        self, key: "AsyncDatabaseConfig[Any, Any, DriverT] | NoPoolAsyncConfig[Any, DriverT]"
+    ) -> "Callable[[Request], Awaitable[DriverT]]": ...
     @overload
-    def provide_session(self, key: "SyncDatabaseConfig") -> "Callable[[Request], SyncDriverAdapterBase]": ...
+    def provide_session(
+        self, key: "SyncDatabaseConfig[Any, Any, DriverT] | NoPoolSyncConfig[Any, DriverT]"
+    ) -> "Callable[[Request], Awaitable[DriverT]]": ...
     def provide_session(
         self,
-        key: "str | type[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig | None" = None,
-    ) -> "Callable[[Request], AsyncDriverAdapterBase | SyncDriverAdapterBase]":
+        key: "str | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | None" = None,
+    ) -> "Callable[[Request], Awaitable[Any]]":
         """Create dependency factory for session injection.
 
-        Returns a callable that can be used with FastAPI's Depends() to inject
-        a database session into route handlers.
+        Returns an async callable compatible with FastAPI's ``Depends()`` that
+        acquires deferred tenant leases on demand once an earlier dependency or
+        middleware has called :func:`~sqlspec.extensions.fastapi.set_request_tenant`.
 
         Args:
-            key: Optional session key (str), config type for type narrowing, or None.
+            key: Optional session/bind key, unique config class, config instance, or None.
 
         Returns:
             Dependency callable for FastAPI Depends().
         """
-        session_key = key if isinstance(key, str) or key is None else None
 
-        def dependency(request: Request) -> _Session:
-            return self.get_session(request, session_key)  # type: ignore[no-any-return]
+        async def dependency(request: Request) -> _Session:
+            return await self.get_session_async(request, key)  # type: ignore[no-any-return]
 
         return dependency
 
-    def provide_async_session(self, key: "str | None" = None) -> "Callable[[Request], AsyncDriverAdapterBase]":
+    def provide_async_session(
+        self,
+        key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]] | None" = None,
+    ) -> "Callable[[Request], Awaitable[AsyncDriverAdapterBase]]":
         """Create dependency factory for async session injection.
 
-        Type-narrowed version of provide_session() that returns AsyncDriverAdapterBase.
-        Useful when using string keys and you know the config is async.
+        Type-narrowed version of ``provide_session()`` returning ``AsyncDriverAdapterBase``.
 
         Args:
-            key: Optional session key for multi-database configurations.
+            key: Optional session key, config class, or config instance.
 
         Returns:
-            Dependency callable that returns AsyncDriverAdapterBase.
+            Async dependency callable returning ``AsyncDriverAdapterBase``.
         """
 
-        def dependency(request: Request) -> _AsyncSession:
-            return self.get_session(request, key)  # type: ignore[no-any-return]
+        async def dependency(request: Request) -> _AsyncSession:
+            return await self.get_session_async(request, key)  # type: ignore[no-any-return]
 
         return dependency
 
-    def provide_sync_session(self, key: "str | None" = None) -> "Callable[[Request], SyncDriverAdapterBase]":
+    def provide_sync_session(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]] | None" = None,
+    ) -> "Callable[[Request], SyncDriverAdapterBase]":
         """Create dependency factory for sync session injection.
 
-        Type-narrowed version of provide_session() that returns SyncDriverAdapterBase.
-        Useful when using string keys and you know the config is sync.
+        Type-narrowed version of ``provide_session()`` returning ``SyncDriverAdapterBase``.
 
         Args:
-            key: Optional session key for multi-database configurations.
+            key: Optional session key, config class, or config instance.
 
         Returns:
-            Dependency callable that returns SyncDriverAdapterBase.
+            Dependency callable returning ``SyncDriverAdapterBase``.
         """
 
         def dependency(request: Request) -> _SyncSession:
@@ -107,68 +121,75 @@ class SQLSpecPlugin(_StarlettePlugin):
         return dependency
 
     @overload
-    def provide_connection(self, key: None = None) -> "Callable[[Request], Any]": ...
+    def provide_connection(self, key: None = None) -> "Callable[[Request], Awaitable[Any]]": ...
     @overload
-    def provide_connection(self, key: str) -> "Callable[[Request], Any]": ...
+    def provide_connection(self, key: str) -> "Callable[[Request], Awaitable[Any]]": ...
     @overload
-    def provide_connection(self, key: "type[AsyncDatabaseConfig]") -> "Callable[[Request], Any]": ...
+    def provide_connection(
+        self, key: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
+    ) -> "Callable[[Request], Awaitable[Any]]": ...
     @overload
-    def provide_connection(self, key: "type[SyncDatabaseConfig]") -> "Callable[[Request], Any]": ...
+    def provide_connection(
+        self, key: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
+    ) -> "Callable[[Request], Awaitable[Any]]": ...
     @overload
-    def provide_connection(self, key: "AsyncDatabaseConfig") -> "Callable[[Request], Any]": ...
+    def provide_connection(
+        self, key: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]"
+    ) -> "Callable[[Request], Awaitable[Any]]": ...
     @overload
-    def provide_connection(self, key: "SyncDatabaseConfig") -> "Callable[[Request], Any]": ...
+    def provide_connection(
+        self, key: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]"
+    ) -> "Callable[[Request], Awaitable[Any]]": ...
     def provide_connection(
         self,
-        key: "str | type[AsyncDatabaseConfig | SyncDatabaseConfig] | AsyncDatabaseConfig | SyncDatabaseConfig | None" = None,
-    ) -> "Callable[[Request], Any]":
+        key: "str | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | None" = None,
+    ) -> "Callable[[Request], Awaitable[Any]]":
         """Create dependency factory for connection injection.
 
-        Returns a callable that can be used with FastAPI's Depends() to inject
+        Returns an async callable compatible with FastAPI's ``Depends()`` to inject
         a database connection into route handlers.
 
         Args:
-            key: Optional session key (str), config type for type narrowing, or None.
+            key: Optional session/bind key, unique config class, config instance, or None.
 
         Returns:
             Dependency callable for FastAPI Depends().
         """
-        connection_key = key if isinstance(key, str) or key is None else None
 
-        def dependency(request: Request) -> Any:
-            return self.get_connection(request, connection_key)
+        async def dependency(request: Request) -> Any:
+            return await self.get_connection_async(request, key)
 
         return dependency
 
-    def provide_async_connection(self, key: "str | None" = None) -> "Callable[[Request], Any]":
+    def provide_async_connection(
+        self,
+        key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]] | None" = None,
+    ) -> "Callable[[Request], Awaitable[Any]]":
         """Create dependency factory for async connection injection.
 
-        Type-narrowed version of provide_connection() for async connections.
-        Useful when using string keys and you know the config is async.
-
         Args:
-            key: Optional session key for multi-database configurations.
+            key: Optional session key, config class, or config instance.
 
         Returns:
-            Dependency callable for async connection.
+            Async dependency callable returning the raw database connection.
         """
 
-        def dependency(request: Request) -> Any:
-            return self.get_connection(request, key)
+        async def dependency(request: Request) -> Any:
+            return await self.get_connection_async(request, key)
 
         return dependency
 
-    def provide_sync_connection(self, key: "str | None" = None) -> "Callable[[Request], Any]":
+    def provide_sync_connection(
+        self,
+        key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]] | None" = None,
+    ) -> "Callable[[Request], Any]":
         """Create dependency factory for sync connection injection.
 
-        Type-narrowed version of provide_connection() for sync connections.
-        Useful when using string keys and you know the config is sync.
-
         Args:
-            key: Optional session key for multi-database configurations.
+            key: Optional session key, config class, or config instance.
 
         Returns:
-            Dependency callable for sync connection.
+            Dependency callable returning the raw database connection.
         """
 
         def dependency(request: Request) -> Any:
@@ -226,5 +247,6 @@ class SQLSpecPlugin(_StarlettePlugin):
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
             "auto_trace_headers": framework_config.get("auto_trace_headers", True),
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "fastapi"),
         }

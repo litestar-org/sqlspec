@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
-from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import DropStatement, SchemaEnsureResult, SchemaTarget, metadata_has_index
 from sqlspec.utils.adapters import resolve_adapter_name
 
 if TYPE_CHECKING:
@@ -85,6 +85,10 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     def drop_statements(self) -> "list[str]":
         """Return statements required to drop queue artifacts."""
         return [self._wrap_drop_statement(f"DROP TABLE {self.table_name}")]
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the queue table and its companion objects."""
+        return [DropStatement(statement) for statement in self.drop_statements()]
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""

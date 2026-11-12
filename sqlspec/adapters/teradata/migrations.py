@@ -1,0 +1,76 @@
+"""Teradata migration tracker with native MULTISET DDL."""
+
+from typing import TYPE_CHECKING
+
+from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_identifier, format_table_ref, split_schema_and_table
+from sqlspec.builder import CreateTable, sql
+from sqlspec.migrations.schema import DropStatement
+from sqlspec.migrations.tracker import SyncMigrationTracker
+
+if TYPE_CHECKING:
+    from sqlspec.driver import SyncDriverAdapterBase
+
+__all__ = ("TeradataSyncMigrationTracker", "build_guarded_drop_table")
+
+
+def build_guarded_drop_table(table_name: str, statement: str | None = None) -> DropStatement:
+    """Return a DROP TABLE that runs only when ``DBC.TablesV`` lists the table.
+
+    Args:
+        table_name: Table or database.table name, quoted parts kept exact and unquoted parts upper-folded.
+        statement: DROP statement to run; defaults to ``DROP TABLE`` on the quoted table reference.
+
+    Returns:
+        Catalog-probed drop for extension downgrades.
+    """
+    return DropStatement(
+        statement or f"DROP TABLE {format_table_ref(table_name)}",
+        exists_sql=TABLE_EXISTS_SQL,
+        exists_parameters=split_schema_and_table(table_name),
+    )
+
+
+class TeradataSyncMigrationTracker(SyncMigrationTracker):
+    """Track migrations using bounded Teradata metadata columns."""
+
+    def _tracking_table_ddl(self) -> CreateTable:
+        return (
+            sql
+            .create_table(self.version_table)
+            .column("version_num", "VARCHAR(32)", primary_key=True)
+            .column("version_type", "VARCHAR(16)")
+            .column("execution_sequence", "INTEGER")
+            .column("description", "VARCHAR(4096)")
+            .column("applied_at", "TIMESTAMP(6) WITH TIME ZONE", default="CURRENT_TIMESTAMP(6)", not_null=True)
+            .column("execution_time_ms", "INTEGER")
+            .column("checksum", "VARCHAR(64)")
+            .column("applied_by", "VARCHAR(255)")
+            .column("replaces", "VARCHAR(4096)")
+        )
+
+    def _tracking_table_exists_sql(self) -> tuple[str, tuple[str | None, str]]:
+        """Return the parameterized catalog probe and exact object identity."""
+        return TABLE_EXISTS_SQL, split_schema_and_table(self.version_table)
+
+    def _tracking_table_create_sql(self) -> str:
+        """Render native MULTISET DDL without unsupported IF NOT EXISTS."""
+        columns = []
+        for col in self._tracking_table_ddl().columns:
+            default = f" DEFAULT {col.default}" if col.default else ""
+            required = " NOT NULL" if col.not_null or col.primary_key else ""
+            primary = " PRIMARY KEY" if col.primary_key else ""
+            columns.append(f"{format_identifier(col.name)} {col.dtype}{default}{required}{primary}")
+        table_ref = format_table_ref(self.version_table, allow_schema=True)
+        return f"CREATE MULTISET TABLE {table_ref} (" + ", ".join(columns) + ")"
+
+    def _ensure_tracking_table_exists(self, driver: "SyncDriverAdapterBase") -> None:
+        """Probe DBC.TablesV and create the tracking table only when absent."""
+        probe, parameters = self._tracking_table_exists_sql()
+        if driver.select_one_or_none(probe, *parameters) is None:
+            driver.execute_script(self._tracking_table_create_sql())
+            self._safe_commit(driver)
+
+    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
+        """Create the tracker when missing, then reconcile existing columns."""
+        self._ensure_tracking_table_exists(driver)
+        self._migrate_schema_if_needed(driver)

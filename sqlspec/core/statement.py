@@ -575,11 +575,10 @@ class SQL:
         if op_type in RETURNS_ROWS_OPERATIONS:
             return True
 
-        if state.parsed_expression:
-            expr = state.parsed_expression
-            if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
-                returning = expr.args.get("returning")
-                return bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
+        expr = state.parsed_expression
+        if isinstance(expr, (exp.Insert, exp.Update, exp.Delete)):
+            returning = expr.args.get("returning")
+            return bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
 
         return False
 
@@ -624,6 +623,8 @@ class SQL:
 
         try:
             config = self._statement_config
+            if config.dialect is None and self._dialect is not None and Dialect.get(self._dialect) is not None:
+                config = config._with_dialect(self._dialect)
             mixed = self._resolve_mixed_parameter_inputs()
             raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
             params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
@@ -1089,13 +1090,14 @@ class SQL:
         from sqlspec.builder import Delete, ExpressionBuilder, Insert, Merge, Select, Update
 
         builder_dialect = dialect or self._dialect
+        lexical_dialect = self._normalize_dialect(builder_dialect)
         converter = self._statement_config.parameter_converter or ParameterConverter(
             self._statement_config.parameter_validator
         )
         raw_params = self.parameters
         raw_sql_for_builder = self._materialized_raw_sql()
         converted_sql, converted_params = converter.convert_placeholder_style(
-            raw_sql_for_builder, raw_params, ParameterStyle.NAMED_COLON, is_many=False
+            raw_sql_for_builder, raw_params, ParameterStyle.NAMED_COLON, is_many=False, dialect=lexical_dialect
         )
         state = self._processed_state
 
@@ -1162,7 +1164,7 @@ class SQL:
             and isinstance(converted_params, Sequence)
             and not isinstance(converted_params, (str, bytes, bytearray))
         ):
-            param_info = converter.validator.extract_parameters(converted_sql)
+            param_info = converter.validator.extract_parameters(converted_sql, dialect=lexical_dialect)
             param_map: dict[str, Any] = {}
             for index, param in enumerate(param_info):
                 if index >= len(converted_params):
@@ -1222,7 +1224,7 @@ class SQL:
         if dialect is None:
             return None
         if isinstance(dialect, str):
-            return dialect
+            return dialect.strip().lower() or None
         if isinstance(dialect, type) and issubclass(dialect, Dialect):
             return dialect.__name__.lower()
         return type(dialect).__name__.lower()
@@ -1341,7 +1343,7 @@ class SQL:
         if not positional or not named or self._is_many:
             return None
         raw = self._materialized_raw_sql()
-        infos = self._statement_config.parameter_validator.extract_parameters(raw)
+        infos = self._statement_config.parameter_validator.extract_parameters(raw, dialect=self._dialect)
         ordinal_styles = {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
         index_styles = {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
         positional_styles = ordinal_styles | index_styles
@@ -1520,7 +1522,7 @@ class SQL:
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
         logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
         mixed = self._mixed_parameter_inputs()
-        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
+        params = mixed[1] if mixed is not None else self._named_parameters.copy() or self._positional_parameters.copy()
         return self._build_processed_state(
             compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
             execution_parameters=params,
@@ -1599,21 +1601,28 @@ class SQL:
             and self._statement_config.enable_parsing
         ):
             try:
-                parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
+                parsed = sqlglot.parse_one(
+                    unescape_qmark_operator(raw_sql, dialect=self._dialect)[0], dialect=self._dialect
+                )
                 if isinstance(parsed, exp.Expr):
                     return parsed
             except ParseError:
                 pass
-        if state is not Empty and state.parsed_expression is not None:
-            return state.parsed_expression.copy()
-        if self.statement_expression is not None:
-            return self.statement_expression.copy()
-        if self._raw_expression is not None:
-            return self._raw_expression.copy()
+        parsed_expression = state.parsed_expression if state is not Empty else None
+        if parsed_expression is not None:
+            return parsed_expression.copy()
+        statement_expression = self.statement_expression
+        if statement_expression is not None:
+            return statement_expression.copy()
+        raw_expression = self._raw_expression
+        if raw_expression is not None:
+            return raw_expression.copy()
         if not self._statement_config.enable_parsing:
             return self._wrapped_raw_sql_expression(raw_sql)
         try:
-            parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
+            parsed = sqlglot.parse_one(
+                unescape_qmark_operator(raw_sql, dialect=self._dialect)[0], dialect=self._dialect
+            )
             if isinstance(parsed, exp.Expr):
                 return parsed
             return self._wrapped_raw_sql_expression(raw_sql)
@@ -1625,7 +1634,12 @@ class SQL:
             msg = "Cannot build an expression from an empty SQL statement."
             raise sqlspec.exceptions.SQLParsingError(msg)
         try:
-            return exp.Select().select("*").from_("(" + unescape_qmark_operator(raw_sql)[0] + ") AS filtered")
+            return (
+                exp
+                .Select()
+                .select("*")
+                .from_("(" + unescape_qmark_operator(raw_sql, dialect=self._dialect)[0] + ") AS filtered")
+            )
         except ParseError as exc:
             msg = f"Failed to parse SQL statement: {exc}"
             raise sqlspec.exceptions.SQLParsingError(msg) from exc
@@ -1721,7 +1735,13 @@ class StatementConfig:
     and other processing options for SQL statements.
     """
 
-    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer", "_user_statement_transformers")
+    __slots__ = (
+        *SQL_CONFIG_SLOTS,
+        "_dialect_variants",
+        "_has_transformers",
+        "_has_output_transformer",
+        "_user_statement_transformers",
+    )
 
     def __init__(
         self,
@@ -1822,6 +1842,7 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
+        self._dialect_variants: dict[str, StatementConfig] | None = None
         self._has_transformers = bool(self._user_statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
 
@@ -1922,6 +1943,31 @@ class StatementConfig:
     def freeze(self) -> None:
         """Mark the configuration as immutable to enable caching."""
         self._is_frozen = True
+
+    def _with_dialect(self, dialect: str) -> "StatementConfig":
+        """Return this configuration with ``dialect`` set.
+
+        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
+        processing caches carry over between statements.
+
+        Args:
+            dialect: SQLGlot dialect name.
+
+        Returns:
+            Configuration whose ``dialect`` is ``dialect``.
+        """
+        if not self._is_frozen:
+            return self.replace(dialect=dialect)
+        variants = self._dialect_variants
+        if variants is None:
+            variants = {}
+            self._dialect_variants = variants
+        derived = variants.get(dialect)
+        if derived is None:
+            derived = self.replace(dialect=dialect)
+            derived.freeze()
+            variants[dialect] = derived
+        return derived
 
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.

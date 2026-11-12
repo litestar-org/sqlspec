@@ -76,3 +76,10 @@ def test_mssql_python_failed_migration_leaves_no_partial_work(
     assert_failed_migration_leaves_no_partial_work(
         tmp_path, MssqlPythonConfig, connection_config, SQLSpecError, "Base table or view not found"
     )
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_mssql_python_tenant_policy_and_transaction_ownership(mssql_service: MSSQLService, autocommit: bool) -> None:
+    from tests.integration.adapters.mssql._tenant import assert_native_tenant_acceptance
+
+    assert_native_tenant_acceptance("mssql_python", _mssql_python_connection_config(mssql_service), autocommit)

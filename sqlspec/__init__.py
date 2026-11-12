@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     )
     from sqlspec.core import filters as filters
     from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
-    from sqlspec.exceptions import StackExecutionError
+    from sqlspec.exceptions import StackExecutionError, TenantCleanupError, TenantContextError
     from sqlspec.extensions.events import (
         AsyncEventChannel,
         AsyncEventListener,
@@ -102,6 +102,7 @@ if TYPE_CHECKING:
         format_statement_event,
     )
     from sqlspec.typing import ConnectionT, PoolT, SchemaT, StatementParameters, SupportedSchemaModel
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
     from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 
 __all__ = (
@@ -159,6 +160,10 @@ __all__ = (
     "SyncEventChannel",
     "SyncEventListener",
     "TelemetryConfig",
+    "TenantCleanupError",
+    "TenantContext",
+    "TenantContextError",
+    "TenantContextPayload",
     "Update",
     "__version__",
     "adapters",
@@ -248,6 +253,10 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "SyncEventChannel": ("sqlspec.extensions.events", "SyncEventChannel"),
     "SyncEventListener": ("sqlspec.extensions.events", "SyncEventListener"),
     "TelemetryConfig": ("sqlspec.observability", "TelemetryConfig"),
+    "TenantCleanupError": ("sqlspec.exceptions", "TenantCleanupError"),
+    "TenantContext": ("sqlspec.utils.tenant", "TenantContext"),
+    "TenantContextError": ("sqlspec.exceptions", "TenantContextError"),
+    "TenantContextPayload": ("sqlspec.utils.tenant", "TenantContextPayload"),
     "Update": ("sqlspec.builder", "Update"),
     "adapters": ("sqlspec.adapters", None),
     "base": ("sqlspec.base", None),

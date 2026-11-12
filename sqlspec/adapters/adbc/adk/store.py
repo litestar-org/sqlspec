@@ -3,30 +3,35 @@
 import contextlib
 import re
 import struct
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
+from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcNotSupportedError
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
+    _TERADATA_INDEX_EXISTS_SQL,
+    _TERADATA_TABLE_EXISTS_SQL,
     RECONCILE_ADBC_DIALECTS,
+    create_teradata_mapped_exception,
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
     is_sqlite_reconcile_target,
     resolve_dialect_from_config,
     resolve_reconcile_adbc_dialect,
+    split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.config import ADKConfig
-from sqlspec.core.parameters._validator import PARAMETER_REGEX
+from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.data_dictionary import normalize_dialect_name
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
-from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index, run_drop_statements_sync
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -39,6 +44,7 @@ if TYPE_CHECKING:
 __all__ = ("AdbcADKConfig", "AdbcADKMemoryStore", "AdbcADKStore", "decode_adbc_pgvector", "format_pgvector_literal")
 
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
+_STORE_PARAMETER_VALIDATOR: Final[ParameterValidator] = ParameterValidator()
 
 
 class AdbcADKConfig(ADKConfig):
@@ -72,6 +78,7 @@ DIALECT_ORACLE: Final = "oracle"
 DIALECT_DB2: Final = "db2"
 DIALECT_MSSQL: Final = "mssql"
 DIALECT_GENERIC: Final = "generic"
+DIALECT_TERADATA: Final = "teradata"
 
 _DB2_WITH_DEFAULT_RE: Final[re.Pattern[str]] = re.compile(r"\bWITH\s+DEFAULT\b", re.IGNORECASE)
 _SCHEMA_TARGET_PARSE_DIALECTS: Final[dict[str, str]] = {DIALECT_POSTGRESQL: "postgres", DIALECT_MSSQL: "tsql"}
@@ -86,6 +93,7 @@ ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "undefined name",
     "ora-00942",
     "sql0204n",
+    "error 3807",
 )
 
 
@@ -115,6 +123,27 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     """
 
     __slots__ = ("_dialect",)
+
+    def drop_tables(self) -> None:
+        """Drop all ADK tables in FK-safe order, probing the Teradata catalog before each drop."""
+        if self._dialect != DIALECT_TERADATA:
+            super().drop_tables()
+            return
+        _run_guarded_drops(self._config, self.downgrade_drops())
+        self._log_tables_dropped()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        tables = (
+            self._metadata_table,
+            self._user_state_table,
+            self._app_state_table,
+            self._events_table,
+            self._session_table,
+        )
+        return [_teradata_guarded_drop(table) for table in tables]
 
     def __init__(self, config: "AdbcConfig") -> None:
         """Initialize ADBC ADK store.
@@ -327,16 +356,20 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return to_json(state)
 
     def _deserialize_state(self, data: Any) -> "dict[str, Any]":
-        """Deserialize state data from JSON string.
+        """Deserialize state data from JSON string, bytes, or native mapping.
 
         Args:
-            data: JSON string from database.
+            data: JSON string, bytes, or mapping from database.
 
         Returns:
             Deserialized state dictionary.
         """
         if data is None:
             return {}
+        if isinstance(data, Mapping):
+            return dict(data)
+        if isinstance(data, (bytes, bytearray)):
+            return cast("dict[str, Any]", from_json(bytes(data)))
         return cast("dict[str, Any]", from_json(str(data)))
 
     def _serialize_json_field(self, value: Any) -> "str | None":
@@ -361,6 +394,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return "VARIANT"
         if self._dialect == DIALECT_ORACLE:
             return "CLOB"
+        if self._dialect == DIALECT_TERADATA:
+            return "JSON"
         if self._dialect == DIALECT_DB2:
             return "CLOB(1M)"
         if self._dialect == DIALECT_MSSQL:
@@ -376,6 +411,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return "REAL"
         if self._dialect == DIALECT_ORACLE:
             return "TIMESTAMP WITH TIME ZONE"
+        if self._dialect == DIALECT_TERADATA:
+            return "TIMESTAMP(6) WITH TIME ZONE"
         if self._dialect == DIALECT_DB2:
             return "TIMESTAMP"
         if self._dialect == DIALECT_MSSQL:
@@ -386,13 +423,17 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Deserialize optional JSON field from database.
 
         Args:
-            data: JSON string from database or None.
+            data: JSON string, bytes, mapping, or None from database.
 
         Returns:
             Deserialized dictionary or None.
         """
         if data is None:
             return None
+        if isinstance(data, Mapping):
+            return dict(data)
+        if isinstance(data, (bytes, bytearray)):
+            return cast("dict[str, Any]", from_json(bytes(data)))
         return cast("dict[str, Any]", from_json(str(data)))
 
     def _sessions_table_ddl(self) -> str:
@@ -401,6 +442,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL statement to create adk_sessions table.
         """
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(self._sessions_ddl_db2())
         if self._dialect == DIALECT_POSTGRESQL:
             return self._sessions_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -583,6 +626,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             SQL statement to create adk_events table.
         """
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(self._events_ddl_db2())
         if self._dialect == DIALECT_POSTGRESQL:
             return self._events_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -791,6 +836,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     END IF;
             END;
             """
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(f"""
+            CREATE TABLE {self._app_state_table} (
+                app_name VARCHAR(128) NOT NULL PRIMARY KEY,
+                state CLOB(1M) NOT NULL,
+                update_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP
+            )
+            """)
         if self._dialect == DIALECT_DB2:
             return f"""
             CREATE TABLE {self._app_state_table} (
@@ -851,6 +904,16 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     END IF;
             END;
             """
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(f"""
+            CREATE TABLE {self._user_state_table} (
+                app_name VARCHAR(128) NOT NULL,
+                user_id VARCHAR(128) NOT NULL,
+                state CLOB(1M) NOT NULL,
+                update_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP,
+                PRIMARY KEY (app_name, user_id)
+            )
+            """)
         if self._dialect == DIALECT_DB2:
             return f"""
             CREATE TABLE {self._user_state_table} (
@@ -912,6 +975,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     END IF;
             END;
             """
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(f"""
+            CREATE TABLE {self._metadata_table} (
+                "KEY" VARCHAR(128) NOT NULL PRIMARY KEY,
+                value VARCHAR(512) NOT NULL
+            )
+            """)
         if self._dialect == DIALECT_DB2:
             return f"""
             CREATE TABLE {self._metadata_table} (
@@ -1048,6 +1118,25 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             params.append(user_id)
             where_clause = f"{where_clause} AND user_id = ?"
 
+        if self._dialect == DIALECT_TERADATA:
+            order = f"{column} {direction}, id {direction}"
+            top = f"TOP {int(limit)} " if limit is not None and not offset else ""
+            page = ""
+            if offset:
+                if limit is None:
+                    page = f" QUALIFY ROW_NUMBER() OVER (ORDER BY {order}) >= ?"
+                    params.append(offset + 1)
+                else:
+                    page = f" QUALIFY ROW_NUMBER() OVER (ORDER BY {order}) BETWEEN ? AND ?"
+                    params.extend((offset + 1, offset + limit))
+            return (
+                (
+                    f"SELECT {top}id, app_name, user_id, state, create_time, update_time "
+                    f"FROM {self._session_table} WHERE {where_clause}{page} ORDER BY {order}"
+                ),
+                tuple(params),
+            )
+
         page_clause = ""
         if limit is not None:
             if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
@@ -1069,7 +1158,21 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Return a JSON parameter placeholder for the current dialect."""
         if self._dialect == DIALECT_POSTGRESQL:
             return "?::jsonb"
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return "PARSE_JSON(?)"
         return "?"
+
+    def _snowflake_state_merge_sql(self, table: str, key_columns: tuple[str, ...]) -> str:
+        """Build a Snowflake MERGE upsert statement for app or user state tables."""
+        source_cols = [*(f"? AS {col}" for col in key_columns), "PARSE_JSON(?) AS state", "? AS update_time"]
+        join_predicate = " AND ".join(f"t.{col} = s.{col}" for col in key_columns)
+        insert_cols = (*key_columns, "state", "update_time")
+        insert_vals = ", ".join(f"s.{col}" for col in insert_cols)
+        return (
+            f"MERGE INTO {table} t USING (SELECT {', '.join(source_cols)}) s ON {join_predicate} "
+            "WHEN MATCHED THEN UPDATE SET state = s.state, update_time = s.update_time "
+            f"WHEN NOT MATCHED THEN INSERT ({', '.join(insert_cols)}) VALUES ({insert_vals})"
+        )
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1092,17 +1195,30 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-            VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
-            """
+            if self._dialect == DIALECT_SNOWFLAKE:
+                sql = (
+                    f"INSERT INTO {self._session_table} "
+                    f"(id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time) "
+                    f"SELECT ?, ?, ?, ?, {state_placeholder}, ?, ?"
+                )
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table}
+                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+                VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
+                """
             params = (session_id, app_name, user_id, owner_id, state_json, now_val, now_val)
         else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (?, ?, ?, {state_placeholder}, ?, ?)
-            """
+            if self._dialect == DIALECT_SNOWFLAKE:
+                sql = (
+                    f"INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time) "
+                    f"SELECT ?, ?, ?, {state_placeholder}, ?, ?"
+                )
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+                VALUES (?, ?, ?, {state_placeholder}, ?, ?)
+                """
             params = (session_id, app_name, user_id, state_json, now_val, now_val)
 
         with self._config.provide_connection() as conn:
@@ -1221,14 +1337,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             user_id: User identifier.
             session_id: Session identifier.
         """
-        delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = ?"
+        delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._enable_foreign_keys(cursor, conn)
-                self._execute(cursor, delete_events_sql, (session_id,))
+                self._execute(cursor, delete_events_sql, (app_name, user_id, session_id))
                 if self._dialect == DIALECT_DUCKDB:
                     conn.commit()
                 self._execute(cursor, delete_session_sql, (app_name, user_id, session_id))
@@ -1298,11 +1414,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             event_record: Event record to store.
         """
         event_data = self._serialize_json_field(event_record["event_data"])
-        sql = f"""
-        INSERT INTO {self._events_table} (
-            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
-        """
+        if self._dialect == DIALECT_SNOWFLAKE:
+            sql = (
+                f"INSERT INTO {self._events_table} "
+                "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+            )
+        else:
+            sql = f"""
+            INSERT INTO {self._events_table} (
+                id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+            ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
+            """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -1353,11 +1476,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_state: Optional app-scoped state snapshot.
             user_state: Optional user-scoped state snapshot.
         """
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
-            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
-        """
+        if self._dialect == DIALECT_SNOWFLAKE:
+            insert_sql = (
+                f"INSERT INTO {self._events_table} "
+                "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+            )
+        else:
+            insert_sql = f"""
+            INSERT INTO {self._events_table} (
+                id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+            ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
+            """
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = {self._json_placeholder()}, update_time = ?
@@ -1382,7 +1512,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         event_data = self._serialize_json_field(event_record["event_data"])
         now_val = self._encode_timestamp(datetime.now(UTC))
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
@@ -1403,17 +1533,29 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         ),
                     )
                     if app_state is not None:
-                        self._execute(cursor, delete_app_state_sql, (app_name,))
-                        self._execute(
-                            cursor, insert_app_state_sql, (app_name, self._serialize_state(app_state), now_val)
-                        )
+                        serialized_app_state = self._serialize_state(app_state)
+                        if self._dialect == DIALECT_SNOWFLAKE:
+                            self._execute(
+                                cursor,
+                                self._snowflake_state_merge_sql(self._app_state_table, ("app_name",)),
+                                (app_name, serialized_app_state, now_val),
+                            )
+                        else:
+                            self._execute(cursor, delete_app_state_sql, (app_name,))
+                            self._execute(cursor, insert_app_state_sql, (app_name, serialized_app_state, now_val))
                     if user_state is not None:
-                        self._execute(cursor, delete_user_state_sql, (app_name, user_id))
-                        self._execute(
-                            cursor,
-                            insert_user_state_sql,
-                            (app_name, user_id, self._serialize_state(user_state), now_val),
-                        )
+                        serialized_user_state = self._serialize_state(user_state)
+                        if self._dialect == DIALECT_SNOWFLAKE:
+                            self._execute(
+                                cursor,
+                                self._snowflake_state_merge_sql(self._user_state_table, ("app_name", "user_id")),
+                                (app_name, user_id, serialized_user_state, now_val),
+                            )
+                        else:
+                            self._execute(cursor, delete_user_state_sql, (app_name, user_id))
+                            self._execute(
+                                cursor, insert_user_state_sql, (app_name, user_id, serialized_user_state, now_val)
+                            )
                     conn.commit()
                 else:
                     with contextlib.suppress(Exception):
@@ -1458,6 +1600,9 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be a non-negative integer"
+            raise ValueError(msg)
         if limit == 0:
             return []
 
@@ -1471,13 +1616,16 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         where_clause = " AND ".join(where_clauses)
         limit_clause = ""
         if limit is not None:
-            if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
+            if self._dialect == DIALECT_TERADATA:
+                pass
+            elif self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
                 limit_clause = " OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
             else:
                 limit_clause = " LIMIT ?"
-            params.append(limit)
+            if self._dialect != DIALECT_TERADATA:
+                params.append(limit)
         sql = f"""
-        SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
+        SELECT {f"TOP {int(limit)} " if self._dialect == DIALECT_TERADATA and limit is not None else ""}e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
         JOIN {self._session_table} s ON e.session_id = s.id
         WHERE {where_clause}
@@ -1554,7 +1702,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         delete_sessions_sql = f"DELETE FROM {self._session_table} {where}"
 
         try:
-            with self._config.provide_connection() as conn:
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, count_sql, params)
@@ -1635,30 +1783,52 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        now_val = self._encode_timestamp(datetime.now(UTC))
+        serialized = self._serialize_state(state)
+        if self._dialect == DIALECT_SNOWFLAKE:
+            merge_sql = self._snowflake_state_merge_sql(self._app_state_table, ("app_name",))
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, merge_sql, (app_name, serialized, now_val))
+                    conn.commit()
+                finally:
+                    cursor.close()
+            return
         delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
         insert_sql = f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (?, {self._json_placeholder()}, ?)"
-        now_val = self._encode_timestamp(datetime.now(UTC))
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name,))
-                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), now_val))
+                self._execute(cursor, insert_sql, (app_name, serialized, now_val))
                 conn.commit()
             finally:
                 cursor.close()
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        now_val = self._encode_timestamp(datetime.now(UTC))
+        serialized = self._serialize_state(state)
+        if self._dialect == DIALECT_SNOWFLAKE:
+            merge_sql = self._snowflake_state_merge_sql(self._user_state_table, ("app_name", "user_id"))
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, merge_sql, (app_name, user_id, serialized, now_val))
+                    conn.commit()
+                finally:
+                    cursor.close()
+            return
         delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
         insert_sql = f"""
         INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (?, ?, {self._json_placeholder()}, ?)
         """
-        now_val = self._encode_timestamp(datetime.now(UTC))
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name, user_id))
-                self._execute(cursor, insert_sql, (app_name, user_id, self._serialize_state(state), now_val))
+                self._execute(cursor, insert_sql, (app_name, user_id, serialized, now_val))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1685,7 +1855,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         key_col = _metadata_key_column(self._dialect)
         delete_sql = f"DELETE FROM {self._metadata_table} WHERE {key_col} = ?"
         insert_sql = f"INSERT INTO {self._metadata_table} ({key_col}, value) VALUES (?, ?)"
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (key,))
@@ -1703,6 +1873,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     """ADBC synchronous ADK memory store for Arrow Database Connectivity."""
 
     __slots__ = ("_dialect", "_sqlite_fts_enabled")
+
+    def drop_tables(self) -> None:
+        """Drop the memory table, probing the Teradata catalog before dropping."""
+        if self._dialect != DIALECT_TERADATA:
+            super().drop_tables()
+            return
+        _run_guarded_drops(self._config, self.downgrade_drops())
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        return [_teradata_guarded_drop(self._memory_table)]
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
@@ -1896,6 +2079,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def _memory_base_table_ddl(self) -> str:
         """Return the base CREATE TABLE DDL for the current dialect without FTS companions."""
+        if self._dialect == DIALECT_TERADATA:
+            return _teradata_ddl(self._memory_ddl_db2())
         if self._dialect == DIALECT_POSTGRESQL:
             return self._memory_ddl_postgresql()
         if self._dialect == DIALECT_SQLITE:
@@ -2286,6 +2471,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def _postgres_memory_extra_index_sql(self) -> "list[str]":
         return [sql for _, sql in self._postgres_memory_extra_index_specs()]
 
+    def _snowflake_memory_merge_sql(self) -> str:
+        merge_columns = ["id", "session_id", "app_name", "user_id", "scope", "event_id", "author"]
+        if self._owner_id_column_name:
+            merge_columns.append(self._owner_id_column_name)
+        merge_columns.extend(("timestamp", "content_json", "content_text", "metadata_json", "inserted_at"))
+        merge_source = ", ".join(
+            f"PARSE_JSON(?) AS {col}" if col in {"content_json", "metadata_json"} else f"? AS {col}"
+            for col in merge_columns
+        )
+        return (
+            f"MERGE INTO {self._memory_table} t USING (SELECT {merge_source}) s ON t.event_id = s.event_id "
+            f"WHEN NOT MATCHED THEN INSERT ({', '.join(merge_columns)}) "
+            f"VALUES ({', '.join(f's.{col}' for col in merge_columns)})"
+        )
+
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2323,6 +2523,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            sql = self._snowflake_memory_merge_sql()
         elif self._owner_id_column_name:
             if use_returning:
                 sql = f"""
@@ -2363,7 +2565,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 )
                 """
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 entries_to_insert = entries
@@ -2457,6 +2659,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         self._execute(cursor, sql, params)
                         if cursor.fetchone():
                             inserted_count += 1
+                    elif self._dialect == DIALECT_SNOWFLAKE:
+                        self._execute(cursor, sql, params)
+                        rowcount = getattr(cursor, "rowcount", None)
+                        inserted_count += rowcount if isinstance(rowcount, int) and rowcount >= 0 else 1
                     else:
                         try:
                             self._execute(cursor, sql, params)
@@ -2466,6 +2672,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                                 getattr(exc, "sqlstate", None) == "23505"
                                 or "unique" in error_message
                                 or "duplicate" in error_message
+                                or any(
+                                    code in error_message
+                                    for code in ("error 2801", "error 2802", "error 2803", "uniqueness violation")
+                                )
                                 or "ora-00001" in error_message
                                 or "sql0803n" in error_message
                             ):
@@ -2507,6 +2717,11 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if not has_query and embedding is None:
             return []
 
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be a non-negative integer"
+            raise ValueError(msg)
+        if limit == 0:
+            return []
         effective_limit = limit if limit is not None else self._max_results
 
         if embedding is not None:
@@ -2548,18 +2763,23 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         elif self._dialect == DIALECT_DB2:
             match_clause = "POSSTR(LOWER(content_text), LOWER(?)) > 0"
             search_param = query
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            match_clause = "content_text ILIKE ?"
+            search_param = f"%{query.strip()}%"
         else:
             match_clause = "content_text LIKE ?"
             search_param = f"%{query}%"
 
-        if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
+        if self._dialect == DIALECT_TERADATA:
+            limit_clause = ""
+        elif self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
             limit_clause = "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
         else:
             limit_clause = "LIMIT ?"
 
         embedding_projection = ", embedding::text AS embedding" if self._pgvector_enabled() else ""
         sql = f"""
-        SELECT id, session_id, app_name, user_id, scope, event_id, author,
+        SELECT {f"TOP {int(effective_limit)} " if self._dialect == DIALECT_TERADATA else ""}id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at{embedding_projection}
         FROM {self._memory_table}
         WHERE {where_scope}
@@ -2572,7 +2792,13 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    self._execute(cursor, sql, (*scope_params, search_param, effective_limit))
+                    self._execute(
+                        cursor,
+                        sql,
+                        (*scope_params, search_param)
+                        if self._dialect == DIALECT_TERADATA
+                        else (*scope_params, search_param, effective_limit),
+                    )
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
@@ -2771,19 +2997,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 content_text = row[9]
                 inserted_at_raw = row[11]
 
-            if isinstance(content_json, dict):
-                content_value = content_json
+            if isinstance(content_json, Mapping):
+                content_value = dict(content_json)
+            elif isinstance(content_json, (bytes, bytearray)):
+                content_value = from_json(bytes(content_json))
             else:
-                content_value = from_json(content_json if isinstance(content_json, (str, bytes)) else str(content_json))
+                content_value = from_json(content_json if isinstance(content_json, str) else str(content_json))
 
             if metadata_json is None:
                 metadata_value = None
-            elif isinstance(metadata_json, dict):
-                metadata_value = metadata_json
+            elif isinstance(metadata_json, Mapping):
+                metadata_value = dict(metadata_json)
+            elif isinstance(metadata_json, (bytes, bytearray)):
+                metadata_value = from_json(bytes(metadata_json))
             else:
-                metadata_value = from_json(
-                    metadata_json if isinstance(metadata_json, (str, bytes)) else str(metadata_json)
-                )
+                metadata_value = from_json(metadata_json if isinstance(metadata_json, str) else str(metadata_json))
 
             records.append({
                 "id": row_id,
@@ -2858,11 +3086,11 @@ def _postgresql_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="postgres"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f"${index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f"${index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -2873,11 +3101,11 @@ def _oracle_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="oracle"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f":{index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f":{index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -2885,7 +3113,7 @@ def _oracle_store_sql(sql: str) -> str:
 def _metadata_key_column(dialect: str) -> str:
     if dialect == DIALECT_MSSQL:
         return "[key]"
-    if dialect == DIALECT_DB2:
+    if dialect in {DIALECT_DB2, DIALECT_TERADATA}:
         return '"KEY"'
     return "key"
 
@@ -2903,6 +3131,10 @@ def _db2_index_exists(cursor: Any, index_name: str) -> bool:
 
 
 def _execute_table_ddl(cursor: Any, dialect: str, table_name: str, ddl: str) -> None:
+    if dialect == DIALECT_TERADATA:
+        if not _teradata_table_exists(cursor, table_name):
+            cursor.execute(ddl)
+        return
     if dialect == DIALECT_DB2:
         if not _db2_table_exists(cursor, table_name):
             cursor.execute(ddl)
@@ -2915,6 +3147,8 @@ def _adbc_index_slug(table_name: str) -> str:
 
 
 def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, str]:
+    if dialect == DIALECT_TERADATA:
+        return split_teradata_table_name(table_name)
     if dialect == DIALECT_DB2:
         return _split_db2_table_name(table_name)
     raw_schema, dot, raw_table = table_name.rpartition(".")
@@ -2924,7 +3158,7 @@ def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, s
 
 
 def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> str:
-    driver_name = config.connection_config.get("driver_name", "")
+    driver_name = config.connection_config.get("driver_name") or config.connection_config.get("driver") or ""
     if (
         isinstance(driver_name, str)
         and driver_name
@@ -2946,7 +3180,10 @@ def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> s
 
     resolved = resolve_dialect_from_config(config.connection_config)
     stmt_dialect = config.statement_config.dialect
-    if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
+    if (
+        isinstance(stmt_dialect, str)
+        and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql", "teradata", "vantage"}
+    ) or (
         resolved is None
         and isinstance(stmt_dialect, str)
         and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
@@ -2964,6 +3201,8 @@ def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> s
         return DIALECT_SNOWFLAKE
     if resolved == "oracle":
         return DIALECT_ORACLE
+    if resolved in {"teradata", "vantage"}:
+        return DIALECT_TERADATA
     if resolved == "db2":
         return DIALECT_DB2
     if resolved in {"mssql", "tsql"}:
@@ -2991,6 +3230,9 @@ def _build_adbc_schema_target(dialect: str, table: str, ddl: str) -> SchemaTarge
 
 
 def _index_ddl_for_dialect(dialect: str, index_name: str, table_name: str, columns: str) -> str:
+    if dialect == DIALECT_TERADATA:
+        columns = re.sub(r"\s+(?:ASC|DESC)\b", "", columns, flags=re.IGNORECASE)
+        return f"CREATE INDEX {index_name} ({columns}) ON {table_name}"
     if dialect == DIALECT_ORACLE:
         return (
             f"BEGIN EXECUTE IMMEDIATE 'CREATE INDEX {index_name} ON {table_name}({columns})'; "
@@ -3041,6 +3283,12 @@ def _reconcile_adbc_indexes_sync(
 
 
 def _execute_index_ddl(cursor: Any, dialect: str, index_name: str, table_name: str, columns: str) -> None:
+    if dialect == DIALECT_TERADATA:
+        schema, table = split_teradata_table_name(table_name)
+        cursor.execute(_TERADATA_INDEX_EXISTS_SQL, (schema, table, index_name))
+        if cursor.fetchone() is None:
+            cursor.execute(_index_ddl_for_dialect(dialect, index_name, table_name, columns))
+        return
     if dialect == DIALECT_DB2:
         if not _db2_index_exists(cursor, index_name):
             cursor.execute(_index_ddl_for_dialect(dialect, index_name, table_name, columns))
@@ -3049,6 +3297,8 @@ def _execute_index_ddl(cursor: Any, dialect: str, index_name: str, table_name: s
 
 
 def _drop_table_sql_for_dialect(dialect: str, table_name: str) -> str:
+    if dialect == DIALECT_TERADATA:
+        return f"DROP TABLE {table_name}"
     if dialect == DIALECT_ORACLE:
         return (
             f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; "
@@ -3074,3 +3324,136 @@ def _build_adbc_scope_where(
     if scope_filter == "user":
         return "app_name = ? AND scope = 'user' AND user_id = ?", (app_name, user_id)
     return "app_name = ? AND scope = 'app'", (app_name,)
+
+
+def _teradata_ddl(ddl: str) -> str:
+    """Translate the sized relational schema into Teradata storage types."""
+    return (
+        ddl
+        .strip()
+        .replace("CREATE TABLE", "CREATE MULTISET TABLE", 1)
+        .replace("content_text CLOB(1M)", "content_text CLOB")
+        .replace("CLOB(1M)", "JSON")
+        .replace("NOT NULL WITH DEFAULT 'user'", "DEFAULT 'user' NOT NULL")
+        .replace(
+            "TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP",
+            "TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL",
+        )
+        .replace("TIMESTAMP NOT NULL", "TIMESTAMP(6) WITH TIME ZONE NOT NULL")
+        .replace(" ON DELETE CASCADE", "")
+    )
+
+
+def _teradata_guarded_drop(table_name: str) -> DropStatement:
+    """Return a DROP TABLE that runs only when the Teradata catalog lists the table."""
+    return DropStatement(
+        _drop_table_sql_for_dialect(DIALECT_TERADATA, table_name),
+        exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+        exists_parameters=split_teradata_table_name(table_name),
+    )
+
+
+def _run_guarded_drops(config: "AdbcConfig", drops: "list[DropStatement]") -> None:
+    """Run catalog-probed drops in one session and commit."""
+    with config.provide_session() as driver:
+        run_drop_statements_sync(driver, drops)
+        driver.commit()
+
+
+def _teradata_table_exists(cursor: Any, table_name: str) -> bool:
+    schema, table = split_teradata_table_name(table_name)
+    cursor.execute(_TERADATA_TABLE_EXISTS_SQL, (schema, table))
+    return cursor.fetchone() is not None
+
+
+class _AdbcNativeTransactionConnection:
+    """DB-API connection view that commits and rolls back on the native ADBC connection.
+
+    The DB-API wrapper disables ``commit()`` when the connection opened in autocommit mode, so a
+    transaction started with ``set_autocommit(False)`` must finish on ``adbc_connection``.
+    """
+
+    __slots__ = ("_connection", "_native")
+
+    def __init__(self, connection: Any, native: Any) -> None:
+        self._connection = connection
+        self._native = native
+
+    def cursor(self) -> Any:
+        """Return a cursor from the wrapped DB-API connection."""
+        return self._connection.cursor()
+
+    def commit(self) -> None:
+        """Commit the native transaction."""
+        self._native.commit()
+
+    def rollback(self) -> None:
+        """Roll back the native transaction."""
+        self._native.rollback()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
+@contextlib.contextmanager
+def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+    """Require transaction support before compound Teradata mutations.
+
+    Yields:
+        A connection with autocommit disabled for the compound operation.
+
+    Raises:
+        TransactionError: If the Teradata connection cannot provide transactions.
+    """
+    with config.provide_connection() as raw_connection:
+        connection: Any = raw_connection
+        if dialect != DIALECT_TERADATA:
+            yield connection
+            return
+        native = getattr(connection, "adbc_connection", None)
+        set_autocommit = getattr(native, "set_autocommit", None)
+        get_option = getattr(native, "get_option", None)
+        mode = None
+        if callable(get_option):
+            try:
+                mode = get_option("adbc.connection.autocommit")
+            except (AdbcNotSupportedError, NotImplementedError):
+                mode = None
+            except AdbcNativeError as exc:
+                raise create_teradata_mapped_exception(exc) from exc
+        previous = mode == "true" if mode in {"true", "false"} else getattr(connection, "_autocommit", None)
+        if not callable(set_autocommit) or not isinstance(previous, bool):
+            msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
+            raise TransactionError(msg)
+        try:
+            set_autocommit(False)
+        except (AdbcNotSupportedError, NotImplementedError) as exc:
+            msg = "ADBC Teradata supports autocommit-only operations; this compound mutation requires a transaction."
+            raise TransactionError(msg) from exc
+        transaction_connection = _AdbcNativeTransactionConnection(connection, native) if previous else connection
+        failed = False
+        try:
+            yield transaction_connection
+        except BaseException:
+            failed = True
+            rolled_back = False
+            native_rollback = getattr(native, "rollback", None)
+            if callable(native_rollback):
+                try:
+                    native_rollback()
+                    rolled_back = True
+                except Exception:
+                    rolled_back = False
+            if not rolled_back:
+                conn_rollback = getattr(connection, "rollback", None)
+                if callable(conn_rollback):
+                    with contextlib.suppress(Exception):
+                        conn_rollback()
+            raise
+        finally:
+            if previous is True:
+                if failed:
+                    with contextlib.suppress(Exception):
+                        set_autocommit(True)
+                else:
+                    set_autocommit(True)

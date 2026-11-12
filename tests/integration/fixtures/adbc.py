@@ -2,21 +2,18 @@
 
 import contextlib
 import functools
-import gzip
-import http.server
-import threading
-import urllib.error
-import urllib.request
+import os
 from collections.abc import Callable, Generator
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import pytest
 from pytest_databases.docker.snowflake import SNOWFLAKE_HTTP_PORT, SnowflakeService, check_snowflake_health
 from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.core import StatementConfig
+from tests.fixtures.snowflake import _provide_embucket_snowflake_proxy
 
 if TYPE_CHECKING:
     from pytest_databases import ContainerService
@@ -45,6 +42,10 @@ __all__ = (
     "adbc_snowflake_session",
     "adbc_sqlite_config",
     "adbc_sqlite_session",
+    "adbc_teradata_config",
+    "adbc_teradata_flightsql_config",
+    "adbc_teradata_flightsql_session",
+    "adbc_teradata_session",
     "snowflake_service",
     "xfail_if_driver_missing",
 )
@@ -355,19 +356,18 @@ def adbc_snowflake_config(snowflake_service: SnowflakeService) -> Generator[Adbc
     pytest.importorskip("adbc_driver_snowflake")
     config = AdbcConfig(
         connection_config={
-            "driver_name": "snowflake",
-            "db_kwargs": {
-                "username": snowflake_service.user,
-                "password": snowflake_service.password,
-                "adbc.snowflake.sql.account": snowflake_service.account,
-                "adbc.snowflake.sql.db": snowflake_service.database,
-                "adbc.snowflake.sql.schema": snowflake_service.schema,
-                "adbc.snowflake.sql.warehouse": snowflake_service.warehouse,
-                "adbc.snowflake.sql.role": snowflake_service.role,
-                "adbc.snowflake.sql.uri.protocol": "http",
-                "adbc.snowflake.sql.uri.host": snowflake_service.host,
-                "adbc.snowflake.sql.uri.port": str(snowflake_service.port),
-            },
+            "driver": "snowflake",
+            "username": snowflake_service.user,
+            "password": snowflake_service.password,
+            "account": snowflake_service.account,
+            "database": snowflake_service.database,
+            "schema": snowflake_service.schema,
+            "warehouse": snowflake_service.warehouse,
+            "role": snowflake_service.role,
+            "protocol": "http",
+            "host": snowflake_service.host,
+            "port": snowflake_service.port,
+            "query_tag": "sqlspec-embucket",
         }
     )
     try:
@@ -407,190 +407,9 @@ def adbc_snowflake_session(adbc_snowflake_config: AdbcConfig) -> Generator[AdbcD
             _drop_table_quietly(session, "DROP TABLE IF EXISTS test_table_adbc_snowflake")
 
 
-class _EmbucketSnowflakeProxyHandler(http.server.BaseHTTPRequestHandler):
-    """Translate Snowflake REST v1 qmark bindings and rowset cell types for Embucket."""
-
-    upstream_host: ClassVar[str] = "127.0.0.1"
-    upstream_port: ClassVar[int] = SNOWFLAKE_HTTP_PORT
-
-    def log_message(self, format: str, *args: object) -> None:
-        """Silence per-request HTTP proxy stderr logging."""
-        _ = (format, args)
-
-    def do_GET(self) -> None:
-        """Forward HTTP GET requests to Embucket."""
-        self._forward("GET")
-
-    def do_POST(self) -> None:
-        """Forward HTTP POST requests to Embucket with Snowflake REST normalization."""
-        self._forward("POST")
-
-    def do_DELETE(self) -> None:
-        """Forward HTTP DELETE requests to Embucket."""
-        self._forward("DELETE")
-
-    def _forward(self, method: str) -> None:
-        """Forward an HTTP request to Embucket and normalize query-request payloads."""
-        content_length = int(self.headers.get("Content-Length", "0"))
-        request_body = self.rfile.read(content_length) if content_length > 0 else b""
-        headers = {
-            key: value
-            for key, value in self.headers.items()
-            if key.lower() not in {"host", "accept-encoding", "content-length", "transfer-encoding", "connection"}
-        }
-        if self.headers.get("Content-Encoding", "").lower() == "gzip" and request_body:
-            request_body = gzip.decompress(request_body)
-            headers.pop("Content-Encoding", None)
-            headers.pop("content-encoding", None)
-
-        if method == "POST" and "/queries/v1/query-request" in self.path and request_body:
-            request_body = self._rewrite_query_request(request_body)
-
-        upstream_url = f"http://{self.upstream_host}:{self.upstream_port}{self.path}"
-        upstream_request = urllib.request.Request(
-            upstream_url, data=request_body if method == "POST" else None, headers=headers, method=method
-        )
-        try:
-            with urllib.request.urlopen(upstream_request, timeout=30) as response:
-                status = response.status
-                response_body = response.read()
-                response_headers = list(response.headers.items())
-        except urllib.error.HTTPError as exc:
-            status = exc.code
-            response_body = exc.read()
-            response_headers = list(exc.headers.items())
-
-        if response_body:
-            response_body = self._normalize_response(response_body)
-
-        self.send_response(status)
-        for header_name, header_value in response_headers:
-            if header_name.lower() not in {"content-length", "transfer-encoding", "content-encoding", "connection"}:
-                self.send_header(header_name, header_value)
-        self.send_header("Content-Length", str(len(response_body)))
-        self.end_headers()
-        if response_body:
-            self.wfile.write(response_body)
-
-    @classmethod
-    def _rewrite_query_request(cls, body: bytes) -> bytes:
-        """Substitute Snowflake REST bindings into sqlText for Embucket's DataFusion planner."""
-        try:
-            payload = from_json(body)
-        except Exception:
-            return body
-        if not isinstance(payload, dict):
-            return body
-        sql_text = payload.get("sqlText")
-        bindings = payload.get("bindings")
-        if not isinstance(sql_text, str) or not isinstance(bindings, dict) or not bindings:
-            return body
-        payload["sqlText"] = cls._substitute_qmark_bindings(sql_text, bindings)
-        payload.pop("bindings", None)
-        return to_json(payload, as_bytes=True)
-
-    @classmethod
-    def _substitute_qmark_bindings(cls, sql_text: str, bindings: dict[str, Any]) -> str:
-        """Replace unquoted qmark placeholders with typed Snowflake REST binding literals."""
-        output: list[str] = []
-        index = 0
-        length = len(sql_text)
-        binding_position = 1
-        in_single_quote = False
-        in_double_quote = False
-
-        while index < length:
-            char = sql_text[index]
-            if char == "'" and not in_double_quote:
-                output.append(char)
-                if in_single_quote and index + 1 < length and sql_text[index + 1] == "'":
-                    output.append("'")
-                    index += 2
-                    continue
-                in_single_quote = not in_single_quote
-                index += 1
-                continue
-            if char == '"' and not in_single_quote:
-                output.append(char)
-                if in_double_quote and index + 1 < length and sql_text[index + 1] == '"':
-                    output.append('"')
-                    index += 2
-                    continue
-                in_double_quote = not in_double_quote
-                index += 1
-                continue
-            if char == "?" and not in_single_quote and not in_double_quote:
-                binding_entry = bindings.get(str(binding_position))
-                binding_position += 1
-                output.append(cls._format_binding_literal(binding_entry))
-                index += 1
-                continue
-            output.append(char)
-            index += 1
-
-        return "".join(output)
-
-    @staticmethod
-    def _format_binding_literal(binding_entry: Any) -> str:
-        """Format a single Snowflake REST binding entry into a SQL literal."""
-        if not isinstance(binding_entry, dict):
-            return "NULL"
-        raw_value = binding_entry.get("value")
-        if raw_value is None:
-            return "NULL"
-        binding_type = str(binding_entry.get("type", "TEXT")).upper()
-        text_value = str(raw_value)
-        if binding_type in {"FIXED", "REAL"}:
-            return text_value
-        if binding_type == "BOOLEAN":
-            return "TRUE" if text_value.lower() in {"true", "1"} else "FALSE"
-        escaped = text_value.replace("'", "''")
-        return f"'{escaped}'"
-
-    @staticmethod
-    def _normalize_response(body: bytes) -> bytes:
-        """Coerce non-null Embucket JSON rowset cells to strings matching Snowflake REST v1."""
-        try:
-            payload = from_json(body)
-        except Exception:
-            return body
-        if not isinstance(payload, dict):
-            return body
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            return body
-        rowset = data.get("rowset")
-        if not isinstance(rowset, list):
-            return body
-        data["rowset"] = [
-            [None if cell is None else str(cell) for cell in row] if isinstance(row, list) else row for row in rowset
-        ]
-        return to_json(payload, as_bytes=True)
-
-
 def _is_embucket_ready(service: "ServiceContainer") -> bool:
     """Return True when the Embucket HTTP health endpoint responds with HTTP 200."""
     return check_snowflake_health(service.host, service.port)
-
-
-@contextlib.contextmanager
-def _provide_embucket_snowflake_proxy(upstream_host: str, upstream_port: int) -> Generator[int, None, None]:
-    """Run a background HTTP forwarder normalizing Snowflake REST payloads for Embucket."""
-
-    class _BoundProxyHandler(_EmbucketSnowflakeProxyHandler):
-        pass
-
-    _BoundProxyHandler.upstream_host = upstream_host
-    _BoundProxyHandler.upstream_port = upstream_port
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _BoundProxyHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield int(server.server_address[1])
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def _drop_table_quietly(session: AdbcDriver, drop_sql: str) -> None:
@@ -648,3 +467,52 @@ def _prepare_gizmosql_test_table(session: AdbcDriver) -> None:
     )
     session.execute("DELETE FROM test_table_adbc")
     session.commit()
+
+
+@pytest.fixture
+def adbc_teradata_config() -> Generator[AdbcConfig, None, None]:
+    """Yield a native Columnar Teradata configuration when explicitly configured."""
+    uri = os.getenv("SQLSPEC_TERADATA_ADBC_URI", "").strip()
+    if not uri:
+        pytest.skip("SQLSPEC_TERADATA_ADBC_URI is not set")
+    pytest.importorskip("adbc_driver_manager")
+    config = AdbcConfig(connection_config={"driver": os.getenv("SQLSPEC_TERADATA_ADBC_DRIVER", "teradata"), "uri": uri})
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def adbc_teradata_session(adbc_teradata_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+    """Yield a native Teradata ADBC session."""
+    with adbc_teradata_config.provide_session() as session:
+        yield session
+
+
+@pytest.fixture
+def adbc_teradata_flightsql_config() -> Generator[AdbcConfig, None, None]:
+    """Yield a Teradata Flight SQL configuration when explicitly configured."""
+    uri = os.getenv("SQLSPEC_TERADATA_FLIGHTSQL_URI", "").strip()
+    if not uri:
+        pytest.skip("SQLSPEC_TERADATA_FLIGHTSQL_URI is not set")
+    pytest.importorskip("adbc_driver_flightsql")
+    options: dict[str, Any] = {"driver": "flightsql", "uri": uri}
+    for key in ("username", "password"):
+        value = os.getenv(f"SQLSPEC_TERADATA_FLIGHTSQL_{key.upper()}")
+        if value:
+            options[key] = value
+    if os.getenv("SQLSPEC_TERADATA_FLIGHTSQL_TLS_SKIP_VERIFY", "").lower() in {"1", "true"}:
+        options["db_kwargs"] = {"adbc.flight.sql.client_option.tls_skip_verify": "true"}
+    config = AdbcConfig(connection_config=options, statement_config=StatementConfig(dialect="teradata"))
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+def adbc_teradata_flightsql_session(adbc_teradata_flightsql_config: AdbcConfig) -> Generator[AdbcDriver, None, None]:
+    """Yield a Teradata Flight SQL session."""
+    with adbc_teradata_flightsql_config.provide_session() as session:
+        yield session

@@ -4,7 +4,7 @@ import asyncio
 import random
 import time
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pytest_databases.docker.postgres import PostgresService
@@ -602,3 +602,171 @@ async def test_asyncpg_statement_cache_size_zero_survives_ddl_shape_change(postg
         await run_shape_change(None)
 
     await run_shape_change(0)
+
+
+async def test_tenant_strategy_native_management_order(postgres_service: "PostgresService") -> None:
+    """Capture and restore real GUCs without target-list ordering assumptions."""
+    from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
+    from sqlspec.utils.tenant import TenantContextPayload
+
+    config = AsyncpgConfig(
+        connection_config={
+            "host": postgres_service.host,
+            "port": postgres_service.port,
+            "user": postgres_service.user,
+            "password": postgres_service.password,
+            "database": postgres_service.database,
+        }
+    )
+    connection = await config.create_connection()
+    try:
+        await connection.execute("SELECT set_config($1, $2, false)", "app.current_tenant_id", "before")
+        await connection.execute("SELECT set_config($1, $2, false)", "search_path", "")
+        strategy = AsyncpgRLSStrategy(variable_keys={"region": "app.region"}, schema_resolver=lambda _: "public")
+        state = await strategy.checkout(connection, TenantContextPayload("a", variables={"region": "eu"}))
+        assert state.baseline["app.current_tenant_id"] == "before"
+        assert state.baseline["search_path"] == ""
+        assert await connection.fetchval("SELECT current_setting($1, true)", "app.current_tenant_id") == "a"
+        await strategy.checkin(connection, state)
+        assert await connection.fetchval("SELECT current_setting($1, true)", "app.current_tenant_id") == "before"
+        assert await connection.fetchval("SELECT current_setting($1, true)", "search_path") == ""
+        assert await connection.fetchval("SELECT current_setting($1, true)", "app.region") == ""
+    finally:
+        await connection.close()
+
+
+async def test_tenant_pool_enforces_rls_and_restores_after_failures(postgres_service: "PostgresService") -> None:
+    """A size-one pool serves distinct non-bypass identities without residue."""
+    from uuid import uuid4
+
+    from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
+    from sqlspec.exceptions import MigrationError, TenantCleanupError, TenantContextError
+    from sqlspec.migrations.commands import AsyncMigrationCommands
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+    from sqlspec.utils.text import quote_identifier
+
+    suffix = uuid4().hex[:12]
+    role = "sqlspec_tenant_" + suffix
+    table = "sqlspec_tenant_rows_" + suffix
+    credentials = {
+        "host": postgres_service.host,
+        "port": postgres_service.port,
+        "user": postgres_service.user,
+        "password": postgres_service.password,
+        "database": postgres_service.database,
+    }
+    admin_config = AsyncpgConfig(connection_config=credentials)
+    admin = await admin_config.create_connection()
+    role_sql = await admin.fetchval(
+        "SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD %L', $1::text, $2::text)",
+        role,
+        "sqlspec-tenant-test",
+    )
+    await admin.execute(role_sql)
+    quoted_table = quote_identifier(table)
+    quoted_role = quote_identifier(role)
+    config = AsyncpgConfig(
+        connection_config={
+            **credentials,
+            "user": role,
+            "password": "sqlspec-tenant-test",
+            "min_size": 1,
+            "max_size": 1,
+        },
+        driver_features={
+            "tenant_strategy": AsyncpgRLSStrategy(variable_keys={"region": "app.region"}),
+            "tenant_session_baseline": {"statement_timeout": "5000", "timezone": "UTC"},
+        },
+    )
+    try:
+        await admin.execute(f"CREATE TABLE {quoted_table} (tenant_id text NOT NULL, value integer NOT NULL)")
+        await admin.execute(f"ALTER TABLE {quoted_table} ENABLE ROW LEVEL SECURITY")
+        await admin.execute(f"ALTER TABLE {quoted_table} FORCE ROW LEVEL SECURITY")
+        await admin.execute(
+            f"CREATE POLICY tenant_policy ON {quoted_table} USING (tenant_id = current_setting('app.current_tenant_id', true)) WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true))"
+        )
+        await admin.execute(f"GRANT SELECT, INSERT ON {quoted_table} TO {quoted_role}")
+        first_pid = 0
+        for tenant, value in [("a", 1), ("b", 2)]:
+            payload = TenantContextPayload(tenant, variables={"region": "eu"} if tenant == "a" else None)
+            async with config.provide_session(tenant=payload) as session:
+                pid = await session.select_value("SELECT pg_backend_pid()")
+                if first_pid:
+                    assert pid == first_pid
+                first_pid = pid
+                await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", (tenant, value))
+                assert await session.select_value(f"SELECT value FROM {quoted_table}") == value
+                assert await session.select_value("SHOW timezone") == "UTC"
+                if tenant == "b":
+                    assert await session.select_value("SELECT current_setting('app.region', true)") in {None, ""}
+        with TenantContext.scope("a"):
+            async with config.provide_session() as session:
+                with pytest.raises(SQLSpecError):
+                    await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", ("b", 3))
+                await session.begin()
+                await session.commit()
+                assert await session.select_value("SELECT current_setting('app.current_tenant_id', true)") == "a"
+        pool = await config.provide_pool()
+        free = pool.get_idle_size()
+        with pytest.raises(TenantContextError):
+            async with config.provide_session():
+                pass
+        assert pool.get_idle_size() == free
+        with pytest.raises(MigrationError):
+            AsyncMigrationCommands(config)
+        with TenantContext.scope("a"):
+            async with config.provide_session() as session:
+                await session.begin()
+                await session.execute(f"INSERT INTO {quoted_table} VALUES ($1, $2)", ("a", 99))
+        with TenantContext.scope("a"):
+            async with config.provide_session() as session:
+                assert await session.select_value(f"SELECT count(*) FROM {quoted_table}") == 1
+                assert await session.select_value("SELECT pg_backend_pid()") == first_pid
+        ready = asyncio.Event()
+
+        async def cancelled_body() -> None:
+            async with config.provide_session(tenant="a"):
+                ready.set()
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(cancelled_body())
+        await ready.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        with TenantContext.scope("b"):
+            async with config.provide_session() as session:
+                assert await session.select_value(f"SELECT value FROM {quoted_table}") == 2
+                assert await session.select_value("SELECT pg_backend_pid()") == first_pid
+        strategy = config.driver_features["tenant_strategy"]
+
+        class FailingRestore(AsyncpgRLSStrategy):
+            __slots__ = ()
+
+            async def checkin(self, connection: Any, state: Any) -> None:
+                raise TenantCleanupError("injected readback failure")
+
+        config.driver_features["tenant_strategy"] = FailingRestore()
+        with TenantContext.scope("a"), pytest.raises(TenantCleanupError):
+            async with config.provide_connection():
+                pass
+        config.driver_features["tenant_strategy"] = strategy
+        with TenantContext.scope("b"):
+            async with config.provide_session() as session:
+                assert await session.select_value("SELECT pg_backend_pid()") != first_pid
+                assert await session.select_value(f"SELECT value FROM {quoted_table}") == 2
+    finally:
+        await config.close_pool()
+        await admin.execute(f"DROP TABLE IF EXISTS {quoted_table}")
+        await admin.execute(f"DROP ROLE {quoted_role}")
+        await admin.close()
+
+
+@pytest.mark.parametrize("scenario", ["deadline", "cancel", "reset_error"])
+async def test_tenant_native_reset_finishes_before_holder_reuse(
+    postgres_service: PostgresService, scenario: str
+) -> None:
+    from tests.integration.adapters._asyncpg_tenant_release import assert_owned_tenant_reset
+    from tests.integration.fixtures.postgres import _postgres_connection_config
+
+    await assert_owned_tenant_reset(AsyncpgConfig, _postgres_connection_config(postgres_service), scenario)

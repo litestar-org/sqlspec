@@ -3,7 +3,12 @@
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
-from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import (
+    ensure_schema_async,
+    ensure_schema_sync,
+    run_drop_statements_async,
+    run_drop_statements_sync,
+)
 from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 from sqlspec.utils.adapters import resolve_extension_store_class
 
@@ -97,8 +102,7 @@ def _downgrade_sync(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
     manage_schema, _ = store._schema_management_flags()
     if not manage_schema:
         return
-    for stmt in store._drop_table_sql():
-        driver.execute_script(stmt)
+    run_drop_statements_sync(driver, store.downgrade_drops())
 
 
 async def _downgrade_async(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
@@ -106,8 +110,7 @@ async def _downgrade_async(driver: Any, store: "BaseSQLSpecStore[Any]") -> None:
     manage_schema, _ = store._schema_management_flags()
     if not manage_schema:
         return
-    for stmt in store._drop_table_sql():
-        await driver.execute_script(stmt)
+    await run_drop_statements_async(driver, store.downgrade_drops())
 
 
 def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":

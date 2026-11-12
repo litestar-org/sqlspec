@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, split_db2_table_name, utc_now
 from sqlspec.builder import sql
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
@@ -14,7 +14,12 @@ if TYPE_CHECKING:
     from sqlspec.builder import CreateTable, Insert
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
-__all__ = ("Db2AsyncMigrationTracker", "Db2MigrationTrackerMixin", "Db2SyncMigrationTracker")
+__all__ = (
+    "Db2AsyncMigrationTracker",
+    "Db2MigrationTrackerMixin",
+    "Db2SyncMigrationTracker",
+    "build_guarded_drop_table",
+)
 
 
 def _dictionary_identifier(catalog_name: str) -> str:
@@ -27,6 +32,19 @@ def _dictionary_identifier(catalog_name: str) -> str:
         The name, quoted when the dictionary's normalization would otherwise change it.
     """
     return catalog_name if normalize_identifier(catalog_name, "db2") == catalog_name else quote_identifier(catalog_name)
+
+
+def build_guarded_drop_table(table_name: str, statement: str) -> DropStatement:
+    """Return a DROP TABLE that runs only when ``SYSCAT.TABLES`` lists the table.
+
+    Args:
+        table_name: Table or schema.table name; unquoted parts are upper-folded for the catalog probe.
+        statement: DROP statement to run.
+
+    Returns:
+        Catalog-probed drop for extension downgrades.
+    """
+    return DropStatement(statement, exists_sql=TABLE_EXISTS_SQL, exists_parameters=split_db2_table_name(table_name))
 
 
 class Db2MigrationTrackerMixin:

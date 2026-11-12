@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVa
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
 from sqlspec.extensions.adk.store import _reconcile_adk_schema_sync
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -156,6 +156,10 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the memory table."""
+        return [DropStatement(statement) for statement in self._drop_memory_table_sql()]
 
     def _drop_sql_for_table(self, table_name: str) -> list[str]:
         current_table = self._memory_table

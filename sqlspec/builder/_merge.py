@@ -54,6 +54,10 @@ _ORACLE_TYPE_DISPATCHER.register(dict, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(list, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
 
+_TERADATA_DECIMAL_MAX_PRECISION: Final[int] = 38
+_TERADATA_VARBYTE_MAX_LENGTH: Final[int] = 64000
+_TERADATA_VARCHAR_MAX_LENGTH: Final[int] = 32000
+
 _DB2_VARCHAR_MAX_LENGTH: Final[int] = 32672
 _DB2_DEFAULT_TYPE: Final[str] = f"VARCHAR({_DB2_VARCHAR_MAX_LENGTH})"
 _DB2_TYPE_DISPATCHER = TypeDispatcher[str]()
@@ -129,10 +133,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     def set_expression(self, expression: exp.Expr) -> None: ...
     def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
+        builder = cast("QueryBuilder", self)
+        is_teradata = builder.dialect_name == "vantage"
         source_expr: exp.Expr
         unwrapped_source = unwrap_expression_source(source, builder=cast("SQLBuilderProtocol", self))
         if isinstance(source, str):
-            source_expr = _parse_table_reference(source, alias, cast("QueryBuilder", self).dialect)
+            source_expr = _parse_table_reference(source, alias, builder.dialect)
         elif isinstance(source, (dict, list)):
             paren_expr = self._create_dict_source_expression(source, alias)
             if alias and isinstance(paren_expr, exp.Paren):
@@ -140,25 +146,43 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             else:
                 source_expr = paren_expr
         elif isinstance(source, QueryBuilder):
-            builder = cast("QueryBuilder", self)
-            subquery_expression_source = builder._embed_subquery(source, alias_hint=alias or "using_src")
-            if alias:
-                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
+            effective_alias = alias or ("src" if is_teradata else None)
+            subquery_expression_source = builder._embed_subquery(source, alias_hint=effective_alias or "using_src")
+            if isinstance(subquery_expression_source, exp.Subquery):
+                if alias:
+                    source_expr = subquery_expression_source.copy()
+                    source_expr.set("alias", exp.to_identifier(alias))
+                elif effective_alias and not subquery_expression_source.alias:
+                    source_expr = subquery_expression_source.copy()
+                    source_expr.set("alias", exp.to_identifier(effective_alias))
+                else:
+                    source_expr = subquery_expression_source
+            elif effective_alias:
+                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(effective_alias))
             else:
                 source_expr = exp.paren(subquery_expression_source)
         elif unwrapped_source is not None:
-            if isinstance(unwrapped_source, exp.Select):
+            effective_alias = alias or ("src" if is_teradata else None)
+            if isinstance(unwrapped_source, (exp.Select, exp.SetOperation)):
                 source_expr = (
-                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(alias))
-                    if alias
+                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(effective_alias))
+                    if effective_alias
                     else exp.paren(unwrapped_source)
                 )
-            elif isinstance(unwrapped_source, exp.Paren) and alias:
+            elif isinstance(unwrapped_source, exp.Paren) and (
+                alias or (is_teradata and isinstance(unwrapped_source.this, (exp.Select, exp.SetOperation)))
+            ):
                 inner = unwrapped_source.this
-                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
-            elif isinstance(unwrapped_source, exp.Subquery) and alias:
-                unwrapped_source.set("alias", exp.to_identifier(alias))
-                source_expr = unwrapped_source
+                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(effective_alias or "src"))
+            elif isinstance(unwrapped_source, exp.Subquery):
+                if alias:
+                    source_expr = unwrapped_source.copy()
+                    source_expr.set("alias", exp.to_identifier(alias))
+                elif is_teradata and not unwrapped_source.alias:
+                    source_expr = unwrapped_source.copy()
+                    source_expr.set("alias", exp.to_identifier("src"))
+                else:
+                    source_expr = unwrapped_source
             else:
                 source_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
         else:
@@ -216,6 +240,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
             return self._create_oracle_json_source(data, columns, alias)
+        if dialect == "vantage":
+            return self._create_teradata_select_source(data, alias)
         if dialect == "db2":
             return self._create_db2_select_source(data, columns, is_list, alias)
 
@@ -355,6 +381,102 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         if isinstance(value, str) and len(value) > _DB2_VARCHAR_MAX_LENGTH:
             return "CLOB"
         return _DB2_DEFAULT_TYPE
+
+    def _infer_teradata_column_type(self, values: Sequence[Any]) -> str:
+        """Choose one non-truncating type for every branch of a source column."""
+        values = [value for value in values if value is not None]
+        if not values:
+            return "VARCHAR(32000)"
+        if any(isinstance(value, (dict, list)) for value in values):
+            return "CLOB"
+        if all(isinstance(value, bool) for value in values):
+            return "BYTEINT"
+        decimals = [value for value in values if isinstance(value, Decimal)]
+        if any(not value.is_finite() for value in decimals):
+            msg = "Cannot infer Teradata DECIMAL type for non-finite Decimal value."
+            raise SQLBuilderError(msg)
+        if all(isinstance(value, (int, float, Decimal)) for value in values):
+            if any(isinstance(value, float) for value in values):
+                return "DOUBLE PRECISION"
+            if decimals:
+                decimals = [Decimal(value) for value in values]
+                scale = max(max(0, -int(value.as_tuple().exponent)) for value in decimals)
+                integer_digits = max(
+                    max(1, len(value.as_tuple().digits) + int(value.as_tuple().exponent)) for value in decimals
+                )
+                precision = max(18, integer_digits + scale)
+                if precision > _TERADATA_DECIMAL_MAX_PRECISION:
+                    msg = "Teradata DECIMAL precision exceeds 38 digits."
+                    raise SQLBuilderError(msg)
+                return f"DECIMAL({precision}, {scale})"
+            return "BIGINT"
+        if all(isinstance(value, date) for value in values):
+            datetimes = [value for value in values if isinstance(value, datetime)]
+            if datetimes:
+                return (
+                    "TIMESTAMP WITH TIME ZONE" if any(value.tzinfo is not None for value in datetimes) else "TIMESTAMP"
+                )
+            return "DATE"
+        if all(isinstance(value, time) for value in values):
+            return "TIME"
+        if all(isinstance(value, UUID) for value in values):
+            return "VARCHAR(36)"
+        if all(isinstance(value, (bytes, bytearray)) for value in values):
+            size = max(1, *(len(value) for value in values))
+            return "BLOB" if size > _TERADATA_VARBYTE_MAX_LENGTH else f"VARBYTE({size})"
+        size = max(1, *(len(str(value)) for value in values))
+        return "CLOB" if size > _TERADATA_VARCHAR_MAX_LENGTH else f"VARCHAR({size})"
+
+    def _create_teradata_select_source(self, rows: list[dict[str, Any]], alias: str | None) -> exp.Expr:
+        """Build typed SELECT branches for Teradata MERGE sources.
+
+        A single row is a FROM-less SELECT. Multiple rows are joined with ``UNION ALL``, and each
+        branch reads from a one-row derived table because Teradata rejects set-operation branches
+        that reference no table (error 3888).
+        """
+        builder = cast("QueryBuilder", self)
+        columns = list(rows[0])
+        resolved_rows = [
+            [resolve_value_expression(row.get(column), self, column.split(".")[-1]) for column in columns]
+            for row in rows
+        ]
+        column_types = {
+            column: exp.DataType.build(
+                self._infer_teradata_column_type([
+                    row.get(column)
+                    for row, resolved_row in zip(rows, resolved_rows, strict=True)
+                    if resolved_row[index] is None
+                ]),
+                dialect="vantage",
+            )
+            for index, column in enumerate(columns)
+        }
+        query: exp.Expr | None = None
+        for row, resolved_row in zip(rows, resolved_rows, strict=True):
+            projections: list[exp.Expr] = []
+            for index, column in enumerate(columns):
+                value = row.get(column)
+                leaf = column.split(".")[-1]
+                resolved = resolved_row[index]
+                if resolved is None:
+                    if isinstance(value, (dict, list)):
+                        value = to_json(value)
+                    elif isinstance(value, bytearray):
+                        value = bytes(value)
+                    placeholder, _ = builder.create_placeholder(value, leaf)
+                    resolved = exp.Cast(this=placeholder, to=column_types[column].copy())
+                projections.append(exp.alias_(resolved, column))
+            branch = exp.Select(expressions=projections)
+            if len(rows) > 1:
+                branch.set("from_", exp.From(this=_teradata_single_row_table()))
+            query = branch if query is None else exp.Union(this=query, expression=branch, distinct=False)
+        effective_alias = alias or "src"
+        return exp.Subquery(
+            this=query,
+            alias=exp.TableAlias(
+                this=exp.to_identifier(effective_alias), columns=[exp.to_identifier(column) for column in columns]
+            ),
+        )
 
     def _create_db2_select_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
@@ -691,7 +813,21 @@ class Merge(
             if not copy:
                 expression = expression.copy()
             self._move_oracle_when_conditions_on_expr(expression)
+        elif resolved_dialect == "vantage":
+            if not copy:
+                expression = expression.copy()
+            self._ensure_teradata_using_alias_on_expr(expression)
         return expression
+
+    def _ensure_teradata_using_alias_on_expr(self, merge_expr: exp.Expr) -> None:
+        """Ensure subquery USING sources carry a correlation alias on Teradata."""
+        if not isinstance(merge_expr, exp.Merge):
+            return
+        using_expr = merge_expr.args.get("using")
+        if isinstance(using_expr, exp.Paren) and isinstance(using_expr.this, (exp.Select, exp.SetOperation)):
+            merge_expr.set("using", exp.Subquery(this=using_expr.this, alias=exp.to_identifier("src")))
+        elif isinstance(using_expr, exp.Subquery) and not using_expr.alias:
+            using_expr.set("alias", exp.to_identifier("src"))
 
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.
@@ -791,3 +927,11 @@ def _parse_merge_condition(
         return condition
     msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
     raise SQLBuilderError(msg)
+
+
+def _teradata_single_row_table() -> exp.Expr:
+    """Return a one-row derived table for Teradata set-operation branches."""
+    return exp.Subquery(
+        this=exp.Select(expressions=[exp.alias_(exp.Literal.number(1), "sqlspec_one")]),
+        alias=exp.TableAlias(this=exp.to_identifier("sqlspec_row")),
+    )

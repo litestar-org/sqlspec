@@ -4,7 +4,7 @@
 from sqlspec.data_dictionary import DialectConfig, get_data_dictionary_loader, get_dialect_config
 ```
 
-SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.
+SQLSpec ships 15 dialect-specific SQL catalog packs under `sqlspec/data_dictionary/dialects/` containing named [`SQLFileLoader`](../../loader.md) queries (`-- name: ...`), version-gated feature profiles (`DialectConfig`), and logical-to-physical type mappings. See the [Data Dictionary Guide](../../../learn/data-dictionary.md) and [Data Dictionary Reference](../index.md) for programmatic usage.
 
 ## Dialect Catalog Matrix
 
@@ -18,12 +18,14 @@ SQLSpec ships 13 dialect-specific SQL catalog packs under `sqlspec/data_dictiona
 | **MariaDB** (`mariadb`) | `None` | Native `SHOW CREATE` + MariaDB sequence & constraint reflection | `17` | `27` | [MariaDB Catalog](mariadb.md) |
 | **Oracle Database** (`oracle`) | `None` | Native `DBMS_METADATA.GET_DDL` + AST fallback | `22` | `36` | [Oracle Database Catalog](oracle.md) |
 | **SQL Server** (`mssql`) | `dbo` | AST synthesis + `OBJECT_DEFINITION()` for views/routines/triggers | `19` | `31` | [SQL Server Catalog](mssql.md) |
+| **Teradata Vantage** (`teradata`) | `None` | DBC.TableTextV object text and catalog-backed AST synthesis | `9` | `17` | [Teradata Vantage Catalog](teradata.md) |
 | **Sybase ASE** (`sybase`) | `dbo` | AST synthesis + `dbo.syscomments` object text reassembly | `9` | `16` | [Sybase ASE Catalog](sybase.md) |
 | **SAP SQL Anywhere** (`sqlanywhere`) | `DBA` | AST synthesis + `SYS.SYSTAB` / `SYS.SYSPROCEDURE` definitions | `9` | `16` | [SAP SQL Anywhere Catalog](sqlanywhere.md) |
+| **Snowflake** (`snowflake`) | `None` | Native GET_DDL and SHOW KEYS metadata | `11` | `24` | [Snowflake Catalog](snowflake.md) |
 | **IBM Db2** (`db2`) | `None` | AST synthesis + `SYSCAT` catalog text definitions | `9` | `14` | [IBM Db2 Catalog](db2.md) |
 | **Google BigQuery** (`bigquery`) | `None` | Native `INFORMATION_SCHEMA.TABLES.ddl` + AST fallback | `14` | `30` | [Google BigQuery Catalog](bigquery.md) |
 | **Google Cloud Spanner** (`spanner`) | `None` | AST synthesis with `INTERLEAVE IN PARENT` & `ROW DELETION POLICY` (`GoogleSQL` & `PostgreSQL` modes) | `5` | `8` | [Google Cloud Spanner Catalog](spanner.md) |
-| **Total (`13` dialects)** | - | - | **`190`** | **`296`** | - |
+| **Total (`15` dialects)** | - | - | **`210`** | **`337`** | - |
 
 ## Cross-Dialect Capability Matrix
 
@@ -39,8 +41,10 @@ Each dialect pack declares boolean `feature_flags` and version-gated `feature_ve
 | [MariaDB](mariadb.md) | `Yes` | `Yes` | `Yes` | `>=10.2.0` | `>=10.2.1` | `>=10.2.7` | `No` | `>=11.7.0` | `Yes` |
 | [Oracle Database](oracle.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=12.1.0` | `No` | `>=23.4.0` | `Yes` |
 | [SQL Server](mssql.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `>=13.0.0` | `No` | `>=17.0.0` | `Yes` |
+| [Teradata Vantage](teradata.md) | `Yes` | `No` | `>=15.10.0` | `>=15.10.0` | `>=15.10.0` | `>=15.10.0` | `No` | `No` | `Yes` |
 | [Sybase ASE](sybase.md) | `Yes` | `No` | `No` | `No` | `No` | `No` | `No` | `No` | `Yes` |
 | [SAP SQL Anywhere](sqlanywhere.md) | `Yes` | `No` | `Yes` | `>=10.0.0` | `>=10.0.0` | `No` | `No` | `No` | `Yes` |
+| [Snowflake](snowflake.md) | `Yes` | `No` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` |
 | [IBM Db2](db2.md) | `Yes` | `No` | `No` | `>=8.1.0` | `>=8.1.0` | `No` | `No` | `No` | `Yes` |
 | [Google BigQuery](bigquery.md) | `Yes` | `No` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` |
 | [Google Cloud Spanner](spanner.md) | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` | `Yes` |
@@ -59,8 +63,10 @@ Each dialect pack declares boolean `feature_flags` and version-gated `feature_ve
 | [MariaDB](mariadb.md) | `JSON` | `VARCHAR(36)` | `TINYINT(1)` | `TIMESTAMP` | `TEXT` | `BLOB` | `-` |
 | [Oracle Database](oracle.md) | `JSON` | `RAW(16)` | `NUMBER(1)` | `TIMESTAMP` | `CLOB` | `BLOB` | `-` |
 | [SQL Server](mssql.md) | `NVARCHAR(MAX)` | `UNIQUEIDENTIFIER` | `BIT` | `DATETIME2(6)` | `NVARCHAR(MAX)` | `VARBINARY(MAX)` | `-` |
+| [Teradata Vantage](teradata.md) | `JSON` | `VARCHAR(36)` | `BYTEINT` | `TIMESTAMP(6) WITH TIME ZONE` | `CLOB` | `BLOB` | `-` |
 | [Sybase ASE](sybase.md) | `TEXT` | `VARCHAR(36)` | `BIT` | `BIGDATETIME` | `TEXT` | `IMAGE` | `-` |
 | [SAP SQL Anywhere](sqlanywhere.md) | `LONG VARCHAR` | `UNIQUEIDENTIFIER` | `BIT` | `TIMESTAMP` | `LONG VARCHAR` | `LONG BINARY` | `-` |
+| [Snowflake](snowflake.md) | `VARIANT` | `VARCHAR(36)` | `BOOLEAN` | `TIMESTAMP_TZ` | `VARCHAR` | `BINARY` | `-` |
 | [IBM Db2](db2.md) | `CLOB` | `VARCHAR(36)` | `BOOLEAN` | `TIMESTAMP` | `CLOB` | `BLOB` | `-` |
 | [Google BigQuery](bigquery.md) | `JSON` | `STRING` | `BOOL` | `TIMESTAMP` | `STRING` | `BYTES` | `-` |
 | [Google Cloud Spanner](spanner.md) | `JSON` | `BYTES(16)` | `BOOL` | `TIMESTAMP` | `STRING(MAX)` | `BYTES(MAX)` | `-` |

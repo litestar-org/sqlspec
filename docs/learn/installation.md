@@ -69,10 +69,12 @@ Install only the driver extras needed by your deployment target. See [Databases]
 | **SQL Server** | `mssql-python`, `pymssql` | `mssql-python>=1.13` or `pymssql` |
 | **Sybase ASE** | `sybase` | `pymssql>=2.4.4` (FreeTDS TDS 5.0 wire protocol) |
 | **SAP SQL Anywhere** | `sqlanywhere` | `sqlanydb>=1.0.14` (`dbcapi` native client wrapper) |
+| **Snowflake** | `snowflake` | `snowflake-connector-python>=4.0.0`, `pyarrow` |
+| **Teradata Vantage** | `teradata` | `teradatasql>=20.0.0` |
 | **IBM Db2** | `db2` | `ibm_db>=3.3.0` |
 | **DuckDB** | `duckdb` | `duckdb`, `pyarrow`, `pytz` |
 | **Google Cloud** | `bigquery`, `spanner` | `google-cloud-bigquery` (+ Storage/GCS) or `google-cloud-spanner>=3.64.0` |
-| **Arrow Flight / ADBC / ODBC** | `adbc`, `arrow-odbc` | `adbc_driver_manager` + `pyarrow` (pair with a PyPI ADBC driver) or `arrow-odbc>=10.4` |
+| **Arrow Flight / ADBC / ODBC** | `adbc`, `arrow-odbc` | `adbc_driver_manager` + `pyarrow` (pair with a PyPI ADBC driver or Columnar `dbc`-installed driver) or `arrow-odbc>=10.4` |
 
 ## Web and AI Framework Extras
 

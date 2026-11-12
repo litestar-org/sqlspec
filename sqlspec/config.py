@@ -12,8 +12,9 @@ import asyncio
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from difflib import get_close_matches
-from inspect import Signature, signature
+from inspect import Signature, iscoroutinefunction, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, NotRequired, Self, TypeAlias, TypeVar, cast
 
@@ -37,15 +38,19 @@ from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import AsyncGenerator, Awaitable, Generator, MutableMapping
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
+    from sqlspec.core.tenant import TenantStrategy
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
+    from sqlspec.utils.tenant import TenantExtractorValue
 
 
 __all__ = (
@@ -322,8 +327,11 @@ class FlaskConfig(TypedDict):
     All fields are optional with sensible defaults. Use in extension_config["flask"]:
     """
 
+    tenant_extractor: NotRequired[Callable[..., "TenantExtractorValue"]]
+    """Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request."""
+
     connection_key: NotRequired[str]
-    """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
+    """Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key."""
 
     session_key: NotRequired[str]
     """Key for accessing session via plugin.get_session(). Default: 'db_session'."""
@@ -373,6 +381,30 @@ class LitestarConfig(TypedDict):
 
     All fields are optional with sensible defaults.
     """
+
+    tenant_extractor: NotRequired["Callable[[MutableMapping[str, Any]], Any]"]
+    """Trusted scope callable returning a tenant identity, payload, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
+
+    tenant_user_attr: NotRequired[str]
+    """Verified direct tenant attribute or mapping key. Default: 'tenant_id'."""
+
+    tenant_memberships_attr: NotRequired[str]
+    """Verified membership attribute or mapping key. Default: 'tenant_ids'."""
+
+    tenant_variables_attr: NotRequired[str]
+    """Extra session variables attribute or mapping key. Default: 'tenant_variables'."""
+
+    tenant_jwt_claim: NotRequired[str]
+    """Direct tenant key in verified auth claims or extras. Default: 'tenant_id'."""
+
+    tenant_path_parameter: NotRequired[str | None]
+    """Route parameter checked against verified memberships. Default: 'tenant_id'."""
+
+    tenant_session_key: NotRequired[str | None]
+    """Session selector checked against verified memberships. Default: 'tenant_id'."""
+
+    tenant_header: NotRequired[str | None]
+    """Optional header selector checked against verified memberships. Default: None."""
 
     migrations_path: NotRequired[str | Path]
     """Directory containing this extension's migrations, or a ``'<dotted.module>:<subdir>'`` specification.
@@ -464,8 +496,11 @@ class StarletteConfig(TypedDict):
     All fields are optional with sensible defaults. Use in extension_config["starlette"]:
     """
 
+    tenant_extractor: NotRequired[Callable[[Any], Any]]
+    """Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
+
     connection_key: NotRequired[str]
-    """Key for storing connection in request.state. Default: 'db_connection'"""
+    """Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection'"""
 
     pool_key: NotRequired[str]
     """Key for storing connection pool in app.state. Default: 'db_pool'"""
@@ -533,8 +568,11 @@ class SanicConfig(TypedDict):
     All fields are optional with sensible defaults. Use in ``extension_config["sanic"]``.
     """
 
+    tenant_extractor: NotRequired[Callable[[Any], "TenantExtractorValue | Awaitable[TenantExtractorValue]"]]
+    """Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
+
     connection_key: NotRequired[str]
-    """Key for storing connection in request.ctx. Default: 'db_connection'"""
+    """Key for storing the connection in request.ctx once it is checked out on first access. Default: 'db_connection'"""
 
     pool_key: NotRequired[str]
     """Key for storing connection pool in app.ctx. Default: 'db_pool'"""
@@ -868,6 +906,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_parquet_export: "ClassVar[bool]" = False
     supports_reliable_rowcount: "ClassVar[bool]" = True
+    supports_tenant_strategy: "ClassVar[bool]" = False
+    supports_tenant_session_baseline: "ClassVar[bool]" = False
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset()
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = None
+    tenant_lease_type: "ClassVar[type[Any] | None]" = None
     default_storage_profile: "ClassVar[str | None]" = None
     storage_partition_strategies: "ClassVar[tuple[str, ...]]" = ("fixed",)
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
@@ -1488,6 +1531,100 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
             raise TypeError(msg)
 
+    def _default_tenant_strategy(self) -> "TenantStrategy":
+        """Build the strategy selected by ``True`` or an adapter shorthand."""
+        strategy_type = self.tenant_strategy_type
+        if strategy_type is None:
+            msg = f"{type(self).__name__} does not support tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        return cast("TenantStrategy", strategy_type())
+
+    def _resolve_tenant_strategy(self, strategy: Any) -> "TenantStrategy | None":
+        """Normalize disabled tenancy, adapter shorthands, and structural strategy instances.
+
+        Raises:
+            ImproperConfigurationError: The shorthand or strategy is unsupported.
+        """
+        if strategy is None or strategy is False:
+            return None
+        if self.tenant_strategy_type is not None and (
+            strategy is True or (isinstance(strategy, str) and strategy in self.tenant_strategy_shorthands)
+        ):
+            return self._default_tenant_strategy()
+        if isinstance(strategy, (str, bool)):
+            msg = f"{type(self).__name__} does not support tenant_strategy shorthand {strategy!r}"
+            raise ImproperConfigurationError(msg)
+        if callable(getattr(strategy, "checkout", None)) and callable(getattr(strategy, "checkin", None)):
+            return cast("TenantStrategy", strategy)
+        msg = f"{type(self).__name__} received an invalid tenant_strategy: {strategy!r}"
+        raise ImproperConfigurationError(msg)
+
+    def _create_tenant_lease(self) -> Any:
+        """Build one fail-closed lease for a connection or session acquisition.
+
+        Returns:
+            The adapter lease, or None when no tenant strategy is configured.
+
+        Raises:
+            ImproperConfigurationError: A strategy is configured without a lease implementation.
+        """
+        strategy = self.driver_features.get("tenant_strategy")
+        if strategy is None:
+            return None
+        lease_type = self.tenant_lease_type
+        if lease_type is None:
+            msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
+            raise ImproperConfigurationError(msg)
+        lease = lease_type(self, strategy)
+        lease.tenant_key = self
+        return lease
+
+    def _require_leased_tenant_connection(self) -> None:
+        """Reject standalone connections that would bypass tenant leases.
+
+        Raises:
+            ImproperConfigurationError: A tenant strategy is configured.
+        """
+        if self.driver_features.get("tenant_strategy") is not None:
+            msg = (
+                f"{type(self).__name__} tenant configurations require provide_connection() or provide_session() leases"
+            )
+            raise ImproperConfigurationError(msg)
+
+    @contextmanager
+    def _provide_sync_tenant_session(
+        self, tenant: "str | UUID | TenantContextPayload", *args: Any, **kwargs: Any
+    ) -> "Generator[DriverT]":
+        """Keep an explicit tenant bound until the session finishes cleanup.
+
+        Yields:
+            The driver session with the explicit tenant active.
+        """
+        if self.driver_features.get("tenant_strategy") is None:
+            msg = "provide_session(tenant=...) requires a configured tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        with TenantContext.scope(tenant):
+            context = cast("AbstractContextManager[DriverT]", self.provide_session(*args, **kwargs))
+            with context as session:
+                yield session
+
+    @asynccontextmanager
+    async def _provide_async_tenant_session(
+        self, tenant: "str | UUID | TenantContextPayload", *args: Any, **kwargs: Any
+    ) -> "AsyncGenerator[DriverT]":
+        """Keep an explicit tenant bound through asynchronous session cleanup.
+
+        Yields:
+            The driver session with the explicit tenant active.
+        """
+        if self.driver_features.get("tenant_strategy") is None:
+            msg = "provide_session(tenant=...) requires a configured tenant_strategy"
+            raise ImproperConfigurationError(msg)
+        with TenantContext.scope(tenant):
+            context = cast("AbstractAsyncContextManager[DriverT]", self.provide_session(*args, **kwargs))
+            async with context as session:
+                yield session
+
     def _init_config_state(
         self,
         *,
@@ -1519,6 +1656,21 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._init_observability(observability_config)
         self.statement_config = statement_config or build_default_statement_config(default_dialect)
         self._storage_capabilities = None
+        strategy = self._resolve_tenant_strategy((driver_features or {}).get("tenant_strategy"))
+        if driver_features is not None and "tenant_strategy" in driver_features:
+            driver_features = {**driver_features, "tenant_strategy": strategy}
+        if strategy is not None:
+            if not self.supports_tenant_strategy:
+                msg = f"{type(self).__name__} does not support tenant_strategy"
+                raise ImproperConfigurationError(msg)
+            if any(
+                iscoroutinefunction(method) is not self.is_async for method in (strategy.checkout, strategy.checkin)
+            ):
+                msg = f"{type(self).__name__} tenant_strategy must match its async execution mode ({self.is_async})"
+                raise ImproperConfigurationError(msg)
+        if "tenant_session_baseline" in (driver_features or {}) and not self.supports_tenant_session_baseline:
+            msg = f"{type(self).__name__} does not support tenant_session_baseline"
+            raise ImproperConfigurationError(msg)
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self.driver_features["_statement_cache_holder"] = StatementCacheHolder(
             self.statement_config, resolve_statement_cache_size(self.driver_features)
@@ -1717,7 +1869,12 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -1775,7 +1932,12 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         raise NotImplementedError
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
         """Provide a database session context manager."""
         raise NotImplementedError
@@ -1865,9 +2027,34 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
-        """Provide a database session context manager."""
+        """Provide a session, optionally binding or bypassing a tenant until cleanup completes.
+
+        Args:
+            *args: Adapter-specific session arguments.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload; None inherits the current scope.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
+            **kwargs: Adapter-specific session options.
+
+        Returns:
+            A driver session context manager.
+        """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_sync_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
+        if tenant is not None:
+            return self._provide_sync_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(
             "AbstractContextManager[DriverT]",
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
@@ -2004,9 +2191,34 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
 
     def provide_session(
-        self, *args: Any, statement_config: "StatementConfig | None" = None, **kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide a database session context manager."""
+        """Provide a session, optionally binding or bypassing a tenant until cleanup completes.
+
+        Args:
+            *args: Adapter-specific session arguments.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload; None inherits the current scope.
+            bypass_tenant: Explicitly bypass tenant setup for this session.
+            **kwargs: Adapter-specific session options.
+
+        Returns:
+            A driver session context manager.
+        """
+        if bypass_tenant:
+            if tenant is not None:
+                msg = "provide_session() cannot combine tenant with bypass_tenant=True"
+                raise ImproperConfigurationError(msg)
+            return self._provide_async_tenant_session(
+                TenantContextPayload.bypass(), *args, statement_config=statement_config, **kwargs
+            )
+        if tenant is not None:
+            return self._provide_async_tenant_session(tenant, *args, statement_config=statement_config, **kwargs)
         return cast(
             "AbstractAsyncContextManager[DriverT]",
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),

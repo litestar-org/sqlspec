@@ -3171,3 +3171,110 @@ class _FakeSparseVector:
     def to_text(self) -> str:
         nonzero = [f"{idx}:{val}" for idx, val in enumerate(self._values, start=1) if val != 0.0]
         return f"{{{','.join(nonzero)}}}/{len(self._values)}"
+
+
+@pytest.mark.parametrize("dialect", ["teradata", "vantage"])
+def test_teradata_lob_export_ordering(tmp_path: Path, dialect: str) -> None:
+    driver = MagicMock()
+    driver.statement_config.dialect = dialect
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": name, "data_type": kind, "is_primary": False}
+        for name, kind in [("id", "INTEGER"), ("doc", "JSON"), ("raw", "BLOB"), ("win", "PERIOD(DATE)")]
+    ]
+    driver.select.return_value = []
+    export_table_fixtures_sync(driver, tmp_path, ["docs"], compress=False)
+    assert driver.select.call_args.args[0].partition("ORDER BY")[2].strip() == '"id"'
+
+
+@pytest.mark.parametrize("type_label", ["BYTE", "VARBYTE", "BYTE(16)", "VARBYTE(64)"])
+def test_teradata_byte_and_varbyte_columns_decode_base64_payloads(type_label: str) -> None:
+    import base64
+
+    encoded = base64.b64encode(b"\x01\x02\xff").decode("ascii")
+    col = fixture_module._TableColumn(
+        name="payload",
+        data_type=type_label,
+        is_primary=False,
+        is_identity=False,
+        identity_always=False,
+        sequence_name=None,
+        is_generated=False,
+    )
+    rows: list[dict[str, Any]] = [{"payload": encoded}]
+    fixture_module._decode_row_values(rows, "teradata", [col])
+    assert rows == [{"payload": b"\x01\x02\xff"}]
+
+
+def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path) -> None:
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    class Cursor:
+        def __init__(self, connection: Any) -> None:
+            self.connection = connection
+            self.description = [
+                ("schema_name", 2, None, None, None, None, False),
+                ("table_name", 2, None, None, None, None, False),
+                ("column_name", 2, None, None, None, None, False),
+                ("data_type", 2, None, None, None, None, False),
+                ("ordinal_position", 0, None, None, 18, 0, False),
+            ]
+            self.rowcount = 1
+            self.session_scope = False
+
+        def execute(self, sql: str, parameters: Any = None, **kwargs: Any) -> None:
+            self.connection.calls.append((sql, parameters))
+            self.session_scope = "CURRENT_DATABASE()" in sql
+            if self.session_scope:
+                self.description = [
+                    ("database_name", 2, None, None, None, None, True),
+                    ("schema_name", 2, None, None, None, None, True),
+                ]
+            if sql.startswith("INSERT"):
+                identifier, payload, items, object_value = parameters
+                self.connection.rows.append({
+                    "id": identifier,
+                    "payload": json.loads(payload) if payload is not None else None,
+                    "items": json.loads(items) if items is not None else None,
+                    "object": json.loads(object_value) if object_value is not None else None,
+                })
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            if self.session_scope:
+                return [("APP_DB", "PUBLIC")]
+            return [
+                ("PUBLIC", "records", "id", "NUMBER", 1),
+                ("PUBLIC", "records", "payload", "VARIANT", 2),
+                ("PUBLIC", "records", "items", "ARRAY", 3),
+                ("PUBLIC", "records", "object", "OBJECT", 4),
+            ]
+
+        def executemany(self, sql: str, parameters: Any) -> None:
+            from snowflake.connector.errors import NotSupportedError
+
+            raise NotSupportedError(msg="Snowflake INSERT SELECT does not support array binding")
+
+        def close(self) -> None:
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Any]] = []
+            self.rows: list[dict[str, Any]] = []
+
+        def cursor(self) -> Cursor:
+            return Cursor(self)
+
+    expected_rows = [
+        {"id": 1, "payload": {"k": 1}, "items": ["a"], "object": None},
+        {"id": 2, "payload": None, "items": [], "object": {"ok": True}},
+    ]
+    (tmp_path / "records.json").write_text(json.dumps(expected_rows), encoding="utf-8")
+    connection = Connection()
+    loaded = load_table_fixtures_sync(SnowflakeDriver(connection), tmp_path, tables=["records"])
+    assert loaded == {"records": 2}
+    assert connection.rows == expected_rows
+    inserts = [statement for statement, _ in connection.calls if statement.startswith("INSERT")]
+    assert inserts == [
+        'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
+        'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
+    ]

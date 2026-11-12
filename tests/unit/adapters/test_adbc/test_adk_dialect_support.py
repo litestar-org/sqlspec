@@ -2,16 +2,19 @@
 
 import logging
 import struct
+from contextlib import nullcontext
 from datetime import UTC, datetime
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from adbc_driver_manager import AdbcStatusCode, IntegrityError
+from adbc_driver_manager import AdbcStatusCode, IntegrityError, NotSupportedError
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKConfig, AdbcADKMemoryStore, AdbcADKStore
 from sqlspec.adapters.adbc.adk.store import (
+    _adbc_atomic_connection,
     _oracle_store_sql,
     _postgresql_store_sql,
     decode_adbc_pgvector,
@@ -22,7 +25,7 @@ from sqlspec.adapters.adbc.litestar.store import AdbcStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.adk import SqliteADKMemoryStore
 from sqlspec.core import StatementConfig
-from sqlspec.exceptions import ImproperConfigurationError, MigrationError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError, TransactionError
 from sqlspec.extensions.adk import StoredMemory
 from sqlspec.extensions.adk.migrations.reconcile import reconcile
 from sqlspec.migrations.context import MigrationContext
@@ -1189,3 +1192,333 @@ def test_adbc_memory_companion_hook_skips_catalog_when_fts_disabled_and_propagat
         fts_store.reconcile_companion_objects_sync(fts_driver)
     assert all("CREATE TRIGGER" not in str(call.args[0]) for call in fts_driver.execute.call_args_list)
     assert fts_driver.commit.call_count == 0
+
+
+def test_teradata_adk_schema_targets() -> None:
+    config = AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"})
+    store = AdbcADKStore(config)
+    targets = store.get_schema_targets_sync(None)
+    assert len(targets) == 5
+    assert all(str(target.create_statement).startswith("CREATE MULTISET TABLE") for target in targets)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "upsert_app_state",
+        "upsert_user_state",
+        "set_metadata",
+        "delete_session",
+        "delete_idle_sessions",
+        "append_event_and_update_state",
+    ],
+)
+def test_teradata_adk_refuses_autocommit_only_compound_mutation(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    native = SimpleNamespace(
+        get_option=lambda _: "true", set_autocommit=MagicMock(side_effect=NotSupportedError("autocommit only"))
+    )
+    conn = SimpleNamespace(adbc_connection=native, cursor=MagicMock(), commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"}))
+    now = datetime.now(UTC)
+    event = {
+        "id": "event",
+        "app_name": "app",
+        "user_id": "user",
+        "session_id": "session",
+        "invocation_id": "invocation",
+        "timestamp": now,
+        "event_data": {},
+    }
+    args: dict[str, tuple[Any, ...]] = {
+        "upsert_app_state": ("app", {}),
+        "upsert_user_state": ("app", "user", {}),
+        "set_metadata": ("key", "value"),
+        "delete_session": ("app", "user", "session"),
+        "delete_idle_sessions": (now, "app"),
+        "append_event_and_update_state": (event, "app", "user", "session", {}),
+    }
+    with pytest.raises(TransactionError, match="autocommit-only"):
+        getattr(store, operation)(*args[operation])
+    conn.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize("initial_mode", ["true", "false"])
+def test_teradata_flightsql_adk_compound_transaction_restores_mode(
+    monkeypatch: pytest.MonkeyPatch, initial_mode: str
+) -> None:
+    modes: list[bool] = []
+    native = SimpleNamespace(
+        get_option=lambda _: initial_mode,
+        set_autocommit=lambda value: modes.append(value),
+        commit=MagicMock(),
+        rollback=MagicMock(),
+    )
+    cursor = MagicMock()
+    conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"}))
+    store.upsert_app_state("app", {"value": 1})
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args_list[0].args == ("DELETE FROM adk_app_state WHERE app_name = ?", ("app",))
+    committer = native.commit if initial_mode == "true" else conn.commit
+    committer.assert_called_once()
+    assert modes == ([False, True] if initial_mode == "true" else [False])
+    cursor.execute.side_effect = RuntimeError("insert failed")
+    with pytest.raises(RuntimeError, match="insert failed"):
+        store.upsert_user_state("app", "user", {})
+    native.rollback.assert_called_once()
+    conn.rollback.assert_not_called()
+    assert modes[-1] is (initial_mode == "true")
+
+
+def test_teradata_adk_metadata_queries_quote_reserved_key_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcADKStore quotes the reserved KEY column on Teradata in metadata SELECT, DELETE, and INSERT."""
+    executed_sql: list[tuple[str, tuple[Any, ...]]] = []
+    native = SimpleNamespace(get_option=lambda _: "false", set_autocommit=lambda _value: None, rollback=MagicMock())
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("1",)
+    cursor.execute.side_effect = lambda sql, params: executed_sql.append((sql, tuple(params)))
+    conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    store = AdbcADKStore(AdbcConfig(connection_config={"uri": "teradata://user:pass@host/database"}))
+    assert store._get_metadata("schema_version") == "1"
+    store._set_metadata("schema_version", "2")
+
+    assert executed_sql == [
+        ('SELECT value FROM adk_internal_metadata WHERE "KEY" = ?', ("schema_version",)),
+        ('DELETE FROM adk_internal_metadata WHERE "KEY" = ?', ("schema_version",)),
+        ('INSERT INTO adk_internal_metadata ("KEY", value) VALUES (?, ?)', ("schema_version", "2")),
+    ]
+    conn.commit.assert_called_once()
+
+
+@pytest.mark.parametrize("failure_cls", [RuntimeError, KeyboardInterrupt])
+def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_autocommit(
+    monkeypatch: pytest.MonkeyPatch, failure_cls: type[BaseException]
+) -> None:
+    """_adbc_atomic_connection commits on the native connection and rolls back before set_autocommit(True)."""
+    call_order: list[str] = []
+
+    class _FakeConnection:
+        def __init__(self) -> None:
+            self._autocommit = True
+            self._commit_supported = False
+            self.adbc_connection = SimpleNamespace(
+                get_option=lambda _: "true",
+                set_autocommit=self._set_autocommit,
+                rollback=self._native_rollback,
+                commit=self._native_commit,
+            )
+
+        def _set_autocommit(self, enabled: bool) -> None:
+            call_order.append(f"set_autocommit:{enabled}")
+
+        def _native_rollback(self) -> None:
+            call_order.append("native_rollback")
+
+        def _native_commit(self) -> None:
+            call_order.append("native_commit")
+
+        def commit(self) -> None:
+            if not self._commit_supported:
+                call_order.append("commit_noop")
+                return
+            call_order.append("commit_executed")
+
+        def rollback(self) -> None:
+            call_order.append("conn_rollback")
+
+    fake_conn = _FakeConnection()
+    config = AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"})
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(fake_conn))
+
+    with _adbc_atomic_connection(config, "teradata") as conn:
+        conn.commit()
+    assert fake_conn._commit_supported is False
+    assert call_order == ["set_autocommit:False", "native_commit", "set_autocommit:True"]
+
+    call_order.clear()
+    with pytest.raises(failure_cls, match="aborted"), _adbc_atomic_connection(config, "teradata"):
+        raise failure_cls("aborted")
+
+    assert fake_conn._commit_supported is False
+    assert call_order == ["set_autocommit:False", "native_rollback", "set_autocommit:True"]
+
+
+def test_adbc_atomic_connection_prevents_partial_autocommit_on_real_dbapi_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Real DBAPI connection starting in autocommit=True commits atomically and rolls back partial writes on error."""
+    adbc_sqlite = pytest.importorskip("adbc_driver_sqlite.dbapi")
+    db_uri = f"file:{tmp_path / 'atomic_teradata.sqlite'}"
+    config = AdbcConfig(connection_config={"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"})
+
+    raw_conn = adbc_sqlite.connect(db_uri, autocommit=True)
+    try:
+        setup_cur = raw_conn.cursor()
+        setup_cur.execute('CREATE TABLE kv ("KEY" TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        setup_cur.close()
+        assert raw_conn._commit_supported is False
+
+        monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(raw_conn))
+
+        with _adbc_atomic_connection(config, "teradata") as conn:
+            cur = conn.cursor()
+            cur.execute('INSERT INTO kv ("KEY", value) VALUES (?, ?)', ("k1", "initial"))
+            cur.close()
+            conn.commit()
+
+        assert raw_conn._commit_supported is False
+        assert raw_conn.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+        with pytest.raises(RuntimeError, match="boom"), _adbc_atomic_connection(config, "teradata") as conn:
+            cur = conn.cursor()
+            cur.execute('DELETE FROM kv WHERE "KEY" = ?', ("k1",))
+            cur.close()
+            raise RuntimeError("boom")
+
+        assert raw_conn._commit_supported is False
+        assert raw_conn.adbc_connection.get_option("adbc.connection.autocommit") == "true"
+
+        verify_cur = raw_conn.cursor()
+        verify_cur.execute('SELECT value FROM kv WHERE "KEY" = ?', ("k1",))
+        assert verify_cur.fetchone() == ("initial",)
+        verify_cur.close()
+    finally:
+        raw_conn.close()
+
+
+def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Snowflake ADBC ADK stores emit PARSE_JSON/SELECT/MERGE DML, decode Mapping/bytes, and search via ILIKE."""
+    from types import MappingProxyType
+
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    cursor = MagicMock()
+
+    def run_sql(sql: str, params: Any = ()) -> None:
+        normalized = _normalized(sql)
+        executed.append((normalized, tuple(params)))
+        if normalized.startswith("SELECT id, app_name, user_id, state"):
+            cursor.fetchone.return_value = ("s1", "app", "u1", MappingProxyType({"count": 1}), now, now)
+            cursor.fetchall.return_value = [cursor.fetchone.return_value]
+        elif normalized.startswith("SELECT e.id, e.session_id"):
+            cursor.fetchall.return_value = [("e1", "s1", "inv1", now, bytearray(b'{"text":"hello"}'), "app", "u1")]
+        elif normalized.startswith("SELECT event_id FROM adk_memory WHERE event_id IN"):
+            cursor.fetchall.return_value = []
+        elif normalized.startswith("MERGE INTO adk_memory"):
+            cursor.rowcount = 1 if params[0] == "m1" else 0
+        elif "content_text ILIKE ?" in normalized:
+            cursor.fetchall.return_value = [
+                (
+                    "m1",
+                    "s1",
+                    "app",
+                    "u1",
+                    "user",
+                    "e1",
+                    "agent",
+                    now,
+                    MappingProxyType({"parts": ["budget"]}),
+                    "Budget Forecast",
+                    bytearray(b'{"tag":"q4"}'),
+                    now,
+                )
+            ]
+
+    cursor.execute.side_effect = run_sql
+    conn = SimpleNamespace(cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "snowflake"},
+        extension_config={"adk": {"enable_memory": True, "owner_id_column": "owner_id VARCHAR(64)"}},
+    )
+    store = AdbcADKStore(config)
+    created = store.create_session("s1", "app", "u1", {"count": 1}, owner_id="org-1")
+    assert created["state"] == {"count": 1}
+    assert (
+        "INSERT INTO adk_session (id, app_name, user_id, owner_id, state, create_time, update_time) "
+        "SELECT ?, ?, ?, ?, PARSE_JSON(?), ?, ?"
+    ) == executed[0][0]
+
+    executed.clear()
+    store.update_session_state("app", "u1", "s1", {"count": 2})
+    assert "UPDATE adk_session SET state = PARSE_JSON(?), update_time = ?" in executed[0][0]
+
+    executed.clear()
+    event = {
+        "id": "e1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv1",
+        "timestamp": now,
+        "event_data": {"text": "hello"},
+    }
+    store.append_event(cast("Any", event))
+    assert (
+        "INSERT INTO adk_event (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+        "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)"
+    ) == executed[0][0]
+
+    executed.clear()
+    updated = store.append_event_and_update_state(
+        cast("Any", event), "app", "u1", "s1", {"count": 3}, app_state={"a": 1}, user_state={"u": 2}
+    )
+    assert updated["state"] == {"count": 1}
+    sql_batch = [stmt for stmt, _ in executed]
+    assert "UPDATE adk_session SET state = PARSE_JSON(?), update_time = ?" in sql_batch[0]
+    assert "INSERT INTO adk_event" in sql_batch[2] and "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)" in sql_batch[2]
+    assert sql_batch[3].startswith("MERGE INTO adk_app_state t USING (SELECT ? AS app_name, PARSE_JSON(?) AS state")
+    assert sql_batch[4].startswith(
+        "MERGE INTO adk_user_state t USING (SELECT ? AS app_name, ? AS user_id, PARSE_JSON(?) AS state"
+    )
+
+    executed.clear()
+    store.upsert_app_state("app", {"a": 2})
+    store.upsert_user_state("app", "u1", {"u": 3})
+    assert executed[0][0].startswith("MERGE INTO adk_app_state t")
+    assert executed[1][0].startswith("MERGE INTO adk_user_state t")
+
+    events = store.get_events("app", "u1", "s1")
+    assert events[0]["event_data"] == {"text": "hello"}
+
+    executed.clear()
+    mem_store = AdbcADKMemoryStore(config)
+    entry_one: StoredMemory = {
+        "id": "m1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e1",
+        "author": "agent",
+        "timestamp": now,
+        "content_json": {"parts": ["budget"]},
+        "content_text": "Budget Forecast",
+        "metadata_json": {"tag": "q4"},
+        "inserted_at": now,
+        "embedding": None,
+    }
+    entry_two: StoredMemory = {**entry_one, "id": "m2", "event_id": "e2"}
+    inserted = mem_store.insert_memory_entries([entry_one, entry_two], owner_id="org-1")
+    assert inserted == 1
+    merge_calls = [stmt for stmt, _ in executed if stmt.startswith("MERGE INTO adk_memory")]
+    assert len(merge_calls) == 2
+    assert "PARSE_JSON(?) AS content_json" in merge_calls[0]
+    assert "PARSE_JSON(?) AS metadata_json" in merge_calls[0]
+    assert "ON t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT" in merge_calls[0]
+
+    executed.clear()
+    recalled = mem_store.search_entries(" budget ", "app", "u1", limit=5)
+    assert len(recalled) == 1
+    assert recalled[0]["content_json"] == {"parts": ["budget"]}
+    assert recalled[0]["metadata_json"] == {"tag": "q4"}
+    search_sql, search_params = executed[0]
+    assert "content_text ILIKE ?" in search_sql
+    assert search_params == ("app", "u1", "%budget%", 5)

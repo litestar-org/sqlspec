@@ -114,16 +114,26 @@ class PymssqlSessionContext:
             driver_cls = _DRIVER_CLS
         assert driver_cls is not None
         self._connection = self._acquire_connection()
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        assert self._driver is not None
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = driver_cls(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            assert self._driver is not None
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
+        if (
+            self._driver_features.get("tenant_strategy") is None
+            and self._driver is not None
+            and (exc_type is not None or self._driver._connection_in_transaction())
+        ):
             with contextlib.suppress(Exception):
                 self._driver.rollback()
         if self._connection is not None:

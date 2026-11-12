@@ -19,6 +19,7 @@ from sqlspec.adapters.adbc.core import (
     configure_adbc_duckdb_profiling,
     create_duckdb_profile_path,
     create_mapped_exception,
+    create_teradata_mapped_exception,
     detect_dialect,
     driver_profile,
     enforce_strict_type_coercion,
@@ -47,14 +48,22 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.parameters import ParameterValidator
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
+from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
+from sqlspec.utils.text import (
+    normalize_identifier,
+    quote_identifier,
+    resolve_catalog_identifier,
+    split_qualified_identifier,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -69,11 +78,13 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
-_DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake"})
+_DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake", "teradata"})
+_DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"snowflake", "teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
 _CATALOG_QUALIFIED_PARTS = 3
+_SCRIPT_PARAMETER_VALIDATOR = ParameterValidator()
 
 
 @final
@@ -84,13 +95,19 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
     on ``pending_exception``.
     """
 
-    __slots__ = ()
+    __slots__ = ("_assume_teradata",)
+
+    def __init__(self, dialect: "str | None" = None) -> None:
+        super().__init__()
+        self._assume_teradata = dialect == "teradata"
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, AdbcNativeError):
-            self.pending_exception = create_mapped_exception(exc_val)
+            self.pending_exception = (
+                create_teradata_mapped_exception(exc_val) if self._assume_teradata else create_mapped_exception(exc_val)
+            )
             return True
         return False
 
@@ -258,7 +275,13 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
-        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2", "snowflake"}:
+        if not explicit_lowercase and (dialect or self._detected_dialect) in {
+            "oracle",
+            "db2",
+            "snowflake",
+            "teradata",
+            "vantage",
+        }:
             normalized_features["enable_lowercase_column_names"] = True
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
@@ -434,14 +457,25 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
         if profiling_enabled:
             self._ensure_statement_profiling()
+        parameter_offset = 0
+        validator = _SCRIPT_PARAMETER_VALIDATOR
         try:
             for idx, stmt in enumerate(statements):
                 stmt_started = perf_counter() if has_observers else 0.0
                 stmt_params: Any = ()
-                if prepared_parameters and (
-                    total_statements == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
-                ):
+                placeholders = (
+                    validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
+                )
+                if prepared_parameters and (total_statements == 1 or placeholders):
                     stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+                    if (
+                        self._dialect_name == "snowflake"
+                        and total_statements > 1
+                        and isinstance(stmt_params, (list, tuple))
+                    ):
+                        count = len(placeholders)
+                        stmt_params = stmt_params[parameter_offset : parameter_offset + count]
+                        parameter_offset += count
                     if (
                         self._dialect_name == "db2"
                         and stmt_params
@@ -502,6 +536,13 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._stream_closers.extend((source.close, stream.close))
         return stream
 
+    @property
+    def observability_db_system(self) -> str | None:
+        """Return the backend db.system for Teradata and Snowflake sessions, else the adapter attribution."""
+        if self._dialect_name in _DB_SYSTEM_OVERRIDE_DIALECTS:
+            return resolve_db_system(self._dialect_name)
+        return None
+
     def begin(self) -> None:
         """Begin a transaction, disabling native autocommit when its state is available."""
         if self._transaction_active:
@@ -515,15 +556,30 @@ class AdbcDriver(SyncDriverAdapterBase):
             except (AdbcNotSupportedError, NotImplementedError):
                 pass
             except AdbcNativeError as exc:
-                raise create_mapped_exception(exc) from exc
-        if mode == "true" and native is not None:
+                raise self._map_native_error(exc) from exc
+        if (
+            native is not None
+            and callable(getattr(native, "set_autocommit", None))
+            and (
+                mode == "true"
+                or (
+                    mode is None
+                    and self._dialect_name == "teradata"
+                    and getattr(self.connection, "_autocommit", None) is True
+                )
+            )
+        ):
             try:
                 native.set_autocommit(False)
+            except AdbcNotSupportedError as exc:
+                self._previous_autocommit = None
+                msg = f"ADBC {self._dialect_name} cannot disable autocommit; this driver supports autocommit-only operations."
+                raise TransactionError(msg) from exc
             except BaseException as exc:
                 with contextlib.suppress(BaseException):
                     native.set_autocommit(True)
                 if isinstance(exc, AdbcNativeError):
-                    raise create_mapped_exception(exc) from exc
+                    raise self._map_native_error(exc) from exc
                 raise
             self._previous_autocommit = True
         self._transaction_active = True
@@ -620,7 +676,21 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Cursor context manager
         """
+        if self._dialect_name == "snowflake":
+            raw_tag = self.driver_features.get("query_tag")
+            tag = raw_tag.strip() if isinstance(raw_tag, str) else ""
+            correlation = CorrelationContext.get()
+            if correlation and correlation != tag:
+                tag = f"{tag}:{correlation}" if tag else correlation
+            if tag:
+                return AdbcCursor(connection, adbc_stmt_kwargs={"adbc.snowflake.statement.query_tag": tag})
         return AdbcCursor(connection)
+
+    def _map_native_error(self, error: BaseException) -> SQLSpecError:
+        """Map a native ADBC error with Teradata diagnostics enabled for Teradata connections."""
+        if self._dialect_name == "teradata":
+            return create_teradata_mapped_exception(error)
+        return create_mapped_exception(error)
 
     def handle_database_exceptions(self) -> "AdbcExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
@@ -628,7 +698,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Exception handler context manager
         """
-        return AdbcExceptionHandler()
+        return AdbcExceptionHandler(self._dialect_name)
 
     def select_to_arrow(
         self,
@@ -829,9 +899,17 @@ class AdbcDriver(SyncDriverAdapterBase):
         concurrent_indexes: bool = False,
         type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
-        """Ingest an Arrow payload directly through the ADBC cursor."""
+        """Ingest an Arrow payload directly through the ADBC cursor.
+
+        On Snowflake, Arrow column names, conflict keys, update exclusions, and type casts are resolved to the
+        target table's catalog column names first: an exact name wins, otherwise a single case-insensitive match.
+        """
 
         self._require_capability("arrow_import_enabled")
+        if self._dialect_name == "snowflake":
+            source, conflict_keys, exclude_update_columns, type_casts = self._align_snowflake_load_columns(
+                table, source, conflict_keys, exclude_update_columns, type_casts
+            )
         if stage_table or conflict_keys or drop_indexes:
             return self._execute_staged_load_sync(
                 table,
@@ -892,6 +970,46 @@ class AdbcDriver(SyncDriverAdapterBase):
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    def _align_snowflake_load_columns(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        conflict_keys: "Sequence[str] | None",
+        exclude_update_columns: "Sequence[str] | None",
+        type_casts: "Mapping[str, str] | None",
+    ) -> "tuple[Any, Sequence[str] | None, Sequence[str] | None, Mapping[str, str] | None]":
+        """Rename load columns to the target table's catalog column names."""
+        catalog_columns = [
+            str(column["column_name"])
+            for column in self.data_dictionary.get_columns(self, table)
+            if column.get("column_name") is not None
+        ]
+        if not catalog_columns:
+            return source, conflict_keys, exclude_update_columns, type_casts
+
+        def resolve(name: str) -> str:
+            return resolve_catalog_identifier(name, catalog_columns) or name
+
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        source_data: Any = source.get_data() if hasattr(source, "get_data") else source
+        if hasattr(source_data, "read_next_batch"):
+            names = [resolve(name) for name in source_data.schema.names]
+            schema = pa.schema([field.with_name(name) for field, name in zip(source_data.schema, names, strict=True)])
+            aligned: Any = pa.RecordBatchReader.from_batches(
+                schema, (pa.RecordBatch.from_arrays(batch.columns, schema=schema) for batch in source_data)
+            )
+        else:
+            arrow_table = self._coerce_arrow_table(source_data)
+            aligned = arrow_table.rename_columns([resolve(name) for name in arrow_table.column_names])
+        return (
+            aligned,
+            [resolve(name) for name in conflict_keys] if conflict_keys else conflict_keys,
+            [resolve(name) for name in exclude_update_columns] if exclude_update_columns else exclude_update_columns,
+            {resolve(name): value for name, value in type_casts.items()} if type_casts else type_casts,
+        )
 
     def load_from_storage(
         self,
@@ -1024,7 +1142,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
             self._transaction_active = False
         if isinstance(primary, AdbcNativeError):
-            raise create_mapped_exception(primary) from primary
+            raise self._map_native_error(primary) from primary
         if primary is not None:
             raise primary
 

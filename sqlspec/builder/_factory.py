@@ -535,7 +535,7 @@ class SQLFactory:
         builder_dialect = _resolve_dialect(dialect, self.dialect)
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
 
-        merge_supported = {"postgres", "postgresql", "oracle", "bigquery", "db2"}
+        merge_supported = {"postgres", "postgresql", "oracle", "bigquery", "db2", "teradata", "vantage"}
 
         if dialect_str in merge_supported:
             return self.merge(table, dialect=builder_dialect)

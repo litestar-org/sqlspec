@@ -58,7 +58,7 @@ def test_sync_migration_commands_squash_squash_valid_range(tmp_path: Path) -> No
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
     (tmp_path / "0003_posts.sql").write_text("-- name: migrate-0003-up\nCREATE TABLE t3 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -72,7 +72,7 @@ def test_sync_migration_commands_squash_squash_invalid_range_raises_error(tmp_pa
     """Test squash raises error when end version is before start."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -87,7 +87,7 @@ def test_sync_migration_commands_squash_squash_dry_run_does_not_modify_files(tmp
     """Test dry_run mode previews without modifying files."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -103,7 +103,7 @@ def test_sync_migration_commands_squash_squash_update_database_false_skips_track
     """Test update_database=False skips tracker operations by verifying no DB session is opened."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     tracker_mock = Mock()
     config.migration_tracker_type = Mock(return_value=tracker_mock)
@@ -121,7 +121,7 @@ def test_sync_migration_commands_squash_squash_update_database_false_skips_track
 async def test_async_squash_builds_sync_runner_with_migration_context(tmp_path: Path) -> None:
     """Async squash should mirror the sync path and pass a real migration context."""
     (tmp_path / "0001_initial.py").write_text("def up(context): pass\n\ndef down(context): pass\n")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -142,7 +142,7 @@ async def test_async_migration_commands_squash_async_squash_valid_range(tmp_path
     """Test async squash succeeds with valid version range."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -156,7 +156,7 @@ async def test_async_migration_commands_squash_async_squash_invalid_range_raises
     """Test async squash raises error when end version is before start."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -171,7 +171,7 @@ def test_sync_squash_defaults_squash_defaults_to_all_migrations(tmp_path: Path) 
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
     (tmp_path / "0003_posts.sql").write_text("-- name: migrate-0003-up\nCREATE TABLE t3 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -184,7 +184,7 @@ def test_sync_squash_defaults_squash_defaults_to_all_migrations(tmp_path: Path) 
 def test_sync_squash_defaults_squash_prompts_for_description(tmp_path: Path) -> None:
     """Test that missing description triggers interactive prompt."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -198,7 +198,7 @@ def test_sync_squash_defaults_squash_prompts_for_description(tmp_path: Path) -> 
 
 def test_sync_squash_defaults_squash_no_migrations_returns_early(tmp_path: Path) -> None:
     """Test that empty directory returns early when no range given."""
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -219,7 +219,7 @@ def test_sync_squash_auto_discovers_timestamp_migrations_and_defaults_descriptio
     (tmp_path / "20251012153000_alter.sql").write_text(
         "-- name: migrate-20251012153000-up\nALTER TABLE widgets ADD COLUMN label VARCHAR(80);\n", encoding="utf-8"
     )
-    config = Mock()
+    config = Mock(driver_features={})
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}

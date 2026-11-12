@@ -4,6 +4,7 @@ from typing import Any, Final
 
 __all__ = (
     "SQLSTATE_EXCEPTION_MAP",
+    "AmbiguousIdentifierError",
     "CheckViolationError",
     "ConfigResolverError",
     "ConnectionTimeoutError",
@@ -44,6 +45,8 @@ __all__ = (
     "StorageCapabilityError",
     "StorageOperationFailedError",
     "StoragePathTraversalError",
+    "TenantCleanupError",
+    "TenantContextError",
     "TransactionError",
     "UniqueViolationError",
     "map_sqlstate_to_exception",
@@ -82,6 +85,14 @@ class SQLSpecError(Exception):
         if self.detail and self.detail not in self.args:
             parts.append(self.detail)
         return " ".join(parts).strip()
+
+
+class TenantContextError(SQLSpecError, ValueError):
+    """Raised when tenant identity is missing, invalid, or mismatched."""
+
+
+class TenantCleanupError(SQLSpecError):
+    """Raised when tenant cleanup fails and the connection is invalidated."""
 
 
 class MissingDependencyError(SQLSpecError):
@@ -424,6 +435,10 @@ class SQLSlotError(SQLSpecError):
 
 class MigrationError(SQLSpecError):
     """Base exception for migration-related errors."""
+
+
+class AmbiguousIdentifierError(SQLSpecError):
+    """An identifier has no exact catalog match and matches several names case-insensitively."""
 
 
 class OutOfOrderMigrationError(MigrationError):

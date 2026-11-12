@@ -1264,6 +1264,8 @@ class IndexMetadata(TypedDict, total=False):
     """Single expression for expression-based indexes."""
     expressions: str | None
     """Comma-separated expressions for expression-based indexes."""
+    catalog_name_generated: bool
+    """Whether ``index_name`` was synthesized because the catalog stores no name for the index."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1498,6 +1500,8 @@ class FeatureFlags(TypedDict, total=False):
     """Whether ``FOR UPDATE SKIP LOCKED`` non-blocking queue scans are supported."""
     supports_structs: bool
     """Whether composite ``STRUCT`` / ``ROW`` column types are supported."""
+    supports_time_travel: bool
+    """Whether historical table snapshots can be queried."""
     supports_transactional_ddl: bool
     """Whether schema DDL statements can be executed within a transaction."""
     supports_transactions: bool

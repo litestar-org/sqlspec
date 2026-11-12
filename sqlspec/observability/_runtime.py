@@ -5,7 +5,12 @@ from time import time
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlspec.observability._common import compute_sql_hash, get_trace_context, redact_sql_literals, resolve_db_system
+from sqlspec.observability._common import (
+    compute_sql_hash,
+    get_trace_context,
+    redact_sql_literals,
+    resolve_effective_db_system,
+)
 from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
 from sqlspec.observability._observer import StatementEvent, create_event, create_statement_observer
@@ -370,15 +375,14 @@ class ObservabilityRuntime:
         script_ordinal: int | None = None,
         script_statement_index: int | None = None,
         script_statement_count: int | None = None,
+        db_system: str | None = None,
     ) -> StatementEvent:
         """Create a redacted and enriched StatementEvent instance."""
         correlation_id = CorrelationContext.get()
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
         logging_config = self.config.logging
-        db_system = resolve_db_system(self.config_name)
-        if db_system == "other_sql" and driver:
-            db_system = resolve_db_system(driver)
+        resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
         sql_hash = None
         if logging_config and logging_config.include_sql_hash:
             if precomputed_sql_hash is not None and (self._redaction is None or not self._redaction.mask_literals):
@@ -401,7 +405,7 @@ class ObservabilityRuntime:
             driver=driver,
             adapter=self.config_name,
             bind_key=self.bind_key,
-            db_system=db_system,
+            db_system=resolved_db_system,
             operation=operation,
             execution_mode=execution_mode,
             is_many=is_many,
@@ -447,6 +451,7 @@ class ObservabilityRuntime:
         script_ordinal: int | None = None,
         script_statement_index: int | None = None,
         script_statement_count: int | None = None,
+        db_system: str | None = None,
     ) -> None:
         """Emit a statement event to all registered observers."""
 
@@ -480,6 +485,7 @@ class ObservabilityRuntime:
             script_ordinal=script_ordinal,
             script_statement_index=script_statement_index,
             script_statement_count=script_statement_count,
+            db_system=db_system,
         )
         for observer in self._statement_observers:
             try:
@@ -487,7 +493,9 @@ class ObservabilityRuntime:
             except Exception as exc:
                 logger.warning("Statement observer failed: %s", exc)
 
-    def start_query_span(self, sql: str, operation: str, driver: str, *, sql_hash: str | None = None) -> Any:
+    def start_query_span(
+        self, sql: str, operation: str, driver: str, *, sql_hash: str | None = None, db_system: str | None = None
+    ) -> Any:
         """Start a query span with runtime metadata."""
 
         if not self.span_manager.is_enabled:
@@ -516,6 +524,7 @@ class ObservabilityRuntime:
             operation=operation,
             connection_info=connection_info,
             correlation_id=correlation_id,
+            db_system=db_system,
         )
 
     def start_storage_span(

@@ -19,11 +19,15 @@ from sqlspec.driver._common import (
     ExecutionResult,
     SyncExceptionHandler,
 )
-from sqlspec.driver._storage_helpers import arrow_batch_to_rows, coerce_arrow_batches, ingest_telemetry_from_batches
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.exceptions import StorageCapabilityError
-from sqlspec.storage.pipeline import StorageBridgeJob, StorageTelemetry, SyncStoragePipeline
+from sqlspec.storage.pipeline import (
+    StorageBridgeJob,
+    StorageTelemetry,
+    SyncStoragePipeline,
+    ingest_telemetry_from_batches,
+)
 from sqlspec.typing import PYARROW_INSTALLED
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 
@@ -260,8 +264,6 @@ def test_driver_common_exposes_streaming_arrow_batch_helpers() -> None:
     assert cols == ["k", "v"]
     assert len(batch_list) == 2
     assert CommonDriverAttributesMixin._arrow_batch_to_rows(batch_list[0]) == [(10, "x"), (20, "y")]
-    assert coerce_arrow_batches is not None
-    assert arrow_batch_to_rows is not None
 
 
 def test_stream_exposes_source_column_types() -> None:

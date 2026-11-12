@@ -72,10 +72,12 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 sanic = ["sanic"]
+snowflake = ["snowflake-connector-python>=4.0.0", "pyarrow"]
 spanner = ["google-cloud-spanner>=3.64.0"]
 sqlanywhere = ["sqlanydb>=1.0.14"]
 starlette = ["starlette"]
 sybase = ["pymssql"]
+teradata = ["teradatasql>=20.0.0"]
 uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
@@ -161,6 +163,7 @@ spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
 sqlanywhere = "sqlspec.dialects.sybase:SQLAnywhere"
 sybase = "sqlspec.dialects.sybase:Sybase"
+vantage = "sqlspec.dialects.teradata:Vantage"
 
 [tool.uv]
 exclude-newer = "7 days"
@@ -265,9 +268,12 @@ include = [
   "sqlspec/dialects/sybase/_generators.py",        # Sybase and SQL Anywhere custom dialect render hooks
   "sqlspec/dialects/sybase/_parsers.py",           # Sybase and SQL Anywhere custom dialect parser hooks
   "sqlspec/dialects/sybase/_transforms.py",        # Sybase and SQL Anywhere custom dialect transform helpers
+  "sqlspec/dialects/teradata/_generators.py",      # Teradata custom dialect render hooks
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
+  "sqlspec/storage/_staging_sql.py",               # Pure staged/checkpoint SQL and worker budget helpers
+  "sqlspec/storage/_ingest.py",                    # Compiled staged and multi-shard storage ingestion orchestration
   "sqlspec/storage/_arrow_stream.py",              # Pure Parquet streaming validation and row-group iteration
   "sqlspec/storage/pipeline.py",                   # Storage bridge orchestration with Arrow boundary split out
   "sqlspec/storage/backends/base.py",              # Storage backend runtime base classes
@@ -280,6 +286,7 @@ include = [
   "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
   "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers
   "sqlspec/extensions/litestar/providers.py",      # Litestar filter provider helpers
+  "sqlspec/extensions/litestar/_tenant_resolution.py", # Litestar tenant resolution over verified auth values
   "sqlspec/extensions/events/_hints.py",           # Adapter event runtime defaults
   "sqlspec/extensions/events/_models.py",          # Event message value object
   "sqlspec/extensions/events/_names.py",           # Event channel/table name validators
@@ -292,6 +299,11 @@ include = [
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
+  "sqlspec/adapters/**/tenant.py",                 # Adapter tenant strategies and leases
+  "sqlspec/adapters/asyncpg/events/_hub.py",       # Native event listener runtimes
+  "sqlspec/adapters/oracledb/events/_hub.py",
+  "sqlspec/adapters/psqlpy/events/_hub.py",
+  "sqlspec/adapters/psycopg/events/_hub.py",
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers
   "sqlspec/adapters/oracledb/_json_handlers.py",   # Native JSON inputtypehandler / outputtypehandler chain
   "sqlspec/adapters/oracledb/_uuid_handlers.py",   # UUID ↔ RAW(16) inputtypehandler / outputtypehandler chain
@@ -311,6 +323,7 @@ include = [
   "sqlspec/utils/serializers/**/*.py",             # Serialization helpers package
   "sqlspec/utils/type_converters.py",              # Adapter type converters
   "sqlspec/utils/correlation.py",                  # Correlation context helpers
+  "sqlspec/utils/tenant/**/*.py",                  # Tenant context, scopes, and shared session-setting helpers
   "sqlspec/utils/portal.py",                       # Thread portal utilities
   "sqlspec/utils/schema.py",                       # Schema transformation (refactored for mypyc)
   "sqlspec/utils/uuids.py",                        # UUID utilities
@@ -380,12 +393,12 @@ version = "{current_version}"
 """
 
 [tool.codespell]
-ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin,DOUB"
+ignore-words-list = "te,ECT,SELCT,froms,ccompiler,BRIN,ageIn,notin,DOUB,checkin"
 skip = 'uv.lock'
 
 [tool.coverage.run]
 branch = true
-concurrency = ["multiprocessing"]
+concurrency = ["multiprocessing", "thread"]
 disable_warnings = ["no-data-collected", "module-not-measured", "module-not-imported"]
 omit = ["*/tests/*"]
 parallel = true
@@ -470,6 +483,7 @@ markers = [
   "oracle: marks tests specific to Oracle",
   "spanner: marks tests specific to Google Cloud Spanner",
   "snowflake: marks tests specific to Snowflake",
+  "snowflake_connector: marks tests using snowflake-connector-python",
   "mssql: marks tests specific to Microsoft SQL Server",
   # Driver markers
   "adbc: marks tests using ADBC drivers",
@@ -491,6 +505,7 @@ markers = [
   "psqlpy: marks tests using psqlpy",
   "sqlanywhere: marks tests using the sqlanywhere adapter",
   "sybase: marks tests using the sybase adapter",
+  "teradata: marks tests using the teradata adapter",
 ]
 python_files = ["test_*.py"]
 testpaths = ["tests"]
@@ -548,6 +563,10 @@ module = [
   "ibm_db_dbi.*",
   "sqlanydb",
   "sqlanydb.*",
+  "snowflake",
+  "snowflake.*",
+  "teradatasql",
+  "teradatasql.*",
   "sqlglot",
   "sqlglot.*",
 ]

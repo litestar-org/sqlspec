@@ -29,7 +29,11 @@ from sqlspec.utils.type_guards import (
 from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
 ```
 
-Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, UUID/NanoID generation, Apache Arrow batch/table coercion, table fixture loading/exporting, correlation tracking, and sync/async bridging.
+Reusable helpers for runtime type narrowing, JSON serialization, schema model conversion, UUID/NanoID generation, Apache Arrow batch/table coercion, table fixture loading/exporting, tenant and correlation tracking, and sync/async bridging.
+
+## Tenant Context
+
+See [Tenant APIs](tenant.md) for immutable payloads, restoring scopes, bypass, request extraction, strategy contracts, and Litestar guards. See [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for database policy setup.
 
 ## Schema, Serialization & Identifiers
 

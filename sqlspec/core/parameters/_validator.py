@@ -8,14 +8,14 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
-__all__ = ("PARAMETER_REGEX", "ParameterValidator", "unescape_qmark_operator")
+__all__ = ("PARAMETER_REGEX", "SNOWFLAKE_PARAMETER_REGEX", "ParameterValidator", "unescape_qmark_operator")
 
 _PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:@$")
 
 PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     r"""
-    (?P<dquote>"(?:[^"\\]|\\.)*") |
-    (?P<squote>'(?:[^'\\]|\\.)*') |
+    (?P<dquote>"(?:""|\\.|[^"\\])*") |
+    (?P<squote>'(?:''|\\.|[^'\\])*') |
     (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)\$[\s\S]*?\$(?P=dollar_quote_tag_inner)\$) |
     (?P<line_comment>--[^\r\n]*) |
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
@@ -23,13 +23,40 @@ PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<pg_cast>::(?P<cast_type>\w+)) |
     (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
     (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
-    (?P<pyformat_pos>%s) |
+    (?P<pyformat_pos>%s(?!\w)) |
     (?P<positional_colon>(?<![A-Za-z0-9_]):(?P<colon_num>\d+)) |
     (?P<named_colon>(?<![A-Za-z0-9_]):(?P<colon_name>\w+)) |
     (?P<named_at>(?<![A-Za-z0-9_])@(?!sqlspec_)(?P<at_name>\w+)) |
     (?P<numeric>(?<![A-Za-z0-9_])\$(?P<numeric_num>\d+)) |
     (?P<named_dollar_param>(?<![A-Za-z0-9_])\$(?P<dollar_param_name>\w+)) |
     (?P<qmark>\?)
+    """,
+    re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+
+SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
+    r"""
+    (?P<dquote>"(?:""|\\.|[^"\\])*") |
+    (?P<squote>'(?:''|\\.|[^'\\])*') |
+    (?P<dollar_quoted_string>\$\$[\s\S]*?\$\$) |
+    (?P<line_comment>--[^\r\n]*) |
+    (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
+    (?P<pg_q_operator>\?\?) |
+    (?P<pg_cast>::(?P<cast_type>\w+)) |
+    (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
+    (?P<sf_slash_comment>(?<!:)//[^\r\n]*) |
+    (?P<sf_user_stage>@~) |
+    (?P<sf_table_stage>@(?:[A-Za-z_][A-Za-z0-9_$]*\.)*%[A-Za-z0-9_$]+) |
+    (?P<sf_named_stage>@[A-Za-z_][A-Za-z0-9_$.]*) |
+    (?P<sf_numeric_dollar>\$\d+) |
+    (?P<sf_session_var>\$[A-Za-z_]\w*) |
+    (?P<pyformat_named>%\((?P<pyformat_name>\w+)\)s) |
+    (?P<pyformat_pos>%s(?!\w)) |
+    (?P<positional_colon>(?<![A-Za-z0-9_$"\]\)]):(?P<colon_num>\d+)) |
+    (?P<named_colon>(?<![A-Za-z0-9_$"\]\)]):(?P<colon_name>\w+)) |
+    (?P<qmark>\?) |
+    (?P<sf_word>[A-Za-z_][A-Za-z0-9_$]*) |
+    (?P<sf_other>[^\s])
     """,
     re.VERBOSE | re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
@@ -46,7 +73,30 @@ _SKIP_GROUPS: Final[tuple[str, ...]] = (
 )
 
 
-_OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s|%\(\w+\)s|@\w|\?)")
+_SNOWFLAKE_PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:")
+_SNOWFLAKE_COLON_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.POSITIONAL_COLON,
+})
+_SNOWFLAKE_SKIP_GROUPS: Final[tuple[str, ...]] = (
+    *_SKIP_GROUPS,
+    "sf_slash_comment",
+    "sf_user_stage",
+    "sf_table_stage",
+    "sf_named_stage",
+    "sf_numeric_dollar",
+    "sf_session_var",
+)
+
+
+def _normalize_dialect(dialect: str | None) -> str | None:
+    """Normalize an optional dialect identifier for lexical selection and caching."""
+    if dialect is None:
+        return None
+    return dialect.strip().lower() or None
+
+
+_OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s(?!\w)|%\(\w+\)s|@\w|\?)")
 _PRECEDING_WORD: Final = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*$")
 _NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
     "select",
@@ -101,6 +151,13 @@ _NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
     "end",
     "if",
 ])
+_SNOWFLAKE_NON_OPERAND_KEYWORDS: Final[frozenset[str]] = _NON_OPERAND_KEYWORDS | frozenset({
+    "default",
+    "immediate",
+    "qualify",
+    "regexp",
+    "rlike",
+})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -110,7 +167,7 @@ class ParameterValidator:
     __slots__ = ("_cache_hits", "_cache_max_size", "_cache_misses", "_parameter_cache")
 
     def __init__(self, cache_max_size: int = 5000) -> None:
-        self._parameter_cache: OrderedDict[str, list[ParameterInfo]] = OrderedDict()
+        self._parameter_cache: OrderedDict[tuple[str, str | None], list[ParameterInfo]] = OrderedDict()
         self._cache_max_size = max(cache_max_size, 0)
         self._cache_hits = 0
         self._cache_misses = 0
@@ -136,12 +193,13 @@ class ParameterValidator:
             "max_size": self._cache_max_size,
         }
 
-    def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
+    def extract_parameters(self, sql: str, dialect: str | None = None) -> "list[ParameterInfo]":
         """Extract ordered parameter metadata from SQL text."""
+        normalized_dialect = "snowflake" if _normalize_dialect(dialect) == "snowflake" else None
         if self._cache_max_size <= 0:
-            return self._extract_parameters_uncached(sql)
+            return self._extract_parameters_uncached(sql, normalized_dialect)
 
-        cache_key = sql
+        cache_key = (sql, normalized_dialect)
         cached_result = self._parameter_cache.get(cache_key)
         if cached_result is not None:
             self._parameter_cache.move_to_end(cache_key)
@@ -149,7 +207,7 @@ class ParameterValidator:
             return cached_result
         self._cache_misses += 1
 
-        parameters = self._extract_parameters_uncached(sql)
+        parameters = self._extract_parameters_uncached(sql, normalized_dialect)
         if len(self._parameter_cache) >= self._cache_max_size:
             self._parameter_cache.popitem(last=False)
         self._parameter_cache[cache_key] = parameters
@@ -176,13 +234,60 @@ class ParameterValidator:
             return ParameterStyle.NAMED_DOLLAR, match.group("dollar_param_name")
         return None, None
 
-    def _extract_parameters_uncached(self, sql: str) -> "list[ParameterInfo]":
-        parameters: list[ParameterInfo] = []
-        ordinal = 0
+    @staticmethod
+    def _extract_snowflake_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
+        """Map the binding styles supported by the Snowflake lexical grammar."""
+        if match.group("qmark"):
+            return ParameterStyle.QMARK, None
+        if match.group("named_colon"):
+            return ParameterStyle.NAMED_COLON, match.group("colon_name")
+        if match.group("pyformat_named"):
+            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
+        if match.group("pyformat_pos"):
+            return ParameterStyle.POSITIONAL_PYFORMAT, None
+        if match.group("positional_colon"):
+            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
+        return None, None
 
+    def _extract_snowflake_parameters(self, sql: str) -> "list[ParameterInfo]":
+        """Distinguish colon binds from path access using preceding meaningful tokens.
+
+        Comments and whitespace preserve the preceding expression. Operators and SQL
+        expression-introducing keywords make the next colon a binding candidate.
+        """
+        if not _SNOWFLAKE_PARAM_CHARS.intersection(sql):
+            return []
+        parameters: list[ParameterInfo] = []
+        preceding_operand = False
+        for match in SNOWFLAKE_PARAMETER_REGEX.finditer(sql):
+            if match.group("line_comment") or match.group("block_comment") or match.group("sf_slash_comment"):
+                continue
+            word = match.group("sf_word")
+            if word is not None:
+                preceding_operand = word.lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
+                continue
+            other = match.group("sf_other")
+            if other is not None:
+                preceding_operand = other in ")]" or other.isdigit()
+                continue
+            if any(match.group(*_SNOWFLAKE_SKIP_GROUPS)):
+                preceding_operand = match.group("pg_q_operator") is None
+                continue
+            style, name = self._extract_snowflake_parameter_style(match)
+            if style is None:
+                continue
+            if preceding_operand and style in _SNOWFLAKE_COLON_STYLES:
+                continue
+            preceding_operand = True
+            parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
+        return parameters
+
+    def _extract_parameters_uncached(self, sql: str, normalized_dialect: str | None = None) -> "list[ParameterInfo]":
+        if normalized_dialect == "snowflake":
+            return self._extract_snowflake_parameters(sql)
         if not _PARAM_CHARS.intersection(sql):
             return []
-
+        parameters: list[ParameterInfo] = []
         for match in PARAMETER_REGEX.finditer(sql):
             if any(match.group(*_SKIP_GROUPS)):
                 continue
@@ -191,9 +296,7 @@ class ParameterValidator:
                 continue
             if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
                 continue
-            placeholder_text = match.group(0)
-            parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
-            ordinal += 1
+            parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
 
@@ -201,7 +304,7 @@ _QMARK_ESCAPE: Final[str] = "??"
 
 
 def unescape_qmark_operator(
-    sql: str, param_info: "list[ParameterInfo] | None" = None
+    sql: str, param_info: "list[ParameterInfo] | None" = None, dialect: str | None = None
 ) -> "tuple[str, list[ParameterInfo]]":
     """Replace each ``??`` escape outside literals and comments with a single ``?``.
 
@@ -213,7 +316,8 @@ def unescape_qmark_operator(
     segments: list[str] = []
     escape_positions: list[int] = []
     last_end = 0
-    for match in PARAMETER_REGEX.finditer(sql):
+    regex = SNOWFLAKE_PARAMETER_REGEX if _normalize_dialect(dialect) == "snowflake" else PARAMETER_REGEX
+    for match in regex.finditer(sql):
         if match.group("pg_q_operator") != _QMARK_ESCAPE:
             continue
         segments.extend((sql[last_end : match.start()], "?"))

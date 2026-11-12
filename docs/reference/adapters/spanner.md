@@ -18,6 +18,8 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 
 ## Configuration & Parameters
 
+See the full [connection and pool parameter table](../../databases/spanner.md#connection-and-pool-parameters) for pool settings, types, and defaults.
+
 ::: sqlspec.adapters.spanner.SpannerSyncConfig
     options:
       heading_level: 3
@@ -37,6 +39,7 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.SpannerPoolParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 
@@ -51,6 +54,7 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.SpannerSyncDriver
     options:
       heading_level: 3
+      show_bases: false
       members:
         - run_in_transaction
         - execute_partitioned_dml
@@ -63,6 +67,9 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.SpannerAsyncDriver
     options:
       heading_level: 3
+      show_bases: false
+      separate_signature: false
+      show_docstring_parameters: false
       members:
         - run_in_transaction
         - execute_partitioned_dml

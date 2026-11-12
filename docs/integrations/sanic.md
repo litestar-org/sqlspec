@@ -30,11 +30,13 @@
 
 ## Basic Setup
 
-Configure `extension_config["sanic"]` (`SanicConfig`), attach the plugin via `db_plugin.init_app(app)`, and retrieve the session with `db_plugin.get_session(request, "db")`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), configure `extension_config["sanic"]` (`SanicConfig`), and retrieve the session with `await db_plugin.get_session_async(request, "db")`:
 
 ```{ .python title="docs/examples/frameworks/sanic/basic_setup.py" }
 --8<-- "docs/examples/frameworks/sanic/basic_setup.py:example"
 ```
+
+Request connections are checked out on first access, so routes that never touch the database open none. With an async configuration, `db_plugin.get_session(request)` returns a session that opens the connection on its first awaited call, so `await session.select(...)`, `async for row in session.select_stream(...)`, and `async with session.transaction():` work unchanged; `await db_plugin.get_session_async(request)` opens it immediately. Reading `session.connection` before the first awaited call raises `ImproperConfigurationError`, and `get_connection(request)` returns an async connection only once it is open, so use `await db_plugin.get_connection_async(request)` before that. Autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Commit Modes and Custom Rollback Statuses
 
@@ -86,6 +88,10 @@ For high-throughput endpoints that only acquire connections on demand rather tha
     --8<-- "docs/examples/frameworks/sanic/observability.py:example"
     ```
 
+## Tenant-Aware Requests
+
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Sanic defers checkout until middleware or a route verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)`; a per-bind `tenant_extractor` can resolve the tenant from `request.ctx.user` instead. See [Sanic Multi-Tenancy](../learn/recipes/multi-tenancy-sanic.md) for complete examples, including streaming and cleanup behavior, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
 ## Configuration Options
 
 Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration:
@@ -93,7 +99,8 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 <!-- GENERATED:START config-table:sqlspec.config.SanicConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.ctx. Default: 'db_connection' |
+| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
+| `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.ctx once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
@@ -111,5 +118,5 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 ## Recap
 
 - Configure `session_key`, `commit_mode`, `disable_di`, and observability flags in `extension_config["sanic"]`.
-- Retrieve sessions via `db_plugin.get_session(request, key)`, or set `disable_di` and acquire connections from `request.app.ctx.<pool_key>`.
+- Retrieve sessions via `db_plugin.get_session(request, key)` or `await db_plugin.get_session_async(request, key)`; connections are checked out on first access. Set `disable_di` to acquire connections from `request.app.ctx.<pool_key>` yourself.
 - See the [Sanic Extension Reference](/reference/extensions/sanic/) for `SQLSpecPlugin` and `SanicConfig` signatures.

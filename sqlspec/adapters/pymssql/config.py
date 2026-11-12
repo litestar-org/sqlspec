@@ -8,8 +8,10 @@ from sqlspec.adapters.pymssql.core import apply_driver_features, build_connectio
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy, PymssqlTenantLease
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
@@ -79,6 +81,9 @@ class PymssqlPoolParams(PymssqlConnectionParams):
 class PymssqlDriverFeatures(TypedDict):
     """Optional pymssql driver feature flags for JSON serialization, connection hooks, and events."""
 
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
+    """Opt-in tenant strategy, or the ``"session_context"`` shorthand, applied to every session and connection lease."""
+
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
@@ -113,6 +118,10 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     driver_type: "ClassVar[type[PymssqlDriver]]" = PymssqlDriver
     connection_type: "ClassVar[type[PymssqlConnection]]" = cast("type[PymssqlConnection]", PymssqlConnection)
     migration_tracker_type: "ClassVar[type[PymssqlSyncMigrationTracker]]" = PymssqlSyncMigrationTracker
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls", "session_context"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = PymssqlSessionContextStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = PymssqlTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -173,6 +182,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         Returns:
             PymssqlConnection: A newly opened connection.
         """
+        self._require_leased_tenant_connection()
         return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":

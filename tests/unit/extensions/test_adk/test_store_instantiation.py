@@ -41,9 +41,11 @@ SESSION_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKStore",
+    "sqlspec.adapters.snowflake.adk.SnowflakeADKStore",
     "sqlspec.adapters.spanner.adk.SpannerAsyncADKStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKStore",
+    "sqlspec.adapters.teradata.adk.TeradataADKStore",
 ]
 
 MEMORY_STORE_CLASSES = [
@@ -67,9 +69,11 @@ MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore",
+    "sqlspec.adapters.snowflake.adk.SnowflakeADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerAsyncADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
+    "sqlspec.adapters.teradata.adk.TeradataADKMemoryStore",
 ]
 
 ALL_STORE_CLASSES = SESSION_STORE_CLASSES + MEMORY_STORE_CLASSES
@@ -85,8 +89,10 @@ SYNC_SESSION_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKStore",
+    "sqlspec.adapters.snowflake.adk.SnowflakeADKStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKStore",
+    "sqlspec.adapters.teradata.adk.TeradataADKStore",
 ]
 
 SYNC_MEMORY_STORE_CLASSES = [
@@ -100,8 +106,10 @@ SYNC_MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore",
+    "sqlspec.adapters.snowflake.adk.SnowflakeADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
+    "sqlspec.adapters.teradata.adk.TeradataADKMemoryStore",
 ]
 
 
@@ -212,7 +220,9 @@ def test_adk_store_registration_validator_resolves_duckdb_store_classes() -> Non
         ("mssql_python", "MssqlPython", "tsql"),
         ("pymssql", "Pymssql", "tsql"),
         ("sybase", "Sybase", "sybase"),
+        ("snowflake", "Snowflake", "snowflake"),
         ("sqlanywhere", "Sqlanywhere", "sqlanywhere"),
+        ("teradata", "Teradata", "teradata"),
     ],
 )
 def test_qualified_table_names_reach_supporting_adk_stores(adapter: str, prefix: str, dialect: str) -> None:

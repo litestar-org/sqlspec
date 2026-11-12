@@ -1,6 +1,8 @@
 """Integration tests for Sanic extension with real database requests."""
 
+import importlib
 import os
+import socket
 import tempfile
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +30,15 @@ def _create_sanic_app(name: str) -> Sanic:
     return app
 
 
-def test_sanic_basic_query() -> None:
+def _reusable_client(app: Sanic) -> Any:
+    """Build a real-server test client listening on a socket bound to an OS-assigned port."""
+    reusable_client_cls: Any = importlib.import_module("sanic_testing.reusable").ReusableClient
+    server_socket = socket.socket()
+    server_socket.bind(("127.0.0.1", 0))
+    return reusable_client_cls(app, port=server_socket.getsockname()[1], server_kwargs={"sock": server_socket})
+
+
+async def test_sanic_basic_query() -> None:
     """Sanic extension should execute a basic async SQLite query."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -48,13 +58,13 @@ def test_sanic_basic_query() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.get("/")
+        _, sanic_response = await app.asgi_client.get("/")
 
         assert sanic_response.status == 200
         assert sanic_response.json == {"value": 1}
 
 
-def test_sanic_autocommit_commits_success_and_rolls_back_error_status() -> None:
+async def test_sanic_autocommit_commits_success_and_rolls_back_error_status() -> None:
     """Autocommit should commit 2xx responses and rollback error responses."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -87,18 +97,18 @@ def test_sanic_autocommit_commits_success_and_rolls_back_error_status() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.post("/setup")
+        _, sanic_response = await app.asgi_client.post("/setup")
         assert sanic_response.status == 200
 
-        _, sanic_response = app.test_client.post("/insert-error")
+        _, sanic_response = await app.asgi_client.post("/insert-error")
         assert sanic_response.status == 500
 
-        _, sanic_response = app.test_client.get("/data")
+        _, sanic_response = await app.asgi_client.get("/data")
         assert sanic_response.status == 200
         assert sanic_response.json == {"names": ["committed"]}
 
 
-def test_sanic_autocommit_rolls_back_on_exception_response() -> None:
+async def test_sanic_autocommit_rolls_back_on_exception_response() -> None:
     """Exceptions should produce rollback through Sanic's error response path."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -132,18 +142,18 @@ def test_sanic_autocommit_rolls_back_on_exception_response() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.post("/setup")
+        _, sanic_response = await app.asgi_client.post("/setup")
         assert sanic_response.status == 200
 
-        _, sanic_response = app.test_client.post("/explode", debug=False)
+        _, sanic_response = await app.asgi_client.post("/explode")
         assert sanic_response.status == 500
 
-        _, sanic_response = app.test_client.get("/data")
+        _, sanic_response = await app.asgi_client.get("/data")
         assert sanic_response.status == 200
         assert sanic_response.json == {"names": ["committed"]}
 
 
-def test_sanic_sync_sqlite_autocommit_commit_and_rollback() -> None:
+async def test_sanic_sync_sqlite_autocommit_commit_and_rollback() -> None:
     """Sync SQLite should work through Sanic request middleware."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -176,18 +186,18 @@ def test_sanic_sync_sqlite_autocommit_commit_and_rollback() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.post("/setup")
+        _, sanic_response = await app.asgi_client.post("/setup")
         assert sanic_response.status == 200
 
-        _, sanic_response = app.test_client.post("/insert-error")
+        _, sanic_response = await app.asgi_client.post("/insert-error")
         assert sanic_response.status == 500
 
-        _, sanic_response = app.test_client.get("/data")
+        _, sanic_response = await app.asgi_client.get("/data")
         assert sanic_response.status == 200
         assert sanic_response.json == {"names": ["committed"]}
 
 
-def test_sanic_multi_database_sessions() -> None:
+async def test_sanic_multi_database_sessions() -> None:
     """Sanic plugin should support multiple configured databases."""
     with (
         tempfile.NamedTemporaryFile(suffix=".db", delete=True) as users_tmp,
@@ -243,15 +253,15 @@ def test_sanic_multi_database_sessions() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.post("/setup")
+        _, sanic_response = await app.asgi_client.post("/setup")
         assert sanic_response.status == 200
 
-        _, sanic_response = app.test_client.get("/counts")
+        _, sanic_response = await app.asgi_client.get("/counts")
         assert sanic_response.status == 200
         assert sanic_response.json == {"users": 1, "products": 1}
 
 
-def test_sanic_session_caching() -> None:
+async def test_sanic_session_caching() -> None:
     """Sanic plugin should cache sessions within one request."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -271,13 +281,13 @@ def test_sanic_session_caching() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.get("/")
+        _, sanic_response = await app.asgi_client.get("/")
 
         assert sanic_response.status == 200
         assert sanic_response.json == {"same_session": True}
 
 
-def test_sanic_disable_di_preserves_pool_lifecycle() -> None:
+async def test_sanic_disable_di_preserves_pool_lifecycle() -> None:
     """disable_di should skip request management while preserving app.ctx pools."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -301,13 +311,13 @@ def test_sanic_disable_di_preserves_pool_lifecycle() -> None:
 
         plugin.init_app(app)
 
-        _, sanic_response = app.test_client.get("/")
+        _, sanic_response = await app.asgi_client.get("/")
 
         assert sanic_response.status == 200
         assert sanic_response.json == {"value": 1}
 
 
-def test_sanic_correlation_header_round_trip() -> None:
+async def test_sanic_correlation_header_round_trip() -> None:
     """Sanic correlation middleware should propagate request correlation IDs."""
     sqlspec = SQLSpec()
     config = SqliteConfig(
@@ -326,7 +336,7 @@ def test_sanic_correlation_header_round_trip() -> None:
 
     plugin.init_app(app)
 
-    _, sanic_response = app.test_client.get("/", headers={"x-request-id": "sanic-cid"})
+    _, sanic_response = await app.asgi_client.get("/", headers={"x-request-id": "sanic-cid"})
 
     assert sanic_response.status == 200
     assert sanic_response.json == {"correlation_id": "sanic-cid"}
@@ -335,7 +345,7 @@ def test_sanic_correlation_header_round_trip() -> None:
     assert CorrelationContext.get() is None
 
 
-def test_sanic_sqlite_manual_rolls_back_on_raise() -> None:
+async def test_sanic_sqlite_manual_rolls_back_on_raise() -> None:
     """Sanic manual mode with SQLite should roll back uncommitted work when handler raises."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -369,18 +379,18 @@ def test_sanic_sqlite_manual_rolls_back_on_raise() -> None:
 
         plugin.init_app(app)
 
-        _, res_setup = app.test_client.post("/setup")
+        _, res_setup = await app.asgi_client.post("/setup")
         assert res_setup.status == 200
 
-        _, res_raise = app.test_client.post("/insert-raise", debug=False)
+        _, res_raise = await app.asgi_client.post("/insert-raise")
         assert res_raise.status == 500
 
-        _, res_data = app.test_client.get("/data")
+        _, res_data = await app.asgi_client.get("/data")
         assert res_data.status == 200
         assert res_data.json == {"names": ["initial"]}
 
 
-def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
+async def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
     """Sanic manual mode with SQLite should commit uncommitted work on clean 200 return."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -413,18 +423,18 @@ def test_sanic_sqlite_manual_commits_on_clean_return() -> None:
 
         plugin.init_app(app)
 
-        _, res_setup = app.test_client.post("/setup")
+        _, res_setup = await app.asgi_client.post("/setup")
         assert res_setup.status == 200
 
-        _, res_clean = app.test_client.post("/insert-clean")
+        _, res_clean = await app.asgi_client.post("/insert-clean")
         assert res_clean.status == 200
 
-        _, res_data = app.test_client.get("/data")
+        _, res_data = await app.asgi_client.get("/data")
         assert res_data.status == 200
         assert res_data.json == {"names": ["clean_row"]}
 
 
-def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresService") -> None:
+async def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresService") -> None:
     """Sanic manual mode with psycopg should roll back on exception and next request succeeds."""
     pytest.importorskip("psycopg")
     pytest.importorskip("psycopg_pool")
@@ -463,10 +473,10 @@ def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresSer
 
     plugin.init_app(app)
 
-    _, res_raise = app.test_client.post("/insert-raise", debug=False)
+    _, res_raise = await app.asgi_client.post("/insert-raise")
     assert res_raise.status == 500
 
-    _, res_ok = app.test_client.post("/insert-ok")
+    _, res_ok = await app.asgi_client.post("/insert-ok")
     assert res_ok.status == 200
 
     with psycopg.connect(conninfo, autocommit=True) as p_conn:
@@ -477,7 +487,7 @@ def test_sanic_psycopg_manual_rolls_back_on_raise(postgres_service: "PostgresSer
     assert rows == ["succeeding"]
 
 
-def test_sanic_autocommit_and_manual_roll_back_when_exception_handler_returns_200() -> None:
+async def test_sanic_autocommit_and_manual_roll_back_when_exception_handler_returns_200() -> None:
     """Mapped exceptions returning HTTP 200 must roll back in both autocommit and manual modes."""
 
     class FallbackError(Exception):
@@ -521,14 +531,14 @@ def test_sanic_autocommit_and_manual_roll_back_when_exception_handler_returns_20
 
             plugin.init_app(app)
 
-            _, res_setup = app.test_client.post("/setup")
+            _, res_setup = await app.asgi_client.post("/setup")
             assert res_setup.status == 200
 
-            _, res_partial = app.test_client.post("/partial-fail")
+            _, res_partial = await app.asgi_client.post("/partial-fail")
             assert res_partial.status == 200
             assert res_partial.json == {"fallback": True}
 
-            _, res_data = app.test_client.get("/data")
+            _, res_data = await app.asgi_client.get("/data")
             assert res_data.status == 200
             assert res_data.json == {"names": ["baseline"]}
 
@@ -537,9 +547,6 @@ def test_sanic_abrupt_disconnect_cancellation_rolls_back_and_releases_pool() -> 
     """Cancelled request with closed transport rolls back aiosqlite and releases single-slot pool."""
     import asyncio
     import contextlib
-    import importlib
-
-    reusable_client_cls: Any = importlib.import_module("sanic_testing.reusable").ReusableClient
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
@@ -576,7 +583,7 @@ def test_sanic_abrupt_disconnect_cancellation_rolls_back_and_releases_pool() -> 
 
         plugin.init_app(app)
 
-        client: Any = reusable_client_cls(app)
+        client = _reusable_client(app)
         with client:
             _, res_setup = client.post("/setup")
             assert res_setup.status == 200
@@ -591,10 +598,7 @@ def test_sanic_abrupt_disconnect_cancellation_rolls_back_and_releases_pool() -> 
 
 def test_sanic_autocommit_deferred_fk_violation_forwards_commit_error_without_double_commit() -> None:
     """Deferred FK violation during Sanic autocommit COMMIT rolls back once without a second COMMIT on exit."""
-    import importlib
     import sqlite3
-
-    reusable_client_cls: Any = importlib.import_module("sanic_testing.reusable").ReusableClient
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         with sqlite3.connect(tmp.name) as setup_conn:
@@ -645,7 +649,7 @@ def test_sanic_autocommit_deferred_fk_violation_forwards_commit_error_without_do
 
         plugin.init_app(app)
 
-        client: Any = reusable_client_cls(app)
+        client = _reusable_client(app)
         with client:
             traced_statements.clear()
             client.post("/violate")

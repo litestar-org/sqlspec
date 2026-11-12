@@ -21,12 +21,14 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgSyncDriver,
     CockroachPsycopgSyncExceptionHandler,
 )
+from sqlspec.adapters.cockroach_psycopg.tenant import CockroachPsycopgAsyncRLSStrategy, CockroachPsycopgSyncRLSStrategy
 
 __all__ = (
     "CockroachAsyncConnection",
     "CockroachPsycopgAsyncConfig",
     "CockroachPsycopgAsyncDriver",
     "CockroachPsycopgAsyncExceptionHandler",
+    "CockroachPsycopgAsyncRLSStrategy",
     "CockroachPsycopgAsyncSessionContext",
     "CockroachPsycopgConnectionConfig",
     "CockroachPsycopgDriverFeatures",
@@ -35,6 +37,7 @@ __all__ = (
     "CockroachPsycopgSyncConfig",
     "CockroachPsycopgSyncDriver",
     "CockroachPsycopgSyncExceptionHandler",
+    "CockroachPsycopgSyncRLSStrategy",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "build_connection_config",

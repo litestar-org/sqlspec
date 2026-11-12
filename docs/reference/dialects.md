@@ -10,6 +10,7 @@ from sqlspec.dialects import (
     Spanner,
     SQLAnywhere,
     Sybase,
+    Teradata,
 )
 ```
 
@@ -38,6 +39,14 @@ Custom SQLGlot dialect implementations registered automatically via Python entry
 ## IBM Db2 Dialect
 
 ::: sqlspec.dialects.db2.DB2
+    options:
+      heading_level: 3
+
+## Teradata Vantage Dialect
+
+SQLSpec registers its Teradata dialect with sqlglot as `vantage` and leaves sqlglot's built-in `teradata` dialect unchanged. SQLSpec builders, statement configs, and the Teradata adapters resolve `teradata` to `vantage`; call sqlglot with `vantage` directly to get the same output.
+
+::: sqlspec.dialects.teradata.Vantage
     options:
       heading_level: 3
 

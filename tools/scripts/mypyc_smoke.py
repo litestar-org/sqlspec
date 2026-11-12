@@ -31,6 +31,12 @@ class SmokeImport(NamedTuple):
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
+    SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Vantage"),
+    SmokeImport("teradata_generators", "sqlspec.dialects.teradata._generators", "teradata_dispatch", True),
+    SmokeImport("teradata_dd_config", "sqlspec.data_dictionary.dialects.teradata.config", "TERADATA_CONFIG", True),
+    SmokeImport("teradata_core", "sqlspec.adapters.teradata.core", "build_connection_config", True),
+    SmokeImport("teradata_pool", "sqlspec.adapters.teradata.pool", "TeradataConnectionPool", True, "teradatasql"),
+    SmokeImport("teradata_type_converter", "sqlspec.adapters.teradata.type_converter", None, True),
     SmokeImport("package", "sqlspec"),
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
     SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
@@ -40,16 +46,44 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
     SmokeImport("sync_driver", "sqlspec.driver._sync", "SyncDriverAdapterBase", True),
     SmokeImport("async_driver", "sqlspec.driver._async", "AsyncDriverAdapterBase", True),
+    SmokeImport("tenant_lease_state", "sqlspec.core.tenant.base", "TenantLeaseState", True),
+    SmokeImport("tenant_lease", "sqlspec.driver._tenant", "AsyncTenantLease", True),
+    SmokeImport("tenant_context", "sqlspec.utils.tenant._context", "TenantContext", True),
+    SmokeImport("tenant_mssql_batches", "sqlspec.utils.tenant._mssql", "MssqlTenantSettings", True),
+    SmokeImport("tenant_postgres_settings", "sqlspec.utils.tenant._postgres", "PostgresTenantSettings", True),
+    *(
+        SmokeImport(f"{adapter}_tenant", f"sqlspec.adapters.{adapter}.tenant", None, True, dependency)
+        for adapter, dependency in (
+            ("asyncpg", "asyncpg"),
+            ("cockroach_asyncpg", "asyncpg"),
+            ("cockroach_psycopg", "psycopg"),
+            ("mssql_python", "mssql_python"),
+            ("oracledb", "oracledb"),
+            ("psqlpy", "psqlpy"),
+            ("psycopg", "psycopg"),
+            ("pymssql", "pymssql"),
+            ("snowflake", "snowflake.connector"),
+        )
+    ),
     SmokeImport("storage_registry", "sqlspec.storage.registry", "StorageRegistry", True),
     SmokeImport("storage_pipeline", "sqlspec.storage.pipeline", "SyncStoragePipeline", True),
+    SmokeImport("storage_staging_sql", "sqlspec.storage._staging_sql", "build_stage_merge_sql", True),
+    SmokeImport("storage_ingest", "sqlspec.storage._ingest", "execute_load_from_storage_sync", True),
     SmokeImport("storage_backend_local", "sqlspec.storage.backends.local", "LocalStore", True),
     SmokeImport("storage_backend_fsspec", "sqlspec.storage.backends.fsspec", "FSSpecBackend", True),
     SmokeImport("storage_backend_obstore", "sqlspec.storage.backends.obstore", "ObStoreBackend", True),
     SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
     SmokeImport("sybase_pool", "sqlspec.adapters.sybase.pool", "SybaseConnectionPool", True, "pymssql"),
     SmokeImport("sqlanywhere_pool", "sqlspec.adapters.sqlanywhere.pool", "SqlanywhereConnectionPool", True, "sqlanydb"),
+    SmokeImport(
+        "snowflake_pool", "sqlspec.adapters.snowflake.pool", "SnowflakeConnectionPool", True, "snowflake.connector"
+    ),
+    SmokeImport(
+        "snowflake_core", "sqlspec.adapters.snowflake.core", "normalize_connection_params", True, "snowflake.connector"
+    ),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
+    SmokeImport("data_dictionary_index_ddl", "sqlspec.data_dictionary._index_ddl", "SyncWithoutIndexesContext", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
     SmokeImport("db2_dialect", "sqlspec.dialects.db2", "DB2"),
@@ -63,6 +97,10 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("event_payload", "sqlspec.extensions.events._payload", "encode_notify_payload", True),
     SmokeImport("event_channel", "sqlspec.extensions.events._channel", "SyncEventChannel", True),
     SmokeImport("event_queue", "sqlspec.extensions.events._queue", "SyncTableEventQueue", True),
+    *(
+        SmokeImport(f"{adapter}_events_hub", f"sqlspec.adapters.{adapter}.events._hub", None, True, adapter)
+        for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
+    ),
     SmokeImport("adk_record_types", "sqlspec.extensions.adk._types", "StoredSession", True, "google.adk"),
     SmokeImport("migration_runner", "sqlspec.migrations.runner", "SyncMigrationRunner", True),
     SmokeImport("sqlite_type_converter", "sqlspec.adapters.sqlite.type_converter", "register_type_handlers", True),
@@ -89,6 +127,18 @@ def is_compiled_module(module: Any) -> bool:
     """Return whether an imported module appears to be a compiled extension."""
     module_file = getattr(module, "__file__", "") or ""
     return module_file.endswith(COMPILED_SUFFIXES)
+
+
+def _has_compiled_module_file(module_name: str) -> bool:
+    spec = importlib.util.find_spec("sqlspec")
+    if spec is None or spec.submodule_search_locations is None:
+        return False
+    relative_module = Path(*module_name.split(".")[1:])
+    return any(
+        (Path(location) / relative_module).with_suffix(suffix).is_file()
+        for location in spec.submodule_search_locations
+        for suffix in COMPILED_SUFFIXES
+    )
 
 
 def _is_missing_optional_dependency(missing_name: str, optional_dependency: str | None) -> bool:
@@ -624,6 +674,40 @@ def _check_pipeline_arrow_streaming(*, require_compiled: bool = False) -> dict[s
                     decoded_empty = decode_arrow(empty_dest.read_bytes(), "parquet")
                     assert decoded_empty.num_rows == 0
                     assert decoded_empty.column_names == ["id", "label"]
+
+                    shard_a = local_dir / "shard_a.parquet"
+                    shard_b = local_dir / "shard_b.parquet"
+                    sync_p.write_arrow(pa.table({"id": [1, 2], "label": ["a", "b"]}), shard_a, format_hint="parquet")
+                    sync_p.write_arrow(
+                        pa.table({"id": [2, 3], "label": ["b_updated", "c"]}), shard_b, format_hint="parquet"
+                    )
+                    sqlite_session.execute("CREATE TABLE smoke_ingest (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+                    sqlite_session.execute("CREATE INDEX idx_smoke_ingest_label ON smoke_ingest (label)")
+                    sqlite_session.commit()
+                    shards = [shard_a, shard_b]
+                    ingest_job = sqlite_session.load_from_storage(
+                        "smoke_ingest",
+                        shards,
+                        file_format="parquet",
+                        stage_table=True,
+                        conflict_keys=["id"],
+                        drop_indexes=True,
+                        checkpoint_table="_smoke_ckpt",
+                        max_workers=len(shards),
+                        executor="process",
+                    )
+                    assert ingest_job.telemetry["shards_processed"] == len(shards)
+                    ingested_rows = sqlite_session.select("SELECT id, label FROM smoke_ingest ORDER BY id")
+                    assert ingested_rows == [
+                        {"id": 1, "label": "a"},
+                        {"id": 2, "label": "b_updated"},
+                        {"id": 3, "label": "c"},
+                    ]
+                    restored_indexes = {
+                        idx["index_name"]
+                        for idx in sqlite_session.data_dictionary.get_indexes(sqlite_session, "smoke_ingest")
+                    }
+                    assert "idx_smoke_ingest_label" in restored_indexes
             finally:
                 sqlite_cfg.close_pool()
     except Exception as exc:
@@ -857,8 +941,11 @@ def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
             missing_name = exc.name or ""
             optional_dependency = entry.optional_dependency
             if _is_missing_optional_dependency(missing_name, optional_dependency):
-                result["skipped"] = True
-                result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
+                    result["error"] = "compiled extension is missing from the installed package"
+                else:
+                    result["skipped"] = True
+                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
             else:
                 result["error"] = f"{type(exc).__name__}: {exc}"
         except Exception as exc:
@@ -1032,6 +1119,7 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
                 "pymssql",
                 "pymysql",
                 "sqlanydb",
+                "teradatasql",
             }:
                 raise
             skipped.append(f"{module_name}: optional dependency missing: {exc.name}")
@@ -1639,6 +1727,178 @@ assert runner_compiled == base_compiled
     )
 
 
+def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, Any], *, asynchronous: bool) -> Any:
+    """Build an interpreted subclass of a compiled lease that routes its hooks to callables."""
+    acquire, release, invalidate, finish = hooks
+
+    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc,name-defined]
+        __slots__ = ()
+
+        def _acquire(self) -> object:
+            return acquire()
+
+        def _release(self, conn: object) -> None:
+            release(conn)
+
+        def _invalidate(self, conn: object) -> None:
+            invalidate(conn)
+
+        def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
+            finish(conn, exc_type)
+
+    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc,name-defined]
+        __slots__ = ()
+
+        async def _acquire(self) -> object:
+            return acquire()
+
+        async def _release(self, conn: object) -> None:
+            release(conn)
+
+        async def _invalidate(self, conn: object) -> None:
+            invalidate(conn)
+
+        async def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
+            finish(conn, exc_type)
+
+    return AsyncLease(strategy) if asynchronous else SyncLease(strategy)
+
+
+async def _run_tenant_lease_case(
+    leases: Any, contracts: Any, context: Any, errors: Any, *, asynchronous: bool, scenario: str
+) -> None:
+    """Check one strategy and lease-hook ordering scenario."""
+    events: list[str] = []
+    connection = object()
+    setup_error = ValueError("injected checkout failure")
+    cleanup_error = RuntimeError("injected reset failure")
+
+    def checkout(conn: object, payload: Any) -> Any:
+        assert conn is connection
+        events.append("checkout")
+        if scenario == "checkout_failure":
+            raise setup_error
+        return (
+            {"owned_key": "baseline"}
+            if scenario == "mapping"
+            else contracts.TenantLeaseState(payload=payload, baseline={})
+        )
+
+    def checkin(conn: object, state: Any) -> None:
+        assert conn is connection
+        assert state.payload.tenant_id == "a"
+        events.append("checkin")
+        assert dict(state.baseline) == ({"owned_key": "baseline"} if scenario == "mapping" else {})
+        if scenario == "checkin_failure":
+            raise cleanup_error
+
+    class SyncStrategy:
+        __slots__ = ()
+
+        def checkout(self, conn: object, payload: Any) -> Any:
+            return checkout(conn, payload)
+
+        def checkin(self, conn: object, state: Any) -> None:
+            checkin(conn, state)
+
+    class AsyncStrategy:
+        __slots__ = ()
+
+        async def checkout(self, conn: object, payload: Any) -> Any:
+            return checkout(conn, payload)
+
+        async def checkin(self, conn: object, state: Any) -> None:
+            checkin(conn, state)
+
+    def acquire() -> object:
+        events.append("acquire")
+        return connection
+
+    def release(conn: object) -> None:
+        assert conn is connection
+        events.append("release")
+
+    def invalidate(conn: object) -> None:
+        assert conn is connection
+        events.append("invalidate")
+        if scenario == "checkout_failure":
+            raise RuntimeError("injected invalidation failure")
+
+    def finish(conn: object, exc_type: type[BaseException] | None) -> None:
+        assert conn is connection
+        assert exc_type is None
+        events.append("finish")
+
+    lease = _smoke_tenant_lease(
+        leases,
+        AsyncStrategy() if asynchronous else SyncStrategy(),
+        (acquire, release, invalidate, finish),
+        asynchronous=asynchronous,
+    )
+    scope = context.TenantContext.bypass() if scenario == "bypass" else context.TenantContext.scope("a")
+    with scope:
+        try:
+            acquired = lease.acquire()
+            if asynchronous:
+                acquired = await acquired
+        except ValueError as exc:
+            assert scenario == "checkout_failure"
+            if exc is not setup_error:
+                raise AssertionError("Checkout must preserve its original exception") from exc
+            if not any("invalidation failed" in note for note in exc.__notes__):
+                raise AssertionError("Failed invalidation must add a note to the original exception") from exc
+            assert events == ["acquire", "checkout", "invalidate"]
+            return
+        assert scenario != "checkout_failure", "checkout failure must propagate"
+        assert acquired is connection
+        try:
+            cleanup = lease.release(connection)
+            if asynchronous:
+                await cleanup
+        except errors.TenantCleanupError as exc:
+            if scenario != "checkin_failure" or exc.__cause__ is not cleanup_error:
+                raise AssertionError("Cleanup must propagate with its original cause") from exc
+        else:
+            assert scenario != "checkin_failure", "reset failure must propagate"
+    expected = (
+        ["acquire", "finish", "release"]
+        if scenario == "bypass"
+        else ["acquire", "checkout", "finish", "checkin", "invalidate" if scenario == "checkin_failure" else "release"]
+    )
+    assert events == expected, (asynchronous, scenario, events)
+
+
+def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise compiled leases through interpreted subclasses and structural Python strategies."""
+    result = _new_smoke_result(
+        name="tenant_lease_boundary",
+        module="sqlspec.driver._tenant",
+        attribute="AsyncTenantLease",
+        compiled_required=require_compiled,
+    )
+    try:
+        leases = importlib.import_module("sqlspec.driver._tenant")
+        contracts = importlib.import_module("sqlspec.core.tenant.base")
+        context = importlib.import_module("sqlspec.utils.tenant._context")
+        errors = importlib.import_module("sqlspec.exceptions")
+        result["imported"] = True
+        result["compiled"] = is_compiled_module(leases) and is_compiled_module(context)
+        if require_compiled and not result["compiled"]:
+            raise AssertionError("tenant leases and tenant context must import from compiled extensions")
+
+        async def run_cases() -> None:
+            for asynchronous in (False, True):
+                for scenario in ("normal", "mapping", "bypass", "checkin_failure", "checkout_failure"):
+                    await _run_tenant_lease_case(
+                        leases, contracts, context, errors, asynchronous=asynchronous, scenario=scenario
+                    )
+
+        asyncio.run(run_cases())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -1652,6 +1912,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_extension_reconciliation(require_compiled=require_compiled),
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
+        _check_tenant_lease_boundary(require_compiled=require_compiled),
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),

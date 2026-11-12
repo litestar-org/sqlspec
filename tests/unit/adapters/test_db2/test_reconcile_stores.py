@@ -300,3 +300,87 @@ async def test_db2_adk_reconcile_entrypoint_repairs_session_and_memory_indexes(d
 
     assert _executed_ddl(connection) == ["CREATE INDEX idx_adk_memory_inserted ON adk_memory (inserted_at)"]
     assert connection.commits == 0
+
+
+class _DropCatalog:
+    """Catalog fake whose DROP TABLE fails for absent tables, like Db2 SQLSTATE 42704."""
+
+    def __init__(self, tables: "set[str]") -> None:
+        self.tables = tables
+        self.dropped: list[str] = []
+
+    def probe(self, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return {"found": 1} if parameters[1] in self.tables else None
+
+    def drop(self, statement: str) -> None:
+        name = statement.removeprefix("DROP TABLE ").upper()
+        if name not in self.tables:
+            msg = f"SQL0204N {name} is an undefined name. SQLSTATE=42704"
+            raise RuntimeError(msg)
+        self.tables.discard(name)
+        self.dropped.append(name)
+
+
+class _SyncDropDriver:
+    def __init__(self, catalog: _DropCatalog) -> None:
+        self._catalog = catalog
+
+    def select_one_or_none(self, _sql: str, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return self._catalog.probe(parameters)
+
+    def execute_script(self, statement: str) -> None:
+        self._catalog.drop(statement)
+
+
+class _AsyncDropDriver:
+    def __init__(self, catalog: _DropCatalog) -> None:
+        self._catalog = catalog
+
+    async def select_one_or_none(self, _sql: str, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return self._catalog.probe(parameters)
+
+    async def execute_script(self, statement: str) -> None:
+        self._catalog.drop(statement)
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_db2_extension_downgrades_skip_tables_already_dropped(is_async: bool) -> None:
+    """Retrying a partially applied downgrade drops only the tables the catalog still lists."""
+    from sqlspec.adapters.db2.adk import (
+        Db2AsyncADKMemoryStore,
+        Db2AsyncADKStore,
+        Db2SyncADKMemoryStore,
+        Db2SyncADKStore,
+    )
+    from sqlspec.adapters.db2.events import Db2AsyncEventQueueStore, Db2SyncEventQueueStore
+    from sqlspec.extensions.adk.migrations import reconcile as adk_module
+    from sqlspec.extensions.events.migrations import reconcile as events_module
+    from sqlspec.extensions.litestar.migrations import reconcile as litestar_module
+
+    extension_config: Any = {"adk": {"enable_memory": True}}
+    if is_async:
+        config: Any = Db2AsyncConfig(connection_config={"database": "SAMPLE"}, extension_config=extension_config)
+        adk_stores: list[Any] = [Db2AsyncADKStore(config), Db2AsyncADKMemoryStore(config)]
+        session_store: Any = Db2AsyncStore(config)
+        queue_store: Any = Db2AsyncEventQueueStore(config)
+    else:
+        config = Db2SyncConfig(connection_config={"database": "SAMPLE"}, extension_config=extension_config)
+        adk_stores = [Db2SyncADKStore(config), Db2SyncADKMemoryStore(config)]
+        session_store = Db2SyncStore(config)
+        queue_store = Db2SyncEventQueueStore(config)
+
+    async def run(module: Any, *args: Any) -> None:
+        if is_async:
+            await module._downgrade_async(*args)
+        else:
+            module._downgrade_sync(*args)
+
+    catalog = _DropCatalog({"ADK_SESSION", "ADK_EVENT", "ADK_MEMORY", "LITESTAR_SESSION"})
+    driver: Any = _AsyncDropDriver(catalog) if is_async else _SyncDropDriver(catalog)
+    await run(adk_module, driver, adk_stores)
+    await run(adk_module, driver, adk_stores)
+    await run(litestar_module, driver, session_store)
+    await run(litestar_module, driver, session_store)
+    await run(events_module, driver, queue_store, True)
+    assert catalog.dropped == ["ADK_MEMORY", "ADK_EVENT", "ADK_SESSION", "LITESTAR_SESSION"]
+    assert catalog.tables == set()

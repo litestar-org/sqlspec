@@ -90,6 +90,7 @@ _JSON_TYPE_NAMES: Final["frozenset[str]"] = frozenset({"json", "jsonb"})
 _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "binary",
     "blob",
+    "byte",
     "bytea",
     "image",
     "long binary",
@@ -99,7 +100,17 @@ _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "raw",
     "tinyblob",
     "varbinary",
+    "varbyte",
 })
+_BINARY_TYPE_PREFIXES: Final["tuple[str, ...]"] = ("binary(", "varbinary(", "byte(", "varbyte(")
+
+
+def _is_binary_type_info(data_type: str) -> bool:
+    """Return whether a normalized column data-type label represents raw binary data."""
+    normalized = data_type.strip().lower()
+    return normalized in _BINARY_TYPES or normalized.startswith(_BINARY_TYPE_PREFIXES)
+
+
 _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "box",
     "circle",
@@ -115,7 +126,9 @@ _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "xml",
 })
 _UNORDERABLE_FAMILY_TYPES: Final["Mapping[str, frozenset[str]]"] = {
+    "teradata": frozenset({"blob", "clob", "json", "xml", "st_geometry", "mbr", "mbb", "period"}),
     "bigquery": frozenset({"geography", "json"}),
+    "snowflake": frozenset({"array", "geography", "geometry", "object", "variant"}),
     "db2": frozenset({"blob", "clob", "dbclob", "long varchar", "long vargraphic", "xml"}),
     "mysql": frozenset({"blob", "geometry", "json", "longblob", "mediumblob", "point", "tinyblob", "vector"}),
     "oracle": frozenset({"bfile", "blob", "clob", "long", "long raw", "nclob", "vector", "xmltype"}),
@@ -709,6 +722,9 @@ def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
     postgresql, mariadb, or mssql, so dialect families are mapped to standard
     SQLGlot identifiers.
     """
+    if family == "teradata":
+        importlib.import_module("sqlspec.dialects.teradata")
+        return "vantage"
     if family in {"postgres", "mysql", "tsql"}:
         return family
     if family in {"sybase", "sqlanywhere"} and family not in Dialect.classes:
@@ -925,6 +941,8 @@ def _dialect_family(dialect_name: str) -> str:
         return "postgres"
     if dialect_name in _MYSQL_DIALECTS:
         return "mysql"
+    if dialect_name in {"teradata", "vantage"}:
+        return "teradata"
     if dialect_name == "ase":
         return "sybase"
     if dialect_name == "sa":
@@ -1419,7 +1437,12 @@ def _without_generated_values(
 ) -> "list[dict[str, Any]]":
     """Return exported rows without generated columns and with string JSON/vector cells normalized."""
     generated = _generated_column_names(columns)
-    json_columns = {column.name for column in columns if column.data_type in _JSON_TYPE_NAMES}
+    json_columns = {
+        column.name
+        for column in columns
+        if column.data_type in _JSON_TYPE_NAMES
+        or (family == "snowflake" and column.data_type in {"variant", "object", "array"})
+    }
     vector_columns = {column.name: column.data_type for column in columns if _is_vector_column(column.data_type)}
     if not generated and not json_columns and not vector_columns:
         return rows
@@ -1634,6 +1657,8 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
     Oracle ``DATE`` columns store a time of day, so their values decode to datetimes.
     """
     normalized_type = data_type.lower()
+    if family == "snowflake" and normalized_type in {"variant", "object", "array"}:
+        return encode_json
     if _is_vector_column(normalized_type):
         if family == "postgres":
             return _pg_vector_decoder(normalized_type)
@@ -1650,7 +1675,7 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return _decode_generic_vector
     if data_type.endswith("]"):
         return None
-    if data_type in _BINARY_TYPES or data_type.startswith(("binary(", "varbinary(")):
+    if _is_binary_type_info(data_type):
         return _decode_bytes
     if data_type in _JSON_TYPE_NAMES:
         return encode_json if family in _JSON_VALUE_FAMILIES else None
@@ -1743,7 +1768,9 @@ def _table_insert_statement(
     for column in columns:
         col = col_map.get(column)
         ph = exp.Placeholder(this=column)
-        if col is not None and family == "postgres" and _postgres_vector_kind(col.data_type):
+        if col is not None and family == "snowflake" and col.data_type in {"variant", "object", "array"}:
+            value_expressions.append(exp.Anonymous(this="PARSE_JSON", expressions=[ph]))
+        elif col is not None and family == "postgres" and _postgres_vector_kind(col.data_type):
             target_type = exp.DataType.build(col.data_type, dialect="postgres", udt=True)
             cast_text = exp.Cast(this=ph, to=exp.DataType(this=exp.DataType.Type.TEXT))
             value_expressions.append(exp.Cast(this=cast_text, to=target_type))
@@ -1760,6 +1787,10 @@ def _table_insert_statement(
         this=exp.Schema(this=_quoted_table(table), expressions=[_quoted_identifier(column) for column in columns]),
         expression=exp.Values(expressions=[exp.Tuple(expressions=value_expressions)]),
     )
+    if family == "snowflake" and any(
+        column.data_type in {"variant", "object", "array"} for column in table_columns if column.name in columns
+    ):
+        insert_expression.set("expression", exp.Select(expressions=value_expressions))
     always_identity = {column.name for column in table_columns if column.identity_always}
     if conflict_keys:
         insert_expression.set(

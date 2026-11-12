@@ -23,6 +23,7 @@ from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.utils.tenant import TenantContext
 
 
 @pytest.fixture
@@ -35,6 +36,39 @@ def sync_config() -> SqliteConfig:
 def async_config() -> AiosqliteConfig:
     """Create an async database config for testing."""
     return AiosqliteConfig(connection_config={"database": ":memory:"})
+
+
+@pytest.mark.parametrize("tenant_scope", [False, True])
+@pytest.mark.parametrize("is_async", [False, True])
+def test_migrations_reject_tenant_configuration(tenant_scope: bool, is_async: bool) -> None:
+    config = AiosqliteConfig() if is_async else SqliteConfig()
+    config.driver_features["tenant_strategy"] = object()
+    with TenantContext.scope("tenant-a") if tenant_scope else TenantContext.bypass():
+        with pytest.raises(MigrationError, match=r"tenant_strategy.*separate configuration"):
+            create_migration_commands(config)
+
+
+def test_migrations_reject_tenant_strategy_after_direct_config_derivation() -> None:
+    derived = SqliteConfig()
+    derived.driver_features["tenant_strategy"] = object()
+
+    class DirectConfig(SqliteConfig):
+        __slots__ = ()
+
+        def derive_direct_config(self) -> SqliteConfig:
+            return derived
+
+    config = DirectConfig(driver_features={"direct_dsn": "sqlite://direct"})
+
+    with pytest.raises(MigrationError, match=r"tenant_strategy.*separate configuration"):
+        SyncMigrationCommands(config)
+
+
+@pytest.mark.parametrize("strategy", [None, False])
+def test_migrations_accept_disabled_tenant_strategy(strategy: object) -> None:
+    config = SqliteConfig(driver_features={"tenant_strategy": strategy})
+
+    assert SyncMigrationCommands(config).config is config
 
 
 def test_migration_commands_sync_config_initialization(sync_config: SqliteConfig) -> None:

@@ -24,10 +24,12 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 | [`sqlanywhere`](sqlanywhere.md) | `sqlspec[sqlanywhere]` | Sync | `?` (`qmark`) | `SqlanywhereConnectionPool` | Row / Stream | Table Queue | Sessions + Memory (`LIKE`) |
 | [`db2`](db2.md) | `sqlspec[db2]` | Sync + Async | `?` (`qmark`) | `Db2SyncConnectionPool` / `Db2AsyncConnectionPool` | Schema-Guided Row | Table Queue (`SKIP LOCKED DATA`) | Sessions + Memory (`LOCATE`) |
 | [`duckdb`](duckdb.md) | `sqlspec[duckdb]` | Sync | `?` (`qmark`) | `DuckDBConnectionPool` | Native Zero-Copy | Table Queue | Sessions + Memory (`FTS`, `ARRAY` Cosine) |
+| [`snowflake`](snowflake.md) | `sqlspec[snowflake]` | Sync | `?` (`qmark`) | `SnowflakeConnectionPool` | Native Arrow batches / stage Parquet | Table Queue | Sessions + Memory (`ILIKE`) |
 | [`bigquery`](bigquery.md) | `sqlspec[bigquery]` | Sync | `@name` (`named`) | Stateless HTTP/gRPC Client | Storage Read / Write API | Table Queue | Sessions + Events (analytics replica) |
 | [`spanner`](spanner.md) | `sqlspec[spanner]` | Sync + Async | `@name` (`named`) | `FixedSizePool` / `AsyncFixedSizePool` | Row / Batched | Lock-Free Snapshot + `run_in_transaction` | Sessions + Memory (`ARRAY<FLOAT32>`, FTS `SCORE`, RRF) + Artifacts |
-| [`adbc`](adbc.md) | `sqlspec[adbc]` | Sync | `?` / `$1` / `:1` | Optional PostgreSQL clone pool | Native C-Stream | Table Queue | Sessions + Memory (PostgreSQL `pgvector` RRF, SQLite `FTS5`, DuckDB, Oracle, Db2) |
+| [`adbc`](adbc.md) | `sqlspec[adbc]` | Sync | `?` / `$1` / `:1` | Optional PostgreSQL clone pool | Native C-Stream | Table Queue | Sessions + Memory (PostgreSQL `pgvector` RRF, SQLite `FTS5`, DuckDB, Oracle, Db2, Teradata) |
 | [`arrow_odbc`](arrow-odbc.md) | `sqlspec[arrow-odbc]` | Sync | `?` (`qmark`) | ODBC Driver Pool (`enable_pooling`) | Native Rust ODBC Batch | Table Queue | Sessions + Memory (`LIKE`) |
+| [`teradata`](teradata.md) | `sqlspec[teradata]` | Sync | `?` (`qmark`) | `TeradataConnectionPool` | Row / Stream | Table Queue | Sessions + Memory |
 
 ## Database Setup Guides
 
@@ -39,8 +41,10 @@ SQLSpec supports synchronous and asynchronous **database adapters** spanning emb
 - **[Microsoft SQL Server](mssql.md)**: Microsoft's official `mssql-python` driver with streaming Arrow `BulkCopy` alongside FreeTDS `pymssql`.
 - **[SAP Adaptive Server Enterprise](sybase.md)**: Sybase ASE 16.0+ via FreeTDS TDS 5.0 (`pymssql`), transactional DDL behavior, and catalog introspection.
 - **[SAP SQL Anywhere](sqlanywhere.md)**: Embedded and client-server SQL Anywhere 12+ via `sqlanydb`, recursive dependency analysis, and automatic rollback on context exit.
+- **[Teradata Vantage](teradata.md)**: Synchronous `teradatasql` connections, TERA and ANSI transactions, Arrow streaming, and Unicode catalog introspection.
 - **[IBM Db2](db2.md)**: Sync and async DRDA pooling (`Db2SyncConfig` / `Db2AsyncConfig`), savepoint cursor retention, and lowercase column normalization.
 - **[DuckDB](duckdb.md)**: In-process OLAP queries over Parquet/S3, hybrid native/Arrow materialization, and JSON statement profiling.
+- **[Snowflake](snowflake.md)**: Python connector authentication, bounded pooling, Arrow batches, stage loads, and VARIANT extension stores.
 - **[Google Cloud BigQuery](bigquery.md)**: Interactive `query_and_wait` execution, Storage Read/Write APIs, reservation governance, and multi-statement script jobs.
 - **[Google Cloud Spanner](spanner.md)**: Symmetric sync and native `asyncio` drivers, `FixedSizePool` / `AsyncFixedSizePool` session pools, `provide_read_session()`, `execute_partitioned_dml()`, mutation batch APIs, and vector/artifact ADK stores.
 - **[Apache Arrow ADBC](adbc.md)**: Zero-copy Arrow C Data Interface ingestion and extraction across PyPI-installable ADBC wire drivers.

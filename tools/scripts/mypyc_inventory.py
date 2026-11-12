@@ -27,6 +27,30 @@ CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "
 SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
+    "sqlspec/data_dictionary/dialects/teradata/config.py": {
+        "classification": "compile_now",
+        "reason": "Teradata catalog configuration compiles with dialect helpers.",
+    },
+    "sqlspec/dialects/teradata/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Explicit argument Teradata generator dispatch handlers.",
+    },
+    "sqlspec/adapters/teradata/core.py": {
+        "classification": "compile_now",
+        "reason": "Teradata connection normalization and error mapping helpers.",
+    },
+    "sqlspec/adapters/teradata/pool.py": {
+        "classification": "compile_now",
+        "reason": "Teradata bounded thread-local connection pool runtime.",
+    },
+    "sqlspec/adapters/teradata/type_converter.py": {
+        "classification": "compile_now",
+        "reason": "Teradata output and parameter coercion helpers.",
+    },
+    "sqlspec/adapters/teradata/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Public DB-API driver remains interpreted alongside sibling adapters.",
+    },
     "sqlspec/service/_base.py": {
         "classification": "keep_interpreted",
         "reason": "Public generic service bases preserve Python slots and subclassing; runtime helpers compile separately.",
@@ -46,6 +70,14 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/storage/pipeline.py": {
         "classification": "compile_now",
         "reason": "Storage orchestration compiles after PyArrow payload encode/decode moved to _arrow_payload.py.",
+    },
+    "sqlspec/storage/_staging_sql.py": {
+        "classification": "compile_now",
+        "reason": "Pure staged/checkpoint SQL builders and worker thread-budget math compile without Arrow dependencies.",
+    },
+    "sqlspec/storage/_ingest.py": {
+        "classification": "compile_now",
+        "reason": "Staged bulk-load and multi-shard storage ingestion orchestration compiles with _arrow_payload worker boundary split out.",
     },
     "sqlspec/storage/_paths.py": {
         "classification": "compile_now",
@@ -70,6 +102,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/data_dictionary/_loader.py": {
         "classification": "compile_now",
         "reason": "Uses importlib.resources instead of direct __file__ path discovery.",
+    },
+    "sqlspec/data_dictionary/_index_ddl.py": {
+        "classification": "compile_now",
+        "reason": "Dialect-aware secondary index DDL builders and slotted without-indexes context managers compile cleanly.",
     },
     "sqlspec/data_dictionary/dialects/postgres/config.py": {
         "classification": "compile_now",
@@ -114,6 +150,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/data_dictionary/dialects/sqlanywhere/config.py": {
         "classification": "compile_now",
         "reason": "SQL Anywhere data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/snowflake/config.py": {
+        "classification": "compile_now",
+        "reason": "Shared native and ADBC Snowflake catalog configuration and SHOW KEYS parsers.",
     },
     "sqlspec/data_dictionary/dialects/sybase/config.py": {
         "classification": "compile_now",
@@ -271,6 +311,34 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "SQL Anywhere parameter normalization, row collection, and exception mapping helpers compile with the adapter core surface.",
     },
+    "sqlspec/adapters/snowflake/core.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake connection normalization and parameter helpers compile with the adapter core surface.",
+    },
+    "sqlspec/adapters/snowflake/pool.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake bounded synchronous connection pool runtime.",
+    },
+    "sqlspec/adapters/snowflake/type_converter.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake parameter and result conversion helpers.",
+    },
+    "sqlspec/adapters/snowflake/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Optional Snowflake driver subclasses and deferred exception handler stay interpreted.",
+    },
+    "sqlspec/adapters/snowflake/config.py": {
+        "classification": "helper_split_first",
+        "reason": "Snowflake configuration retains interpreted lifecycle and factory methods.",
+    },
+    "sqlspec/adapters/snowflake/data_dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data dictionary inheritance stays interpreted.",
+    },
+    "sqlspec/adapters/snowflake/migrations.py": {
+        "classification": "keep_interpreted",
+        "reason": "Snowflake migration tracker extends the interpreted migration tracker facade.",
+    },
     "sqlspec/adapters/sqlanywhere/pool.py": {
         "classification": "compile_now",
         "reason": "SQL Anywhere thread-local pool runtime compiles without adapter driver subclasses.",
@@ -289,15 +357,51 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/adapters/sqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Native compiled driver construction segfaulted in installed-wheel SqliteConfig session smoke; keep interpreted pending driver layout work.",
+        "reason": "Native Arrow ingestion bypasses interpreted parameter-conversion overrides and breaks rollback on rejected batches.",
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Async SQLite driver shares the same native adapter-driver layout risk as the sync driver and stays out of the compiled baseline.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
     },
     "sqlspec/adapters/asyncpg/driver.py": {
         "classification": "prove_separately",
-        "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/tenant.py": {
+            "classification": "compile_now",
+            "reason": "Tenant strategies and lease subclasses with native SDK and interpreted-subclass coverage.",
+        }
+        for adapter in (
+            "asyncpg",
+            "cockroach_asyncpg",
+            "db2",
+            "cockroach_psycopg",
+            "mssql_python",
+            "oracledb",
+            "psqlpy",
+            "psycopg",
+            "pymssql",
+            "snowflake",
+        )
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/_hub.py": {
+            "classification": "compile_now",
+            "reason": "Native listener routing and queueing with SDK and shutdown-order coverage.",
+        }
+        for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
+    },
+    "sqlspec/adapters/oracledb/events/backend.py": {
+        "classification": "keep_interpreted",
+        "reason": "Compiled AQ and TxEventQ backends reject interpreted subclasses or their structural listener overrides.",
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/backend.py": {
+            "classification": "keep_interpreted",
+            "reason": "Native backend fields enforce concrete listener hub types and reject structural listeners.",
+        }
+        for adapter in ("asyncpg", "psqlpy", "psycopg")
     },
     "sqlspec/utils/adapters.py": {
         "classification": "compile_now",
@@ -330,6 +434,22 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/utils/type_converters.py": {
         "classification": "compile_now",
         "reason": "Compiled adapter coercion helpers are on the hot path.",
+    },
+    "sqlspec/extensions/litestar/_tenant_resolution.py": {
+        "classification": "compile_now",
+        "reason": "Per-request tenant resolution is pure scope and mapping traversal with no Litestar runtime imports.",
+    },
+    "sqlspec/utils/tenant/_context.py": {
+        "classification": "compile_now",
+        "reason": "Tenant payload validation, context scopes, and ASGI binding run on every tenant acquisition.",
+    },
+    "sqlspec/utils/tenant/_mssql.py": {
+        "classification": "compile_now",
+        "reason": "Typed SQL Server batch generation and result validation are shared by both tenant strategies.",
+    },
+    "sqlspec/utils/tenant/_postgres.py": {
+        "classification": "compile_now",
+        "reason": "Shared PostgreSQL-family batch construction and validation with interpreted subclass support.",
     },
     "sqlspec/storage/backends/base.py": {
         "classification": "compile_now",
@@ -487,7 +607,7 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "modules": adapter_drivers,
             "status": "blocked",
             "classification": "prove_separately",
-            "reason": "SQLite sync/async driver admission compiled but failed installed-wheel session construction; driver.py files stay interpreted pending layout work.",
+            "reason": "Driver shells need separate layout and dispatch verification: grouped builds lose inherited fields, and compiled SQLite bypasses an interpreted Arrow conversion override.",
         },
         "adapter_pool_runtimes": {
             "count": len(adapter_pools),

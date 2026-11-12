@@ -31,7 +31,7 @@ db_plugin = SQLSpecPlugin(spec)
 
 
 async def report(request: Request) -> JSONResponse:
-    db: AiosqliteDriver = db_plugin.get_session(request, "db")
+    db: AiosqliteDriver = await db_plugin.get_session_async(request, "db")
     etl_db: SqliteDriver = db_plugin.get_session(request, "etl_db")
     users = await db.select("SELECT 1 AS id, 'Alice' AS name")
     metrics = etl_db.select("SELECT 'metric1' AS name, 100 AS value")

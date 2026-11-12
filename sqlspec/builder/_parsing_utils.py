@@ -104,8 +104,14 @@ _BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
 })
 _PARAMETER_VALIDATOR = ParameterValidator()
 _NON_IDENTIFIER_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\W+")
+_SQLSPEC_DIALECT_MODULES: Final[dict[str, str]] = {
+    "sqlanywhere": "sqlspec.dialects.sybase",
+    "sybase": "sqlspec.dialects.sybase",
+    "vantage": "sqlspec.dialects.teradata",
+}
 _DIALECT_ALIASES: Final[dict[str, str]] = {
     "ase": "sybase",
+    "teradata": "vantage",
     "cockroach": "postgres",
     "cockroachdb": "postgres",
     "mariadb": "mysql",
@@ -840,6 +846,15 @@ def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None
     return dialect or default
 
 
+def _ensure_sqlspec_dialects_loaded(dialect_name: str) -> None:
+    """Register SQLSpec dialects that sqlglot does not ship before resolving their names."""
+    if dialect_name in Dialect.classes:
+        return
+    module_name = _SQLSPEC_DIALECT_MODULES.get(dialect_name)
+    if module_name is not None:
+        importlib.import_module(module_name)
+
+
 def _normalize_dialect(dialect: "DialectType | None") -> str | None:
     """Resolve public dialect aliases to SQLGlot dialect names."""
     if dialect is None:
@@ -851,8 +866,7 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
     else:
         name = type(dialect).__name__.lower()
     resolved = _DIALECT_ALIASES.get(name, name)
-    if resolved in {"sybase", "sqlanywhere"} and resolved not in Dialect.classes:
-        importlib.import_module("sqlspec.dialects.sybase")
+    _ensure_sqlspec_dialects_loaded(resolved)
     return resolved
 
 

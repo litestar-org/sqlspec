@@ -406,6 +406,9 @@ def test_sync_session_factory_forwards_exception_to_pool_context() -> None:
         def provide_pool(self) -> _RecordingPool:
             return _RecordingPool()
 
+        def _create_tenant_lease(self) -> None:
+            return None
+
     factory = SyncPoolSessionFactory(_RecordingConfig())
     connection = factory.acquire_connection()
     error = _BoomError()

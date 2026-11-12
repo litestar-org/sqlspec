@@ -387,23 +387,21 @@ def test_raise_missing_connection_provide_request_connection_raises_when_connect
     try:
         plugin.provide_request_connection("db_connection", state, scope)
     except ImproperConfigurationError as exc:
-        assert "db_connection" in str(exc)
+        assert "provide_request_connection_async" in str(exc)
     else:
         msg = "provide_request_connection should raise when no connection is scoped"
         raise AssertionError(msg)
 
 
-def test_raise_missing_connection_provide_request_session_raises_when_connection_missing() -> None:
+def test_provide_request_session_defers_async_connection_when_none_is_scoped() -> None:
     plugin = _build_plugin()
+    plugin.on_app_init(AppConfig())
     state = AppConfig().state
     scope = cast("HTTPScope", {"type": "http"})
-    try:
-        plugin.provide_request_session("db_connection", state, scope)
-    except ImproperConfigurationError as exc:
-        assert "db_connection" in str(exc)
-    else:
-        msg = "provide_request_session should raise when no connection is scoped"
-        raise AssertionError(msg)
+    session = plugin.provide_request_session("db_session", state, scope)
+    assert session.dialect == "sqlite"
+    with pytest.raises(ImproperConfigurationError, match="provide_request_session_async"):
+        _ = session.connection
 
 
 def test_raise_missing_connection_raise_missing_connection_annotation_is_noreturn() -> None:

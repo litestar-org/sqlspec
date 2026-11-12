@@ -10,6 +10,7 @@ pytest.importorskip("sanic")
 
 from sanic import Sanic
 
+from sqlspec.base import SQLSpec
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.extensions.sanic import SQLSpecPlugin
 from sqlspec.utils.correlation import CorrelationContext
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.anyio
 async def test_correlation_context_is_set_and_restored() -> None:
     """Correlation middleware should use request headers and restore prior context."""
     CorrelationContext.set("outer-context")
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_correlation=True)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_correlation=True)}))
     request = _make_request(headers={"x-request-id": "request-123"})
     response = SimpleNamespace(status=500, headers={})
 
@@ -42,7 +43,7 @@ async def test_sqlcommenter_context_is_set_with_sanic_framework_and_restored() -
     """SQLCommenter middleware should set Sanic request attributes."""
     previous = {"route": "/outer"}
     SQLCommenterContext.set(previous)
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_sqlcommenter=True)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_sqlcommenter=True)}))
     request = _make_request(path="/items/1", uri_template="/items/<item_id:int>", endpoint="App.get_item")
     response = SimpleNamespace(status=200, headers={})
 
@@ -65,7 +66,7 @@ async def test_sqlcommenter_context_is_set_with_sanic_framework_and_restored() -
 def test_observability_registers_middleware_when_di_disabled() -> None:
     """disable_di should not suppress enabled observability middleware."""
     app = Sanic(f"SQLSpecObservability{uuid4().hex}")
-    plugin = SQLSpecPlugin(MagicMock(configs={"default": _make_config(enable_correlation=True)}))
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": _make_config(enable_correlation=True)}))
 
     plugin.init_app(app)
 

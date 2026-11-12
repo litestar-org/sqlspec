@@ -1,6 +1,6 @@
 # Flask Integration
 
-`sqlspec.extensions.flask` provides `SQLSpecPlugin` for Flask applications, managing synchronous (and portal-bridged asynchronous) connection pools across Flask's application factory lifecycle (`init_app`), caching request-scoped sessions on `flask.g`, and finalizing transactions in `teardown_appcontext`.
+`sqlspec.extensions.flask` provides `SQLSpecPlugin` for Flask applications, managing synchronous (and portal-bridged asynchronous) connection pools across Flask's application factory lifecycle (`init_app`), caching request-scoped sessions on `flask.g`, and finalizing transactions in `teardown_appcontext`. A request connection is checked out the first time `plugin.get_session()` or `plugin.get_connection()` asks for it, so views that never touch the database open none.
 
 ## Installation
 
@@ -30,13 +30,13 @@
 
 ## Application Factory Setup
 
-Create a `SQLSpecPlugin(spec)` instance, initialize it inside your `create_app` factory with `plugin.init_app(app)`, and retrieve the active request session via `plugin.get_session()`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(...)`, initialize it inside your `create_app` factory with `plugin.init_app(app)` (or `SQLSpecPlugin(config, app)`), and retrieve the active request session via `plugin.get_session()`:
 
 ```{ .python title="docs/examples/frameworks/flask/basic_setup.py" }
 --8<-- "docs/examples/frameworks/flask/basic_setup.py:example"
 ```
 
-Calling `plugin.get_session()` multiple times within the same HTTP request returns the same `flask.g`-cached driver session.
+Calling `plugin.get_session()` multiple times within the same HTTP request returns the same `flask.g`-cached driver session. With an async configuration, `plugin.get_session()` returns a blocking session whose calls (`session.select(...)`, `for row in session.select_stream(...)`, `with session.transaction():`) run on the plugin's portal event loop, so views use it without `await`.
 
 ## Multi-Database Binds
 
@@ -46,12 +46,17 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 --8<-- "docs/examples/frameworks/flask/multi_database.py:example"
 ```
 
+## Tenant-Aware Requests
+
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask defers checkout until a view or `before_request` hook verifies membership, calls `set_request_tenant(org_id)`, and calls `plugin.get_session()`; a synchronous per-bind `tenant_extractor` can resolve the tenant from `g.user` instead. See [Flask Multi-Tenancy](../learn/recipes/multi-tenancy-flask.md) for complete examples and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
 ## Configuration Options
 
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
+| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
+| `connection_key` | `str` | - | Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |

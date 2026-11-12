@@ -30,17 +30,17 @@
 
 ## Basic Setup and Session Injection
 
-Attach `SQLSpecPlugin(spec, app)` to your `FastAPI` instance and inject the session into route handlers using `Depends(db_ext.provide_session())`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(..., app)` and inject the session into route handlers using `Depends(db_ext.provide_session())`:
 
 ```{ .python title="docs/examples/frameworks/fastapi/basic_setup.py" }
 --8<-- "docs/examples/frameworks/fastapi/basic_setup.py:example"
 ```
 
-`SQLSpecPlugin` automatically opens configured connection pools when FastAPI starts and closes them when the application shuts down.
+`SQLSpecPlugin` automatically opens configured connection pools when FastAPI starts and closes them when the application shuts down. A request connection is checked out the first time a dependency such as `Depends(db_plugin.provide_session())` resolves it, so routes that never touch the database open none, and autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Multi-Database Configuration
 
-Register multiple synchronous or asynchronous adapters on `SQLSpec` with distinct `session_key` names under `extension_config["fastapi"]`, then pass the key to `db_plugin.provide_session("<key>")`:
+Pass multiple synchronous or asynchronous configurations with distinct `session_key`, `connection_key`, and `pool_key` names under `extension_config["fastapi"]`, then pass the key (or `bind_key`) to `db_plugin.provide_session("<key>")`:
 
 ```{ .python title="docs/examples/frameworks/fastapi/multi_database.py" }
 --8<-- "docs/examples/frameworks/fastapi/multi_database.py:example"
@@ -53,7 +53,8 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 <!-- GENERATED:START config-table:sqlspec.config.FastAPIConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
+| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
+| `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
@@ -69,6 +70,10 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 <!-- GENERATED:END config-table:sqlspec.config.FastAPIConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
+
+## Tenant-Aware Requests
+
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, an authorization dependency verifies membership and calls `set_request_tenant(request, org_id)`, and `Depends(db_ext.provide_session())` checks out the tenant connection only when a route resolves it. See [FastAPI Multi-Tenancy](../learn/recipes/multi-tenancy-fastapi.md) for single-database, separate auth database, and upfront extractor examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
 
 ## Declarative Filter Dependencies
 
@@ -109,6 +114,6 @@ def register_user_routes(app: FastAPI, db_ext: SQLSpecPlugin) -> None:
 
 ## Recap
 
-- Instantiate `db_ext = SQLSpecPlugin(spec, app)` to bind pool lifecycles and request sessions to FastAPI.
-- Use `Depends(db_ext.provide_session())` for single-database routes, `Depends(db_ext.provide_session("key"))` for multi-database setups, and `Depends(db_ext.provide_filters(FilterConfig(...)))` for declarative query filters.
-- See the [FastAPI Extension Reference](/reference/extensions/fastapi/) for `SQLSpecPlugin`, `FastAPIConfig`, and `provide_filters` signatures.
+- Instantiate `db_ext = SQLSpecPlugin(config, app)` (passing a single config, a list of configs, or a `SQLSpec` registry) to bind pool lifecycles and request sessions to FastAPI.
+- Use `Depends(db_ext.provide_session())` for single-database routes, `Depends(db_ext.provide_session("key"))` for multi-database setups, `set_request_tenant(request, tenant_id)` in auth dependencies for deferred tenant leases, and `Depends(db_ext.provide_filters(FilterConfig(...)))` for declarative query filters.
+- See the [FastAPI Extension Reference](/reference/extensions/fastapi/) for `SQLSpecPlugin`, `FastAPIConfig`, `set_request_tenant`, and `provide_filters` signatures.

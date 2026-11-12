@@ -352,10 +352,12 @@ def test_validate_builtin_reconcile_adapter_supported_matrix() -> None:
         "pymssql",
         "oracledb",
         "spanner",
+        "snowflake",
         "bigquery",
         "sqlanywhere",
         "sybase",
         "db2",
+        "teradata",
     }
     assert UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS == expected_unconditional
 
@@ -463,6 +465,7 @@ def test_adbc_explicit_statement_dialect_and_derive_pool() -> None:
         "postgres",
         "snowflake",
         "sqlite",
+        "teradata",
     })
 
     auto_cfg = AdbcConfig(connection_config={"uri": "grpc+tls://h:8815"})

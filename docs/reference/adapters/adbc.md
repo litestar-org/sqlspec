@@ -82,3 +82,7 @@ Apache Arrow Database Connectivity (ADBC) adapter supporting zero-copy Arrow ing
     options:
       heading_level: 4
       members: false
+
+## Teradata transport
+
+`AdbcConfig` supports Columnar `dbc` Teradata driver manifests and explicit `teradata` dialect routing for Flight SQL. See [Teradata setup](../../databases/adbc.md#teradata) for installation and transaction restrictions.

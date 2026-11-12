@@ -9,6 +9,7 @@ import pytest
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
 from sqlspec.adapters.adbc.litestar.store import AdbcStore
+from sqlspec.core import StatementConfig
 from sqlspec.exceptions import IntegrityError
 
 __all__ = ()
@@ -52,14 +53,14 @@ def test_adbc_litestar_store_enterprise_drop_sql(dialect: str, expected_drop_fra
     assert expected_drop_fragment in drop_sql
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "db2", "mssql"])
+@pytest.mark.parametrize("dialect", ["oracle", "db2", "mssql", "teradata"])
 def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dialect: str) -> None:
     executed: list[tuple[str, tuple[Any, ...]]] = []
 
     class _DriverStub:
         def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
             executed.append((sql.strip(), params))
-            return {"count": 0}
+            return {"count": 0, "row_count": 0}
 
         def execute(self, sql: str, *params: Any) -> None:
             executed.append((sql.strip(), params))
@@ -73,7 +74,7 @@ def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dia
     store._set("sess_1", b"payload", expires_in=None)
 
     assert len(executed) == 2
-    assert "SELECT COUNT(*)" in executed[0][0]
+    assert f"SELECT COUNT(*) AS {'row_count' if dialect == 'teradata' else 'count'}" in executed[0][0]
     assert "INSERT INTO" in executed[1][0]
     assert "ON CONFLICT" not in executed[1][0]
 
@@ -99,6 +100,29 @@ def test_adbc_event_queue_store_enterprise_dialects(
     assert expected_drop_fragment in drop_sql
 
 
+@pytest.mark.parametrize("label", ["row_count", "ROW_COUNT"])
+def test_adbc_litestar_store_delete_expired_reads_count_alias(label: str) -> None:
+    executed: list[str] = []
+
+    class _DriverStub:
+        def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
+            executed.append(sql)
+            return {label: 2}
+
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append(sql)
+
+        def commit(self) -> None:
+            pass
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "teradata"
+    assert store._delete_expired() == 2
+    assert "COUNT(*) AS row_count" in executed[0]
+    assert executed[1].startswith("DELETE FROM")
+
+
 def test_adbc_litestar_store_concurrent_set_fallback() -> None:
     """AdbcStore._set catches IntegrityError on INSERT race condition and falls back to UPDATE."""
     executed: list[tuple[str, tuple[Any, ...]]] = []
@@ -106,7 +130,7 @@ def test_adbc_litestar_store_concurrent_set_fallback() -> None:
     class _DriverStub:
         def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
             executed.append((sql.strip(), params))
-            return {"count": 0}
+            return {"count": 0, "row_count": 0}
 
         def execute(self, sql: str, *params: Any) -> None:
             executed.append((sql.strip(), params))
@@ -151,3 +175,218 @@ def test_adbc_litestar_store_rollback_on_failure() -> None:
 
 def _make_adbc_config(dialect_uri: str) -> AdbcConfig:
     return AdbcConfig(connection_config={"uri": dialect_uri})
+
+
+@pytest.mark.parametrize(
+    "connection_config",
+    [{"uri": "teradata://user:pass@host/database"}, {"uri": "grpc+tls://host:443", "adbc_dialect": "teradata"}],
+)
+def test_adbc_teradata_extension_targets(connection_config: dict[str, str]) -> None:
+    config = AdbcConfig(connection_config=connection_config)
+    store = AdbcStore(config)
+    queue = AdbcEventQueueStore(config)
+    session_target = store.get_schema_targets()[0]
+    queue_target = queue.get_schema_targets()[0]
+    assert str(session_target.create_statement).startswith("CREATE MULTISET TABLE")
+    assert str(queue_target.create_statement).startswith("CREATE MULTISET TABLE")
+    assert (
+        store.get_companion_indexes()[0].ddl
+        == "CREATE INDEX idx_litestar_session_expires_at (expires_at) ON litestar_session"
+    )
+    assert (
+        queue.create_statements()[1]
+        == "CREATE INDEX idx_sqlspec_event_queue_channel_status (channel, status, available_at) ON sqlspec_event_queue"
+    )
+    assert queue.drop_statements() == ["DROP TABLE sqlspec_event_queue"]
+
+
+@pytest.mark.parametrize("stmt_dialect", ["teradata", "vantage"])
+def test_adbc_event_queue_store_flightsql_statement_dialect_detection(stmt_dialect: str) -> None:
+    """AdbcEventQueueStore resolves FlightSQL and mutated statement_config Teradata dialects to teradata."""
+    flight_cfg = AdbcConfig(
+        connection_config={"driver": "flightsql", "uri": "grpc+tls://host:443"},
+        statement_config=StatementConfig(dialect=stmt_dialect),
+    )
+    assert AdbcEventQueueStore(flight_cfg).dialect == "teradata"
+
+    fallback_stub = SimpleNamespace(
+        connection_config={"driver": "flightsql", "uri": "grpc+tls://host:443"},
+        statement_config=StatementConfig(dialect=stmt_dialect),
+        extension_config={"events": {}},
+    )
+    assert AdbcEventQueueStore(cast("Any", fallback_stub)).dialect == "teradata"
+
+    bare_stub = SimpleNamespace(
+        connection_config={}, statement_config=StatementConfig(dialect=stmt_dialect), extension_config={"events": {}}
+    )
+    assert AdbcEventQueueStore(cast("Any", bare_stub)).dialect == "teradata"
+
+
+def test_adbc_teradata_schema_qualified_extension_targets() -> None:
+    """Teradata Litestar and Events stores split and normalize database-qualified table names."""
+    config = AdbcConfig(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={
+            "litestar": {"session_table": "my_db.my_sessions"},
+            "events": {"queue_table": "my_db.my_queue"},
+        },
+    )
+    store = AdbcStore(config)
+    queue = AdbcEventQueueStore(config)
+
+    session_target = store.get_schema_targets()[0]
+    assert session_target.schema == "MY_DB"
+    assert session_target.table_name == "MY_SESSIONS"
+
+    companion = store.get_companion_indexes()[0]
+    assert companion.schema == "MY_DB"
+    assert companion.table == "MY_SESSIONS"
+    assert companion.ddl == "CREATE INDEX idx_my_db_my_sessions_expires_at (expires_at) ON my_db.my_sessions"
+
+    queue_target = queue.get_schema_targets()[0]
+    assert queue_target.schema == "MY_DB"
+    assert queue_target.table_name == "MY_QUEUE"
+    assert queue._index_existence_target() == ("MY_DB", "MY_QUEUE")
+
+
+def test_adbc_litestar_store_teradata_create_table_commits_after_companion_reconcile() -> None:
+    """AdbcStore._create_table commits companion index creation and rolls back on failure for Teradata."""
+    events: list[str] = []
+
+    class _DataDictionaryStub:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None = None) -> list[dict[str, Any]]:
+            events.append(f"get_indexes:{schema}:{table}")
+            return []
+
+    class _DriverStub:
+        dialect = "teradata"
+        data_dictionary = _DataDictionaryStub()
+
+        def select_one_or_none(self, _sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+            events.append(f"probe:{params[0]}:{params[1]}")
+            return None
+
+        def execute(self, sql: str) -> None:
+            events.append(f"execute:{sql.split()[3]}")
+
+        def execute_script(self, sql: str) -> None:
+            events.append(f"execute_script:{sql.split()[2]}")
+
+        def commit(self) -> None:
+            events.append("commit")
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+    driver_stub = _DriverStub()
+    config_stub = SimpleNamespace(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={"litestar": {"session_table": "my_db.my_sessions"}},
+        provide_session=lambda: nullcontext(driver_stub),
+    )
+    store = AdbcStore(cast("Any", config_stub))
+    store._create_table()
+
+    assert events == [
+        "probe:MY_DB:MY_SESSIONS",
+        "execute:my_db.my_sessions",
+        "commit",
+        "get_indexes:MY_DB:MY_SESSIONS",
+        "execute_script:idx_my_db_my_sessions_expires_at",
+        "commit",
+    ]
+
+
+class _TeradataCatalogDriver:
+    """Fake session driver whose DROP TABLE fails for absent tables, like Teradata error 3807."""
+
+    dialect = "vantage"
+
+    def __init__(self, tables: "set[str]") -> None:
+        self.tables = tables
+        self.dropped: list[str] = []
+
+    def select_one_or_none(self, _sql: str, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return {"found": 1} if parameters[1] in self.tables else None
+
+    def execute_script(self, statement: str) -> None:
+        name = statement.removeprefix("DROP TABLE ").upper()
+        if name not in self.tables:
+            msg = f"[Error 3807] Object '{name}' does not exist."
+            raise RuntimeError(msg)
+        self.tables.discard(name)
+        self.dropped.append(name)
+
+    def commit(self) -> None:
+        return None
+
+
+def test_adbc_teradata_extension_downgrades_skip_tables_already_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.adbc.adk.store import AdbcADKMemoryStore, AdbcADKStore
+    from sqlspec.extensions.adk.migrations.reconcile import _downgrade_sync as adk_downgrade
+    from sqlspec.extensions.events.migrations.reconcile import _downgrade_sync as events_downgrade
+    from sqlspec.extensions.litestar.migrations.reconcile import _downgrade_sync as litestar_downgrade
+
+    config = AdbcConfig(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    driver = _TeradataCatalogDriver({"ADK_SESSION", "ADK_EVENT", "ADK_MEMORY", "LITESTAR_SESSION"})
+    monkeypatch.setattr(AdbcConfig, "provide_session", lambda _: nullcontext(driver))
+
+    adk_stores = [AdbcADKStore(config), AdbcADKMemoryStore(config)]
+    adk_downgrade(driver, adk_stores)
+    adk_downgrade(driver, adk_stores)
+    litestar_store = AdbcStore(config)
+    assert litestar_store._get_dialect() == "teradata"
+    litestar_downgrade(driver, litestar_store)
+    litestar_downgrade(driver, litestar_store)
+    events_downgrade(driver, AdbcEventQueueStore(config), True)
+    assert driver.dropped == ["ADK_MEMORY", "ADK_EVENT", "ADK_SESSION", "LITESTAR_SESSION"]
+
+    driver.tables.update({"ADK_SESSION", "ADK_MEMORY"})
+    adk_stores[0].drop_tables()
+    adk_stores[1].drop_tables()
+    assert driver.dropped[-2:] == ["ADK_SESSION", "ADK_MEMORY"]
+    assert driver.tables == set()
+
+
+@pytest.mark.parametrize("uri", ["postgresql://user:pass@host/db", "sqlite:///:memory:", "duckdb:///:memory:"])
+def test_adbc_litestar_store_rejects_qualified_session_table_outside_teradata(uri: str) -> None:
+    config = AdbcConfig(
+        connection_config={"uri": uri}, extension_config={"litestar": {"session_table": "app.sessions"}}
+    )
+    with pytest.raises(ValueError, match=r"app\.sessions"):
+        AdbcStore(config)
+
+
+@pytest.mark.parametrize("expires_in", [None, 60])
+def test_adbc_litestar_store_snowflake_set_uses_atomic_hex_merge(expires_in: int | None) -> None:
+    """Snowflake AdbcStore._set executes a single atomic MERGE with TO_BINARY(..., 'HEX')."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _DriverStub:
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append((" ".join(sql.split()), params))
+
+        def commit(self) -> None:
+            executed.append(("COMMIT", ()))
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "snowflake"
+    store._set("sess_sf", b"\xde\xad", expires_in=expires_in)
+
+    assert len(executed) == 2
+    merge_sql, merge_params = executed[0]
+    assert merge_sql.startswith(
+        "MERGE INTO litestar_session t USING (SELECT ? AS session_id, TO_BINARY(?, 'HEX') AS data"
+    )
+    assert merge_params[:2] == ("sess_sf", "dead")
+    if expires_in is None:
+        assert "NULL AS expires_at" in merge_sql
+        assert len(merge_params) == 2
+    else:
+        assert "? AS expires_at" in merge_sql
+        assert len(merge_params) == 3
+    assert executed[1] == ("COMMIT", ())

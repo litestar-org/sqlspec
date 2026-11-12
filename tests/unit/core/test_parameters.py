@@ -914,7 +914,7 @@ def test_extract_parameters_cache_uses_sql_string_without_hashing(validator: Par
         validator.extract_parameters(sql)
 
     mock_blake2b.assert_not_called()
-    assert sql in validator._parameter_cache
+    assert (sql, None) in validator._parameter_cache
 
 
 def test_extract_parameters_complex_sql(validator: ParameterValidator) -> None:
@@ -3150,3 +3150,210 @@ def test_fingerprint_execute_many_resolves_non_none_types_beyond_first_row() -> 
     assert _processor_module.structural_fingerprint(
         dict_batch_a, is_many=True
     ) != _processor_module.structural_fingerprint(dict_batch_b, is_many=True)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT $1, $2 FROM @%sales WHERE id = :id AND dt >= $min_dt // ? :ignored",
+        "SELECT t.$1 FROM @db.public.stage t WHERE id = :id",
+        "SELECT $1 FROM @~ WHERE id = :id",
+        'SHOW WAREHOUSES ->> SELECT "name" FROM $1 WHERE id = :id',
+        'SELECT payload:user:id, "PAYLOAD":status, items[0]:sku, PARSE_JSON(raw):key FROM t WHERE id = :id',
+        "SELECT 's3://bkt/p?x=1', 'it''s :hidden', $$ ? :hidden $$ FROM t WHERE id = :id",
+    ],
+)
+def test_snowflake_validator_ignores_native_sql(sql: str) -> None:
+    infos = ParameterValidator().extract_parameters(sql, dialect="Snowflake")
+    assert [(info.style, info.name, info.ordinal) for info in infos] == [(ParameterStyle.NAMED_COLON, "id", 0)]
+    assert sql[infos[0].position : infos[0].position + len(infos[0].placeholder_text)] == ":id"
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "duckdb", "bigquery", "spanner"])
+def test_snowflake_validator_cache_isolates_other_dialects(dialect: str | None) -> None:
+    validator = ParameterValidator()
+    sql = "SELECT $1, $name, @stage, :id"
+    expected = [
+        ParameterStyle.NUMERIC,
+        ParameterStyle.NAMED_DOLLAR,
+        ParameterStyle.NAMED_AT,
+        ParameterStyle.NAMED_COLON,
+    ]
+    assert [info.style for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+    assert [info.name for info in validator.extract_parameters(sql, dialect="snowflake")] == ["id"]
+    assert [info.style for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+    assert validator.extract_parameters(sql, dialect=" SNOWFLAKE ") is validator.extract_parameters(
+        sql, dialect="snowflake"
+    )
+
+
+@pytest.mark.parametrize("cache_max_size", [0, 1])
+def test_snowflake_binding_styles_and_cache_eviction(cache_max_size: int) -> None:
+    validator = ParameterValidator(cache_max_size=cache_max_size)
+    sql = "SELECT ? AS a, :1 AS b, :name AS c, %s AS d, %(other)s AS e FROM @%sales"
+    assert [(info.style, info.name) for info in validator.extract_parameters(sql, dialect="snowflake")] == [
+        (ParameterStyle.QMARK, None),
+        (ParameterStyle.POSITIONAL_COLON, "1"),
+        (ParameterStyle.NAMED_COLON, "name"),
+        (ParameterStyle.POSITIONAL_PYFORMAT, None),
+        (ParameterStyle.NAMED_PYFORMAT, "other"),
+    ]
+    validator.extract_parameters("SELECT $1", dialect="postgres")
+    assert [info.name for info in validator.extract_parameters(sql, dialect="snowflake")] == [
+        None,
+        "1",
+        "name",
+        None,
+        "other",
+    ]
+
+
+def test_snowflake_converter_preserves_native_ordinals_and_static_binary() -> None:
+    converter = ParameterConverter()
+    sql = "SELECT $1 FROM @%sales WHERE id = :id AND data = :data // ? :ignored"
+    assert converter.convert_placeholder_style(
+        sql, {"id": 7, "data": b"\x01\xff"}, ParameterStyle.STATIC, dialect="snowflake"
+    ) == ("SELECT $1 FROM @%sales WHERE id = 7 AND data = X'01ff' // ? :ignored", None)
+    assert converter.convert_placeholder_style(
+        "SELECT $1 FROM @%sales WHERE id = :id", {"id": 7}, ParameterStyle.QMARK, dialect="snowflake"
+    ) == ("SELECT $1 FROM @%sales WHERE id = ?", (7,))
+
+
+def test_snowflake_processor_keeps_native_and_execution_numeric_placeholders_separate() -> None:
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        supported_parameter_styles={ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.NUMERIC,
+        supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+    )
+    result = ParameterProcessor().process(
+        "SELECT $1, $2 FROM @stage WHERE id = :id", {"id": 42}, config, dialect="snowflake"
+    )
+    assert result.sql == "SELECT $1, $2 FROM @stage WHERE id = $1"
+    assert result.parameters == (42,)
+    assert [(info.name, info.ordinal) for info in result.parameter_profile.parameters] == [("1", 0)]
+
+
+def test_snowflake_sql_compile_and_mixed_inputs_use_statement_dialect() -> None:
+    from sqlspec.core import StatementConfig
+
+    config = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+        )
+    )
+    statement = SQL(
+        "SELECT $1 FROM @my_stage WHERE tenant = ? AND id = :id",
+        "acme",
+        id=7,
+        dialect="snowflake",
+        statement_config=config,
+    )
+    assert statement.compile() == ("SELECT $1 FROM @my_stage WHERE tenant = ? AND id = ?", ("acme", 7))
+    assert config.dialect is None
+
+
+def test_snowflake_sql_builder_preserves_session_variables_and_positional_values() -> None:
+    from sqlglot.dialects.snowflake import Snowflake
+
+    statement = SQL("SELECT $1 FROM t WHERE region = ? AND dt >= $min_dt", "us-west", dialect="snowflake")
+    built = statement.builder(dialect=Snowflake).build()
+    assert "$1" in built.sql
+    assert "$min_dt" in built.sql
+    assert built.parameters == {"param_0": "us-west"}
+
+
+def test_snowflake_unescape_preserves_comments_and_adjusts_bind_positions() -> None:
+    sql = "SELECT data ?? 'key', ? // ?? :hidden\nFROM t WHERE id = ?"
+    validator = ParameterValidator()
+    infos = validator.extract_parameters(sql, dialect="snowflake")
+    rewritten, shifted = _validator_module.unescape_qmark_operator(sql, infos, dialect="snowflake")
+    assert rewritten == "SELECT data ? 'key', ? // ?? :hidden\nFROM t WHERE id = ?"
+    assert [(rewritten[info.position], info.ordinal) for info in shifted] == [("?", 0), ("?", 1)]
+
+
+def test_snowflake_sql_default_compilation_uses_dialect_lexing() -> None:
+    sql = "SELECT $1 FROM @%sales WHERE id = :id // ? :ignored"
+    compiled, parameters = SQL(sql, {"id": 99}, dialect="Snowflake").compile()
+    assert compiled == "SELECT $1 FROM @%sales WHERE id = ? // ? :ignored"
+    assert parameters == (99,)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "payload :region",
+        "payload /* warehouse field */ :region",
+        "payload/*warehouse field*/:region",
+        "payload -- warehouse field\n :region",
+        "payload // warehouse field\n :region",
+        '"PAYLOAD" /* warehouse field */ :region',
+        "items[0] /* warehouse field */ :region",
+        "PARSE_JSON(raw) /* warehouse field */ :region",
+        "payload /* first */ :region /* nested */ :city",
+    ],
+)
+def test_snowflake_sql_compile_preserves_spaced_variant_paths(expression: str) -> None:
+    statement = SQL("SELECT " + expression + " FROM events WHERE id = :id", {"id": 7}, dialect="snowflake")
+    assert statement.compile() == ("SELECT " + expression + " FROM events WHERE id = ?", (7,))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT :value FROM events WHERE id = :id",
+        "SELECT /* projection */ :value FROM events WHERE id = :id",
+        "SELECT DISTINCT :value FROM events WHERE id = :id",
+        "SELECT payload RLIKE :value FROM events WHERE id = :id",
+        "SELECT payload REGEXP :value FROM events WHERE id = :id",
+        "SELECT :value FROM events QUALIFY :id = id",
+        "EXECUTE IMMEDIATE :value USING :id",
+        "SELECT COALESCE(payload :region, :value) FROM events WHERE id = :id",
+        "SELECT payload :region = :value FROM events WHERE id = :id",
+        "SELECT CASE WHEN id = :id THEN :value ELSE payload :region END FROM events",
+    ],
+)
+def test_snowflake_sql_compile_binds_values_next_to_variant_paths(query: str) -> None:
+    compiled, parameters = SQL(query, {"value": "west", "id": 7}, dialect="snowflake").compile()
+    assert compiled == query.replace(":value", "?").replace(":id", "?")
+    assert parameters == ((7, "west") if query.startswith("SELECT CASE") else ("west", 7))
+
+
+def test_parameter_processor_fast_path_qmark_escape_honors_unescape_output() -> None:
+    """Fast-path parameter processing unescapes sqlglot SQL and respects qmark execution preservation."""
+    processor = ParameterProcessor()
+
+    numeric_config = ParameterStyleConfig(ParameterStyle.NUMERIC)
+    numeric_sql = "SELECT payload ?? 'region' FROM events WHERE id = $1"
+    unescaped = processor.process(numeric_sql, (7,), numeric_config, dialect="postgres")
+    assert unescaped.sql == "SELECT payload ? 'region' FROM events WHERE id = $1"
+    assert unescaped.sqlglot_sql == "SELECT payload ? 'region' FROM events WHERE id = $1"
+    assert unescaped.parameters == (7,)
+
+    qmark_config = ParameterStyleConfig(ParameterStyle.QMARK)
+    qmark_sql = "SELECT payload ?? 'region' FROM events WHERE id = ?"
+    preserved = processor.process(qmark_sql, (7,), qmark_config, dialect="postgres")
+    assert preserved.sql == qmark_sql
+    assert preserved.sqlglot_sql == "SELECT payload ? 'region' FROM events WHERE id = ?"
+    assert preserved.parameters == (7,)
+
+
+def test_snowflake_concatenation_between_qmarks_extracts_both_parameters() -> None:
+    """Snowflake has no ``?|`` or ``?&`` operators, so ``?||?`` concatenates two placeholders."""
+    parameters = ParameterValidator().extract_parameters("SELECT ?||? AS joined", dialect="snowflake")
+
+    assert [parameter.style for parameter in parameters] == [ParameterStyle.QMARK, ParameterStyle.QMARK]
+
+
+def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
+    """Dialects without distinct lexing reuse one cached extraction."""
+    validator = ParameterValidator()
+
+    validator.extract_parameters("SELECT ?", dialect="postgres")
+    validator.extract_parameters("SELECT ?", dialect="sqlite")
+    validator.extract_parameters("SELECT ?")
+
+    assert validator.cache_stats()["size"] == 1

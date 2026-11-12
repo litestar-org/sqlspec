@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 from sqlspec.extensions.events._channel import _resolve_backend_name
-from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import (
+    ensure_schema_async,
+    ensure_schema_sync,
+    run_drop_statements_async,
+    run_drop_statements_sync,
+)
 from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 from sqlspec.utils.adapters import resolve_adapter_name, resolve_extension_store_class
 
@@ -108,8 +113,7 @@ def _downgrade_sync(driver: Any, store: "BaseEventQueueStore[Any]", needs_table:
     manage_schema, _ = store._schema_management_flags()
     if not manage_schema:
         return
-    for stmt in store.drop_statements():
-        driver.execute_script(stmt)
+    run_drop_statements_sync(driver, store.downgrade_drops())
 
 
 async def _downgrade_async(driver: Any, store: "BaseEventQueueStore[Any]", needs_table: bool) -> None:
@@ -119,8 +123,7 @@ async def _downgrade_async(driver: Any, store: "BaseEventQueueStore[Any]", needs
     manage_schema, _ = store._schema_management_flags()
     if not manage_schema:
         return
-    for stmt in store.drop_statements():
-        await driver.execute_script(stmt)
+    await run_drop_statements_async(driver, store.downgrade_drops())
 
 
 def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":

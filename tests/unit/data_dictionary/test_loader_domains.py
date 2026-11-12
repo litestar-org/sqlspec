@@ -1,6 +1,6 @@
 """Unit tests for namespaced data-dictionary query loading."""
 
-from sqlspec.core import SQL
+from sqlspec.core import SQL, ParameterValidator
 from sqlspec.data_dictionary import (
     DataDictionaryLoader,
     MetadataQuery,
@@ -91,3 +91,39 @@ def test_domain_query_batch_lookup_reuses_domain_results() -> None:
     assert tuple(queries) == ("by_schema", "missing")
     assert queries["by_schema"].is_supported is True
     assert queries["missing"].is_supported is False
+
+
+def test_snowflake_catalog_domains_load_with_named_parameter_contracts() -> None:
+    """Snowflake SQL catalog packs resolve the complete public reflection surface."""
+    loader = DataDictionaryLoader()
+    expected = {
+        ("version", "current"): set(),
+        ("schemas", "list"): set(),
+        ("tables", "by_schema"): {"schema_name"},
+        ("tables", "by_table"): {"schema_name", "table_name"},
+        ("columns", "by_schema"): {"schema_name"},
+        ("columns", "by_table"): {"schema_name", "table_name"},
+        ("views", "by_schema"): {"schema_name"},
+        ("objects", "by_schema"): {"schema_name"},
+        ("constraints", "by_table"): {"schema_name", "table_name"},
+        ("foreign_keys", "by_table"): set(),
+        ("ddl", "by_object"): {"object_type", "object_name"},
+        ("sequences", "by_name"): {"schema_name", "sequence_name"},
+        ("routines", "by_schema"): {"schema_name"},
+    }
+    for (domain, operation), parameters in expected.items():
+        query = loader.get_domain_query("sf", domain, operation)
+        assert query.is_supported is True
+        assert query.capability.source == MetadataSource.CATALOG
+        assert isinstance(query.sql, SQL)
+        extracted = ParameterValidator().extract_parameters(query.sql.raw_sql, dialect="snowflake")
+        assert {parameter.name for parameter in extracted} == parameters
+    version_query = loader.get_domain_query_text("snowflake", "version", "current")
+    assert isinstance(version_query, str)
+    assert version_query.strip() == 'SELECT CURRENT_VERSION() AS "version";'
+    foreign_keys_query = loader.get_domain_query_text("snowflake", "foreign_keys", "by_table")
+    assert isinstance(foreign_keys_query, str)
+    assert (
+        foreign_keys_query.format(scope_clause='IN TABLE "PUBLIC"."ORDERS"').strip()
+        == 'SHOW IMPORTED KEYS IN TABLE "PUBLIC"."ORDERS";'
+    )

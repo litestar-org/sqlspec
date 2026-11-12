@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
+from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
@@ -32,6 +33,7 @@ from sqlspec.observability import (
     get_trace_context,
     resolve_db_system,
 )
+from sqlspec.observability._common import resolve_effective_db_system
 from sqlspec.observability._diagnostics import collect_diagnostics
 from sqlspec.observability._observer import _maybe_truncate_parameters
 from sqlspec.storage import StorageTelemetry
@@ -284,7 +286,7 @@ def test_observability_config_merge_combines_hooks_and_observers() -> None:
     assert merged.statement_observers is not None
     assert len(merged.statement_observers) == 1
     dispatcher = LifecycleDispatcher(cast("dict[str, Iterable[Any]]", merged.lifecycle))
-    assert getattr(dispatcher, "has_query_start") is True
+    assert dispatcher.has_query_start is True
     dispatcher.emit_query_start({"foo": "bar"})
     assert observer_called == []  # observers run via runtime, dispatcher unaffected
 
@@ -797,8 +799,8 @@ def test_get_trace_context_with_otel(monkeypatch) -> None:
     def get_current_span() -> "FakeSpan":
         return FakeSpan()
 
-    setattr(trace_module, "get_current_span", get_current_span)
-    setattr(opentelemetry_module, "trace", trace_module)
+    monkeypatch.setattr(trace_module, "get_current_span", get_current_span, raising=False)
+    monkeypatch.setattr(opentelemetry_module, "trace", trace_module, raising=False)
 
     monkeypatch.setitem(sys.modules, "opentelemetry", opentelemetry_module)
     monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace_module)
@@ -953,18 +955,28 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
 
 
 @pytest.mark.parametrize(
-    ("config_name", "driver", "expected"),
+    ("config_name", "driver", "db_system", "expected"),
     [
-        ("SQLSpecConfig", "AsyncpgDriver", "postgresql"),
-        ("SybaseConfig", "PymssqlDriver", "sybase"),
-        ("SqlanywhereConfig", "SqlanywhereDriver", "sqlanywhere"),
-        ("SQLSpecConfig", "SybaseDriver", "sybase"),
-        ("SQLSpecConfig", "SqlanywhereDriver", "sqlanywhere"),
-        ("SQLSpecConfig", "PymssqlDriver", "mssql"),
-        ("SQLSpecConfig", "UnknownDriver", "other_sql"),
+        ("SQLSpecConfig", "AsyncpgDriver", None, "postgresql"),
+        ("AdbcConfig", "AdbcDriver", "teradata", "teradata"),
+        ("AdbcConfig", "AdbcDriver", "snowflake", "snowflake"),
+        ("AdbcConfig", "AdbcDriver", "postgresql", "postgresql"),
+        ("AdbcConfig", "AdbcDriver", None, "adbc"),
+        ("AdbcConfig", "UnmappedCustomDriver", None, "adbc"),
+        ("TeradataConfig", "TeradataDriver", None, "teradata"),
+        ("VantageConfig", "AdbcDriver", None, "teradata"),
+        ("SnowflakeConfig", "SnowflakeDriver", None, "snowflake"),
+        ("SybaseConfig", "PymssqlDriver", None, "sybase"),
+        ("SqlanywhereConfig", "SqlanywhereDriver", None, "sqlanywhere"),
+        ("SQLSpecConfig", "SybaseDriver", None, "sybase"),
+        ("SQLSpecConfig", "SqlanywhereDriver", None, "sqlanywhere"),
+        ("SQLSpecConfig", "PymssqlDriver", None, "mssql"),
+        ("SQLSpecConfig", "UnknownDriver", None, "other_sql"),
     ],
 )
-def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, driver: str, expected: str) -> None:
+def test_span_manager_attaches_context_and_resolves_db_system(
+    config_name: str, driver: str, db_system: str | None, expected: str
+) -> None:
     """Emit matching database identifiers in statement events and exported spans."""
     trace_sdk = pytest.importorskip("opentelemetry.sdk.trace")
     export_sdk = pytest.importorskip("opentelemetry.sdk.trace.export")
@@ -972,6 +984,7 @@ def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, 
     assert resolve_db_system("CockroachAsyncpgConfig") == "cockroachdb"
     assert resolve_db_system("PymssqlDriver") == "mssql"
     assert resolve_db_system("MariaDBConfig") == "mariadb"
+    assert resolve_effective_db_system(config_name, driver, db_system) == expected
 
     exporter = in_memory_export.InMemorySpanExporter()
     provider = trace_sdk.TracerProvider()
@@ -985,7 +998,7 @@ def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, 
         config_name=config_name,
     )
     try:
-        span = runtime.start_query_span("SELECT 1", "SELECT", driver)
+        span = runtime.start_query_span("SELECT 1", "SELECT", driver, db_system=db_system)
         runtime.emit_statement_event(
             sql="SELECT 1",
             parameters=None,
@@ -997,6 +1010,7 @@ def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, 
             rows_affected=1,
             duration_s=0.01,
             storage_backend=None,
+            db_system=db_system,
         )
         runtime.span_manager.end_span(span)
 
@@ -1004,6 +1018,102 @@ def test_span_manager_attaches_context_and_resolves_db_system(config_name: str, 
         exported_spans = exporter.get_finished_spans()
         assert len(exported_spans) == 1
         assert exported_spans[0].attributes["db.system"] == expected
+    finally:
+        provider.shutdown()
+
+
+class _StubAdbcCursor:
+    """Minimal ADBC cursor stub for unit testing observability dispatch."""
+
+    __slots__ = ("description", "rowcount")
+
+    def __init__(self) -> None:
+        self.description: Any = None
+        self.rowcount = 1
+
+    def execute(self, sql: str, parameters: Any = None) -> None:
+        _ = sql, parameters
+
+    def close(self) -> None:
+        return None
+
+
+class _StubAdbcConnection:
+    """Minimal ADBC connection stub for unit testing session isolation."""
+
+    __slots__ = ()
+
+    def cursor(self) -> _StubAdbcCursor:
+        return _StubAdbcCursor()
+
+    def adbc_get_info(self) -> dict[str, Any]:
+        return {}
+
+
+@requires_interpreted
+def test_adbc_shared_observability_runtime_isolates_db_system_across_sessions() -> None:
+    """Shared ObservabilityRuntime across ADBC dialects emits per-session db_system without sticky state."""
+    trace_sdk = pytest.importorskip("opentelemetry.sdk.trace")
+    export_sdk = pytest.importorskip("opentelemetry.sdk.trace.export")
+    in_memory_export = pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
+
+    standalone_teradata = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="teradata")
+    standalone_sql = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="sql")
+    standalone_postgres = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="postgres")
+    assert standalone_teradata.observability.config_name == "AdbcDriver"
+    assert standalone_teradata.observability_db_system == "teradata"
+    assert standalone_sql.observability_db_system is None
+    assert standalone_postgres.observability_db_system is None
+
+    exporter = in_memory_export.InMemorySpanExporter()
+    provider = trace_sdk.TracerProvider()
+    provider.add_span_processor(export_sdk.SimpleSpanProcessor(exporter))
+    observed_events: list[dict[str, Any]] = []
+    query_start_contexts: list[dict[str, Any]] = []
+    shared_runtime = ObservabilityRuntime(
+        ObservabilityConfig(
+            lifecycle=_lifecycle_config({"on_query_start": [query_start_contexts.append]}),
+            statement_observers=(lambda event: observed_events.append(event.as_dict()),),
+            telemetry=TelemetryConfig(enable_spans=True, provider_factory=lambda: provider),
+        ),
+        config_name="AdbcConfig",
+    )
+
+    try:
+        teradata_session = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="teradata")
+        sql_session = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="sql")
+        postgres_session = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="postgres")
+        teradata_session.attach_observability(shared_runtime)
+        sql_session.attach_observability(shared_runtime)
+        postgres_session.attach_observability(shared_runtime)
+
+        teradata_session.execute("DELETE FROM items")
+        sql_session.execute("DELETE FROM items")
+        postgres_session.execute("DELETE FROM items")
+        sql_session.execute_script("DELETE FROM items; UPDATE items SET id = 1")
+        teradata_session.execute_script("DELETE FROM items; UPDATE items SET id = 1")
+
+        assert [ctx.get("db_system") for ctx in query_start_contexts] == ["teradata", None, None, None, "teradata"]
+        assert "db_system" not in query_start_contexts[1]
+        assert [ev["db_system"] for ev in observed_events] == [
+            "teradata",
+            "adbc",
+            "adbc",
+            "adbc",
+            "adbc",
+            "adbc",
+            "teradata",
+            "teradata",
+            "teradata",
+        ]
+        exported_spans = exporter.get_finished_spans()
+        assert [span.attributes["db.system"] for span in exported_spans] == [
+            "teradata",
+            "adbc",
+            "adbc",
+            "adbc",
+            "teradata",
+        ]
     finally:
         provider.shutdown()
 
@@ -1213,3 +1323,18 @@ def test_statement_event_profile_and_script_index_fields(caplog: Any) -> None:
     assert last_record.__dict__.get("db.statement.profile") == sample_profile
     assert last_record.__dict__.get("sqlspec.script.statement_index") == 0
     assert last_record.__dict__.get("sqlspec.script.statement_count") == 2
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("snowflake", "snowflake"),
+        ("SnowflakeConfig", "snowflake"),
+        ("adbc_driver_snowflake.dbapi.connect", "snowflake"),
+        ("AdbcConfig[snowflake]", "snowflake"),
+        ("AdbcConfig", "adbc"),
+    ],
+)
+def test_resolve_db_system_snowflake(name: str, expected: str) -> None:
+    """Snowflake identity takes precedence over the ADBC transport name."""
+    assert resolve_db_system(name) == expected

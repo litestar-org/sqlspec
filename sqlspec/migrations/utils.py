@@ -58,9 +58,11 @@ UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS: frozenset[str] = frozenset({
     "pymssql",
     "oracledb",
     "spanner",
+    "snowflake",
     "bigquery",
     "sqlanywhere",
     "sybase",
+    "teradata",
     "db2",
 })
 

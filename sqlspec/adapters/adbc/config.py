@@ -4,7 +4,7 @@ import contextlib
 import importlib.metadata
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
@@ -42,8 +42,10 @@ from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 
 __all__ = ("AdbcConfig", "AdbcConnectionParams", "AdbcDriverFeatures", "AdbcPoolConfig")
@@ -61,6 +63,14 @@ class AdbcPoolConfig(TypedDict):
 class AdbcConnectionParams(TypedDict):
     """ADBC connection parameters across PyPI-installable Arrow Database Connectivity drivers."""
 
+    host: NotRequired[str]
+    """Database server or proxy endpoint hostname (for example Teradata or Snowflake)."""
+    port: NotRequired[int | str]
+    """Database server endpoint port (for example Teradata ``1025`` or Snowflake ``443``)."""
+    user: NotRequired[str]
+    """Alias for the connection username on Teradata and Snowflake."""
+    adbc_dialect: NotRequired[str]
+    """Explicit database dialect for generic FlightSQL transports."""
     uri: NotRequired[str]
     """Backend connection URI (such as ``postgresql://``, ``sqlite://``, ``duckdb://``, ``grpc+tls://``, ``oracle://``, ``db2://``, or ``quack://``)."""
     dsn: NotRequired[str]
@@ -74,7 +84,7 @@ class AdbcConnectionParams(TypedDict):
     path: NotRequired[str]
     """Filesystem database path for ``adbc-driver-sqlite`` or ``adbc-driver-duckdb``."""
     driver: NotRequired[str]
-    """Short driver alias (such as ``'postgresql'``, ``'sqlite'``, ``'duckdb'``, ``'flightsql'``, ``'gizmosql'``, ``'snowflake'``, ``'bigquery'``, ``'oracle'``, ``'db2'``, or ``'quack'``) or shared library path."""
+    """Short driver alias (such as ``'postgresql'``, ``'sqlite'``, ``'duckdb'``, ``'flightsql'``, ``'gizmosql'``, ``'snowflake'``, ``'teradata'``, ``'bigquery'``, ``'oracle'``, ``'db2'``, or ``'quack'``) or shared library path."""
     driver_name: NotRequired[str]
     """Explicit ADBC Python module connect path or shared library name overriding URI inference."""
     db_kwargs: NotRequired[dict[str, Any]]
@@ -154,6 +164,47 @@ class AdbcConnectionParams(TypedDict):
     extra: NotRequired[dict[str, Any]]
     """Additional driver options merged into ``db_kwargs``."""
 
+    region: NotRequired[str]
+    """Snowflake cloud region identifier."""
+    protocol: NotRequired[str]
+    """Snowflake endpoint transport protocol."""
+    application: NotRequired[str]
+    """Client application identifier."""
+    keep_session_alive: NotRequired[bool]
+    """Keep the Snowflake session active during idle intervals."""
+    login_timeout: NotRequired[int | float | str]
+    """Authentication timeout in seconds or a Go duration string."""
+    request_timeout: NotRequired[int | float | str]
+    """HTTP request timeout in seconds or a Go duration string."""
+    client_timeout: NotRequired[int | float | str]
+    """Overall client timeout in seconds or a Go duration string."""
+    ocsp_fail_open_mode: NotRequired[bool]
+    """Allow connections when the certificate status responder is unreachable."""
+    use_high_precision: NotRequired[bool]
+    """Return fixed-point Snowflake numbers as lossless Arrow decimal values by default."""
+    okta_url: NotRequired[str]
+    """Okta authentication endpoint URL."""
+    identity_provider: NotRequired[str]
+    """Workload identity provider name."""
+    workload_identity_provider: NotRequired[str]
+    """Alias for identity_provider."""
+    private_key: NotRequired[str | bytes | Path | Any]
+    """JWT private key as PEM text, DER bytes, a path, or a private key object."""
+    private_key_passphrase: NotRequired[str | bytes]
+    """Passphrase for an encrypted private key."""
+    jwt_private_key: NotRequired[str | Path]
+    """Filesystem path to a private key."""
+    jwt_private_key_pkcs8_value: NotRequired[str]
+    """In-memory PKCS8 private key text."""
+    jwt_private_key_pkcs8_password: NotRequired[str]
+    """Passphrase for the in-memory private key."""
+    jwt_expire_timeout: NotRequired[int | float | str]
+    """JWT lifetime in seconds or a Go duration string."""
+    query_tag: NotRequired[str]
+    """Default Snowflake query tag for session and statement correlation."""
+    session_parameters: NotRequired[Mapping[str, Any]]
+    """Additional Snowflake session parameters."""
+
 
 class AdbcDriverFeatures(TypedDict):
     """ADBC driver feature flags controlling Arrow type handling, dialect probes, and DuckDB profiling."""
@@ -173,13 +224,15 @@ class AdbcDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Probe ``pg_extension`` for ``pg_textsearch`` BM25 support on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_lowercase_column_names: NotRequired[bool]
-    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, and Snowflake ADBC backends)."""
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, Teradata, and Snowflake ADBC backends)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
     """Callback invoked with the raw ADBC connection immediately after ``connect()``."""
     events_backend: NotRequired[Literal["poll_queue"]]
     """Event queue backend name (``'poll_queue'``)."""
+    query_tag: NotRequired[str]
+    """Default Snowflake statement tag combined with the current correlation ID."""
     enable_statement_profiling: NotRequired[bool]
     """Capture per-statement DuckDB JSON operator profiles on ``StatementEvent.profile`` when using DuckDB ADBC (defaults to ``False``)."""
 
@@ -351,8 +404,15 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
-        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake"}:
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake", "teradata", "vantage"}:
             features_dict["enable_lowercase_column_names"] = True
+        if self._resolved_dialect == "snowflake":
+            nested_options = self.connection_config.get("db_kwargs")
+            query_tag = self.connection_config.get("query_tag")
+            if query_tag is None and isinstance(nested_options, Mapping):
+                query_tag = nested_options.get("QUERY_TAG")
+            if isinstance(query_tag, str) and query_tag.strip():
+                features_dict.setdefault("query_tag", query_tag.strip())
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
         )
@@ -571,7 +631,12 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         return AdbcConnectionContext(self)
 
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "AdbcSessionContext":
         """Provide a driver session context manager.
 
@@ -579,13 +644,18 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         extensions and updates the dialect accordingly.
 
         Args:
-            *_args: Additional arguments.
+            *args: Additional arguments.
             statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
+            tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
+            bypass_tenant: Unsupported by this adapter; requires a tenant-enabled adapter.
+            **kwargs: Additional keyword arguments.
 
         Returns:
             A context manager that yields an AdbcDriver instance.
         """
+        if tenant is not None or bypass_tenant:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         if self._pool_config is not None:
             self.create_pool()
         self._detect_extensions_if_needed()

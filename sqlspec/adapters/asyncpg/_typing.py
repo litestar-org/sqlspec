@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg as asyncpg_module
 from asyncpg import Connection as AsyncpgRawConnection
+from asyncpg import InterfaceError as AsyncpgInterfaceError
 from asyncpg import Pool
 from asyncpg import PostgresError as AsyncpgPostgresError
 from asyncpg import Record as AsyncpgRecord
@@ -49,6 +50,7 @@ __all__ = (
     "AsyncpgConnection",
     "AsyncpgConnectionMeta",
     "AsyncpgCursor",
+    "AsyncpgInterfaceError",
     "AsyncpgNativePool",
     "AsyncpgNativePoolConnectionProxy",
     "AsyncpgPool",
@@ -118,11 +120,16 @@ class AsyncpgSessionContext:
     async def __aenter__(self) -> "AsyncpgDriver":
         driver_cls = _resolve_asyncpg_driver()
         self._connection = await self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            connection, self._connection = self._connection, None
+            await self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

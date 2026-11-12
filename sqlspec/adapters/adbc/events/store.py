@@ -16,14 +16,17 @@ import logging
 from typing import TYPE_CHECKING, Final
 
 from sqlspec.adapters.adbc.core import (
+    _TERADATA_TABLE_EXISTS_SQL,
     RECONCILE_ADBC_DIALECTS,
     is_postgres_dialect,
     resolve_dialect_from_config,
+    resolve_reconcile_adbc_dialect,
     split_db2_table_name,
+    split_teradata_table_name,
 )
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -42,6 +45,7 @@ DIALECT_FLIGHTSQL: Final = "flightsql"
 DIALECT_ORACLE: Final = "oracle"
 DIALECT_DB2: Final = "db2"
 DIALECT_MSSQL: Final = "mssql"
+DIALECT_TERADATA: Final = "teradata"
 
 
 class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
@@ -99,9 +103,25 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             statements.append(self._wrap_create_statement(index_sql, "index"))
         return statements
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self.dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self.table_name),
+            )
+            for statement in self.drop_statements()
+        ]
+
     def drop_statements(self) -> "list[str]":
         """Return drop statements in reverse dependency order."""
         dialect = self.dialect
+
+        if dialect == DIALECT_TERADATA:
+            return [f"DROP TABLE {self.table_name}"]
 
         if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
             return [f"DROP TABLE IF EXISTS {self.table_name}"]
@@ -131,6 +151,11 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             Dialect identifier for DDL generation.
         """
         connection_config = self._config.connection_config
+        classified = resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
+        if classified == DIALECT_TERADATA:
+            return DIALECT_TERADATA
         driver_name = connection_config.get("driver_name") or connection_config.get("driver") or ""
         uri = connection_config.get("uri", "")
 
@@ -143,6 +168,7 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             if normalized_gizmo in {DIALECT_DUCKDB, DIALECT_SQLITE}:
                 return normalized_gizmo
 
+        statement_config = self._config.statement_config
         is_flight_or_grpc = (
             "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith(("grpc://", "grpc+tls://"))
         )
@@ -152,6 +178,10 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
                 normalized_explicit = normalize_dialect_name(explicit_dialect.strip())
                 if normalized_explicit in RECONCILE_ADBC_DIALECTS and normalized_explicit != DIALECT_SQLITE:
                     return normalized_explicit
+            if statement_config and statement_config.dialect is not None:
+                stmt_dialect = str(statement_config.dialect).lower()
+                if "teradata" in stmt_dialect or "vantage" in stmt_dialect:
+                    return DIALECT_TERADATA
             if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
                 return DIALECT_FLIGHTSQL
 
@@ -160,7 +190,14 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             return DIALECT_POSTGRESQL
         if resolved in {"mssql", "tsql"}:
             return DIALECT_MSSQL
-        if resolved in {DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE, DIALECT_ORACLE, DIALECT_DB2}:
+        if resolved in {
+            DIALECT_DUCKDB,
+            DIALECT_BIGQUERY,
+            DIALECT_SNOWFLAKE,
+            DIALECT_ORACLE,
+            DIALECT_DB2,
+            DIALECT_TERADATA,
+        }:
             return resolved
         if resolved == DIALECT_SQLITE and (
             "sqlite" in driver_lower
@@ -169,9 +206,10 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         ):
             return DIALECT_SQLITE
 
-        statement_config = self._config.statement_config
         if statement_config and statement_config.dialect is not None:
             dialect_str = str(statement_config.dialect).lower()
+            if "teradata" in dialect_str or "vantage" in dialect_str:
+                return DIALECT_TERADATA
             if is_postgres_dialect(dialect_str):
                 return DIALECT_POSTGRESQL
             if dialect_str in {"mssql", "tsql"}:
@@ -202,6 +240,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Return payload, metadata, and timestamp column types for the dialect."""
         dialect = self.dialect
 
+        if dialect == DIALECT_TERADATA:
+            return "JSON", "JSON", "TIMESTAMP(6) WITH TIME ZONE"
         if dialect == DIALECT_POSTGRESQL:
             return "JSONB", "JSONB", "TIMESTAMPTZ"
         if dialect == DIALECT_DUCKDB:
@@ -222,6 +262,17 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
     def _table_ddl(self) -> str:
         """Build dialect-specific CREATE TABLE SQL."""
         dialect = self.dialect
+
+        if dialect == DIALECT_TERADATA:
+            return (
+                f"CREATE MULTISET TABLE {self.table_name} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, "
+                "channel VARCHAR(128) NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, "
+                "status VARCHAR(32) DEFAULT 'pending' NOT NULL, "
+                "available_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+                "lease_expires_at TIMESTAMP(6) WITH TIME ZONE, attempts INTEGER DEFAULT 0 NOT NULL, "
+                "created_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6) NOT NULL, "
+                "acknowledged_at TIMESTAMP(6) WITH TIME ZONE)"
+            )
 
         if dialect == DIALECT_BIGQUERY:
             return f"CREATE TABLE IF NOT EXISTS {self.table_name} (event_id STRING NOT NULL, channel STRING NOT NULL, payload_json JSON NOT NULL, metadata_json JSON, status STRING NOT NULL DEFAULT 'pending', available_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), lease_expires_at TIMESTAMP, attempts INT64 NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(), acknowledged_at TIMESTAMP) CLUSTER BY channel, status, available_at"
@@ -250,6 +301,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Build dialect-specific index SQL."""
         dialect = self.dialect
 
+        if dialect == DIALECT_TERADATA:
+            return f"CREATE INDEX {self._index_name()} (channel, status, available_at) ON {self.table_name}"
+
         if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
             return None
 
@@ -272,6 +326,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             Idempotent DDL statement.
         """
         dialect = self.dialect
+        if dialect == DIALECT_TERADATA:
+            return statement
         if dialect == DIALECT_ORACLE:
             escaped = statement.replace("'", "''")
             if object_type == "table":
@@ -301,6 +357,9 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
     def _schema_target(self) -> SchemaTarget:
         """Build a queue SchemaTarget using the resolved ADBC backend dialect."""
         dialect = self.dialect
+        if dialect == DIALECT_TERADATA:
+            schema, table = split_teradata_table_name(self.table_name)
+            return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="teradata")
         if dialect == DIALECT_DB2:
             schema, table = split_db2_table_name(self.table_name)
             return SchemaTarget.from_ddl(table, self.create_statements()[0], schema=schema, dialect="db2")
@@ -311,6 +370,8 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         """Return optional schema and table name for companion queue index catalog lookup."""
         if self._index_ddl() is None:
             return None
+        if self.dialect == DIALECT_TERADATA:
+            return split_teradata_table_name(self.table_name)
         if self.dialect == DIALECT_DB2:
             return split_db2_table_name(self.table_name)
         raw_schema, dot, raw_table = self.table_name.partition(".")
