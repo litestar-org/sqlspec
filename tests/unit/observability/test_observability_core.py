@@ -960,8 +960,6 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
         ("SQLSpecConfig", "AsyncpgDriver", None, "postgresql"),
         ("AdbcConfig", "AdbcDriver", "teradata", "teradata"),
         ("AdbcConfig", "AdbcDriver", "postgresql", "postgresql"),
-        ("AdbcDriver[teradata]", "AdbcDriver", None, "teradata"),
-        ("AdbcDriver[postgresql]", "AdbcDriver", None, "postgresql"),
         ("AdbcConfig", "AdbcDriver", None, "adbc"),
         ("AdbcConfig", "UnmappedCustomDriver", None, "adbc"),
         ("TeradataConfig", "TeradataDriver", None, "teradata"),
@@ -1059,10 +1057,11 @@ def test_adbc_shared_observability_runtime_isolates_db_system_across_sessions() 
 
     standalone_teradata = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="teradata")
     standalone_sql = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="sql")
-    assert standalone_teradata.observability.config_name == "AdbcDriver[teradata]"
+    standalone_postgres = AdbcDriver(cast("Any", _StubAdbcConnection()), dialect="postgres")
+    assert standalone_teradata.observability.config_name == "AdbcDriver"
     assert standalone_teradata.observability_db_system == "teradata"
-    assert standalone_sql.observability.config_name == "AdbcDriver"
     assert standalone_sql.observability_db_system is None
+    assert standalone_postgres.observability_db_system is None
 
     exporter = in_memory_export.InMemorySpanExporter()
     provider = trace_sdk.TracerProvider()
@@ -1092,17 +1091,12 @@ def test_adbc_shared_observability_runtime_isolates_db_system_across_sessions() 
         sql_session.execute_script("DELETE FROM items; UPDATE items SET id = 1")
         teradata_session.execute_script("DELETE FROM items; UPDATE items SET id = 1")
 
-        assert [ctx.get("db_system") for ctx in query_start_contexts] == [
-            "teradata",
-            None,
-            "postgresql",
-            None,
-            "teradata",
-        ]
+        assert [ctx.get("db_system") for ctx in query_start_contexts] == ["teradata", None, None, None, "teradata"]
+        assert "db_system" not in query_start_contexts[1]
         assert [ev["db_system"] for ev in observed_events] == [
             "teradata",
             "adbc",
-            "postgresql",
+            "adbc",
             "adbc",
             "adbc",
             "adbc",
@@ -1114,7 +1108,7 @@ def test_adbc_shared_observability_runtime_isolates_db_system_across_sessions() 
         assert [span.attributes["db.system"] for span in exported_spans] == [
             "teradata",
             "adbc",
-            "postgresql",
+            "adbc",
             "adbc",
             "teradata",
         ]

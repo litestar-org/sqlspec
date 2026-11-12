@@ -51,7 +51,7 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
-from sqlspec.observability import ObservabilityRuntime, resolve_db_system
+from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
@@ -72,6 +72,7 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionConte
 
 logger = get_logger("sqlspec.adapters.adbc")
 _DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake", "teradata"})
+_DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
@@ -517,24 +518,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         return stream
 
     @property
-    def observability(self) -> ObservabilityRuntime:
-        """Return the observability runtime, naming the concrete ADBC dialect when known."""
-        if self._observability is None:
-            config_name = (
-                f"AdbcDriver[{self._dialect_name}]"
-                if self._dialect_name and self._dialect_name != "sql"
-                else type(self).__name__
-            )
-            self._observability = ObservabilityRuntime(config_name=config_name)
-        return self._observability
-
-    @property
     def observability_db_system(self) -> str | None:
-        """Return a concrete backend db.system override for multi-backend ADBC sessions."""
-        if self._dialect_name and self._dialect_name != "sql":
-            resolved = resolve_db_system(self._dialect_name)
-            if resolved not in {"other_sql", "adbc"}:
-                return resolved
+        """Return the Teradata db.system for Teradata sessions; other ADBC backends keep the adapter attribution."""
+        if self._dialect_name in _DB_SYSTEM_OVERRIDE_DIALECTS:
+            return resolve_db_system(self._dialect_name)
         return None
 
     def begin(self) -> None:

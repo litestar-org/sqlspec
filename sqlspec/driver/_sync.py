@@ -1629,11 +1629,12 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             "sql": compiled_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
-            "db_system": db_system,
             "operation": operation,
             "is_many": is_many,
             "is_script": is_script,
         }
+        if db_system is not None:
+            query_context["db_system"] = db_system
         runtime.emit_query_start_sync(**query_context)
         sql_hash = None
         if runtime.span_manager.is_enabled or (
