@@ -157,6 +157,10 @@ pass the verified tenant identifier to the worker and open
 
 `Depends(db_ext.provide_session())` is an async dependency for sync and async
 configurations alike and checks out the request connection on first use.
-Outside dependency injection, call `await db_ext.get_session_async(request)`;
-the synchronous `db_ext.get_session(request)` raises `ImproperConfigurationError`
-for async configurations, which are checked out on first use.
+Outside dependency injection, `db_ext.get_session(request)` on an async
+configuration returns a session that opens the connection, under the request
+tenant, on its first awaited call; `await db_ext.get_session_async(request)`
+opens it immediately. Reading `session.connection` before the first awaited
+call raises `ImproperConfigurationError`, and the synchronous
+`db_ext.get_connection(request)` returns an async connection only once it is
+open; use `await db_ext.get_connection_async(request)` before that.

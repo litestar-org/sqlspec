@@ -36,7 +36,7 @@ Pass a single database configuration, a sequence of configurations, or a `SQLSpe
 --8<-- "docs/examples/frameworks/flask/basic_setup.py:example"
 ```
 
-Calling `plugin.get_session()` multiple times within the same HTTP request returns the same `flask.g`-cached driver session.
+Calling `plugin.get_session()` multiple times within the same HTTP request returns the same `flask.g`-cached driver session. With an async configuration, `plugin.get_session()` returns a blocking session whose calls (`session.select(...)`, `for row in session.select_stream(...)`, `with session.transaction():`) run on the plugin's portal event loop, so views use it without `await`.
 
 ## Multi-Database Binds
 

@@ -506,5 +506,8 @@ async configurations alike, and checks out a tenant connection only when a
 route asks for one. In guards, middleware, and other code without dependency
 injection, use `await plugin.provide_request_session_async(key, state, scope)`
 for async configurations and `plugin.provide_request_session_sync(key, state,
-scope)` for sync ones; both acquire under the resolved request tenant. See
+scope)` for sync ones; both acquire under the resolved request tenant. With an
+async configuration, `plugin.provide_request_session(key, state, scope)` and
+`provide_request_session_sync` return a session that acquires on its first
+awaited call instead. See
 [On-Demand Session and Connection Acquisition](../../integrations/litestar.md#on-demand-session-and-connection-acquisition).

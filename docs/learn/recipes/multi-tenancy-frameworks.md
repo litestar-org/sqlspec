@@ -48,10 +48,12 @@ one, the plugin installs no tenant handling and adds no per-request work.
   response message, so streaming bodies and background tasks keep the tenant
   resolved for their request; nothing reads request state after the response.
 - **Configuration**: `tenant_extractor` requires `tenant_strategy` on the same
-  configuration. Async tenant configurations are checked out on first use, so
-  use the async accessors (`await plugin.get_session_async(request)`,
-  `Depends(plugin.provide_session())`, or Litestar dependency injection); the
-  synchronous accessor raises `ImproperConfigurationError` for them.
+  configuration.
+- **Sync accessors on async configurations**: The synchronous session accessor
+  (`plugin.get_session(request)`, or Litestar's
+  `plugin.provide_request_session(key, state, scope)`) returns a session that
+  opens the connection under the request tenant on its first awaited call.
+  Flask's `plugin.get_session()` blocks on the plugin's portal instead.
 - **Ambient middleware placement**: Register an outer tenant source (Flask and
   Sanic request hooks, ASGI middleware) before the SQLSpec plugin so it counts
   as ambient; a source that runs after the plugin's request hook behaves like a

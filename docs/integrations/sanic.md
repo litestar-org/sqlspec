@@ -36,7 +36,7 @@ Pass a single database configuration, a sequence of configurations, or a `SQLSpe
 --8<-- "docs/examples/frameworks/sanic/basic_setup.py:example"
 ```
 
-Request connections are checked out on first access, so routes that never touch the database open none. Async configurations use `await db_plugin.get_session_async(request)` or `await db_plugin.get_connection_async(request)`; the synchronous `get_session(request)` and `get_connection(request)` accessors work for synchronous configurations and raise `ImproperConfigurationError` for asynchronous ones. Autocommit modes commit or roll back by response status only when the request used a connection.
+Request connections are checked out on first access, so routes that never touch the database open none. With an async configuration, `db_plugin.get_session(request)` returns a session that opens the connection on its first awaited call, so `await session.select(...)`, `async for row in session.select_stream(...)`, and `async with session.transaction():` work unchanged; `await db_plugin.get_session_async(request)` opens it immediately. Reading `session.connection` before the first awaited call raises `ImproperConfigurationError`, and `get_connection(request)` returns an async connection only once it is open, so use `await db_plugin.get_connection_async(request)` before that. Autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Commit Modes and Custom Rollback Statuses
 
@@ -118,5 +118,5 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 ## Recap
 
 - Configure `session_key`, `commit_mode`, `disable_di`, and observability flags in `extension_config["sanic"]`.
-- Retrieve sessions via `await db_plugin.get_session_async(request, key)` (or `db_plugin.get_session(request, key)` for sync configurations); connections are checked out on first access. Set `disable_di` to acquire connections from `request.app.ctx.<pool_key>` yourself.
+- Retrieve sessions via `db_plugin.get_session(request, key)` or `await db_plugin.get_session_async(request, key)`; connections are checked out on first access. Set `disable_di` to acquire connections from `request.app.ctx.<pool_key>` yourself.
 - See the [Sanic Extension Reference](/reference/extensions/sanic/) for `SQLSpecPlugin` and `SanicConfig` signatures.

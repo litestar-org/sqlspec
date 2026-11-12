@@ -153,8 +153,13 @@ task and open `config.provide_session(tenant=tenant_id)` there; see
 
 ## Sync and Async Accessors
 
-Every request connection, tenant or not, is checked out on first access. Async
-configurations use `await db_plugin.get_session_async(request)` or
-`await db_plugin.get_connection_async(request)`; sync adapters can call
-`db_plugin.get_session(request)`. The synchronous accessors raise
-`ImproperConfigurationError` for async configurations.
+Every request connection, tenant or not, is checked out on first access. With
+an async configuration, `db_plugin.get_session(request)` returns a session that
+opens the connection, under the request tenant, on its first awaited call, so
+`await session.select(...)`, `async for row in session.select_stream(...)`, and
+`async with session.transaction():` work unchanged. Reading `session.connection`
+before that first call raises `ImproperConfigurationError`; call
+`await db_plugin.get_session_async(request)` to open the connection
+immediately. A raw connection has no deferred form, so use
+`await db_plugin.get_connection_async(request)` for async configurations;
+`db_plugin.get_connection(request)` returns it only once it is open.

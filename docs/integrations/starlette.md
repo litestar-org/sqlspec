@@ -36,7 +36,7 @@ Pass a single database config, a sequence of configs, or a `SQLSpec` registry to
 --8<-- "docs/examples/frameworks/starlette/basic_setup.py:example"
 ```
 
-Request connections are checked out on first access, so routes that never touch the database open none. Async configurations use `await db_plugin.get_session_async(request)` or `await db_plugin.get_connection_async(request)`; the synchronous `get_session(request)` and `get_connection(request)` accessors work for synchronous configurations and raise `ImproperConfigurationError` for asynchronous ones. Autocommit modes commit or roll back by response status only when the request used a connection.
+Request connections are checked out on first access, so routes that never touch the database open none. With an async configuration, `db_plugin.get_session(request)` returns a session that opens the connection on its first awaited call, so `await session.select(...)`, `async for row in session.select_stream(...)`, and `async with session.transaction():` work unchanged; `await db_plugin.get_session_async(request)` opens it immediately. Reading `session.connection` before the first awaited call raises `ImproperConfigurationError`, and `get_connection(request)` returns an async connection only once it is open, so use `await db_plugin.get_connection_async(request)` before that. Autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Multi-Database Setup
 
@@ -75,6 +75,6 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Recap
 
-- Pass a config, config list, or `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or `db_plugin.init_app(app)`) and retrieve sessions with `await db_plugin.get_session_async(request)` (async configurations) or `db_plugin.get_session(request)` (sync configurations); connections are checked out on first access.
+- Pass a config, config list, or `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or `db_plugin.init_app(app)`) and retrieve sessions with `db_plugin.get_session(request)` or `await db_plugin.get_session_async(request)`; connections are checked out on first access.
 - Use `set_request_tenant(request, tenant_id)` for deferred tenant leases, or configure `commit_mode`, `tenant_extractor`, multi-database keys, and `sqlcommenter` middleware in `extension_config["starlette"]`.
 - See the [Starlette Extension Reference](/reference/extensions/starlette/) for `SQLSpecPlugin`, `set_request_tenant`, and `StarletteConfig` details.

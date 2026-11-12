@@ -140,6 +140,9 @@ identifier. See [Tenant Operations](multi-tenancy-operations.md).
 
 `plugin.get_session()` and `plugin.get_connection()` serve sync adapters
 directly and async adapters through SQLSpec's portal, acquiring deferred tenant
-leases lazily in both cases. SQLSpec forwards the captured tenant payload into
-the portal for async drivers. Tenant extractors must be synchronous in either
+leases lazily in both cases. For an async adapter, `plugin.get_session()`
+returns a blocking session: `session.select(...)`, `for row in
+session.select_stream(...)`, and `with session.transaction():` each run on the
+portal's event loop. SQLSpec forwards the captured tenant payload into the
+portal for async drivers. Tenant extractors must be synchronous in either
 case.
