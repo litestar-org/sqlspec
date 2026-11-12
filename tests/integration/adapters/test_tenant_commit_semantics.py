@@ -114,12 +114,20 @@ def _db2(asynchronous: bool) -> Callable[[Any, bool], Any]:
     return build
 
 
+def _snowflake_live(service: Any, tenant: bool) -> Any:
+    from sqlspec.adapters.snowflake import SnowflakeConfig
+
+    features: dict[str, Any] = {"tenant_strategy": "session_attributes"} if tenant else {}
+    return SnowflakeConfig(connection_config=dict(service), driver_features=features)
+
+
 _DB2_SETUP = ("CREATE OR REPLACE VARIABLE APP.CURRENT_TENANT_ID VARCHAR(256) DEFAULT NULL",)
 _DB2 = pytest.mark.xdist_group("db2")
 _POSTGRES = pytest.mark.xdist_group("postgres")
 _COCKROACH = pytest.mark.xdist_group("cockroachdb")
 _ORACLE = pytest.mark.xdist_group("oracle")
 _MSSQL = pytest.mark.xdist_group("mssql")
+_SNOWFLAKE_LIVE = (pytest.mark.snowflake, pytest.mark.xdist_group("snowflake"))
 
 CASES = [
     pytest.param(CommitCase("postgres_service", _postgres("asyncpg")), id="asyncpg", marks=_POSTGRES),
@@ -149,6 +157,9 @@ CASES = [
     ),
     pytest.param(CommitCase("db2_service", _db2(False), setup_sql=_DB2_SETUP), id="db2_sync", marks=_DB2),
     pytest.param(CommitCase("db2_service", _db2(True), setup_sql=_DB2_SETUP), id="db2_async", marks=_DB2),
+    pytest.param(
+        CommitCase("snowflake_live_connection_config", _snowflake_live), id="snowflake_live", marks=_SNOWFLAKE_LIVE
+    ),
 ]
 
 

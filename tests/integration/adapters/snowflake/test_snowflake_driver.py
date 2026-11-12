@@ -273,3 +273,27 @@ def test_snowflake_live_stage_parquet_put_and_copy_into(snowflake_live_session: 
         ]
     finally:
         snowflake_live_session.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_snowflake_live_tenant_sessions_bind_immutable_session_attributes(
+    snowflake_live_connection_config: dict[str, Any],
+) -> None:
+    """Each tenant session sees only its own immutable attribute and cannot overwrite it."""
+    from sqlspec.adapters.snowflake import SnowflakeConfig
+    from sqlspec.exceptions import SQLSpecError
+
+    config = SnowflakeConfig(
+        connection_config=snowflake_live_connection_config, driver_features={"tenant_strategy": "session_attributes"}
+    )
+    read = "SELECT SYS_CONTEXT('SNOWFLAKE$SESSION_ATTRIBUTES', 'tenant_id')"
+    try:
+        for tenant in ("tenant-a", "tenant-b"):
+            with config.provide_session(tenant=tenant) as session:
+                assert session.select_value(read) == tenant
+                with pytest.raises(SQLSpecError):
+                    session.execute("CALL SET_SYS_CONTEXT('SNOWFLAKE$SESSION_ATTRIBUTES', 'tenant_id', 'other')")
+                assert session.select_value(read) == tenant
+        with config.provide_session(bypass_tenant=True) as session:
+            assert session.select_value(read) is None
+    finally:
+        config.close_pool()
