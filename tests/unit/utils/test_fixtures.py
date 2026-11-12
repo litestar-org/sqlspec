@@ -3212,6 +3212,8 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
         def __init__(self, connection: Any) -> None:
             self.connection = connection
             self.description = [
+                ("schema_name", 2, None, None, None, None, False),
+                ("table_name", 2, None, None, None, None, False),
                 ("column_name", 2, None, None, None, None, False),
                 ("data_type", 2, None, None, None, None, False),
                 ("ordinal_position", 0, None, None, 18, 0, False),
@@ -3239,7 +3241,12 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
         def fetchall(self) -> list[tuple[Any, ...]]:
             if self.session_scope:
                 return [("APP_DB", "PUBLIC")]
-            return [("id", "NUMBER", 1), ("payload", "VARIANT", 2), ("items", "ARRAY", 3), ("object", "OBJECT", 4)]
+            return [
+                ("PUBLIC", "records", "id", "NUMBER", 1),
+                ("PUBLIC", "records", "payload", "VARIANT", 2),
+                ("PUBLIC", "records", "items", "ARRAY", 3),
+                ("PUBLIC", "records", "object", "OBJECT", 4),
+            ]
 
         def executemany(self, sql: str, parameters: Any) -> None:
             from snowflake.connector.errors import NotSupportedError
