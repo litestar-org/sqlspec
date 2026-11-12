@@ -27,6 +27,7 @@ All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="
 | SQL Server | `mssql_python`, `pymssql` | `"rls"` or `"session_context"` | Sets mutable `SESSION_CONTEXT` keys for database row policies. |
 | Oracle | `oracledb` | `"identifier"` | Sets client-identifier metadata. |
 | IBM Db2 | `db2` | `"rcac"` or `"global_variable"` | Sets session global variables for row and column access control. |
+| Snowflake | `snowflake` | `"rls"` or `"session_attributes"` | Sets immutable session attributes for row access policies on one connection per lease. |
 
 Oracle VPD requires an explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` with trusted setter, clearer, namespace, and attribute names. There is no parameter-free `"vpd"` shorthand. See the [Oracle reference](adapters/oracledb.md#tenant-strategies).
 

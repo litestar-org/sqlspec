@@ -172,6 +172,7 @@ Pass connection and pool keys in `connection_config`, and feature flags in `driv
 | `enable_query_tag_correlation` | `bool` | - | Attach statement correlation information to Snowflake query tags. |
 | `enable_events` | `bool` | - | Enable SQLSpec table-backed event channels. |
 | `events_backend` | `Literal['poll_queue']` | - | Event backend used for Snowflake table queues (`'poll_queue'`). |
+| `tenant_strategy` | `SyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"session_attributes"` shorthand, applied to every session and connection lease. |
 <!-- GENERATED:END config-table:sqlspec.adapters.snowflake.config.SnowflakeDriverFeatures -->
 
 ## Arrow Streaming and Bulk Loads
@@ -187,6 +188,30 @@ Write `:name`, `:1`, `%s`, or `%(name)s` parameters; the default wire format is 
 `execute_script()` binds supplied values statically, splits SQL with SQLSpec's Snowflake splitter, and executes each statement through its own managed cursor. Scripting blocks, comments, and dollar-quoted bodies stay intact. Transaction ownership comes from `CURRENT_TRANSACTION()` on the server. `execute_async_query()` submits a warehouse query and returns its query ID; `fetch_async_query_result(query_id)` waits for its result. These methods are synchronous Python calls. Async frameworks use `sqlspec.utils.sync_tools.async_()` to bridge synchronous work.
 
 Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQueueStore` with VARIANT payloads and the `poll_queue` backend by default. Google ADK uses `SnowflakeADKStore` and `SnowflakeADKMemoryStore`; memory recall uses `ILIKE`, and vector embeddings are unsupported. Built-in schema reconciliation creates extension tables without secondary indexes.
+
+## Tenant Isolation
+
+Set `driver_features={"tenant_strategy": "rls"}` (or `True`, `"default"`, `"session_attributes"`) to bind each session to a tenant for row access policies. Each lease opens its own connection, sets the tenant as an immutable session attribute with `CALL SET_SYS_CONTEXT('SNOWFLAKE$SESSION_ATTRIBUTES', ...)`, reads it back with `SYS_CONTEXT`, and closes the connection when the session ends. Snowflake cannot overwrite or clear an immutable session attribute, so tenant sessions are never returned to the pool. Setting your own session attributes needs no extra privilege.
+
+```sql
+CREATE ROW ACCESS POLICY tenant_rows AS (tenant_col VARCHAR) RETURNS BOOLEAN ->
+  tenant_col = SYS_CONTEXT('SNOWFLAKE$SESSION_ATTRIBUTES', 'tenant_id');
+ALTER TABLE orders ADD ROW ACCESS POLICY tenant_rows ON (tenant_id);
+```
+
+```python
+from sqlspec.adapters.snowflake import SnowflakeConfig
+
+config = SnowflakeConfig(
+    connection_config={"account": "my_org-my_account", "user": "APP_SERVICE", "warehouse": "APP_WH"},
+    driver_features={"tenant_strategy": "rls"},
+)
+
+with config.provide_session(tenant="acme") as session:
+    session.select("SELECT order_id FROM orders")
+```
+
+`SYS_CONTEXT` returns `NULL` for an unset attribute, so the policy above hides every row from sessions without a tenant. Attribute names are case-sensitive. Use `SnowflakeSessionAttributeStrategy(tenant_attribute="tenant_id", variable_keys={"region": "tenant_region"})` to choose the attribute names and map `TenantContextPayload` variables to more attributes. `create_connection()` is rejected on tenant configurations; use `provide_session()` or `provide_connection()`. ADBC Snowflake configurations do not support `tenant_strategy`. See [Multi-Tenancy](../learn/recipes/multi-tenancy.md).
 
 ## Type Mappings and Related Reference
 

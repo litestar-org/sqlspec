@@ -97,7 +97,7 @@ async def health(request):
 Replace `litestar` with `fastapi`, `starlette`, `flask`, or `sanic` to match
 your web framework. Tenant strategies are available on the `asyncpg`,
 `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`,
-`mssql_python`, `pymssql`, and `db2` adapters.
+`mssql_python`, `pymssql`, `db2`, and `snowflake` adapters.
 
 ## Account Tables and User Lookup SQL
 
