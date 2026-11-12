@@ -74,7 +74,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect: str | None = None
 
-    def _ensure_table_name(self, table_name: str) -> None:
+    def _validate_table_name(self, table_name: str) -> None:
         """Validate the session table name, accepting ``database.table`` names for Teradata configs.
 
         Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.

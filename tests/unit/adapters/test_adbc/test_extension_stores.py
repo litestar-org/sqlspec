@@ -356,5 +356,5 @@ def test_adbc_litestar_store_rejects_qualified_session_table_outside_teradata(ur
     config = AdbcConfig(
         connection_config={"uri": uri}, extension_config={"litestar": {"session_table": "app.sessions"}}
     )
-    with pytest.raises(ValueError, match="app.sessions"):
+    with pytest.raises(ValueError, match=r"app\.sessions"):
         AdbcStore(config)

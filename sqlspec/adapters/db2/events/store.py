@@ -35,6 +35,8 @@ class _Db2EventStoreMixin:
         @property
         def table_name(self) -> str: ...
 
+        def drop_statements(self) -> "list[str]": ...
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return the payload, metadata, and timestamp column types."""
         return "CLOB", "CLOB", "TIMESTAMP"

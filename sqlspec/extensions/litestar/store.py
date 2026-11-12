@@ -105,7 +105,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         self._config = config
         self._validate_extension_config()
         self._table_name = self._table_name_from_config()
-        self._ensure_table_name(self._table_name)
+        self._validate_table_name(self._table_name)
 
     @property
     def config(self) -> ConfigT:
@@ -344,6 +344,14 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         if isinstance(value, str):
             return value.encode("utf-8")
         return value
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate the configured session table name; adapters may accept qualified names.
+
+        Args:
+            table_name: Table name to validate.
+        """
+        self._ensure_table_name(table_name)
 
     @staticmethod
     def _ensure_table_name(table_name: str) -> None:

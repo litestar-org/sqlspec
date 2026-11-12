@@ -180,7 +180,7 @@ def test_teradata_merge_subquery_source_value_binds_parameters_once() -> None:
 
 def test_teradata_merge_multi_row_source_branches_reference_a_table() -> None:
     def build(rows: list[dict[str, object]]) -> str:
-        return (
+        return str(
             sql
             .merge(dialect="teradata")
             .into("orders", alias="t")
