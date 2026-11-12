@@ -440,8 +440,8 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ("_conn",)
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "OracleSyncConfig", tenant_lease: Any = None) -> None:
+        super().__init__(config, tenant_lease)
         self._conn: OracleSyncConnection | None = None
 
     def acquire_connection(self) -> "OracleSyncConnection":
@@ -495,7 +495,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
-        self._ctx = OracleSyncConnectionContext(config)
+        self._ctx = OracleSyncConnectionContext(config, self._tenant_lease)
 
     def acquire_connection(self) -> "OracleSyncConnection":
         return cast("OracleSyncConnection", self._ctx.acquire_connection())

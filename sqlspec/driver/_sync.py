@@ -102,10 +102,17 @@ class SyncPoolConnectionContext:
 
     __slots__ = ("_config", "_ctx", "_tenant_lease")
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, tenant_lease: Any = None) -> None:
+        """Bind the configuration and the tenant lease for this context.
+
+        Args:
+            config: Database configuration that provides the pool.
+            tenant_lease: Lease owned by an enclosing session handler; a new connection lease is
+                created when omitted and the configuration has a tenant strategy.
+        """
         self._config = config
         self._ctx: Any = None
-        self._tenant_lease: Any = config._create_tenant_lease()
+        self._tenant_lease: Any = tenant_lease if tenant_lease is not None else config._create_tenant_lease()
 
     def __enter__(self) -> Any:
         if self._tenant_lease is not None:
