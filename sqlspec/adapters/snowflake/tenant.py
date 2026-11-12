@@ -165,21 +165,26 @@ class SnowflakeTenantLease(SyncTenantLease):
     """Fail-closed tenant lease over one standalone Snowflake connection per lease.
 
     Immutable session attributes cannot be cleared, so each lease opens its own physical
-    connection and closes it on release or invalidation; it never returns to the pool.
+    connection and discards it through the pool on release or invalidation; it never returns
+    to the pool. The pool bounds concurrent leases to its maximum size.
     """
 
-    __slots__ = ("_config",)
+    __slots__ = ("_config", "_pool")
 
     def __init__(self, config: Any, strategy: "SyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
+        self._pool: Any = None
 
     def _acquire(self) -> Any:
-        return self._config.provide_pool().new_connection()
+        pool = self._config.provide_pool()
+        connection = pool.new_connection()
+        self._pool = pool
+        return connection
 
     def _release(self, connection: Any) -> None:
         try:
-            connection.close()
+            self._pool.discard_connection(connection)
             closed = connection.is_closed()
         except Exception as exc:
             msg = "Snowflake tenant connection could not be closed"
@@ -189,7 +194,7 @@ class SnowflakeTenantLease(SyncTenantLease):
             raise TenantCleanupError(msg)
 
     def _invalidate(self, connection: Any) -> None:
-        connection.close()
+        self._pool.discard_connection(connection)
 
     def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         connection.rollback()

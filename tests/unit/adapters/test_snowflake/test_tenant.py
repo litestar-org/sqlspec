@@ -1,6 +1,7 @@
 """Snowflake tenant strategies bind immutable session attributes on one connection per lease."""
 
 import re
+import threading
 from typing import Any, cast
 
 import pytest
@@ -12,8 +13,15 @@ from sqlspec.adapters.snowflake.tenant import (
     SnowflakeTenantLease,
     validate_session_attribute,
 )
+from sqlspec.config import LifecycleConfig
 from sqlspec.core.tenant import TenantLeaseState
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    TenantCleanupError,
+    TenantContextError,
+)
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 _SET_CALL = re.compile(r"CALL SET_SYS_CONTEXT\((\?|:1|%s), (\?|:2|%s), (\?|:3|%s)\)")
@@ -186,6 +194,9 @@ class _Pool:
         self.opened += 1
         return self.connection
 
+    def discard_connection(self, connection: SessionAttributeConnection) -> None:
+        connection.close()
+
 
 def _lease(connection: SessionAttributeConnection, strategy: Any = None) -> tuple[SnowflakeTenantLease, _Pool]:
     pool = _Pool(connection)
@@ -268,5 +279,109 @@ def test_tenant_connections_bypass_the_pool_and_close_after_each_lease(monkeypat
         assert [connection.attributes for connection in opened] == [{"tenant_id": "acme"}, {"tenant_id": "globex"}]
         assert all(connection.is_closed() for connection in opened)
         assert config.provide_pool().size() == 0
+    finally:
+        config.close_pool()
+
+
+def _tenant_config(
+    monkeypatch: pytest.MonkeyPatch, observability_config: ObservabilityConfig | None = None, **pool: Any
+) -> tuple[SnowflakeConfig, list[SessionAttributeConnection]]:
+    connector = pytest.importorskip("snowflake.connector")
+    opened: list[SessionAttributeConnection] = []
+
+    def connect(**_: Any) -> SessionAttributeConnection:
+        connection = SessionAttributeConnection()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(connector, "connect", connect)
+    config = SnowflakeConfig(
+        connection_config={"account": "acct", "user": "u", "password": "p", **pool},
+        driver_features={"tenant_strategy": "session_attributes"},
+        observability_config=observability_config,
+    )
+    return config, opened
+
+
+def test_tenant_leases_beyond_pool_max_size_wait_for_a_free_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    config, opened = _tenant_config(monkeypatch, pool_max_size=1, pool_timeout=5.0)
+    waiting_lease: list[SessionAttributeConnection] = []
+
+    def second_lease() -> None:
+        with TenantContext.scope("globex"), config.provide_connection() as connection:
+            waiting_lease.append(cast("SessionAttributeConnection", connection))
+
+    try:
+        with TenantContext.scope("acme"), config.provide_connection():
+            waiter = threading.Thread(target=second_lease)
+            waiter.start()
+            waiter.join(timeout=0.2)
+            assert waiter.is_alive()
+            assert len(opened) == 1
+        waiter.join(timeout=5.0)
+        assert not waiter.is_alive()
+        assert waiting_lease == [opened[1]]
+        assert all(connection.is_closed() for connection in opened)
+    finally:
+        config.close_pool()
+
+
+def test_tenant_lease_slot_wait_times_out_and_failed_opens_free_their_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    config, opened = _tenant_config(monkeypatch, pool_max_size=1, pool_timeout=0.05)
+    try:
+        with TenantContext.scope("acme"), config.provide_connection():
+            with pytest.raises(DatabaseConnectionError, match="Timed out"), config.provide_connection():
+                pass
+            assert len(opened) == 1
+
+        connector = pytest.importorskip("snowflake.connector")
+        succeed = connector.connect
+
+        def fail(**_: Any) -> SessionAttributeConnection:
+            msg = "login failed"
+            raise OSError(msg)
+
+        monkeypatch.setattr(connector, "connect", fail)
+        with TenantContext.scope("acme"), pytest.raises(OSError, match="login failed"), config.provide_connection():
+            pass
+        monkeypatch.setattr(connector, "connect", succeed)
+        with TenantContext.scope("globex"), config.provide_connection() as connection:
+            assert cast("SessionAttributeConnection", connection).attributes == {"tenant_id": "globex"}
+        assert len(opened) == 2
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize("checkout_fails", [False, True])
+def test_tenant_lease_close_emits_destroy_paired_with_create(
+    monkeypatch: pytest.MonkeyPatch, checkout_fails: bool
+) -> None:
+    events: list[tuple[str, Any]] = []
+    lifecycle = cast(
+        "LifecycleConfig",
+        {
+            "on_connection_create": [lambda context: events.append(("create", context["connection"]))],
+            "on_connection_destroy": [lambda context: events.append(("destroy", context["connection"]))],
+        },
+    )
+    config, opened = _tenant_config(
+        monkeypatch, ObservabilityConfig(lifecycle=lifecycle), pool_max_size=1, pool_timeout=0.05
+    )
+    try:
+        if checkout_fails:
+            with (
+                TenantContext.scope(TenantContextPayload("acme", {"region": "west"})),
+                pytest.raises(TenantContextError),
+                config.provide_connection(),
+            ):
+                pass
+        else:
+            with TenantContext.scope("acme"), config.provide_connection():
+                pass
+        assert events == [("create", opened[0]), ("destroy", opened[0])]
+        assert opened[0].is_closed()
+        with TenantContext.scope("globex"), config.provide_connection():
+            pass
+        assert len(opened) == 2
     finally:
         config.close_pool()

@@ -35,6 +35,8 @@ class SnowflakeConnectionPool:
         "_min_size",
         "_observability_runtime",
         "_recycle_seconds",
+        "_standalone",
+        "_standalone_slots",
         "_thread_local",
         "_timeout",
         "_total_count",
@@ -92,6 +94,8 @@ class SnowflakeConnectionPool:
         self._thread_local = threading.local()
         self._idle: list[tuple[SnowflakeConnection, float, float]] = []
         self._checked_out: dict[int, tuple[SnowflakeConnection, float]] = {}
+        self._standalone: dict[int, SnowflakeConnection] = {}
+        self._standalone_slots = threading.BoundedSemaphore(max_size)
         self._total_count = 0
         self._closed = False
         try:
@@ -139,22 +143,57 @@ class SnowflakeConnectionPool:
     def new_connection(self) -> "SnowflakeConnection":
         """Open a standalone connection configured like a pooled one.
 
-        The connection is owned by the caller: it does not count against pool capacity and is not
-        closed by pool shutdown.
+        Standalone connections hold one of ``max_size`` slots that are separate from pooled
+        capacity. Callers wait up to the pool timeout for a free slot and return it through
+        :meth:`discard_connection`. Pool shutdown does not close standalone connections.
 
         Returns:
             A newly opened physical connection.
+
+        Raises:
+            DatabaseConnectionError: No standalone slot became free within the pool timeout.
         """
         self.check_pid()
-        connection = self._open_connection()
+        if not self._standalone_slots.acquire(timeout=min(self._timeout, threading.TIMEOUT_MAX)):
+            msg = "Timed out waiting for a standalone Snowflake connection"
+            raise DatabaseConnectionError(msg)
         try:
-            if self._observability_runtime is not None:
-                self._observability_runtime.emit_connection_create_sync(connection)
+            connection = self._open_connection()
+            try:
+                if self._observability_runtime is not None:
+                    self._observability_runtime.emit_connection_create_sync(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
+            with self._condition:
+                self._standalone[id(connection)] = connection
         except BaseException:
-            with contextlib.suppress(Exception):
-                connection.close()
+            self._standalone_slots.release()
             raise
         return connection
+
+    def discard_connection(self, connection: "SnowflakeConnection") -> None:
+        """Close a standalone connection and free its slot.
+
+        The first discard of a connection opened by :meth:`new_connection` emits the
+        connection-destroy event and frees the slot. Every call closes the connection.
+
+        Raises:
+            Exception: The destroy event or the connector's ``close()`` failed; the slot is freed regardless.
+        """
+        self.check_pid()
+        with self._condition:
+            owned = self._standalone.pop(id(connection), None) is connection
+        try:
+            if owned and self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_destroy_sync(connection)
+        finally:
+            try:
+                connection.close()
+            finally:
+                if owned:
+                    self._standalone_slots.release()
 
     def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
         try:
