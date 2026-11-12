@@ -675,9 +675,10 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
             with self._config.provide_session() as driver:
                 try:
-                    check_sql = f"SELECT COUNT(*) AS session_count FROM {self._table_name} WHERE session_id = {p1}"
+                    count_alias = _count_alias(dialect)
+                    check_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    raw_count = _count_value(result, "session_count")
+                    raw_count = _count_value(result, count_alias)
                     exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
@@ -830,13 +831,14 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         if is_postgres_dialect(dialect):
             sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts} RETURNING session_id"
         else:
-            count_sql = f"SELECT COUNT(*) AS expired_count FROM {self._table_name} WHERE expires_at <= {current_ts}"
+            count_alias = _count_alias(dialect)
+            count_sql = f"SELECT COUNT(*) AS {count_alias} FROM {self._table_name} WHERE expires_at <= {current_ts}"
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    raw_count = _count_value(result, "expired_count")
+                    raw_count = _count_value(result, count_alias)
                     count = int(raw_count) if raw_count else 0
 
                     if count > 0:
@@ -863,6 +865,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
             else:
                 return count
+
+
+def _count_alias(dialect: str) -> str:
+    """Return the COUNT(*) column alias, avoiding Teradata's reserved COUNT keyword."""
+    return "row_count" if dialect == "teradata" else "count"
 
 
 def _count_value(row: "dict[str, Any] | None", alias: str) -> Any:
