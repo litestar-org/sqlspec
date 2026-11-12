@@ -245,6 +245,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
     ),
     "db2": (
+        "tenant_strategy",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",
