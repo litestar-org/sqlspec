@@ -62,9 +62,9 @@ class AdbcConnectionParams(TypedDict):
     """ADBC connection parameters across PyPI-installable Arrow Database Connectivity drivers."""
 
     host: NotRequired[str]
-    """Teradata server hostname or IP address."""
-    port: NotRequired[int]
-    """Teradata server port, defaulting to 1025."""
+    """Database server or proxy endpoint hostname (for example Teradata or Snowflake)."""
+    port: NotRequired[int | str]
+    """Database server endpoint port (for example Teradata ``1025`` or Snowflake ``443``)."""
     user: NotRequired[str]
     """Alias for the Teradata connection username."""
     adbc_dialect: NotRequired[str]
@@ -82,7 +82,7 @@ class AdbcConnectionParams(TypedDict):
     path: NotRequired[str]
     """Filesystem database path for ``adbc-driver-sqlite`` or ``adbc-driver-duckdb``."""
     driver: NotRequired[str]
-    """Short driver alias (such as ``'postgresql'``, ``'sqlite'``, ``'duckdb'``, ``'flightsql'``, ``'gizmosql'``, ``'snowflake'``, ``'bigquery'``, ``'oracle'``, ``'db2'``, or ``'quack'``) or shared library path."""
+    """Short driver alias (such as ``'postgresql'``, ``'sqlite'``, ``'duckdb'``, ``'flightsql'``, ``'gizmosql'``, ``'snowflake'``, ``'teradata'``, ``'bigquery'``, ``'oracle'``, ``'db2'``, or ``'quack'``) or shared library path."""
     driver_name: NotRequired[str]
     """Explicit ADBC Python module connect path or shared library name overriding URI inference."""
     db_kwargs: NotRequired[dict[str, Any]]
@@ -164,10 +164,6 @@ class AdbcConnectionParams(TypedDict):
 
     region: NotRequired[str]
     """Snowflake cloud region identifier."""
-    host: NotRequired[str]
-    """Snowflake or proxy endpoint hostname."""
-    port: NotRequired[int | str]
-    """Snowflake endpoint port."""
     protocol: NotRequired[str]
     """Snowflake endpoint transport protocol."""
     application: NotRequired[str]
@@ -226,7 +222,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Probe ``pg_extension`` for ``pg_textsearch`` BM25 support on PostgreSQL ADBC connections (defaults to ``True``)."""
     enable_lowercase_column_names: NotRequired[bool]
-    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, and Snowflake ADBC backends)."""
+    """Normalize unquoted uppercase column names to lowercase (defaults to ``True`` on Oracle, Db2, Teradata, and Snowflake ADBC backends)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec table-backed event channel support."""
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"

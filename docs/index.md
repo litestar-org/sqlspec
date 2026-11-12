@@ -92,7 +92,7 @@ Run live SQLite queries directly in your browser in the [Interactive Playground]
 | Section | What You Will Find |
 | --- | --- |
 | **[Learn](learn/index.md)** | Progressive SQLite-first tutorials covering configuration, querying, parameters, typed schema mapping, transactions, `.sql` files, query builders, filtering, migrations, Arrow pipelines, observability, testing, and production recipes. |
-| **[Databases](/databases/)** | Central Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, Teradata Vantage, IBM Db2, DuckDB, BigQuery, Spanner, ADBC, and Arrow ODBC. |
+| **[Databases](/databases/)** | Central Capability Matrix plus concise setup, connection pool, type coercion, and dialect guides for PostgreSQL, CockroachDB, SQLite, MySQL, MariaDB, Oracle, SQL Server, Sybase ASE, SAP SQL Anywhere, Teradata Vantage, IBM Db2, DuckDB, BigQuery, Snowflake, Spanner, ADBC, and Arrow ODBC. |
 | **[Integrations](/integrations/)** | Unified plugin, dependency injection, session store, event queue, and agent memory guides for Litestar, Google ADK, Events, FastAPI, Starlette, Flask, Sanic, and Dishka. |
 | **[Playground](playground.md)** | Zero-install WebAssembly (Pyodide) SQLite environment running `SQLSpec` directly in your browser tab. |
 | **[Reference](/reference/)** | Focused API reference pages for `SQLSpec`, configurations, drivers, statements, builders, migrations, storage, data dictionaries, extensions, CLI commands, and adapter classes. |
@@ -116,6 +116,6 @@ flowchart LR
     SQL["Raw SQL / SQLFileLoader / Query Builder"] --> Compiler["SQL Statement & Parameter Compiler"]
     Compiler --> Cache["Per-Config Statement & AST Cache"]
     Cache --> Driver["Sync or Async Adapter Driver"]
-    Driver --> DB[("PostgreSQL / SQLite / MySQL / Oracle / DuckDB / Spanner / BigQuery")]
+    Driver --> DB[("PostgreSQL / SQLite / MySQL / Oracle / DuckDB / Snowflake / Spanner / BigQuery")]
     Driver --> Output["dict / msgspec / Pydantic / Apache Arrow"]
 ```

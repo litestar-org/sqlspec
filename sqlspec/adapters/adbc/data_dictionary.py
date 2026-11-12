@@ -1,5 +1,6 @@
 """ADBC multi-dialect data dictionary for metadata queries."""
 
+import re
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
@@ -89,6 +90,8 @@ _ADBC_STATISTICS_WARNING: Final = "ADBC statistics metadata may be approximate, 
 
 
 _ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
+_SNOWFLAKE_DATABASE_QUALIFIED_PARTS: Final = 3
+_SNOWFLAKE_IDENTIFIER_PART: Final = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
 
 
 _ADBC_STATISTIC_NAMES: dict[int, str] = {
@@ -218,11 +221,15 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     def get_tables(self, driver: "AdbcDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables for the current dialect."""
         dialect = self._normalize_dialect(driver)
-        schema_name: str | None = self._resolve_schema(dialect, schema)
+        database_name: str | None = None
+        if dialect == "snowflake":
+            database_name, schema_name, _ = self._resolve_snowflake_scope(schema, None)
+        else:
+            schema_name = self._resolve_schema(dialect, schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
 
         try:
-            return self._native_get_tables(driver, dialect, schema_name)
+            return self._native_get_tables(driver, dialect, schema_name, catalog_name=database_name)
         except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for tables: %s", exc)
 
@@ -239,7 +246,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
         if dialect == "snowflake":
-            return self._snowflake_get_tables(driver, schema_name)
+            return self._snowflake_get_tables(driver, schema_name, database_name=database_name)
 
         rows = driver.select(self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, table_name=None)
         return cast("list[TableMetadata]", _lowercase_dict_rows(rows, dialect))
@@ -249,15 +256,19 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         dialect = self._normalize_dialect(driver)
-        schema_name: str | None = self._resolve_schema(dialect, schema)
+        database_name: str | None = None
+        if dialect == "snowflake":
+            database_name, schema_name, resolved_table = self._resolve_snowflake_scope(schema, table)
+        else:
+            schema_name = self._resolve_schema(dialect, schema)
+            resolved_table = self._resolve_identifier(dialect, table) if table is not None else None
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="columns")
         else:
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="columns")
 
-        resolved_table = self._resolve_identifier(dialect, table) if table is not None else None
         try:
-            return self._native_get_columns(driver, dialect, resolved_table, schema_name)
+            return self._native_get_columns(driver, dialect, resolved_table, schema_name, catalog_name=database_name)
         except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for columns: %s", exc)
 
@@ -282,7 +293,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "snowflake":
-            return self._snowflake_get_columns(driver, resolved_table, schema_name)
+            return self._snowflake_get_columns(driver, resolved_table, schema_name, database_name=database_name)
 
         if table is None:
             rows = driver.select(
@@ -340,22 +351,28 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
         dialect = self._normalize_dialect(driver)
-        schema_name: str | None = self._resolve_schema(dialect, schema)
+        database_name: str | None = None
+        if dialect == "snowflake":
+            database_name, schema_name, resolved_table = self._resolve_snowflake_scope(schema, table)
+        else:
+            schema_name = self._resolve_schema(dialect, schema)
+            resolved_table = self._resolve_identifier(dialect, table) if table is not None else None
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="foreign_keys")
         else:
             self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="foreign_keys")
 
-        resolved_table = self._resolve_identifier(dialect, table) if table is not None else None
         try:
-            return self._native_get_foreign_keys(driver, dialect, resolved_table, schema_name)
+            return self._native_get_foreign_keys(
+                driver, dialect, resolved_table, schema_name, catalog_name=database_name
+            )
         except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for foreign keys: %s", exc)
 
         if dialect == "snowflake":
             operation = "by_table" if resolved_table is not None else "by_schema"
             query_text = self._get_query_text(dialect, "foreign_keys", operation).format(
-                scope_clause=_format_snowflake_show_scope(schema_name, resolved_table)
+                scope_clause=_format_snowflake_show_scope(schema_name, resolved_table, database_name=database_name)
             )
             return parse_snowflake_imported_keys(driver.select(query_text), table_name=resolved_table)
 
@@ -408,10 +425,15 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     ) -> "list[TableStatisticsMetadata]":
         """Get native driver statistics for a table via ADBC GetStatistics."""
         dialect = self._normalize_dialect(driver)
-        schema_name = self._resolve_schema(dialect, schema)
-        table_name = self._resolve_identifier(dialect, table)
+        database_name: str | None = None
+        if dialect == "snowflake":
+            database_name, schema_name, resolved_table = self._resolve_snowflake_scope(schema, table)
+            table_name = resolved_table or self._resolve_identifier(dialect, table)
+        else:
+            schema_name = self._resolve_schema(dialect, schema)
+            table_name = self._resolve_identifier(dialect, table)
         self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="statistics")
-        filters = self._native_object_filters(dialect, schema_name, table_name)
+        filters = self._native_object_filters(dialect, schema_name, table_name, catalog_name=database_name)
         try:
             reader = driver.connection.adbc_get_statistics(
                 catalog_filter=filters["catalog_filter"],
@@ -472,10 +494,14 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     ) -> "MetadataResult":
         """Get lossy ADBC constraint shells from GetObjects."""
         dialect = self._normalize_dialect(driver)
-        schema_name = self._resolve_schema(dialect, schema)
-        table_name = self._resolve_identifier(dialect, table) if table is not None else None
+        database_name: str | None = None
+        if dialect == "snowflake":
+            database_name, schema_name, table_name = self._resolve_snowflake_scope(schema, table)
+        else:
+            schema_name = self._resolve_schema(dialect, schema)
+            table_name = self._resolve_identifier(dialect, table) if table is not None else None
         try:
-            rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+            rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name, catalog_name=database_name)
         except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             warning = f"ADBC GetObjects is unavailable for constraints: {exc}"
             capability = MetadataCapability(
@@ -511,11 +537,25 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
     ) -> "tuple[str, str | None]":
         """Resolve a DDL object name against the dialect detected from the ADBC driver."""
         dialect = self._normalize_dialect(driver)
+        if dialect == "snowflake":
+            database_name, schema_name, resolved_name = self._resolve_snowflake_scope(schema, object_name)
+            resolved_object = resolved_name or self._resolve_identifier(dialect, object_name)
+            if database_name is not None and schema_name is not None:
+                return (resolved_object, f"{quote_identifier(database_name)}.{quote_identifier(schema_name)}")
+            return (resolved_object, schema_name)
         return (self._resolve_identifier(dialect, object_name), self._resolve_schema(dialect, schema))
 
     def exact_catalog_identifier(self, driver: "AdbcDriver", name: str) -> str:
         """Return ``name`` in the form ADBC metadata getters resolve back to the exact catalog name."""
-        if self._resolve_identifier(self._normalize_dialect(driver), name) == name:
+        dialect = self._normalize_dialect(driver)
+        if (
+            dialect == "snowflake"
+            and name.startswith('"')
+            and name.endswith('"')
+            and len(split_qualified_identifier(name)) > 1
+        ):
+            return name
+        if self._resolve_identifier(dialect, name) == name:
             return name
         return quote_identifier(name)
 
@@ -634,6 +674,26 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         except ValueError:
             return identifier
         return normalize_identifier(identifier, config.name)
+
+    def _resolve_snowflake_scope(
+        self, schema: "str | None", table: "str | None"
+    ) -> "tuple[str | None, str | None, str | None]":
+        schema_input = schema if schema is not None else self._resolve_schema("snowflake", None)
+        database_name: str | None = None
+        schema_name: str | None = None
+        if schema_input is not None:
+            schema_parts = _split_snowflake_catalog_identifier(schema_input)
+            schema_name = schema_parts[-1]
+            if len(schema_parts) > 1:
+                database_name = schema_parts[-2]
+        table_name: str | None = None
+        if table is not None:
+            table_parts = _split_snowflake_catalog_identifier(table)
+            table_name = table_parts[-1]
+            if len(table_parts) > 1:
+                schema_name = table_parts[-2]
+                database_name = table_parts[-3] if len(table_parts) >= _SNOWFLAKE_DATABASE_QUALIFIED_PARTS else None
+        return database_name, schema_name, table_name
 
     def _resolve_feature_flag(self, dialect: str, feature: str, version_info: "VersionInfo | None") -> bool:
         try:
@@ -796,9 +856,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return _normalize_native_statistic_names(cast("list[dict[str, Any]]", rows))
 
     def _native_object_filters(
-        self, dialect: str, schema_name: "str | None", table_name: "str | None"
+        self, dialect: str, schema_name: "str | None", table_name: "str | None", *, catalog_name: "str | None" = None
     ) -> "dict[str, str | None]":
-        catalog_filter: str | None = None
+        catalog_filter: str | None = catalog_name
         db_schema_filter: str | None = None
         if schema_name:
             if dialect == "sqlite":
@@ -808,9 +868,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return {"catalog_filter": catalog_filter, "db_schema_filter": db_schema_filter, "table_name_filter": table_name}
 
     def _native_get_objects(
-        self, driver: "AdbcDriver", dialect: str, depth: str, schema_name: "str | None", table_name: "str | None"
+        self,
+        driver: "AdbcDriver",
+        dialect: str,
+        depth: str,
+        schema_name: "str | None",
+        table_name: "str | None",
+        *,
+        catalog_name: "str | None" = None,
     ) -> "list[dict[str, Any]]":
-        filters = self._native_object_filters(dialect, schema_name, table_name)
+        filters = self._native_object_filters(dialect, schema_name, table_name, catalog_name=catalog_name)
         reader = driver.connection.adbc_get_objects(
             depth=depth,
             catalog_filter=filters["catalog_filter"],
@@ -825,15 +892,21 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return cast("list[dict[str, Any]]", rows)
 
     def _native_get_tables(
-        self, driver: "AdbcDriver", dialect: str, schema_name: "str | None"
+        self, driver: "AdbcDriver", dialect: str, schema_name: "str | None", *, catalog_name: "str | None" = None
     ) -> "list[TableMetadata]":
-        rows = self._native_get_objects(driver, dialect, "tables", schema_name, None)
+        rows = self._native_get_objects(driver, dialect, "tables", schema_name, None, catalog_name=catalog_name)
         return _normalize_native_tables(rows)
 
     def _native_get_columns(
-        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
+        self,
+        driver: "AdbcDriver",
+        dialect: str,
+        table_name: "str | None",
+        schema_name: "str | None",
+        *,
+        catalog_name: "str | None" = None,
     ) -> "list[ColumnMetadata]":
-        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name, catalog_name=catalog_name)
         columns = _normalize_native_columns(rows, table_name_exact=table_name)
         missing_types = [entry for entry in columns if "data_type" not in entry]
         missing_nullability = any("is_nullable" not in entry for entry in columns)
@@ -841,7 +914,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return columns
         if table_name is None or missing_nullability:
             raise _NativeMetadataIncompleteError
-        filters = self._native_object_filters(dialect, schema_name, None)
+        filters = self._native_object_filters(dialect, schema_name, None, catalog_name=catalog_name)
         arrow_schema = driver.connection.adbc_get_table_schema(
             table_name, catalog_filter=filters["catalog_filter"], db_schema_filter=filters["db_schema_filter"]
         )
@@ -855,9 +928,15 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return columns
 
     def _native_get_foreign_keys(
-        self, driver: "AdbcDriver", dialect: str, table_name: "str | None", schema_name: "str | None"
+        self,
+        driver: "AdbcDriver",
+        dialect: str,
+        table_name: "str | None",
+        schema_name: "str | None",
+        *,
+        catalog_name: "str | None" = None,
     ) -> "list[ForeignKeyMetadata]":
-        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name)
+        rows = self._native_get_objects(driver, dialect, "all", schema_name, table_name, catalog_name=catalog_name)
         if not rows:
             raise _NativeMetadataIncompleteError
         for _, _, table in _iter_object_tables(rows):
@@ -865,14 +944,20 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 raise _NativeMetadataIncompleteError
         return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
 
-    def _snowflake_get_tables(self, driver: "AdbcDriver", schema_name: str | None) -> "list[TableMetadata]":
+    def _snowflake_get_tables(
+        self, driver: "AdbcDriver", schema_name: str | None, *, database_name: str | None = None
+    ) -> "list[TableMetadata]":
         operation = "by_schema" if schema_name is not None else "by_database"
         query = self._get_query("snowflake", "tables", operation)
+        if database_name is not None:
+            query = query.copy(
+                query.raw_sql.replace("information_schema.", f"{quote_identifier(database_name)}.information_schema.")
+            )
         rows = driver.select(query, schema_name=schema_name) if schema_name is not None else driver.select(query)
         return cast("list[TableMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
     def _snowflake_get_columns(
-        self, driver: "AdbcDriver", table_name: str | None, schema_name: str | None
+        self, driver: "AdbcDriver", table_name: str | None, schema_name: str | None, *, database_name: str | None = None
     ) -> "list[ColumnMetadata]":
         parameters: dict[str, Any] = {}
         if schema_name is not None:
@@ -882,7 +967,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             operation = "by_table" if schema_name is not None else "by_table_all_schemas"
         else:
             operation = "by_schema" if schema_name is not None else "by_database"
-        rows = driver.select(self._get_query("snowflake", "columns", operation), **parameters)
+        query = self._get_query("snowflake", "columns", operation)
+        if database_name is not None:
+            query = query.copy(
+                query.raw_sql.replace("information_schema.", f"{quote_identifier(database_name)}.information_schema.")
+            )
+        rows = driver.select(query, **parameters)
         return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
 
@@ -1257,15 +1347,44 @@ def _coerce_index_unique(value: Any) -> bool:
     return bool(value) if isinstance(value, (bool, int, float)) else False
 
 
-def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str | None = None) -> str:
+def _split_snowflake_catalog_identifier(identifier: str) -> "tuple[str, ...]":
+    """Validate and split a Snowflake 1-, 2-, or 3-part identifier into exact catalog segments."""
+    if not identifier.strip() or "\x00" in identifier:
+        msg = "Snowflake identifier must not be empty or contain NUL"
+        raise SQLSpecError(msg)
+    position = 0
+    parts: list[str] = []
+    while position < len(identifier):
+        matched = _SNOWFLAKE_IDENTIFIER_PART.match(identifier, position)
+        if matched is None:
+            msg = f"Invalid Snowflake identifier: {identifier!r}"
+            raise SQLSpecError(msg)
+        normalized_part = normalize_identifier(matched.group(1), "snowflake")
+        if not normalized_part.strip() or "\x00" in normalized_part:
+            msg = "Snowflake identifier must not be empty or contain NUL"
+            raise SQLSpecError(msg)
+        parts.append(normalized_part)
+        position = matched.end()
+        if matched.group(2) == "." and position == len(identifier):
+            msg = f"Invalid Snowflake identifier: {identifier!r}"
+            raise SQLSpecError(msg)
+    return tuple(parts)
+
+
+def _format_snowflake_show_scope(
+    schema_name: str | None = None, table_name: str | None = None, *, database_name: str | None = None
+) -> str:
     """Format Snowflake SHOW scope clauses using quoted catalog identifiers."""
+    database_prefix = f"{_format_snowflake_identifier(database_name)}." if database_name is not None else ""
     if table_name is not None:
         table = _format_snowflake_identifier(table_name)
         if schema_name is not None:
-            return f"IN TABLE {_format_snowflake_identifier(schema_name)}.{table}"
+            return f"IN TABLE {database_prefix}{_format_snowflake_identifier(schema_name)}.{table}"
         return f"IN TABLE {table}"
     if schema_name is not None:
-        return f"IN SCHEMA {_format_snowflake_identifier(schema_name)}"
+        return f"IN SCHEMA {database_prefix}{_format_snowflake_identifier(schema_name)}"
+    if database_name is not None:
+        return f"IN DATABASE {_format_snowflake_identifier(database_name)}"
     return "IN SCHEMA"
 
 

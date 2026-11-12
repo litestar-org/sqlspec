@@ -128,7 +128,7 @@ When a route handler in `"manual"` mode returns cleanly without calling `commit(
 | Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
 | Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
 | Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
-| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`; `teradata` rolls back uncommitted `autocommit=False` work on pool release) | `psqlpy`, `db2`, `teradata`, `arrow_odbc`, `bigquery` |
+| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`; `teradata` and `snowflake` roll back uncommitted `autocommit=False` work on pool release) | `psqlpy`, `db2`, `teradata`, `snowflake`, `arrow_odbc`, `bigquery` |
 | Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
 
 ## Declarative Query Filter Providers

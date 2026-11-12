@@ -563,10 +563,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             else self._config.provide_session(transaction=True)
         )
         async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
-            if self._dialect == "snowflake":
-                async with driver.transaction():
-                    await self._execute_many_with_driver(driver, records)
-            elif self._use_run_in_transaction:
+            if self._use_run_in_transaction:
                 run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
                 if callable(run_in_tx):
                     await cast("Any", run_in_tx)(partial(self._execute_many_with_driver, records=records))

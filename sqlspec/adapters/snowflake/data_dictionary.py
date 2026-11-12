@@ -173,15 +173,18 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
 
     def get_columns(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[ColumnMetadata]:
         """List columns, preserving exact quoted table and schema names."""
-        params: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
+        database_name, schema_name, table_name, _ = _resolve_snowflake_catalog_scope(schema, table)
+        params: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
-        if table is not None:
+        if table_name is not None:
             operation = "by_table"
-            params["table_name"] = self.resolve_identifier(table)
-        return cast(
-            "list[ColumnMetadata]",
-            driver.select(self.get_query("columns", operation), schema_type=ColumnMetadata, **params),
-        )
+            params["table_name"] = table_name
+        query = self.get_query("columns", operation)
+        if database_name is not None:
+            query = query.copy(
+                query.raw_sql.replace("information_schema.", f"{quote_identifier(database_name)}.information_schema.")
+            )
+        return cast("list[ColumnMetadata]", driver.select(query, schema_type=ColumnMetadata, **params))
 
     def get_indexes(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[IndexMetadata]:
         """Return no secondary indexes for standard Snowflake tables."""
@@ -234,6 +237,66 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         """List functions and procedures in a schema."""
         return self._metadata(driver, "routines", schema)
 
+    def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: str | None) -> tuple[str, str | None]:
+        """Resolve qualified or quoted Snowflake object and schema identifiers into exact catalog names."""
+        _ = driver
+        object_parts = split_qualified_identifier(_format_snowflake_identifier(object_name))
+        resolved_name = object_parts[-1]
+        if len(object_parts) >= _DATABASE_QUALIFIED_PARTS:
+            return resolved_name, f"{quote_identifier(object_parts[-3])}.{quote_identifier(object_parts[-2])}"
+        if len(object_parts) > 1:
+            return resolved_name, object_parts[-2]
+        if schema is not None:
+            schema_parts = split_qualified_identifier(_format_snowflake_identifier(schema))
+            if len(schema_parts) > 1:
+                return resolved_name, f"{quote_identifier(schema_parts[-2])}.{quote_identifier(schema_parts[-1])}"
+            return resolved_name, (schema_parts[0] if schema_parts else self.resolve_schema(None))
+        return resolved_name, self.resolve_schema(None)
+
+    def exact_catalog_identifier(self, driver: Any, name: str) -> str:
+        """Return ``name`` in the form Snowflake metadata getters resolve back to the exact catalog name."""
+        if name.startswith('"') and name.endswith('"') and len(split_qualified_identifier(name)) > 1:
+            return name
+        return super().exact_catalog_identifier(driver, name)
+
+    def get_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: str | None = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+        target_dialect: str | None = None,
+    ) -> DDLResult:
+        """Resolve one Snowflake object's DDL while avoiding default schema qualification for schemas."""
+        if object_type.lower() == "schema" and schema is None:
+            object_parts = split_qualified_identifier(_format_snowflake_identifier(object_name))
+            resolved_name = object_parts[-1]
+            resolved_schema = object_parts[-2] if len(object_parts) > 1 else None
+            return self._get_exact_object_ddl(
+                driver,
+                resolved_name,
+                schema=resolved_schema,
+                object_type=object_type,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+            )
+        return super().get_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+            target_dialect=target_dialect,
+        )
+
     def _get_native_object_ddl(
         self,
         driver: Any,
@@ -244,12 +307,17 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         include_dependencies: bool,
         redact: bool,
     ) -> DDLResult | None:
+        _ = include_dependencies, redact
         kind = _DDL_TYPES.get(object_type.lower())
         if kind is None:
             return None
         name = quote_identifier(object_name)
         if schema is not None:
-            name = f"{quote_identifier(schema)}.{name}"
+            if schema.startswith('"') and schema.endswith('"') and len(split_qualified_identifier(schema)) > 1:
+                qualifier = schema
+            else:
+                qualifier = quote_identifier(schema)
+            name = f"{qualifier}.{name}"
         ddl = driver.select_value_or_none(self.get_query("ddl", "by_object"), object_type=kind, object_name=name)
         identity = ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect)
         if not ddl:

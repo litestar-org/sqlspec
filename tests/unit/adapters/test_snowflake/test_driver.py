@@ -294,3 +294,38 @@ def test_execute_many_insert_select_leaves_fresh_autocommit_false_rows_pending(
     driver.rollback()
     assert snowflake_connection.pending_rows == []
     assert snowflake_connection.committed_rows == []
+
+
+@pytest.mark.parametrize("enable_json_deserialization", [False, True])
+@pytest.mark.parametrize("enable_lowercase_column_names", [False, True])
+def test_dict_cursor_rows_and_async_query_tag_correlation(
+    snowflake_connection: Any, enable_json_deserialization: bool, enable_lowercase_column_names: bool
+) -> None:
+    snowflake_connection.default_result = {
+        "description": [
+            ("ID", 0, None, None, 18, 0, False),
+            ("MixedName", 2, None, None, None, None, True),
+            ("PAYLOAD", 5, None, None, None, None, True),
+        ],
+        "rows": [{"ID": 9, "MixedName": "kept", "PAYLOAD": '{"flag":1}'}],
+    }
+    driver = SnowflakeDriver(
+        snowflake_connection,
+        driver_features={
+            "enable_json_deserialization": enable_json_deserialization,
+            "enable_lowercase_column_names": enable_lowercase_column_names,
+            "enable_query_tag_correlation": True,
+            "query_tag": "batch",
+        },
+    )
+    assert driver.driver_features["storage_capabilities"]["partition_strategies"] == ["fixed", "rows_per_chunk"]
+    rows = driver.select("SELECT ID, MixedName, PAYLOAD FROM items")
+    id_key = "id" if enable_lowercase_column_names else "ID"
+    payload_key = "payload" if enable_lowercase_column_names else "PAYLOAD"
+    expected_payload: Any = {"flag": 1} if enable_json_deserialization else '{"flag":1}'
+    assert rows == [{id_key: 9, "MixedName": "kept", payload_key: expected_payload}]
+
+    with CorrelationContext.context("job-42"):
+        query_id = driver.execute_async_query("SELECT :val", val=1)
+    assert query_id == "sfqid-123"
+    assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "batch:job-42"}}

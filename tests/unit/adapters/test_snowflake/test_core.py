@@ -7,20 +7,27 @@ from unittest.mock import Mock
 
 import pytest
 
+import sqlspec.adapters.snowflake as snowflake_package
 from sqlspec.adapters.snowflake import _typing
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import (
+    DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
+    build_profile,
     build_statement_config,
     collect_rows,
     create_mapped_exception,
     normalize_column_names,
+    normalize_connection_params,
     normalize_execute_parameters,
     normalize_many_parameters,
+    resolve_column_names,
 )
 from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
+    ImproperConfigurationError,
+    MissingDependencyError,
     NotFoundError,
     PermissionDeniedError,
     QueryTimeoutError,
@@ -169,3 +176,116 @@ def test_server_tuple_bindings_keep_json_codec_for_regular_tuples(snowflake_conn
         "INSERT INTO events(created, tags) VALUES (:created, :tags)", {"created": explicit, "tags": ("blue", "green")}
     )
     assert list(snowflake_connection.calls[-1][1]) == [explicit, "custom:blue,green"]
+
+
+class _UnsubscriptableResultMetadata:
+    __slots__ = ("name", "type_code")
+
+    def __init__(self, name: str, type_code: int) -> None:
+        self.name = name
+        self.type_code = type_code
+
+
+@pytest.mark.parametrize("use_metadata_objects", [False, True])
+@pytest.mark.parametrize("use_mapping_rows", [False, True])
+@pytest.mark.parametrize("enable_json_deserialization", [False, True])
+@pytest.mark.parametrize("enable_lowercase_column_names", [False, True])
+def test_collect_rows_preserves_values_across_cursor_and_descriptor_modes(
+    use_metadata_objects: bool,
+    use_mapping_rows: bool,
+    enable_json_deserialization: bool,
+    enable_lowercase_column_names: bool,
+) -> None:
+    description: list[Any] = (
+        [
+            _UnsubscriptableResultMetadata("USER_ID", 0),
+            _UnsubscriptableResultMetadata("OrderTotal", 1),
+            _UnsubscriptableResultMetadata("PAYLOAD", 5),
+        ]
+        if use_metadata_objects
+        else [("USER_ID", 0), ("OrderTotal", 1), ("PAYLOAD", 5)]
+    )
+    raw_rows: list[Any] = (
+        [{"USER_ID": 7, "OrderTotal": 12.5, "PAYLOAD": '{"ok":true}'}]
+        if use_mapping_rows
+        else [(7, 12.5, '{"ok":true}')]
+    )
+    converter = SnowflakeOutputConverter() if enable_json_deserialization else None
+    cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
+    rows, names, row_format = collect_rows(
+        raw_rows, description, cache, converter=converter, enable_lowercase_column_names=enable_lowercase_column_names
+    )
+    expected_names = (
+        ["user_id", "OrderTotal", "payload"] if enable_lowercase_column_names else ["USER_ID", "OrderTotal", "PAYLOAD"]
+    )
+    expected_payload: Any = {"ok": True} if enable_json_deserialization else '{"ok":true}'
+    assert names == expected_names
+    assert row_format == "tuple"
+    assert rows == [(7, 12.5, expected_payload)]
+    assert (
+        resolve_column_names(description, cache, enable_lowercase_column_names=enable_lowercase_column_names)
+        == expected_names
+    )
+
+
+def test_column_name_cache_bounds_and_empty_description() -> None:
+    cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
+    assert resolve_column_names(None, cache) == []
+    for index in range(260):
+        resolve_column_names([(f"COL_{index}", 0)], cache)
+    assert len(cache) == 256
+    assert DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS == 1000
+
+
+def test_snowflake_package_lazy_exports_and_unknown_attribute() -> None:
+    tracker_cls = snowflake_package.SnowflakeSyncMigrationTracker
+    assert tracker_cls.__name__ == "SnowflakeSyncMigrationTracker"
+    with pytest.raises(AttributeError, match="NonExistentSnowflakeExport"):
+        _ = snowflake_package.NonExistentSnowflakeExport
+
+
+def test_session_context_unavailable_driver_and_close_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = Mock()
+    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: None)
+    unavailable = SnowflakeSessionContext(Mock(), release, build_statement_config(), {}, lambda value: value)
+    with pytest.raises(ImproperConfigurationError, match="SnowflakeDriver is unavailable"):
+        with unavailable:
+            pytest.fail("unavailable driver must not enter session")
+
+    connection = Mock()
+    failing_driver = Mock()
+    failing_driver.close.side_effect = RuntimeError("close exploded")
+    monkeypatch.setattr(_typing, "import_optional_attr", lambda *_: Mock(return_value=failing_driver))
+    closing_ctx = SnowflakeSessionContext(
+        lambda: connection, release, build_statement_config(), {}, lambda value: value
+    )
+    with pytest.raises(RuntimeError, match="close exploded"), closing_ctx:
+        pass
+    assert release.call_args.args == (connection,)
+    assert release.call_args.kwargs["exc_type"] is RuntimeError
+
+
+def test_core_validation_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from sqlspec.utils.module_loader import reset_dependency_cache
+
+    with pytest.raises(ImproperConfigurationError, match="paramstyle"):
+        build_profile(paramstyle="named")
+    assert normalize_connection_params({"authenticator": "oauth"})["authenticator"] == "oauth"
+    assert normalize_connection_params({"username": "alice"})["user"] == "alice"
+    with pytest.raises(ImproperConfigurationError, match="auth_type and authenticator conflict"):
+        normalize_connection_params({"auth_type": "pat", "authenticator": "oauth"})
+    with pytest.raises(ImproperConfigurationError, match="extra must be a mapping"):
+        normalize_connection_params({"extra": "invalid"})
+    with pytest.raises(ImproperConfigurationError, match="private_key"):
+        normalize_connection_params({"private_key": object()})
+    monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.serialization", None)
+    reset_dependency_cache("cryptography.hazmat.primitives.serialization")
+    try:
+        with pytest.raises(MissingDependencyError, match="cryptography"):
+            normalize_connection_params({
+                "private_key": "-----BEGIN PRIVATE KEY-----\nZmFrZQ==\n-----END PRIVATE KEY-----"
+            })
+    finally:
+        reset_dependency_cache("cryptography.hazmat.primitives.serialization")

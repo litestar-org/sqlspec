@@ -5,7 +5,7 @@ import struct
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -1390,3 +1390,135 @@ def test_adbc_atomic_connection_prevents_partial_autocommit_on_real_dbapi_connec
         verify_cur.close()
     finally:
         raw_conn.close()
+
+
+def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Snowflake ADBC ADK stores emit PARSE_JSON/SELECT/MERGE DML, decode Mapping/bytes, and search via ILIKE."""
+    from types import MappingProxyType
+
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    cursor = MagicMock()
+
+    def run_sql(sql: str, params: Any = ()) -> None:
+        normalized = _normalized(sql)
+        executed.append((normalized, tuple(params)))
+        if normalized.startswith("SELECT id, app_name, user_id, state"):
+            cursor.fetchone.return_value = ("s1", "app", "u1", MappingProxyType({"count": 1}), now, now)
+            cursor.fetchall.return_value = [cursor.fetchone.return_value]
+        elif normalized.startswith("SELECT e.id, e.session_id"):
+            cursor.fetchall.return_value = [("e1", "s1", "inv1", now, bytearray(b'{"text":"hello"}'), "app", "u1")]
+        elif normalized.startswith("SELECT event_id FROM adk_memory WHERE event_id IN"):
+            cursor.fetchall.return_value = []
+        elif normalized.startswith("MERGE INTO adk_memory"):
+            cursor.rowcount = 1 if params[0] == "m1" else 0
+        elif "content_text ILIKE ?" in normalized:
+            cursor.fetchall.return_value = [
+                (
+                    "m1",
+                    "s1",
+                    "app",
+                    "u1",
+                    "user",
+                    "e1",
+                    "agent",
+                    now,
+                    MappingProxyType({"parts": ["budget"]}),
+                    "Budget Forecast",
+                    bytearray(b'{"tag":"q4"}'),
+                    now,
+                )
+            ]
+
+    cursor.execute.side_effect = run_sql
+    conn = SimpleNamespace(cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "snowflake"},
+        extension_config={"adk": {"enable_memory": True, "owner_id_column": "owner_id VARCHAR(64)"}},
+    )
+    store = AdbcADKStore(config)
+    created = store.create_session("s1", "app", "u1", {"count": 1}, owner_id="org-1")
+    assert created["state"] == {"count": 1}
+    assert (
+        "INSERT INTO adk_session (id, app_name, user_id, owner_id, state, create_time, update_time) "
+        "SELECT ?, ?, ?, ?, PARSE_JSON(?), ?, ?"
+    ) == executed[0][0]
+
+    executed.clear()
+    store.update_session_state("app", "u1", "s1", {"count": 2})
+    assert "UPDATE adk_session SET state = PARSE_JSON(?), update_time = ?" in executed[0][0]
+
+    executed.clear()
+    event = {
+        "id": "e1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv1",
+        "timestamp": now,
+        "event_data": {"text": "hello"},
+    }
+    store.append_event(cast("Any", event))
+    assert (
+        "INSERT INTO adk_event (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+        "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)"
+    ) == executed[0][0]
+
+    executed.clear()
+    updated = store.append_event_and_update_state(
+        cast("Any", event), "app", "u1", "s1", {"count": 3}, app_state={"a": 1}, user_state={"u": 2}
+    )
+    assert updated["state"] == {"count": 1}
+    sql_batch = [stmt for stmt, _ in executed]
+    assert "UPDATE adk_session SET state = PARSE_JSON(?), update_time = ?" in sql_batch[0]
+    assert "INSERT INTO adk_event" in sql_batch[2] and "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)" in sql_batch[2]
+    assert sql_batch[3].startswith("MERGE INTO adk_app_state t USING (SELECT ? AS app_name, PARSE_JSON(?) AS state")
+    assert sql_batch[4].startswith(
+        "MERGE INTO adk_user_state t USING (SELECT ? AS app_name, ? AS user_id, PARSE_JSON(?) AS state"
+    )
+
+    executed.clear()
+    store.upsert_app_state("app", {"a": 2})
+    store.upsert_user_state("app", "u1", {"u": 3})
+    assert executed[0][0].startswith("MERGE INTO adk_app_state t")
+    assert executed[1][0].startswith("MERGE INTO adk_user_state t")
+
+    events = store.get_events("app", "u1", "s1")
+    assert events[0]["event_data"] == {"text": "hello"}
+
+    executed.clear()
+    mem_store = AdbcADKMemoryStore(config)
+    entry_one: StoredMemory = {
+        "id": "m1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e1",
+        "author": "agent",
+        "timestamp": now,
+        "content_json": {"parts": ["budget"]},
+        "content_text": "Budget Forecast",
+        "metadata_json": {"tag": "q4"},
+        "inserted_at": now,
+        "embedding": None,
+    }
+    entry_two: StoredMemory = {**entry_one, "id": "m2", "event_id": "e2"}
+    inserted = mem_store.insert_memory_entries([entry_one, entry_two], owner_id="org-1")
+    assert inserted == 1
+    merge_calls = [stmt for stmt, _ in executed if stmt.startswith("MERGE INTO adk_memory")]
+    assert len(merge_calls) == 2
+    assert "PARSE_JSON(?) AS content_json" in merge_calls[0]
+    assert "PARSE_JSON(?) AS metadata_json" in merge_calls[0]
+    assert "ON t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT" in merge_calls[0]
+
+    executed.clear()
+    recalled = mem_store.search_entries(" budget ", "app", "u1", limit=5)
+    assert len(recalled) == 1
+    assert recalled[0]["content_json"] == {"parts": ["budget"]}
+    assert recalled[0]["metadata_json"] == {"tag": "q4"}
+    search_sql, search_params = executed[0]
+    assert "content_text ILIKE ?" in search_sql
+    assert search_params == ("app", "u1", "%budget%", 5)

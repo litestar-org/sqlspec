@@ -2389,9 +2389,11 @@ def _normalize_snowflake_private_key(value: Any, passphrase: Any, options: dict[
             return
         try:
             value = Path(value).read_bytes()
-        except OSError as exc:
+        except OSError as read_err:
             msg = "Cannot read Snowflake private key file."
-            raise ImproperConfigurationError(msg) from exc
+            file_config_err = ImproperConfigurationError(msg)
+            file_config_err.__cause__ = read_err
+            raise file_config_err from read_err
     if isinstance(value, (bytearray, memoryview)):
         value = bytes(value)
     if isinstance(value, bytes) and value.lstrip().startswith(b"-----BEGIN"):
@@ -2410,9 +2412,11 @@ def _normalize_snowflake_private_key(value: Any, passphrase: Any, options: dict[
                 raise ImproperConfigurationError(msg)
             encryption = serialization.BestAvailableEncryption(password) if password else serialization.NoEncryption()
             pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, encryption)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError) as decode_err:
             msg = "Cannot decode Snowflake private key."
-            raise ImproperConfigurationError(msg) from exc
+            decode_config_err = ImproperConfigurationError(msg)
+            decode_config_err.__cause__ = decode_err
+            raise decode_config_err from decode_err
         options.setdefault(prefix + "jwt_private_key_pkcs8_value", pem.decode())
     if password_text is not None:
         options.setdefault(prefix + "jwt_private_key_pkcs8_password", password_text)

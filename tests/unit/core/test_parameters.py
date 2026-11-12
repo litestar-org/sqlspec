@@ -3320,3 +3320,22 @@ def test_snowflake_sql_compile_binds_values_next_to_variant_paths(query: str) ->
     compiled, parameters = SQL(query, {"value": "west", "id": 7}, dialect="snowflake").compile()
     assert compiled == query.replace(":value", "?").replace(":id", "?")
     assert parameters == ((7, "west") if query.startswith("SELECT CASE") else ("west", 7))
+
+
+def test_parameter_processor_fast_path_qmark_escape_honors_unescape_output() -> None:
+    """Fast-path parameter processing unescapes sqlglot SQL and respects qmark execution preservation."""
+    processor = ParameterProcessor()
+
+    numeric_config = ParameterStyleConfig(ParameterStyle.NUMERIC)
+    numeric_sql = "SELECT payload ?? 'region' FROM events WHERE id = $1"
+    unescaped = processor.process(numeric_sql, (7,), numeric_config, dialect="postgres")
+    assert unescaped.sql == "SELECT payload ? 'region' FROM events WHERE id = $1"
+    assert unescaped.sqlglot_sql == "SELECT payload ? 'region' FROM events WHERE id = $1"
+    assert unescaped.parameters == (7,)
+
+    qmark_config = ParameterStyleConfig(ParameterStyle.QMARK)
+    qmark_sql = "SELECT payload ?? 'region' FROM events WHERE id = ?"
+    preserved = processor.process(qmark_sql, (7,), qmark_config, dialect="postgres")
+    assert preserved.sql == qmark_sql
+    assert preserved.sqlglot_sql == "SELECT payload ? 'region' FROM events WHERE id = ?"
+    assert preserved.parameters == (7,)

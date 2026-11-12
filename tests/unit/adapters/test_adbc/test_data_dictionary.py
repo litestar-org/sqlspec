@@ -917,3 +917,64 @@ def test_snowflake_foreign_keys_reject_nul_identifier() -> None:
     with pytest.raises(SQLSpecError, match="NUL"):
         AdbcDataDictionary().get_foreign_keys(driver, table="orders\x00", schema="public")
     driver.select.assert_not_called()
+
+
+def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
+    """Qualified 2-part and 3-part Snowflake table names resolve schema and database scopes across catalog methods."""
+    from sqlspec.exceptions import SQLSpecError
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.return_value = [
+        {
+            "SCHEMA_NAME": "SALES",
+            "TABLE_NAME": "ORDERS",
+            "COLUMN_NAME": "ID",
+            "DATA_TYPE": "NUMBER",
+            "ORDINAL_POSITION": 1,
+            "IS_NULLABLE": "NO",
+        }
+    ]
+
+    cols = dictionary.get_columns(driver, table="other_db.sales.orders")
+    assert cols[0]["column_name"] == "ID"
+    first_query = driver.select.call_args.args[0].raw_sql
+    assert '"OTHER_DB".information_schema.' in first_query
+    assert driver.select.call_args.kwargs == {"schema_name": "SALES", "table_name": "ORDERS"}
+
+    quoted_cols = dictionary.get_columns(driver, table='"sales"."Orders"')
+    assert quoted_cols[0]["column_name"] == "ID"
+    assert driver.select.call_args.kwargs == {"schema_name": "sales", "table_name": "Orders"}
+
+    driver.select.return_value = []
+    dictionary.get_foreign_keys(driver, table="other_db.sales.orders")
+    assert driver.select.call_args.args[0].strip() == 'SHOW IMPORTED KEYS IN TABLE "OTHER_DB"."SALES"."ORDERS";'
+
+    dictionary.get_tables(driver, schema="other_db.sales")
+    tables_query = driver.select.call_args.args[0].raw_sql
+    assert '"OTHER_DB".information_schema.' in tables_query
+    assert driver.select.call_args.kwargs == {"schema_name": "SALES"}
+
+    constraints = dictionary.get_constraints(driver, table="other_db.sales.orders")
+    assert constraints.capability.support == MetadataSupport.UNSUPPORTED
+    assert driver.connection.adbc_get_objects.call_args.kwargs == {
+        "depth": "all",
+        "catalog_filter": "OTHER_DB",
+        "db_schema_filter": "SALES",
+        "table_name_filter": "ORDERS",
+    }
+
+    assert dictionary.resolve_ddl_object_name(driver, "sales.orders", None) == ("ORDERS", "SALES")
+    assert dictionary.resolve_ddl_object_name(driver, "other_db.sales.orders", None) == ("ORDERS", '"OTHER_DB"."SALES"')
+    assert dictionary.exact_catalog_identifier(driver, '"OTHER_DB"."SALES"') == '"OTHER_DB"."SALES"'
+
+    sqlite_driver = Mock()
+    sqlite_driver.dialect = "sqlite"
+    unsupported_views = dictionary.get_views(sqlite_driver)
+    assert unsupported_views.capability.support == MetadataSupport.UNSUPPORTED
+
+    for bad_identifier in ("", "sales.", "sales..orders", '""'):
+        with pytest.raises(SQLSpecError):
+            dictionary.get_columns(driver, table=bad_identifier)

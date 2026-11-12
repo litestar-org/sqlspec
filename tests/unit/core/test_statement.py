@@ -1854,3 +1854,23 @@ def test_copy_on_access_expression_isolates_cached_and_rebound_statements() -> N
     assert rebound_expr is not None
     assert rebound_expr is rebound.expression
     assert rebound_expr.args.get("limit") is None
+
+
+def test_snowflake_builder_sequence_params_and_disabled_parsing_where() -> None:
+    """SQL.builder preserves Snowflake stage ordinals for sequence params and where() wraps raw SQL when parsing is disabled."""
+    seq_config = StatementConfig(dialect="snowflake", parameter_config=ParameterStyleConfig(ParameterStyle.QMARK))
+    stage_only = SQL("SELECT $1 FROM stage_tbl", "unused_stage_arg", statement_config=seq_config).builder().build()
+    assert stage_only.parameters == {}
+
+    built = SQL("SELECT $1 FROM stage_tbl WHERE region = ?", "us-west", statement_config=seq_config).builder().build()
+    assert built.parameters == {"param_0": "us-west"}
+
+    unparsed_config = StatementConfig(
+        dialect="snowflake", parameter_config=ParameterStyleConfig(ParameterStyle.QMARK), enable_parsing=False
+    )
+    filtered = SQL("SELECT payload ?? 'region' AS has_region FROM events", statement_config=unparsed_config).where_eq(
+        "id", 7
+    )
+    compiled_sql, compiled_params = filtered.compile()
+    assert "WHERE" in compiled_sql
+    assert compiled_params == (7,)

@@ -33,6 +33,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
 __all__ = (
+    "DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS",
     "POOL_CONFIG_KEYS",
     "apply_driver_features",
     "build_empty_arrow_table_from_description",
@@ -41,6 +42,8 @@ __all__ = (
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
+    "descriptor_column_name",
+    "descriptor_type_code",
     "driver_profile",
     "is_snowflake_error",
     "normalize_column_names",
@@ -52,6 +55,7 @@ __all__ = (
     "snowflake_type_code_to_arrow_type",
 )
 
+DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS: Final[int] = 1000
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)[A-Z0-9_]+$")
 VALID_WORKLOAD_IDENTITY_PROVIDERS: Final[frozenset[str]] = frozenset({"AWS", "GCP", "AZURE", "OIDC"})
 TOKEN_AUTHENTICATORS: Final[frozenset[str]] = frozenset({"PROGRAMMATIC_ACCESS_TOKEN", "oauth", "WORKLOAD_IDENTITY"})
@@ -196,7 +200,7 @@ def apply_driver_features(
     for key, default in (
         ("enable_lowercase_column_names", True),
         ("enable_stage_parquet_load", True),
-        ("stage_parquet_threshold_rows", 1000),
+        ("stage_parquet_threshold_rows", DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS),
         ("enable_query_tag_correlation", False),
         ("enable_events", True),
         ("events_backend", "poll_queue"),
@@ -359,57 +363,77 @@ def normalize_column_names(column_names: Sequence[str], *, enable_lowercase_colu
     ]
 
 
+def descriptor_column_name(column: Any) -> str:
+    """Extract the raw column name from a DB-API tuple or ResultMetadata descriptor."""
+    return str(column.name if hasattr(column, "name") else column[0])
+
+
+def descriptor_type_code(column: Any) -> int | None:
+    """Extract the Snowflake type code from a DB-API tuple or ResultMetadata descriptor."""
+    raw = column.type_code if hasattr(column, "type_code") else column[1]
+    return int(raw) if raw is not None else None
+
+
 def resolve_column_names(
     description: Sequence[Any] | None,
-    cache: dict[int, tuple[Sequence[Any], list[str]]],
+    cache: dict[tuple[tuple[str, ...], bool], list[str]],
     *,
     enable_lowercase_column_names: bool = True,
 ) -> list[str]:
-    """Resolve result column names with a bounded description identity cache."""
+    """Resolve result column names with a bounded descriptor-tuple cache."""
     if not description:
         return []
-    cached = cache.get(id(description))
-    if cached is not None and cached[0] is description:
-        return cached[1]
-    names = normalize_column_names(
-        [str(column.name if hasattr(column, "name") else column[0]) for column in description],
-        enable_lowercase_column_names=enable_lowercase_column_names,
-    )
+    raw_names = tuple(descriptor_column_name(column) for column in description)
+    cache_key = (raw_names, enable_lowercase_column_names)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    names = normalize_column_names(raw_names, enable_lowercase_column_names=enable_lowercase_column_names)
     if len(cache) >= _COLUMN_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
-    cache[id(description)] = (description, names)
+    cache[cache_key] = names
     return names
 
 
 def collect_rows(
     fetched_data: Sequence[Any] | None,
     description: Sequence[Any] | None,
-    cache: dict[int, tuple[Sequence[Any], list[str]]],
+    cache: dict[tuple[tuple[str, ...], bool], list[str]],
     *,
     converter: SnowflakeOutputConverter | None = None,
     enable_lowercase_column_names: bool = True,
-) -> tuple[list[Any], list[str], Literal["dict", "tuple"]]:
-    """Collect rows and decode semi-structured fields using cursor metadata."""
+) -> tuple[list[tuple[Any, ...]], list[str], Literal["tuple"]]:
+    """Collect normalized positional rows and decode semi-structured fields using cursor metadata."""
     names = resolve_column_names(description, cache, enable_lowercase_column_names=enable_lowercase_column_names)
     rows = list(fetched_data or [])
-    row_format: Literal["dict", "tuple"] = "dict" if rows and isinstance(rows[0], Mapping) else "tuple"
-    if converter is None or not description:
-        return rows, names, row_format
-    converted: list[Any] = []
+    if not rows:
+        return [], names, "tuple"
+    raw_names = tuple(descriptor_column_name(column) for column in description) if description else ()
+    tuple_rows: list[tuple[Any, ...]] = []
     for row in rows:
         if isinstance(row, Mapping):
-            converted.append({
-                name: converter.convert_value(row.get(column[0], row.get(name)), type_code=column[1])
-                for name, column in zip(names, description, strict=True)
-            })
-        else:
-            converted.append(
-                tuple(
-                    converter.convert_value(value, type_code=column[1])
-                    for value, column in zip(row, description, strict=True)
+            if raw_names:
+                tuple_rows.append(
+                    tuple(
+                        row[raw_name] if raw_name in row else row.get(name)
+                        for raw_name, name in zip(raw_names, names, strict=True)
+                    )
                 )
-            )
-    return converted, names, row_format
+            else:
+                tuple_rows.append(tuple(row.values()))
+        else:
+            tuple_rows.append(tuple(row))
+    if converter is None or not description:
+        return tuple_rows, names, "tuple"
+    type_codes = tuple(descriptor_type_code(column) for column in description)
+    converted = [
+        tuple(
+            converter.convert_value(value, type_code=type_code)
+            for value, type_code in zip(row, type_codes, strict=True)
+        )
+        for row in tuple_rows
+    ]
+    return converted, names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -533,7 +557,7 @@ def build_empty_arrow_table_from_description(
         raise MissingDependencyError(package="pyarrow", install_package="snowflake")
     columns = description or []
     names = normalize_column_names(
-        [str(column.name if hasattr(column, "name") else column[0]) for column in columns],
+        [descriptor_column_name(column) for column in columns],
         enable_lowercase_column_names=bool(driver_features.get("enable_lowercase_column_names", True)),
     )
     fields = []

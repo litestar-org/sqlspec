@@ -35,7 +35,7 @@ Common `MigrationConfig` keys:
 - `schema_dump_path`: Default output path written by `dump_schema()` when `output_path` is omitted (`auto_dump_schema=True` falls back to `<script_location>/schema.sql` when `schema_dump_path` is unset).
 - `auto_dump_schema`: Set to `True` (or a file path) to refresh `schema.sql` automatically after every `upgrade` that applies revisions.
 
-`default_schema`, `version_table_schema`, and `-- schema:` directives require an adapter with migration schema support: PostgreSQL drivers, CockroachDB, DuckDB, Oracle, IBM Db2, SQL Server, and PostgreSQL-backed ADBC. Other adapters raise `MigrationError`. To keep the tracking table in a specific schema on those adapters, set `version_table_name` to `"<schema>.ddl_migrations"`.
+`default_schema`, `version_table_schema`, and `-- schema:` directives require an adapter with migration schema support: PostgreSQL drivers, CockroachDB, DuckDB, Oracle, IBM Db2, SQL Server, Snowflake, and PostgreSQL-backed ADBC. Other adapters raise `MigrationError`. To keep the tracking table in a specific schema on those adapters, set `version_table_name` to `"<schema>.ddl_migrations"`.
 
 SQLSpec restores the session schema after each migration, whether it succeeds or fails. A failed transactional migration rolls back first, and the original error is reported.
 
@@ -151,7 +151,7 @@ When `strict=True`, `ensure_schema_sync` and `ensure_schema_async` raise `Migrat
 
 Built-in reconcilers (`litestar`, `events`, and `adk`) run across:
 
-- **21 unconditional adapters**: `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `bigquery`, `db2`, `sqlanywhere`, `sybase`, and `teradata`.
+- **22 unconditional adapters**: `sqlite`, `aiosqlite`, `asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `aiomysql`, `asyncmy`, `pymysql`, `mysqlconnector`, `duckdb`, `mssql_python`, `pymssql`, `oracledb`, `spanner`, `snowflake`, `bigquery`, `db2`, `sqlanywhere`, `sybase`, and `teradata`.
 - **Arrow ODBC (`arrow_odbc`)**: Supported when `statement_config.dialect` is `"mssql"`, `"tsql"`, or `"db2"`.
 - **Apache Arrow ADBC (`adbc`)**: Supported on every backend with a resolved dialect (`postgresql`, `sqlite`, `duckdb`, `bigquery`, `snowflake`, `mssql`, `oracle`, `db2`, `teradata`, and `mysql`).
 

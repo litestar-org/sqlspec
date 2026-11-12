@@ -1,5 +1,7 @@
 """Unit tests for built-in data dictionary dialect registration."""
 
+from typing import Any
+
 import pytest
 from sqlglot import exp
 
@@ -78,7 +80,7 @@ def test_snowflake_composite_primary_and_unique_keys() -> None:
     """SHOW keys preserve catalog identity and composite column order."""
     from sqlspec.data_dictionary.dialects.snowflake import parse_snowflake_primary_or_unique_keys
 
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "schema_name": "PUBLIC",
             "table_name": "ITEMS",
@@ -115,7 +117,7 @@ def test_snowflake_imported_keys_order_and_referential_actions() -> None:
     from sqlspec.data_dictionary import ForeignKeyMetadata
     from sqlspec.data_dictionary.dialects.snowflake import parse_snowflake_imported_keys
 
-    base = {
+    base: dict[str, Any] = {
         "fk_table_name": "LEDGER",
         "fk_schema_name": "FIN",
         "fk_name": "FK_LEDGER",
@@ -125,7 +127,7 @@ def test_snowflake_imported_keys_order_and_referential_actions() -> None:
         "delete_rule": "set_null",
         "update_rule": "NO ACTION",
     }
-    rows = [
+    rows: list[dict[str, Any]] = [
         {**base, "fk_column_name": "LINE_ID", "pk_column_name": "ID_2", "key_sequence": 2},
         {**base, "fk_column_name": "ACCT_ID", "pk_column_name": "ID_1", "key_sequence": "1"},
     ]
@@ -166,7 +168,7 @@ def test_snowflake_key_parsers_handle_incomplete_catalog_rows() -> None:
     )
 
     assert parse_snowflake_imported_keys([{}, {"fk_table_name": "ORDERS"}]) == []
-    rows = [
+    rows: list[dict[str, Any]] = [
         {},
         {"table_name": "ORDERS", "column_name": "ID", "key_sequence": "unknown"},
         {"table_name": "ORDERS", "column_name": "ID", "key_sequence": None},

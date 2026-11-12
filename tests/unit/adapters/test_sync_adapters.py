@@ -512,9 +512,12 @@ def test_sync_driver_build_statement_result(sqlite_sync_driver: SqliteDriver) ->
 def test_snowflake_sync_driver_contracts() -> None:
     """Snowflake preserves deferred errors and rejects unsupported savepoint operations."""
     pytest.importorskip("snowflake.connector")
-    from snowflake.connector.errors import ForbiddenError
+    from snowflake.connector.errors import Error as SnowflakeError
 
     from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    class ForbiddenError(SnowflakeError):
+        """Snowflake SDK error stub matching legacy ForbiddenError name without SDK deprecation warning."""
 
     driver = SnowflakeDriver(SimpleNamespace())
     handler = driver.handle_database_exceptions()

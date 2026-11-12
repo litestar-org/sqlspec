@@ -55,6 +55,19 @@ def _sql(call: Any) -> str:
     return str(statement.sql if hasattr(statement, "sql") else statement)
 
 
+def _configure_reconcile_catalog(driver: MagicMock, targets: list[Any]) -> None:
+    columns_by_table = {
+        target.table_name: [
+            {"column_name": column.name, "data_type": column.dtype, "is_nullable": "NO" if column.not_null else "YES"}
+            for column in target.create_table.columns
+        ]
+        for target in targets
+    }
+    driver.data_dictionary.get_columns.side_effect = lambda _drv, table=None, schema=None: columns_by_table.get(
+        str(table), []
+    )
+
+
 def test_adk_store_resolves_and_reconciles_all_six_tables(monkeypatch: pytest.MonkeyPatch) -> None:
     config, driver = store_config(monkeypatch, {"adk": {"enable_memory": True}})
     assert (
@@ -281,6 +294,7 @@ def test_adk_missing_tables_are_empty_but_other_errors_propagate(monkeypatch: py
 def test_adk_create_tables_append_event_and_event_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
     config, driver = store_config(monkeypatch)
     store = SnowflakeADKStore(config)
+    _configure_reconcile_catalog(driver, store._schema_targets())
     store.create_tables()
     assert driver.execute.call_count == 5
     assert all("CREATE TABLE IF NOT EXISTS" in _sql(call) for call in driver.execute.call_args_list)
@@ -373,7 +387,7 @@ def test_memory_guards_and_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     assert store.delete_entries_by_session("s1") == 1
     assert driver.execute.call_args.args == ("DELETE FROM adk_memory WHERE session_id = ?", ["s1"])
     assert store.delete_entries_older_than(7, "app", "user") == 1
-    assert "timestamp < ? AND app_name = ? AND scope = ?" in driver.execute.call_args.args[0]
+    assert "inserted_at < ? AND app_name = ? AND scope = ?" in driver.execute.call_args.args[0]
     disabled_config, disabled_driver = store_config(monkeypatch, {"adk": {"enable_memory": False}})
     disabled = SnowflakeADKMemoryStore(disabled_config)
     disabled.create_tables()
@@ -389,6 +403,7 @@ def test_memory_creation_owner_column_and_null_metadata(monkeypatch: pytest.Monk
         monkeypatch, {"adk": {"owner_id_column": "owner VARCHAR(64)", "memory_use_fts": True}}
     )
     store = SnowflakeADKMemoryStore(config)
+    _configure_reconcile_catalog(driver, store._schema_targets())
     store.create_tables()
     assert "content_json VARIANT NOT NULL" in driver.execute.call_args.args[0]
     entry = _memory()
@@ -416,3 +431,29 @@ def test_memory_missing_tables_and_other_failures(monkeypatch: pytest.MonkeyPatc
     driver.select.side_effect = SQLSpecError("permission denied")
     with pytest.raises(SQLSpecError, match="permission denied"):
         store.search_entries("budget", "app", "u1")
+
+
+@pytest.mark.parametrize(
+    "settings, creates_tables, expected_assume_existing",
+    [({"create_schema": True}, True, True), ({"create_schema": False}, False, False)],
+)
+def test_adk_and_memory_create_tables_honor_schema_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, bool], creates_tables: bool, expected_assume_existing: bool
+) -> None:
+    config, driver = store_config(monkeypatch, {"adk": {"enable_memory": True, **settings}})
+    reconcile_calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        SnowflakeADKStore,
+        "reconcile_schema",
+        lambda self, *, assume_existing=False: reconcile_calls.append(("session", assume_existing)),
+    )
+    monkeypatch.setattr(
+        SnowflakeADKMemoryStore,
+        "reconcile_schema",
+        lambda self, *, assume_existing=False: reconcile_calls.append(("memory", assume_existing)),
+    )
+    SnowflakeADKStore(config).create_tables()
+    SnowflakeADKMemoryStore(config).create_tables()
+
+    assert driver.execute.call_count == (6 if creates_tables else 0)
+    assert reconcile_calls == [("session", expected_assume_existing), ("memory", expected_assume_existing)]

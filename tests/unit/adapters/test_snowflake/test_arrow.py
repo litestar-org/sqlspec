@@ -31,12 +31,12 @@ def test_empty_arrow_results_preserve_typed_schema(snowflake_connection: Any, re
     elif return_format == "batches":
         table = pa.Table.from_batches(
             data,
-            schema=pa.schema([
+            schema=pa.schema((
                 pa.field("id", pa.int64(), nullable=False),
                 pa.field("amount", pa.decimal128(38, 4)),
                 pa.field("camelCase", pa.string()),
                 pa.field("stamp", pa.timestamp("ns", tz="UTC")),
-            ]),
+            )),
         )
     else:
         table = data

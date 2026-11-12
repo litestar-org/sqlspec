@@ -196,8 +196,8 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 <!-- GENERATED:START config-table:sqlspec.adapters.adbc.config.AdbcConnectionParams,sqlspec.adapters.adbc.config.AdbcPoolConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `host` | `str` | - | Teradata server hostname or IP address. |
-| `port` | `int` | - | Teradata server port, defaulting to 1025. |
+| `host` | `str` | - | Database server or proxy endpoint hostname (for example Teradata or Snowflake). |
+| `port` | `int or str` | - | Database server endpoint port (for example Teradata `1025` or Snowflake `443`). |
 | `user` | `str` | - | Alias for the Teradata connection username. |
 | `adbc_dialect` | `str` | - | Explicit database dialect for generic FlightSQL transports. |
 | `uri` | `str` | - | Backend connection URI (such as `postgresql://`, `sqlite://`, `duckdb://`, `grpc+tls://`, `oracle://`, `db2://`, or `quack://`). |
@@ -206,7 +206,7 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 | `connection_string` | `str` | - | Connection string alias normalized to `uri` when `uri` is unset. |
 | `db` | `str` | - | Database path or identifier alias normalized for file-backed and embedded ADBC drivers. |
 | `path` | `str` | - | Filesystem database path for `adbc-driver-sqlite` or `adbc-driver-duckdb`. |
-| `driver` | `str` | - | Short driver alias (such as `'postgresql'`, `'sqlite'`, `'duckdb'`, `'flightsql'`, `'gizmosql'`, `'snowflake'`, `'bigquery'`, `'oracle'`, `'db2'`, or `'quack'`) or shared library path. |
+| `driver` | `str` | - | Short driver alias (such as `'postgresql'`, `'sqlite'`, `'duckdb'`, `'flightsql'`, `'gizmosql'`, `'snowflake'`, `'teradata'`, `'bigquery'`, `'oracle'`, `'db2'`, or `'quack'`) or shared library path. |
 | `driver_name` | `str` | - | Explicit ADBC Python module connect path or shared library name overriding URI inference. |
 | `db_kwargs` | `dict[str, Any]` | - | Driver-specific `adbc_driver_manager.AdbcDatabase` options passed to `dbapi.connect`. |
 | `conn_kwargs` | `dict[str, Any]` | - | Driver-specific `adbc_driver_manager.AdbcConnection` options passed to `dbapi.connect`. |
@@ -247,8 +247,6 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 | `headers` | `dict[str, str]` | - | Custom gRPC metadata headers attached to FlightSQL or GizmoSQL requests. |
 | `extra` | `dict[str, Any]` | - | Additional driver options merged into `db_kwargs`. |
 | `region` | `str` | - | Snowflake cloud region identifier. |
-| `host` | `str` | - | Snowflake or proxy endpoint hostname. |
-| `port` | `int or str` | - | Snowflake endpoint port. |
 | `protocol` | `str` | - | Snowflake endpoint transport protocol. |
 | `application` | `str` | - | Client application identifier. |
 | `keep_session_alive` | `bool` | - | Keep the Snowflake session active during idle intervals. |
@@ -286,7 +284,7 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 | `enable_pgvector` | `bool` | `True` | Probe `pg_extension` for `vector` on PostgreSQL ADBC connections (defaults to `True` when `pgvector` is installed). |
 | `enable_paradedb` | `bool` | `True` | Probe `pg_extension` for ParadeDB `pg_search` on PostgreSQL ADBC connections (defaults to `True`). |
 | `enable_pg_textsearch` | `bool` | `True` | Probe `pg_extension` for `pg_textsearch` BM25 support on PostgreSQL ADBC connections (defaults to `True`). |
-| `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase column names to lowercase (defaults to `True` on Oracle, Db2, and Snowflake ADBC backends). |
+| `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase column names to lowercase (defaults to `True` on Oracle, Db2, Teradata, and Snowflake ADBC backends). |
 | `enable_events` | `bool` | - | Enable SQLSpec table-backed event channel support. |
 | `on_connection_create` | `Callable[[AdbcConnection], None]` | - | Callback invoked with the raw ADBC connection immediately after `connect()`. |
 | `events_backend` | `Literal['poll_queue']` | - | Event queue backend name (`'poll_queue'`). |

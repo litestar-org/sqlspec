@@ -9,10 +9,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor
 from sqlspec.adapters.snowflake.core import (
+    DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS,
     build_empty_arrow_table_from_description,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
+    descriptor_column_name,
+    descriptor_type_code,
     driver_profile,
     is_snowflake_error,
     normalize_column_names,
@@ -112,16 +115,22 @@ def _iter_arrow_tables(cursor: Any, features: Mapping[str, Any]) -> Iterator[Any
         ensure_pyarrow()
         import pyarrow as pa
 
+        raw_names = [descriptor_column_name(column) for column in cursor.description or ()]
         names = normalize_column_names(
-            [str(column[0]) for column in cursor.description or ()],
-            enable_lowercase_column_names=bool(features.get("enable_lowercase_column_names", True)),
+            raw_names, enable_lowercase_column_names=bool(features.get("enable_lowercase_column_names", True))
         )
         rows = cursor.fetchall()
         if not rows:
             yield build_empty_arrow_table_from_description(cursor.description, features)
         else:
             dictionaries = [
-                dict(zip(names, row.values() if isinstance(row, Mapping) else row, strict=False)) for row in rows
+                {
+                    name: (row[raw_name] if raw_name in row else row.get(name))
+                    for raw_name, name in zip(raw_names, names, strict=True)
+                }
+                if isinstance(row, Mapping)
+                else dict(zip(names, row, strict=False))
+                for row in rows
             ]
             yield pa.Table.from_pylist(dictionaries)
 
@@ -186,7 +195,7 @@ class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
 class SnowflakeDriver(SyncDriverAdapterBase):
     """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
 
-    __slots__ = ("_active_stream_cursors", "_data_dictionary")
+    __slots__ = ("_active_stream_cursors", "_column_name_cache", "_data_dictionary")
     dialect = "snowflake"
     native_arrow_export: ClassVar[bool] = True
 
@@ -208,12 +217,13 @@ class SnowflakeDriver(SyncDriverAdapterBase):
                 "arrow_import_enabled": True,
                 "parquet_export_enabled": True,
                 "parquet_import_enabled": True,
-                "partition_strategies": ["rows_per_chunk"],
+                "partition_strategies": ["fixed", "rows_per_chunk"],
             },
         )
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._data_dictionary: SnowflakeSyncDataDictionary | None = None
         self._active_stream_cursors: dict[int, Any] = {}
+        self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
 
     def close(self) -> None:
         """Close outstanding native Arrow cursors before returning the connection."""
@@ -255,12 +265,19 @@ class SnowflakeDriver(SyncDriverAdapterBase):
 
         return close_cursor
 
-    def _execute_cursor(self, cursor: Any, sql: str, params: Any, config: StatementConfig | None = None) -> None:
+    def _statement_execute_options(self) -> dict[str, Any]:
         options: dict[str, Any] = {}
         if self.driver_features.get("enable_query_tag_correlation") and (correlation := CorrelationContext.get()):
             tag = self.driver_features.get("query_tag")
             options["_statement_params"] = {"QUERY_TAG": f"{tag}:{correlation}" if tag else correlation}
-        cursor.execute(sql, normalize_execute_parameters(params, paramstyle=self._binding_mode(config)), **options)
+        return options
+
+    def _execute_cursor(self, cursor: Any, sql: str, params: Any, config: StatementConfig | None = None) -> None:
+        cursor.execute(
+            sql,
+            normalize_execute_parameters(params, paramstyle=self._binding_mode(config)),
+            **self._statement_execute_options(),
+        )
 
     def collect_rows(self, cursor: Any, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
         """Materialize rows with consistent identifier casing."""
@@ -271,15 +288,13 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             if self.driver_features.get("enable_json_deserialization", True)
             else None
         )
-        data, names, row_format = collect_rows(
+        data, names, _ = collect_rows(
             fetched,
             cursor.description,
-            {},
+            self._column_name_cache,
             converter=converter,
             enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
         )
-        if row_format == "dict":
-            data = [tuple(row.get(name) for name in names) for row in data]
         return data, names, len(data)
 
     def _execute_cache_hit_with_cursor(
@@ -406,7 +421,11 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         query_id = None
         with handler, self.with_cursor(self.connection) as cursor:
             sql, params = self._compiled_sql(prepared, config)
-            cursor.execute_async(sql, normalize_execute_parameters(params, paramstyle=self._binding_mode(config)))
+            cursor.execute_async(
+                sql,
+                normalize_execute_parameters(params, paramstyle=self._binding_mode(config)),
+                **self._statement_execute_options(),
+            )
             query_id = cursor.sfqid
         self._check_pending_exception(handler)
         if not query_id:
@@ -613,7 +632,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         """Load already normalized physical columns without folding them again."""
         arrow_table = self._coerce_arrow_table(source)
         formatted = _format_identifier(table)
-        threshold = int(self.driver_features.get("stage_parquet_threshold_rows", 10_000))
+        threshold = int(self.driver_features.get("stage_parquet_threshold_rows", DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS))
         if (
             arrow_table.num_rows
             and self.driver_features.get("enable_stage_parquet_load", True)
@@ -712,13 +731,15 @@ class _SnowflakeArrowStreamSource:
                 sql, params = self._driver._compiled_sql(self._statement, self._driver.statement_config)
                 self._driver._execute_cursor(cursor, sql, params, self._statement.statement_config)
                 names = normalize_column_names(
-                    [str(item[0]) for item in cursor.description or ()],
+                    [descriptor_column_name(item) for item in cursor.description or ()],
                     enable_lowercase_column_names=bool(
                         self._driver.driver_features.get("enable_lowercase_column_names", True)
                     ),
                 )
                 self._variant_names = {
-                    names[index] for index, item in enumerate(cursor.description or ()) if item[1] in {5, 9, 10}
+                    names[index]
+                    for index, item in enumerate(cursor.description or ())
+                    if descriptor_type_code(item) in {5, 9, 10}
                 }
                 self._reader = build_arrow_reader_from_cursor(
                     cursor, close_cursor, self._driver.driver_features, batch_size=self._chunk_size

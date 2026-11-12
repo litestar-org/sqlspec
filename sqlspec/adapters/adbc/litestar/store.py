@@ -694,10 +694,41 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             VALUES ({p1}, {p2}, {p3})
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
-        elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql", "teradata"}:
-            bind_data: bytes | str = data.hex() if dialect == "snowflake" else data
-            insert_data_expr = f"TO_BINARY({p2}, 'HEX')" if dialect == "snowflake" else p2
-            update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
+        elif dialect == "snowflake":
+            bind_hex = data.hex()
+            if expires_at is None:
+                sql = (
+                    f"MERGE INTO {self._table_name} t "
+                    f"USING (SELECT {p1} AS session_id, TO_BINARY({p2}, 'HEX') AS data, NULL AS expires_at) s "
+                    "ON t.session_id = s.session_id "
+                    "WHEN MATCHED THEN UPDATE SET data = s.data, expires_at = s.expires_at "
+                    "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
+                    "VALUES (s.session_id, s.data, s.expires_at)"
+                )
+                merge_params: tuple[Any, ...] = (key, bind_hex)
+            else:
+                sql = (
+                    f"MERGE INTO {self._table_name} t "
+                    f"USING (SELECT {p1} AS session_id, TO_BINARY({p2}, 'HEX') AS data, {p3} AS expires_at) s "
+                    "ON t.session_id = s.session_id "
+                    "WHEN MATCHED THEN UPDATE SET data = s.data, expires_at = s.expires_at "
+                    "WHEN NOT MATCHED THEN INSERT (session_id, data, expires_at) "
+                    "VALUES (s.session_id, s.data, s.expires_at)"
+                )
+                merge_params = (key, bind_hex, expires_at)
+            with self._config.provide_session() as driver:
+                try:
+                    driver.execute(sql, *merge_params)
+                    driver.commit()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+            return
+        elif dialect in {"bigquery", "oracle", "db2", "mssql", "teradata"}:
+            bind_data: bytes | str = data
+            insert_data_expr = p2
+            update_data_expr = p1
             with self._config.provide_session() as driver:
                 try:
                     count_alias = _count_alias(dialect)

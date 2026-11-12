@@ -321,3 +321,39 @@ def test_cross_database_constraints_keep_catalog_and_show_identity(
         f"SHOW PRIMARY KEYS {scope}",
         f"SHOW UNIQUE KEYS {scope}",
     ]
+
+
+@pytest.mark.parametrize(
+    ("object_name", "schema", "object_type", "expected_type", "expected_name"),
+    [
+        ("users", None, "table", "TABLE", '"PUBLIC"."USERS"'),
+        ('"users"', None, "table", "TABLE", '"PUBLIC"."users"'),
+        ("analytics.users", None, "table", "TABLE", '"ANALYTICS"."USERS"'),
+        ('"Sales"."Orders"', "ignored", "table", "TABLE", '"Sales"."Orders"'),
+        ("other_db.analytics.users", None, "table", "TABLE", '"OTHER_DB"."ANALYTICS"."USERS"'),
+        ("users", "other_db.analytics", "table", "TABLE", '"OTHER_DB"."ANALYTICS"."USERS"'),
+        ("analytics", None, "schema", "SCHEMA", '"ANALYTICS"'),
+        ("other_db.analytics", None, "schema", "SCHEMA", '"OTHER_DB"."ANALYTICS"'),
+    ],
+)
+def test_native_ddl_splits_and_formats_qualified_identifiers(
+    snowflake_connection: Any,
+    object_name: str,
+    schema: str | None,
+    object_type: str,
+    expected_type: str,
+    expected_name: str,
+) -> None:
+    snowflake_connection.default_result = _result(["ddl"], [(f"CREATE {expected_type} {expected_name}",)])
+    driver = SnowflakeDriver(snowflake_connection)
+    result = driver.data_dictionary.get_ddl(
+        driver, object_name, schema, object_type=object_type, include_dependencies=False
+    )
+    assert result.status == MetadataSupport.SUPPORTED
+    assert list(snowflake_connection.calls[-1][1]) == [expected_type, expected_name]
+
+
+def test_native_ddl_unsupported_object_type_returns_unsupported(snowflake_connection: Any) -> None:
+    driver = SnowflakeDriver(snowflake_connection)
+    result = driver.data_dictionary.get_ddl(driver, "trg_orders", object_type="trigger", include_dependencies=False)
+    assert result.status == MetadataSupport.UNSUPPORTED

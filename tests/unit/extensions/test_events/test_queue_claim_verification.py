@@ -6,6 +6,7 @@ every DML statement. The table queue must confirm claim ownership through the
 persisted lease token instead of trusting the zero rowcount.
 """
 
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -124,3 +125,53 @@ async def test_async_dequeue_delivers_when_rows_affected_unreported(tmp_path: An
         assert await queue.dequeue("alerts") is None
     finally:
         await config.close_pool()
+
+
+async def test_async_locked_candidate_verifies_claim_when_rowcount_unreported() -> None:
+    """Locking async queues (FOR UPDATE) verify claim ownership when UPDATE reports zero rows."""
+    from contextlib import asynccontextmanager
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from typing import cast
+    from unittest.mock import AsyncMock
+
+    from sqlspec.core import StatementConfig
+
+    now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+    candidate_row: dict[str, Any] = {
+        "event_id": "evt-locked-1",
+        "channel": "alerts",
+        "payload_json": {"type": "alert"},
+        "metadata_json": None,
+        "attempts": 0,
+        "available_at": now,
+        "lease_expires_at": None,
+        "created_at": now,
+    }
+
+    async def execute_claim(stmt: Any) -> Any:
+        candidate_row["lease_expires_at"] = stmt.named_parameters["lease_expires_at"]
+        return SimpleNamespace(rows_affected=0)
+
+    driver = SimpleNamespace(
+        select_one_or_none=AsyncMock(return_value=candidate_row),
+        execute=AsyncMock(side_effect=execute_claim),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def provide_session(*_args: Any, **_kwargs: Any) -> AsyncIterator[Any]:
+        yield driver
+
+    config_stub = SimpleNamespace(
+        statement_config=StatementConfig(dialect="postgres"),
+        extension_config={"events": {"queue_table": _QUEUE_TABLE, "lease_seconds": 30}},
+        provide_session=provide_session,
+        get_observability_runtime=lambda: SimpleNamespace(increment_metric=lambda *_a, **_k: None),
+    )
+    queue = AsyncTableEventQueue(cast("Any", config_stub), queue_table=_QUEUE_TABLE)
+    claimed = await queue.dequeue("alerts")
+    assert claimed is not None
+    assert claimed.event_id == "evt-locked-1"
+    driver.commit.assert_awaited_once()

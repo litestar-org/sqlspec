@@ -62,7 +62,10 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     _max_table_name_parts: ClassVar[int] = 3
 
     def create_tables(self) -> None:
-        """Create the five session persistence tables."""
+        """Create and reconcile the five session persistence tables."""
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
         with self._config.provide_session() as driver:
             for ddl in (
                 self._sessions_table_ddl(),
@@ -73,6 +76,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             ):
                 driver.execute(ddl)
             driver.commit()
+        self.reconcile_schema(assume_existing=True)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
@@ -488,11 +492,16 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
     _max_table_name_parts: ClassVar[int] = 3
 
     def create_tables(self) -> None:
-        """Create the memory table when memory persistence is enabled."""
-        if self._enabled:
-            with self._config.provide_session() as driver:
-                driver.execute(self._memory_table_ddl())
-                driver.commit()
+        """Create and reconcile the memory table when memory persistence is enabled."""
+        if not self._enabled:
+            return
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
+            return
+        with self._config.provide_session() as driver:
+            driver.execute(self._memory_table_ddl())
+            driver.commit()
+        self.reconcile_schema(assume_existing=True)
 
     def insert_memory_entries(self, entries: list[StoredMemory], owner_id: object | None = None) -> int:
         """Insert new event memories without replacing already persisted events."""
@@ -620,7 +629,7 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memories older than the cutoff within optional scope filters."""
-        predicate = "timestamp < ?"
+        predicate = "inserted_at < ?"
         parameters: list[Any] = [datetime.now(UTC) - timedelta(days=days)]
         if app_name is not None:
             predicate += " AND app_name = ?"

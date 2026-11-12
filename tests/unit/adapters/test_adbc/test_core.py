@@ -1341,7 +1341,7 @@ def test_adbc_snowflake_observability_and_statement_query_tags() -> None:
 def test_adbc_non_snowflake_cursor_has_no_statement_options() -> None:
     """Other ADBC backends retain the zero-keyword cursor contract."""
     calls: list[dict[str, Any]] = []
-    cursor = SimpleNamespace(close=lambda: None)
+    cursor: Any = SimpleNamespace(close=lambda: None)
 
     def make_cursor(**kwargs: Any) -> Any:
         calls.append(kwargs)
@@ -1411,7 +1411,51 @@ def test_adbc_backend_identity_does_not_leak_across_shared_runtime() -> None:
     runtime.register_lifecycle_hook("on_query_start", started.append)
     for driver in (snowflake, sqlite, snowflake):
         assert driver.select_value("SELECT 1 AS value") == 1
-    assert [event.db_system for event in events] == ["snowflake", "adbc", "snowflake"]
+    assert [event.db_system for event in events] == ["snowflake", "sqlite", "snowflake"]
     assert [event.driver for event in events] == ["AdbcDriver", "AdbcDriver", "AdbcDriver"]
     assert len(started) == 3
+
+
+def test_adbc_snowflake_script_parameter_slicing_and_stream_cleanup() -> None:
+    """Snowflake multi-statement scripts slice positional parameters per statement and emit observer events."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    executed: list[tuple[str, Any]] = []
+    events: list[Any] = []
+    cursor = SimpleNamespace(
+        execute=lambda sql, parameters=None: executed.append((sql, parameters)),
+        close=lambda: None,
+        description=None,
+        rowcount=1,
+    )
+    connection = SimpleNamespace(cursor=lambda **_kw: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(
+        cast("Any", connection), statement_config=get_statement_config("snowflake"), dialect="snowflake"
+    )
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+
+    stmt = SQL(
+        "INSERT INTO t VALUES (?); INSERT INTO t VALUES (?, ?);",
+        10,
+        20,
+        30,
+        statement_config=driver.statement_config,
+        is_script=True,
+    )
+    result = driver.dispatch_statement_execution(stmt, cast("Any", connection))
+    assert result.total_statements == 2
+    assert executed == [("INSERT INTO t VALUES (?)", [10]), ("INSERT INTO t VALUES (?, ?)", [20, 30])]
+    assert [event.db_system for event in events] == ["snowflake", "snowflake", "snowflake"]
+
+    closed_steps: list[str] = []
+
+    def fail_first() -> None:
+        closed_steps.append("first")
+        raise RuntimeError("close boom")
+
+    driver._stream_closers.extend([fail_first, lambda: closed_steps.append("second")])
+    with pytest.raises(RuntimeError, match="close boom"):
+        driver.close_streams()
+    assert closed_steps == ["first", "second"]
     assert runtime.config_name == "AdbcConfig"
