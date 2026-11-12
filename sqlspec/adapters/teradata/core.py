@@ -29,6 +29,7 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 __all__ = (
     "DEFAULT_TERADATA_PORT",
     "INDEX_EXISTS_SQL",
+    "SCHEMA_EXISTS_SQL",
     "TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
@@ -46,6 +47,7 @@ __all__ = (
     "format_table_ref",
     "is_ddl_or_session_band_sql",
     "maybe_prefix_fastexport",
+    "render_query_band_sql",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
@@ -92,6 +94,9 @@ TABLE_EXISTS_SQL = (
     "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
     "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
     "AND TableKind IN ('T', 'O')"
+)
+SCHEMA_EXISTS_SQL = (
+    "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.DatabasesV WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(?))"
 )
 INDEX_EXISTS_SQL = (
     "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.IndicesV "
@@ -228,8 +233,12 @@ def format_query_band(query_band: Mapping[str, str] | str) -> str:
 
 def build_set_query_band_sql(query_band: Mapping[str, str] | str, *, transaction: bool = False) -> str:
     """Render a validated QUERY_BAND command."""
-    band = format_query_band(query_band)
-    value = f"'{band}'" if band else "NONE"
+    return render_query_band_sql(format_query_band(query_band), transaction=transaction)
+
+
+def render_query_band_sql(formatted_band: str, *, transaction: bool = False) -> str:
+    """Render a QUERY_BAND command from a band already returned by ``format_query_band``."""
+    value = f"'{formatted_band}'" if formatted_band else "NONE"
     return f"SET QUERY_BAND = {value} FOR {'TRANSACTION' if transaction else 'SESSION'};"
 
 

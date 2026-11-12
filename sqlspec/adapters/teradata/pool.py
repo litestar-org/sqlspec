@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from sqlspec.adapters.teradata.core import build_connection_config, format_query_band
+from sqlspec.adapters.teradata.core import build_connection_config, format_query_band, render_query_band_sql
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
     DatabaseConnectionError,
@@ -122,8 +122,7 @@ class TeradataConnectionPool:
             if self._session_query_band is not None:
                 cursor = connection.cursor()
                 try:
-                    value = f"'{self._session_query_band}'" if self._session_query_band else "NONE"
-                    cursor.execute(f"SET QUERY_BAND = {value} FOR SESSION;")
+                    cursor.execute(render_query_band_sql(self._session_query_band))
                     if connection.autocommit is False:
                         connection.commit()
                 finally:

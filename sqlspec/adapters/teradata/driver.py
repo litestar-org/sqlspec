@@ -11,6 +11,7 @@ from sqlspec.adapters.teradata._typing import (
     TeradataSessionContext,
 )
 from sqlspec.adapters.teradata.core import (
+    SCHEMA_EXISTS_SQL,
     build_insert_statement,
     build_set_query_band_sql,
     collect_rows,
@@ -442,19 +443,13 @@ class TeradataDriver(SyncDriverAdapterBase):
         with self.with_cursor(self.connection) as cursor:
             if sys.exc_info()[1] is None:
                 with exc_handler:
-                    cursor.execute(
-                        "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.DatabasesV WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(?))",
-                        (schema,),
-                    )
+                    cursor.execute(SCHEMA_EXISTS_SQL, (schema,))
                     result = cursor.fetchone() is not None
             else:
 
                 def _fetch() -> None:
                     nonlocal result
-                    cursor.execute(
-                        "LOCKING ROW FOR ACCESS SELECT 1 FROM DBC.DatabasesV WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(?))",
-                        (schema,),
-                    )
+                    cursor.execute(SCHEMA_EXISTS_SQL, (schema,))
                     result = cursor.fetchone() is not None
 
                 self._run_with_exception_handler(exc_handler, _fetch)
