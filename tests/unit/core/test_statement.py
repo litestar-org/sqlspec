@@ -1874,3 +1874,14 @@ def test_snowflake_builder_sequence_params_and_disabled_parsing_where() -> None:
     compiled_sql, compiled_params = filtered.compile()
     assert "WHERE" in compiled_sql
     assert compiled_params == (7,)
+
+
+def test_statement_dialects_on_shared_default_config_stay_independent() -> None:
+    """Statements with different dialects on the default config compile with their own dialect rules."""
+    for _ in range(2):
+        snowflake_sql, snowflake_params = SQL("SELECT ? || ?", "a", "b", dialect="snowflake").compile()
+        postgres_sql, _ = SQL("SELECT :x::int", {"x": 1}, dialect="postgres").compile()
+
+        assert snowflake_sql == "SELECT ? || ?"
+        assert list(snowflake_params) == ["a", "b"]
+        assert "::" in postgres_sql

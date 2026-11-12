@@ -624,7 +624,7 @@ class SQL:
         try:
             config = self._statement_config
             if config.dialect is None and self._dialect is not None and Dialect.get(self._dialect) is not None:
-                config = config.replace(dialect=self._dialect)
+                config = config._with_dialect(self._dialect)
             mixed = self._resolve_mixed_parameter_inputs()
             raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
             params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
@@ -1735,7 +1735,13 @@ class StatementConfig:
     and other processing options for SQL statements.
     """
 
-    __slots__ = (*SQL_CONFIG_SLOTS, "_has_transformers", "_has_output_transformer", "_user_statement_transformers")
+    __slots__ = (
+        *SQL_CONFIG_SLOTS,
+        "_dialect_variants",
+        "_has_transformers",
+        "_has_output_transformer",
+        "_user_statement_transformers",
+    )
 
     def __init__(
         self,
@@ -1836,6 +1842,7 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
+        self._dialect_variants: dict[str, StatementConfig] | None = None
         self._has_transformers = bool(self._user_statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
 
@@ -1936,6 +1943,31 @@ class StatementConfig:
     def freeze(self) -> None:
         """Mark the configuration as immutable to enable caching."""
         self._is_frozen = True
+
+    def _with_dialect(self, dialect: str) -> "StatementConfig":
+        """Return this configuration with ``dialect`` set.
+
+        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
+        processing caches carry over between statements.
+
+        Args:
+            dialect: SQLGlot dialect name.
+
+        Returns:
+            Configuration whose ``dialect`` is ``dialect``.
+        """
+        if not self._is_frozen:
+            return self.replace(dialect=dialect)
+        variants = self._dialect_variants
+        if variants is None:
+            variants = {}
+            self._dialect_variants = variants
+        derived = variants.get(dialect)
+        if derived is None:
+            derived = self.replace(dialect=dialect)
+            derived.freeze()
+            variants[dialect] = derived
+        return derived
 
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
