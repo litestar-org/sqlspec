@@ -1518,11 +1518,8 @@ def _arrow_schema_has_opaque_uuid(schema: Any) -> bool:
 def _resolve_dialect_config(dialect: str | None) -> "DialectConfig | None":
     if not dialect:
         return None
-    normalized = str(dialect).strip().lower()
-    if normalized == "vantage":
-        normalized = "teradata"
     with contextlib.suppress(ValueError):
-        return get_dialect_config(normalized)
+        return get_dialect_config(str(dialect).strip())
     return None
 
 
