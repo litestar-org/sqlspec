@@ -4,12 +4,14 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
+from sqlspec.adapters.db2.migrations import build_guarded_drop_table
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import quote_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
+    from sqlspec.migrations.schema import DropStatement
 
 __all__ = ("Db2AsyncStore", "Db2SyncStore")
 
@@ -286,6 +288,10 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         """Get Db2 DROP TABLE statements."""
         return [drop_session_table_sql(self._table_name)]
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the session table."""
+        return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
+
     def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
         schema, table = session_catalog_names(self._table_name)
@@ -448,6 +454,10 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
     def _drop_table_sql(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""
         return [drop_session_table_sql(self._table_name)]
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the session table."""
+        return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
 
     async def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""

@@ -632,6 +632,7 @@ def test_teradata_adk_remaining_branches_and_row_decoders(monkeypatch) -> None:
     driver = SimpleNamespace(
         select_one_or_none=lambda *_a: {"found": 1},
         execute=executed_session_sql.append,
+        execute_script=executed_session_sql.append,
         commit=lambda: None,
         data_dictionary=SimpleNamespace(get_indexes=lambda *_a, **_k: [], get_columns=lambda *_a, **_k: []),
     )
@@ -664,3 +665,47 @@ def test_teradata_adk_remaining_branches_and_row_decoders(monkeypatch) -> None:
     assert m_store.search_entries("hello", "app", "u1", scope_filter="user") == []
     assert m_store.search_entries("hello", "app", "u1", scope_filter="app") == []
     assert m_store.delete_entries_older_than(7) == 1
+
+
+class _CatalogDriver:
+    """Fake driver whose DROP TABLE fails for absent tables, like Teradata error 3807."""
+
+    def __init__(self, tables: set[str]) -> None:
+        self.tables = tables
+        self.dropped: list[str] = []
+
+    def select_one_or_none(self, _sql: str, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return {"found": 1} if parameters[1] in self.tables else None
+
+    def execute_script(self, statement: str) -> None:
+        name = statement.removeprefix("DROP TABLE ").strip('"').upper()
+        if name not in self.tables:
+            msg = f"[Error 3807] Object '{name}' does not exist."
+            raise RuntimeError(msg)
+        self.tables.discard(name)
+        self.dropped.append(name)
+
+
+def test_teradata_extension_downgrades_skip_tables_already_dropped() -> None:
+    from sqlspec.extensions.adk.migrations.reconcile import _downgrade_sync as adk_downgrade
+    from sqlspec.extensions.events.migrations.reconcile import _downgrade_sync as events_downgrade
+    from sqlspec.extensions.litestar.migrations.reconcile import _downgrade_sync as litestar_downgrade
+
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
+    stores = [TeradataADKStore(config), TeradataADKMemoryStore(config)]
+    driver = _CatalogDriver({"ADK_SESSION", "ADK_EVENT", "ADK_MEMORY"})
+    adk_downgrade(driver, stores)
+    assert driver.dropped == ["ADK_MEMORY", "ADK_EVENT", "ADK_SESSION"]
+    adk_downgrade(driver, stores)
+    assert driver.dropped == ["ADK_MEMORY", "ADK_EVENT", "ADK_SESSION"]
+
+    session_store = TeradataStore(TeradataConfig(connection_config={"host": "localhost"}))
+    driver = _CatalogDriver({"LITESTAR_SESSION"})
+    litestar_downgrade(driver, session_store)
+    litestar_downgrade(driver, session_store)
+    assert driver.dropped == ["LITESTAR_SESSION"]
+
+    queue_store = TeradataEventQueueStore(TeradataConfig(connection_config={"host": "localhost"}))
+    driver = _CatalogDriver(set())
+    events_downgrade(driver, queue_store, True)
+    assert driver.dropped == []

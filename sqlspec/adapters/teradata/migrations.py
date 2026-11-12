@@ -4,12 +4,30 @@ from typing import TYPE_CHECKING
 
 from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_identifier, format_table_ref, split_schema_and_table
 from sqlspec.builder import CreateTable, sql
+from sqlspec.migrations.schema import DropStatement
 from sqlspec.migrations.tracker import SyncMigrationTracker
 
 if TYPE_CHECKING:
     from sqlspec.driver import SyncDriverAdapterBase
 
-__all__ = ("TeradataSyncMigrationTracker",)
+__all__ = ("TeradataSyncMigrationTracker", "build_guarded_drop_table")
+
+
+def build_guarded_drop_table(table_name: str, statement: str | None = None) -> DropStatement:
+    """Return a DROP TABLE that runs only when ``DBC.TablesV`` lists the table.
+
+    Args:
+        table_name: Table or database.table name, quoted parts kept exact and unquoted parts upper-folded.
+        statement: DROP statement to run; defaults to ``DROP TABLE`` on the quoted table reference.
+
+    Returns:
+        Catalog-probed drop for extension downgrades.
+    """
+    return DropStatement(
+        statement or f"DROP TABLE {format_table_ref(table_name)}",
+        exists_sql=TABLE_EXISTS_SQL,
+        exists_parameters=split_schema_and_table(table_name),
+    )
 
 
 class TeradataSyncMigrationTracker(SyncMigrationTracker):

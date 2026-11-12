@@ -14,7 +14,13 @@ from sqlspec.extensions.adk._config_utils import (
 from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore, BaseSyncADKArtifactStore
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseAsyncADKStore, BaseSyncADKStore
-from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import (
+    DropStatement,
+    ensure_schema_async,
+    ensure_schema_sync,
+    run_drop_statements_async,
+    run_drop_statements_sync,
+)
 from sqlspec.migrations.utils import validate_builtin_reconcile_adapter
 from sqlspec.utils.adapters import resolve_adapter_name
 
@@ -208,30 +214,26 @@ def reconcile(context: "MigrationContext") -> "Awaitable[None] | None":
     return None
 
 
-def _store_drop_statements(store: Any) -> list[str]:
-    """Return the DROP statements for an ADK session, memory, or artifact store."""
+def _store_downgrade_drops(store: Any) -> "list[DropStatement]":
+    """Return the downgrade drops for an ADK session, memory, or artifact store."""
     if isinstance(store, (BaseSyncADKArtifactStore, BaseAsyncADKArtifactStore)):
         build_drop = getattr(store, "_build_drop_artifact_table_sql", None)
         if callable(build_drop):
-            return list(cast("list[str]", build_drop()))
-        return [f"DROP TABLE IF EXISTS {store.artifact_table}"]
-    if isinstance(store, (BaseSyncADKMemoryStore, BaseAsyncADKMemoryStore)):
-        return list(store._drop_memory_table_sql())
-    return list(store._drop_tables_sql())
+            return [DropStatement(statement) for statement in cast("list[str]", build_drop())]
+        return [DropStatement(f"DROP TABLE IF EXISTS {store.artifact_table}")]
+    return list(store.downgrade_drops())
 
 
 def _downgrade_sync(driver: Any, stores: list[Any]) -> None:
     """Drop enabled ADK store schemas in reverse dependency order on a synchronous driver."""
     for store in reversed(stores):
-        for stmt in _store_drop_statements(store):
-            driver.execute_script(stmt)
+        run_drop_statements_sync(driver, _store_downgrade_drops(store))
 
 
 async def _downgrade_async(driver: Any, stores: list[Any]) -> None:
     """Drop enabled ADK store schemas in reverse dependency order on an asynchronous driver."""
     for store in reversed(stores):
-        for stmt in _store_drop_statements(store):
-            await driver.execute_script(stmt)
+        await run_drop_statements_async(driver, _store_downgrade_drops(store))
 
 
 def downgrade(context: "MigrationContext") -> "Awaitable[None] | None":

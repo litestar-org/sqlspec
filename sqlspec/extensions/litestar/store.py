@@ -8,7 +8,13 @@ from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 from litestar.stores.base import Store
 
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync, metadata_has_index
+from sqlspec.migrations.schema import (
+    DropStatement,
+    SchemaTarget,
+    ensure_schema_async,
+    ensure_schema_sync,
+    metadata_has_index,
+)
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger
@@ -280,6 +286,10 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             Order matters: drop indexes before table.
         """
         raise NotImplementedError
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the session table and its indexes."""
+        return [DropStatement(statement) for statement in self._drop_table_sql()]
 
     def _log_table_created(self) -> None:
         logger.debug(

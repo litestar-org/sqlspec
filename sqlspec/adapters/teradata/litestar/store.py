@@ -5,9 +5,10 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.teradata._typing import TeradataCursor
 from sqlspec.adapters.teradata.core import TABLE_EXISTS_SQL, format_table_ref, resolve_rowcount, split_schema_and_table
+from sqlspec.adapters.teradata.migrations import build_guarded_drop_table
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -96,6 +97,10 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
 
     def _drop_table_sql(self) -> list[str]:
         return [f"DROP TABLE {format_table_ref(self._table_name)}"]
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the session table."""
+        return [build_guarded_drop_table(self._table_name)]
 
     def _create_table(self) -> None:
         schema, table = split_schema_and_table(self._table_name)

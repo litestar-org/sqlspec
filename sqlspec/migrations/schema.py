@@ -17,7 +17,16 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
     from sqlglot.tokenizer_core import Token
 
-__all__ = ("SchemaEnsureResult", "SchemaTarget", "ensure_schema_async", "ensure_schema_sync", "metadata_has_index")
+__all__ = (
+    "DropStatement",
+    "SchemaEnsureResult",
+    "SchemaTarget",
+    "ensure_schema_async",
+    "ensure_schema_sync",
+    "metadata_has_index",
+    "run_drop_statements_async",
+    "run_drop_statements_sync",
+)
 
 logger = get_logger("sqlspec.migrations.schema")
 
@@ -149,6 +158,72 @@ _TYPE_FAMILIES: Final[dict[str, str]] = {
     "tokenlist": "struct",
     "tsvector": "struct",
 }
+
+
+class DropStatement:
+    """One DROP statement run by an extension downgrade.
+
+    Dialects without ``DROP ... IF EXISTS`` supply a catalog probe; the statement then runs only
+    when the probe returns a row, so a retried downgrade skips objects that are already gone.
+
+    Args:
+        statement: DROP statement to execute.
+        exists_sql: Optional catalog query returning a row when the object exists.
+        exists_parameters: Parameters bound to ``exists_sql``.
+    """
+
+    __slots__ = ("exists_parameters", "exists_sql", "statement")
+
+    def __init__(
+        self, statement: str, *, exists_sql: str | None = None, exists_parameters: "tuple[Any, ...]" = ()
+    ) -> None:
+        self.statement = statement
+        self.exists_sql = exists_sql
+        self.exists_parameters = exists_parameters
+
+    def __repr__(self) -> str:
+        return f"DropStatement({self.statement!r}, exists_sql={self.exists_sql!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DropStatement):
+            return NotImplemented
+        return (self.statement, self.exists_sql, self.exists_parameters) == (
+            other.statement,
+            other.exists_sql,
+            other.exists_parameters,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.statement, self.exists_sql, self.exists_parameters))
+
+
+def run_drop_statements_sync(driver: Any, drops: "Sequence[DropStatement]") -> None:
+    """Execute downgrade drops in order, skipping probed objects that no longer exist.
+
+    Args:
+        driver: Synchronous migration driver.
+        drops: DROP statements with optional existence probes.
+    """
+    for drop in drops:
+        if drop.exists_sql is not None and driver.select_one_or_none(drop.exists_sql, drop.exists_parameters) is None:
+            continue
+        driver.execute_script(drop.statement)
+
+
+async def run_drop_statements_async(driver: Any, drops: "Sequence[DropStatement]") -> None:
+    """Execute downgrade drops in order on an async driver, skipping probed objects that no longer exist.
+
+    Args:
+        driver: Asynchronous migration driver.
+        drops: DROP statements with optional existence probes.
+    """
+    for drop in drops:
+        if (
+            drop.exists_sql is not None
+            and await driver.select_one_or_none(drop.exists_sql, drop.exists_parameters) is None
+        ):
+            continue
+        await driver.execute_script(drop.statement)
 
 
 class SchemaTarget:

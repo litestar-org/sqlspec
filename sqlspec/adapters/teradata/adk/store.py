@@ -15,9 +15,10 @@ from sqlspec.adapters.teradata.core import (
     resolve_rowcount,
     split_schema_and_table,
 )
+from sqlspec.adapters.teradata.migrations import build_guarded_drop_table
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
-from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index, run_drop_statements_sync
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -45,17 +46,21 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
 
     def drop_tables(self) -> None:
         """Drop existing ADK tables in FK-safe order using catalog guards."""
-        _drop_existing_tables(
-            self._config,
-            (
+        _drop_existing_tables(self._config, self.downgrade_drops())
+        self._log_tables_dropped()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return catalog-probed drops for the ADK tables in FK-safe order."""
+        return [
+            build_guarded_drop_table(table)
+            for table in (
                 self._metadata_table,
                 self._user_state_table,
                 self._app_state_table,
                 self._events_table,
                 self._session_table,
-            ),
-        )
-        self._log_tables_dropped()
+            )
+        ]
 
     def create_tables(self) -> None:
         """Create ADK tables and indexes using catalog guards and MULTISET DDL."""
@@ -458,7 +463,11 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
 
     def drop_tables(self) -> None:
         """Drop an existing memory table using a catalog guard."""
-        _drop_existing_tables(self._config, (self._memory_table,))
+        _drop_existing_tables(self._config, self.downgrade_drops())
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the memory table."""
+        return [build_guarded_drop_table(self._memory_table)]
 
     def create_tables(self) -> None:
         """Create the memory table and indexes using catalog guards and MULTISET DDL."""
@@ -988,14 +997,10 @@ def _create_missing_table(driver: Any, table_name: str, ddl: str) -> None:
         driver.commit()
 
 
-def _drop_existing_tables(config: "TeradataConfig", table_names: "Sequence[str]") -> None:
-    """Drop each table that exists in the catalog, committing each DDL step."""
+def _drop_existing_tables(config: "TeradataConfig", drops: "Sequence[DropStatement]") -> None:
+    """Run catalog-probed drops in one session; the driver commits each DDL step in manual mode."""
     with config.provide_session() as driver:
-        for table_name in table_names:
-            schema, table = split_schema_and_table(table_name)
-            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
-                driver.execute(f"DROP TABLE {format_table_ref(table_name)}")
-                driver.commit()
+        run_drop_statements_sync(driver, drops)
 
 
 def _create_missing_index(driver: Any, table_name: str, index_name: str, columns: str) -> None:

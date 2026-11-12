@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -136,6 +136,10 @@ class _ADKStoreCommon(Generic[ConfigT]):
     def _drop_tables_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the session store tables in FK-safe order."""
+        return [DropStatement(statement) for statement in self._drop_tables_sql()]
 
     def _reset_drop_statements(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""

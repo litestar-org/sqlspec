@@ -13,6 +13,7 @@ from sqlspec.adapters.db2.core import (
     to_db_timestamp,
     utc_now,
 )
+from sqlspec.adapters.db2.migrations import build_guarded_drop_table
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -23,7 +24,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
-from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
 
@@ -81,6 +82,17 @@ class _Db2ADKStoreMixin:
             _drop_table_sql(self._events_table),
             _drop_table_sql(self._session_table),
         ]
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return catalog-probed drops for the ADK tables in FK-safe order."""
+        tables = (
+            self._metadata_table,
+            self._user_state_table,
+            self._app_state_table,
+            self._events_table,
+            self._session_table,
+        )
+        return [build_guarded_drop_table(table, _drop_table_sql(table)) for table in tables]
 
     def _upsert_app_state_sql(self) -> str:
         return _upsert_state_sql(self._app_state_table, ("app_name",))
@@ -650,6 +662,10 @@ class _Db2ADKMemoryStoreMixin:
 
     def _drop_memory_table_sql(self) -> list[str]:
         return [_drop_table_sql(self._memory_table)]
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the memory table."""
+        return [build_guarded_drop_table(self._memory_table, _drop_table_sql(self._memory_table))]
 
 
 class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2SyncConfig]):

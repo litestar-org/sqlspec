@@ -4,8 +4,9 @@ from typing import Final
 
 from sqlspec.adapters.teradata.config import TeradataConfig
 from sqlspec.adapters.teradata.core import split_schema_and_table
+from sqlspec.adapters.teradata.migrations import build_guarded_drop_table
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 
 __all__ = ("TeradataEventQueueStore",)
 
@@ -57,3 +58,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
     def _wrap_drop_statement(self, statement: str) -> str:
         """Return the DROP statement unchanged."""
         return statement
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the catalog-probed drop for the queue table."""
+        return [build_guarded_drop_table(self.table_name, statement) for statement in self.drop_statements()]
