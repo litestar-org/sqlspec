@@ -176,3 +176,32 @@ def test_teradata_merge_subquery_source_value_binds_parameters_once() -> None:
     )
     assert '"customer_id" = :customer_id' in built.sql
     assert [name for name in built.parameters if name.startswith("customer_id")] == ["customer_id"]
+
+
+def test_teradata_merge_multi_row_source_branches_reference_a_table() -> None:
+    def build(rows: list[dict[str, object]]) -> str:
+        return (
+            sql
+            .merge(dialect="teradata")
+            .into("orders", alias="t")
+            .using(rows, alias="src")
+            .on("t.id = src.id")
+            .when_not_matched_then_insert(columns=["id", "total"], values=["src.id", "src.total"])
+            .build()
+            .sql
+        )
+
+    multi = parse_one(build([{"id": 1, "total": 2}, {"id": 2, "total": 3}, {"id": 3, "total": 4}]), dialect="vantage")
+    union = multi.find(exp.Union)
+    assert union is not None
+    branches = [select for select in union.find_all(exp.Select) if select.find(exp.Cast)]
+    assert len(branches) == 3
+    for branch in branches:
+        source = branch.args["from_"].this
+        assert isinstance(source, exp.Subquery)
+        assert source.alias == "sqlspec_row"
+        assert source.this.sql(dialect="vantage") == 'SELECT 1 AS "sqlspec_one"'
+
+    single = parse_one(build([{"id": 1, "total": 2}]), dialect="vantage")
+    assert single.find(exp.Union) is None
+    assert single.find(exp.From) is None

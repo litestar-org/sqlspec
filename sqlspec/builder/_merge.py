@@ -428,7 +428,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         return "CLOB" if size > _TERADATA_VARCHAR_MAX_LENGTH else f"VARCHAR({size})"
 
     def _create_teradata_select_source(self, rows: list[dict[str, Any]], alias: str | None) -> exp.Expr:
-        """Build tableless typed SELECT branches for Teradata MERGE sources."""
+        """Build typed SELECT branches for Teradata MERGE sources.
+
+        A single row is a FROM-less SELECT. Multiple rows are joined with ``UNION ALL``, and each
+        branch reads from a one-row derived table because Teradata rejects set-operation branches
+        that reference no table (error 3888).
+        """
         builder = cast("QueryBuilder", self)
         columns = list(rows[0])
         resolved_rows = [
@@ -462,6 +467,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     resolved = exp.Cast(this=placeholder, to=column_types[column].copy())
                 projections.append(exp.alias_(resolved, column))
             branch = exp.Select(expressions=projections)
+            if len(rows) > 1:
+                branch.set("from_", exp.From(this=_teradata_single_row_table()))
             query = branch if query is None else exp.Union(this=query, expression=branch, distinct=False)
         effective_alias = alias or "src"
         return exp.Subquery(
@@ -920,3 +927,11 @@ def _parse_merge_condition(
         return condition
     msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
     raise SQLBuilderError(msg)
+
+
+def _teradata_single_row_table() -> exp.Expr:
+    """Return a one-row derived table for Teradata set-operation branches."""
+    return exp.Subquery(
+        this=exp.Select(expressions=[exp.alias_(exp.Literal.number(1), "sqlspec_one")]),
+        alias=exp.TableAlias(this=exp.to_identifier("sqlspec_row")),
+    )
