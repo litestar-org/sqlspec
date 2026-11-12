@@ -19,6 +19,7 @@ _SESSION_CONTEXTS = (
     ("sqlspec.adapters.arrow_odbc._typing", "ArrowOdbcSessionContext"),
     ("sqlspec.adapters.bigquery._typing", "BigQuerySessionContext"),
     ("sqlspec.adapters.db2._typing", "Db2SyncSessionContext"),
+    ("sqlspec.adapters.teradata._typing", "TeradataSessionContext"),
 )
 
 POOLING_CASES = (

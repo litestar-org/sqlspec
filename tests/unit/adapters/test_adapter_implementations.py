@@ -80,6 +80,7 @@ ADAPTER_CORE_MODULES = (
     "sqlspec.adapters.pymysql.core",
     "sqlspec.adapters.spanner.core",
     "sqlspec.adapters.sqlite.core",
+    "sqlspec.adapters.teradata.core",
 )
 CREATE_MAPPED_EXCEPTION_MODULES = ADAPTER_CORE_MODULES
 APPLY_DRIVER_FEATURES_MODULES = ADAPTER_CORE_MODULES
@@ -553,6 +554,7 @@ ADAPTER_CONFIG_MODULES = (
     "sqlspec.adapters.pymysql.config",
     "sqlspec.adapters.spanner.config",
     "sqlspec.adapters.sqlite.config",
+    "sqlspec.adapters.teradata.config",
 )
 
 
@@ -573,7 +575,7 @@ def test_every_config_declares_type_coercion_capabilities() -> None:
             ):
                 concrete_configs.append(obj)
 
-    assert len(concrete_configs) == 26
+    assert len(concrete_configs) == 27
 
     for config_cls in concrete_configs:
         assert "type_coercion_capabilities" in config_cls.__dict__, (
