@@ -73,6 +73,7 @@ __all__ = (
     "configure_adbc_duckdb_profiling",
     "create_duckdb_profile_path",
     "create_mapped_exception",
+    "create_teradata_mapped_exception",
     "detect_dialect",
     "detect_postgres_extensions",
     "driver_from_uri",
@@ -1043,6 +1044,9 @@ def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map ADBC errors to SQLSpec exceptions.
 
+    Teradata ``[Error NNNN]`` diagnostics are mapped only when the message identifies Teradata;
+    use ``create_teradata_mapped_exception`` for connections known to reach Teradata.
+
     This is a factory function that returns an exception instance rather than
     raising. This pattern is more robust for use in __exit__ handlers and
     avoids issues with exception control flow in different Python versions.
@@ -1061,6 +1065,25 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     _ = logger
+    return _create_mapped_exception(error, assume_teradata=False)
+
+
+def create_teradata_mapped_exception(error: Any) -> SQLSpecError:
+    """Map an error from a connection known to reach Teradata, including Flight SQL routes.
+
+    Teradata ``[Error NNNN]`` diagnostics are mapped even when the message carries no Teradata
+    marker, then the generic ADBC mapping applies.
+
+    Args:
+        error: The ADBC exception to map.
+
+    Returns:
+        A SQLSpec exception that wraps the original error.
+    """
+    return _create_mapped_exception(error, assume_teradata=True)
+
+
+def _create_mapped_exception(error: Any, *, assume_teradata: bool) -> SQLSpecError:
     status_mapped = _map_adbc_status_exception(error)
     if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
         return status_mapped
@@ -1070,7 +1093,9 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
 
-    if enterprise_mapped := _map_enterprise_exception(error, raw_message, error_msg, sqlstate):
+    if enterprise_mapped := _map_enterprise_exception(
+        error, raw_message, error_msg, sqlstate, assume_teradata=assume_teradata
+    ):
         return enterprise_mapped
 
     if sqlstate:
@@ -1923,13 +1948,15 @@ def _map_mssql_exception(error: Any, raw_message: str, lowered_message: str) -> 
 
 
 def _map_enterprise_exception(
-    error: Any, raw_message: str, lowered_message: str, sqlstate: "str | None"
+    error: Any, raw_message: str, lowered_message: str, sqlstate: "str | None", *, assume_teradata: bool = False
 ) -> "SQLSpecError | None":
     if oracle_mapped := _map_oracle_exception(error, raw_message):
         return oracle_mapped
     if db2_mapped := _map_db2_exception(error, raw_message, lowered_message, sqlstate):
         return db2_mapped
-    if teradata_mapped := _map_teradata_exception(error, raw_message, lowered_message, sqlstate):
+    if teradata_mapped := _map_teradata_exception(
+        error, raw_message, lowered_message, sqlstate, assume_teradata=assume_teradata
+    ):
         return teradata_mapped
     return _map_mssql_exception(error, raw_message, lowered_message)
 
@@ -2415,11 +2442,19 @@ _TERADATA_ERROR_CODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 
 
 def _map_teradata_exception(
-    error: Any, raw_message: str, lowered_message: str, sqlstate: str | None
+    error: Any, raw_message: str, lowered_message: str, sqlstate: str | None, *, assume_teradata: bool = False
 ) -> SQLSpecError | None:
-    """Map Teradata DBS [Error NNNN] diagnostics and ODBC SQLSTATE codes to SQLSpecError."""
+    """Map Teradata DBS [Error NNNN] diagnostics and ODBC SQLSTATE codes to SQLSpecError.
+
+    Diagnostics are mapped only for messages that name Teradata, or when the caller knows the
+    connection reaches Teradata.
+    """
+    has_teradata_marker = assume_teradata or any(
+        marker in lowered_message for marker in ("teradata", "[teradata", "teradatasql", "tdwm")
+    )
+    if not has_teradata_marker:
+        return None
     match = _TERADATA_ERROR_CODE_PATTERN.search(raw_message)
-    has_teradata_marker = any(marker in lowered_message for marker in ("teradata", "[teradata", "teradatasql", "tdwm"))
     code: int | None = None
     if match is not None:
         code = int(match.group(1))

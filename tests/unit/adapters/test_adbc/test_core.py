@@ -1215,3 +1215,27 @@ def test_teradata_driver_reports_teradata_for_vantage_statement_config() -> None
     assert driver.statement_config.statement_transformers == (_marker,)
     assert driver.dialect == "vantage"
     assert driver._dialect_name == "teradata"
+
+
+def test_teradata_error_codes_map_only_for_teradata_sources() -> None:
+    from adbc_driver_manager import OperationalError
+
+    from sqlspec.adapters.adbc.core import create_mapped_exception, create_teradata_mapped_exception
+    from sqlspec.adapters.adbc.driver import AdbcExceptionHandler
+    from sqlspec.exceptions import PermissionDeniedError
+
+    def make_error(message: str) -> OperationalError:
+        return OperationalError(message, status_code=AdbcStatusCode.UNKNOWN, vendor_code=None, sqlstate=None)
+
+    unmarked = make_error("[Error 3523] request rejected")
+    assert type(create_mapped_exception(unmarked)) is SQLSpecError
+    assert isinstance(create_teradata_mapped_exception(unmarked), PermissionDeniedError)
+    assert isinstance(
+        create_mapped_exception(make_error("[Teradata Database] [Error 3523] denied")), PermissionDeniedError
+    )
+
+    for dialect, expected in (("teradata", PermissionDeniedError), ("postgres", SQLSpecError)):
+        handler = AdbcExceptionHandler(dialect)
+        with handler:
+            raise make_error("[Error 3523] request rejected")
+        assert type(handler.pending_exception) is expected

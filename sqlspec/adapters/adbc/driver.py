@@ -19,6 +19,7 @@ from sqlspec.adapters.adbc.core import (
     configure_adbc_duckdb_profiling,
     create_duckdb_profile_path,
     create_mapped_exception,
+    create_teradata_mapped_exception,
     detect_dialect,
     driver_profile,
     enforce_strict_type_coercion,
@@ -85,13 +86,19 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
     on ``pending_exception``.
     """
 
-    __slots__ = ()
+    __slots__ = ("_assume_teradata",)
+
+    def __init__(self, dialect: "str | None" = None) -> None:
+        super().__init__()
+        self._assume_teradata = dialect == "teradata"
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
         if issubclass(exc_type, AdbcNativeError):
-            self.pending_exception = create_mapped_exception(exc_val)
+            self.pending_exception = (
+                create_teradata_mapped_exception(exc_val) if self._assume_teradata else create_mapped_exception(exc_val)
+            )
             return True
         return False
 
@@ -543,7 +550,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             except (AdbcNotSupportedError, NotImplementedError):
                 pass
             except AdbcNativeError as exc:
-                raise create_mapped_exception(exc) from exc
+                raise self._map_native_error(exc) from exc
         if (
             native is not None
             and callable(getattr(native, "set_autocommit", None))
@@ -566,7 +573,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                 with contextlib.suppress(BaseException):
                     native.set_autocommit(True)
                 if isinstance(exc, AdbcNativeError):
-                    raise create_mapped_exception(exc) from exc
+                    raise self._map_native_error(exc) from exc
                 raise
             self._previous_autocommit = True
         self._transaction_active = True
@@ -665,13 +672,19 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return AdbcCursor(connection)
 
+    def _map_native_error(self, error: BaseException) -> SQLSpecError:
+        """Map a native ADBC error with Teradata diagnostics enabled for Teradata connections."""
+        if self._dialect_name == "teradata":
+            return create_teradata_mapped_exception(error)
+        return create_mapped_exception(error)
+
     def handle_database_exceptions(self) -> "AdbcExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
 
         Returns:
             Exception handler context manager
         """
-        return AdbcExceptionHandler()
+        return AdbcExceptionHandler(self._dialect_name)
 
     def select_to_arrow(
         self,
@@ -1067,7 +1080,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             self._previous_autocommit = None
             self._transaction_active = False
         if isinstance(primary, AdbcNativeError):
-            raise create_mapped_exception(primary) from primary
+            raise self._map_native_error(primary) from primary
         if primary is not None:
             raise primary
 
