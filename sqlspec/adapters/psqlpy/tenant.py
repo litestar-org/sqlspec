@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
-from sqlspec.driver._tenant import AsyncTenantLease, _await_owned
+from sqlspec.driver._tenant import AsyncTenantLease, await_owned_release
 from sqlspec.exceptions import TenantCleanupError
 from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
@@ -58,6 +58,7 @@ async def _terminate_and_confirm(connection: Any) -> bool:
     return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PsqlpyTenantLease(AsyncTenantLease):
     """Own one pool context, transaction finish, and verified disposal."""
 
@@ -78,9 +79,10 @@ class PsqlpyTenantLease(AsyncTenantLease):
         except BaseException as exc:
             setup_error = exc
         if setup_error is not None:
-            disposal_error, _ = await _await_owned(asyncio.create_task(self._invalidate(connection)))
-            if disposal_error is not None:
-                setup_error.add_note(f"Tenant acquire connection disposal failed: {type(disposal_error).__name__}")
+            try:
+                await await_owned_release(self._invalidate(connection))
+            except BaseException as disposal_error:
+                setup_error.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
             raise setup_error
         return connection
 

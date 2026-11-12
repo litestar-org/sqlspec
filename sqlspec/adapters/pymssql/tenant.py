@@ -50,6 +50,7 @@ class PymssqlSessionContextStrategy(MssqlTenantSettings):
         self.verify_checkin(state, restored)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class PymssqlTenantLease(SyncTenantLease):
     """Fail-closed tenant lease over pymssql connections."""
 
