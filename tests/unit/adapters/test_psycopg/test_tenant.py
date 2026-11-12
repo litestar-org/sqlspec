@@ -1,5 +1,6 @@
 """Sync and async psycopg tenant management obey identical session contracts."""
 
+from inspect import iscoroutinefunction
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Self, cast
 from unittest.mock import Mock
@@ -7,7 +8,10 @@ from unittest.mock import Mock
 import pytest
 from psycopg import pq
 
+from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncRLSStrategy, CockroachPsycopgSyncRLSStrategy
+from sqlspec.adapters.cockroach_psycopg.tenant import CockroachPsycopgAsyncTenantLease, CockroachPsycopgSyncTenantLease
 from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
+from sqlspec.adapters.psycopg.tenant import PsycopgAsyncTenantLease, PsycopgSyncTenantLease
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.exceptions import TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
@@ -93,18 +97,36 @@ class GucConnection:
         pass
 
 
-async def checkout(
-    strategy: PsycopgAsyncRLSStrategy | PsycopgSyncRLSStrategy, connection: GucConnection, payload: TenantContextPayload
-) -> TenantLeaseState:
-    if isinstance(strategy, PsycopgAsyncRLSStrategy):
-        return await strategy.checkout(cast("PsycopgAsyncConnection", connection), payload)
-    return strategy.checkout(cast("PsycopgSyncConnection", connection), payload)
+@pytest.fixture(
+    params=[
+        SimpleNamespace(
+            sync_strategy=PsycopgSyncRLSStrategy,
+            async_strategy=PsycopgAsyncRLSStrategy,
+            sync_lease=PsycopgSyncTenantLease,
+            async_lease=PsycopgAsyncTenantLease,
+        ),
+        SimpleNamespace(
+            sync_strategy=CockroachPsycopgSyncRLSStrategy,
+            async_strategy=CockroachPsycopgAsyncRLSStrategy,
+            sync_lease=CockroachPsycopgSyncTenantLease,
+            async_lease=CockroachPsycopgAsyncTenantLease,
+        ),
+    ],
+    ids=["psycopg", "cockroach_psycopg"],
+)
+def family(request: pytest.FixtureRequest) -> Any:
+    """Return one psycopg-protocol adapter's sync and async strategies and leases."""
+    return request.param
 
 
-async def checkin(
-    strategy: PsycopgAsyncRLSStrategy | PsycopgSyncRLSStrategy, connection: GucConnection, state: TenantLeaseState
-) -> None:
-    if isinstance(strategy, PsycopgAsyncRLSStrategy):
+async def checkout(strategy: Any, connection: GucConnection, payload: TenantContextPayload) -> TenantLeaseState:
+    if iscoroutinefunction(strategy.checkout):
+        return cast("TenantLeaseState", await strategy.checkout(cast("PsycopgAsyncConnection", connection), payload))
+    return cast("TenantLeaseState", strategy.checkout(cast("PsycopgSyncConnection", connection), payload))
+
+
+async def checkin(strategy: Any, connection: GucConnection, state: TenantLeaseState) -> None:
+    if iscoroutinefunction(strategy.checkin):
         await strategy.checkin(cast("PsycopgAsyncConnection", connection), state)
     else:
         strategy.checkin(cast("PsycopgSyncConnection", connection), state)
@@ -112,9 +134,9 @@ async def checkin(
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("autocommit", [False, True])
-async def test_tenant_manages_bound_identity_and_restores(asynchronous: bool, autocommit: bool) -> None:
+async def test_tenant_manages_bound_identity_and_restores(asynchronous: bool, autocommit: bool, family: Any) -> None:
     connection = GucConnection(asynchronous, autocommit)
-    strategy = PsycopgAsyncRLSStrategy() if asynchronous else PsycopgSyncRLSStrategy()
+    strategy = (family.async_strategy if asynchronous else family.sync_strategy)()
     payload = TenantContextPayload("a'; DROP")
     state = await checkout(strategy, connection, payload)
     assert state.baseline["app.current_tenant_id"] == "before"
@@ -131,9 +153,9 @@ async def test_tenant_manages_bound_identity_and_restores(asynchronous: bool, au
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: bool) -> None:
+async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: bool, family: Any) -> None:
     connection = GucConnection(asynchronous)
-    strategy = PsycopgAsyncRLSStrategy() if asynchronous else PsycopgSyncRLSStrategy()
+    strategy = (family.async_strategy if asynchronous else family.sync_strategy)()
     payload = TenantContextPayload("a")
     connection.info.transaction_status = pq.TransactionStatus.INTRANS
     with pytest.raises(TenantContextError):
@@ -147,9 +169,11 @@ async def test_tenant_rejects_active_checkout_and_failed_restore(asynchronous: b
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_tenant_checkin_preserves_driver_error(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_tenant_checkin_preserves_driver_error(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch, family: Any
+) -> None:
     connection = GucConnection(asynchronous)
-    strategy = PsycopgAsyncRLSStrategy() if asynchronous else PsycopgSyncRLSStrategy()
+    strategy = (family.async_strategy if asynchronous else family.sync_strategy)()
     state = await checkout(strategy, connection, TenantContextPayload("a"))
     error = RuntimeError("native restore failed")
     monkeypatch.setattr(connection, "cursor", Mock(side_effect=error))
@@ -162,10 +186,9 @@ async def test_tenant_checkin_preserves_driver_error(asynchronous: bool, monkeyp
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_tenant_close_failure_never_returns_unverified_connection(asynchronous: bool) -> None:
+async def test_tenant_close_failure_never_returns_unverified_connection(asynchronous: bool, family: Any) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
-    from sqlspec.adapters.psycopg.tenant import PsycopgAsyncTenantLease, PsycopgSyncTenantLease
     from sqlspec.utils.tenant import TenantContext
 
     payload = TenantContextPayload("a")
@@ -189,7 +212,7 @@ async def test_tenant_close_failure_never_returns_unverified_connection(asynchro
         provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
         driver_features={"tenant_strategy": strategy},
     )
-    lease_type: Any = PsycopgAsyncTenantLease if asynchronous else PsycopgSyncTenantLease
+    lease_type: Any = family.async_lease if asynchronous else family.sync_lease
     lease = lease_type(config, strategy)
     with TenantContext.scope(payload):
         if asynchronous:
@@ -212,14 +235,13 @@ async def test_tenant_close_failure_never_returns_unverified_connection(asynchro
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_tenant_failed_close_quarantines_native_pool_before_context_gc(
-    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch, family: Any
 ) -> None:
     import gc
     from unittest.mock import AsyncMock, MagicMock
 
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
-    from sqlspec.adapters.psycopg.tenant import PsycopgAsyncTenantLease, PsycopgSyncTenantLease
     from sqlspec.utils.tenant import TenantContext
 
     payload = TenantContextPayload("a")
@@ -249,7 +271,7 @@ async def test_tenant_failed_close_quarantines_native_pool_before_context_gc(
         provide_pool=AsyncMock(return_value=pool) if asynchronous else lambda: pool,
         driver_features={"tenant_strategy": strategy},
     )
-    lease_type: Any = PsycopgAsyncTenantLease if asynchronous else PsycopgSyncTenantLease
+    lease_type: Any = family.async_lease if asynchronous else family.sync_lease
     if asynchronous:
         await pool.open()
     else:

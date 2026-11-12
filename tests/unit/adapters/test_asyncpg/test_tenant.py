@@ -1,5 +1,6 @@
 """Tenant session state is bound, verified, and restored through one SQL call."""
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 
@@ -7,6 +8,9 @@ import pytest
 
 from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
 from sqlspec.adapters.asyncpg.tenant import apply_session_baseline, validate_asyncpg_tenant_config
+from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgRLSStrategy
+from sqlspec.adapters.cockroach_asyncpg.tenant import apply_session_baseline as cockroach_apply_session_baseline
+from sqlspec.adapters.cockroach_asyncpg.tenant import validate_cockroach_asyncpg_tenant_config
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContextPayload
 
@@ -50,6 +54,24 @@ class FakeGucConnection:
         return tuple(values)
 
 
+@pytest.fixture(
+    params=[
+        SimpleNamespace(
+            strategy=AsyncpgRLSStrategy, apply=apply_session_baseline, validate=validate_asyncpg_tenant_config
+        ),
+        SimpleNamespace(
+            strategy=CockroachAsyncpgRLSStrategy,
+            apply=cockroach_apply_session_baseline,
+            validate=validate_cockroach_asyncpg_tenant_config,
+        ),
+    ],
+    ids=["asyncpg", "cockroach_asyncpg"],
+)
+def family(request: pytest.FixtureRequest) -> Any:
+    """Return one asyncpg-protocol adapter's strategy, baseline replay, and config validator."""
+    return request.param
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -60,14 +82,14 @@ class FakeGucConnection:
         {"tenant_key": "bad;key"},
     ],
 )
-def test_tenant_rejects_overlapping_or_invalid_targets(kwargs: dict[str, Any]) -> None:
+def test_tenant_rejects_overlapping_or_invalid_targets(kwargs: dict[str, Any], family: Any) -> None:
     with pytest.raises(ImproperConfigurationError):
-        AsyncpgRLSStrategy(**kwargs)
+        family.strategy(**kwargs)
 
 
-async def test_tenant_captures_and_restores_owned_settings_once() -> None:
+async def test_tenant_captures_and_restores_owned_settings_once(family: Any) -> None:
     connection = FakeGucConnection({"app.Tenant": "previous", "unrelated": "leave"})
-    strategy = AsyncpgRLSStrategy(tenant_key="app.Tenant", variable_keys={"z": "app.Z", "a": "app.A"})
+    strategy = family.strategy(tenant_key="app.Tenant", variable_keys={"z": "app.Z", "a": "app.A"})
     payload = TenantContextPayload("a'; DROP", variables={"z": "2", "a": "1"})
     state = await strategy.checkout(connection.native, payload)
     assert dict(state.baseline) == {"app.Tenant": "previous", "app.A": None, "app.Z": None}
@@ -79,9 +101,9 @@ async def test_tenant_captures_and_restores_owned_settings_once() -> None:
     assert connection.settings == {"app.Tenant": "previous", "unrelated": "leave", "app.A": "", "app.Z": ""}
 
 
-async def test_tenant_schema_restore_and_subset() -> None:
+async def test_tenant_schema_restore_and_subset(family: Any) -> None:
     connection = FakeGucConnection()
-    strategy = AsyncpgRLSStrategy(variable_keys={"a": "app.a", "b": "app.b"}, schema_resolver=lambda _: "tenant_a")
+    strategy = family.strategy(variable_keys={"a": "app.a", "b": "app.b"}, schema_resolver=lambda _: "tenant_a")
     state = await strategy.checkout(connection.native, TenantContextPayload("a", variables={"b": "2"}))
     assert connection.settings["search_path"] == '"tenant_a"'
     assert connection.calls[0][1] == ("app.current_tenant_id", "a", "app.b", "2", "search_path", '"tenant_a"')
@@ -90,12 +112,12 @@ async def test_tenant_schema_restore_and_subset() -> None:
 
 
 @pytest.mark.parametrize("case", ["busy", "unmapped", "schema", "missing", "corrupt"])
-async def test_tenant_checkout_fails_closed(case: str) -> None:
+async def test_tenant_checkout_fails_closed(case: str, family: Any) -> None:
     connection = FakeGucConnection()
     connection.busy = case == "busy"
     connection.missing = case == "missing"
     connection.corrupt = case == "corrupt"
-    strategy = AsyncpgRLSStrategy(schema_resolver=(lambda _: "bad;schema") if case == "schema" else None)
+    strategy = family.strategy(schema_resolver=(lambda _: "bad;schema") if case == "schema" else None)
     payload = TenantContextPayload("a", variables={"region": "eu"} if case == "unmapped" else None)
     with pytest.raises(TenantContextError):
         await strategy.checkout(connection.native, payload)
@@ -104,9 +126,9 @@ async def test_tenant_checkout_fails_closed(case: str) -> None:
 
 
 @pytest.mark.parametrize("missing", [True, False])
-async def test_tenant_checkin_requires_verified_readback(missing: bool) -> None:
+async def test_tenant_checkin_requires_verified_readback(missing: bool, family: Any) -> None:
     connection = FakeGucConnection()
-    strategy = AsyncpgRLSStrategy()
+    strategy = family.strategy()
     state = await strategy.checkout(connection.native, TenantContextPayload("a"))
     connection.missing = missing
     connection.corrupt = not missing
@@ -114,9 +136,9 @@ async def test_tenant_checkin_requires_verified_readback(missing: bool) -> None:
         await strategy.checkin(connection.native, state)
 
 
-async def test_tenant_checkin_preserves_driver_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_tenant_checkin_preserves_driver_error(monkeypatch: pytest.MonkeyPatch, family: Any) -> None:
     connection = FakeGucConnection()
-    strategy = AsyncpgRLSStrategy()
+    strategy = family.strategy()
     state = await strategy.checkout(connection.native, TenantContextPayload("a"))
     error = RuntimeError("native restore failed")
     monkeypatch.setattr(connection, "fetchrow", AsyncMock(side_effect=error))
@@ -128,61 +150,59 @@ async def test_tenant_checkin_preserves_driver_error(monkeypatch: pytest.MonkeyP
     assert caught.value.__suppress_context__
 
 
-async def test_tenant_baseline_replay_is_batched() -> None:
+async def test_tenant_baseline_replay_is_batched(family: Any) -> None:
     connection = FakeGucConnection()
-    await apply_session_baseline(connection.native, {})
+    await family.apply(connection.native, {})
     assert connection.calls == []
-    await apply_session_baseline(connection.native, {"timezone": "UTC", "statement_timeout": "5000"})
+    await family.apply(connection.native, {"timezone": "UTC", "statement_timeout": "5000"})
     assert len(connection.calls) == 1
     assert connection.settings == {"timezone": "UTC", "statement_timeout": "5000"}
 
 
 @pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
-def test_tenant_config_requires_session_affinity(mode: str) -> None:
+def test_tenant_config_requires_session_affinity(mode: str, family: Any) -> None:
     with pytest.raises(ImproperConfigurationError, match="session"):
-        validate_asyncpg_tenant_config({"pooler_mode": mode}, {})
+        family.validate({"pooler_mode": mode}, {})
 
 
 @pytest.mark.parametrize("source", ["init", "setup"])
-def test_tenant_pool_callbacks_require_explicit_baseline(source: str) -> None:
+def test_tenant_pool_callbacks_require_explicit_baseline(source: str, family: Any) -> None:
     callback = object()
     connection = {source: callback}
     with pytest.raises(ImproperConfigurationError, match="tenant_session_baseline"):
-        validate_asyncpg_tenant_config({}, connection)
-    assert validate_asyncpg_tenant_config({"tenant_session_baseline": {}}, connection) == {}
+        family.validate({}, connection)
+    assert family.validate({"tenant_session_baseline": {}}, connection) == {}
 
 
-def test_tenant_on_connection_create_defaults_baseline_to_empty() -> None:
+def test_tenant_on_connection_create_defaults_baseline_to_empty(family: Any) -> None:
     callback = object()
-    assert validate_asyncpg_tenant_config({"on_connection_create": callback}, {}) == {}
-    assert validate_asyncpg_tenant_config(
-        {"on_connection_create": callback, "tenant_session_baseline": {"timezone": "UTC"}}, {}
-    ) == {"timezone": "UTC"}
+    assert family.validate({"on_connection_create": callback}, {}) == {}
+    assert family.validate({"on_connection_create": callback, "tenant_session_baseline": {"timezone": "UTC"}}, {}) == {
+        "timezone": "UTC"
+    }
 
 
-def test_tenant_baseline_validates_values_and_conflicts() -> None:
-    assert validate_asyncpg_tenant_config({}, {}) == {}
-    assert validate_asyncpg_tenant_config({"tenant_session_baseline": {"timezone": "UTC"}}, {}) == {"timezone": "UTC"}
+def test_tenant_baseline_validates_values_and_conflicts(family: Any) -> None:
+    assert family.validate({}, {}) == {}
+    assert family.validate({"tenant_session_baseline": {"timezone": "UTC"}}, {}) == {"timezone": "UTC"}
     with pytest.raises(ImproperConfigurationError):
-        validate_asyncpg_tenant_config(
-            {"tenant_session_baseline": {"timezone": "UTC"}}, {"server_settings": {"timezone": "CET"}}
-        )
+        family.validate({"tenant_session_baseline": {"timezone": "UTC"}}, {"server_settings": {"timezone": "CET"}})
     with pytest.raises(ImproperConfigurationError):
-        validate_asyncpg_tenant_config({"tenant_session_baseline": {"bad;key": "x"}}, {})
+        family.validate({"tenant_session_baseline": {"bad;key": "x"}}, {})
 
 
-async def test_tenant_preserves_empty_search_path_baseline() -> None:
+async def test_tenant_preserves_empty_search_path_baseline(family: Any) -> None:
     connection = FakeGucConnection({"search_path": ""})
-    strategy = AsyncpgRLSStrategy(schema_resolver=lambda _: "tenant_a")
+    strategy = family.strategy(schema_resolver=lambda _: "tenant_a")
     state = await strategy.checkout(connection.native, TenantContextPayload("a"))
     await strategy.checkin(connection.native, state)
     assert connection.settings["search_path"] == ""
 
 
 @pytest.mark.parametrize("key", ["", 1])
-def test_tenant_rejects_invalid_variable_source_names(key: Any) -> None:
+def test_tenant_rejects_invalid_variable_source_names(key: Any, family: Any) -> None:
     with pytest.raises(ImproperConfigurationError):
-        AsyncpgRLSStrategy(variable_keys={key: "app.region"})
+        family.strategy(variable_keys={key: "app.region"})
 
 
 @pytest.mark.parametrize("scenario", ["success", "error", "timeout", "native_cancel"])
