@@ -137,7 +137,8 @@ def build_checkpoint_table_ddl(dialect: str, checkpoint_table: str) -> str:
             f"CREATE MULTISET TABLE {checkpoint_table} ("
             "phase VARCHAR(128) NOT NULL, shard_uri VARCHAR(1024) NOT NULL, "
             "rows_loaded BIGINT NOT NULL, bytes_processed BIGINT NOT NULL, duration_s DOUBLE PRECISION NOT NULL, "
-            "completed_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (phase, shard_uri))"
+            "completed_at TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6)) "
+            "UNIQUE PRIMARY INDEX (phase, shard_uri)"
         )
     if norm == "sybase":
         create_sql = (
@@ -254,7 +255,7 @@ def build_stage_table_ddl(
     """Build dialect-specific DDL statements to create an empty staging table matching ``target_table``."""
     norm = normalize_storage_dialect(dialect)
     if norm == "teradata":
-        return [f"CREATE MULTISET TABLE {stage_table} AS {target_table} WITH NO DATA"]
+        return [f"CREATE MULTISET TABLE {stage_table} AS (SELECT * FROM {target_table}) WITH NO DATA"]
     if norm in _PG_FAMILY_DIALECTS:
         return [f"CREATE UNLOGGED TABLE IF NOT EXISTS {stage_table} (LIKE {target_table} INCLUDING DEFAULTS)"]
     if norm in {"duckdb", "sqlite"}:

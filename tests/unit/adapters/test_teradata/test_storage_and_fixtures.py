@@ -14,6 +14,7 @@ def test_teradata_checkpoint_sql() -> None:
     ddl = build_checkpoint_table_ddl("teradata", "checkpoint")
     assert ddl.startswith("CREATE MULTISET TABLE checkpoint (")
     assert "TIMESTAMP(6) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP(6)" in ddl
+    assert ddl.endswith(") UNIQUE PRIMARY INDEX (phase, shard_uri)")
     merge = build_checkpoint_insert_sql("teradata", "checkpoint")
     assert merge.startswith("MERGE INTO checkpoint AS tgt")
     assert "CAST(:phase AS VARCHAR(128))" in merge
@@ -21,7 +22,7 @@ def test_teradata_checkpoint_sql() -> None:
 
 def test_teradata_stage_sql() -> None:
     assert build_stage_table_ddl("teradata", "orders", "stage") == [
-        "CREATE MULTISET TABLE stage AS orders WITH NO DATA"
+        "CREATE MULTISET TABLE stage AS (SELECT * FROM orders) WITH NO DATA"
     ]
     assert build_drop_stage_table_sql("teradata", "stage") == "DROP TABLE stage"
     sql = build_stage_merge_sql("teradata", "orders", "stage", ["id", "total"], conflict_keys=["id"])
