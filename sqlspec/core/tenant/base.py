@@ -58,7 +58,9 @@ class AsyncTenantStrategy(Protocol):
 
 
 TenantStrategy: TypeAlias = SyncTenantStrategy | AsyncTenantStrategy
-TenantStrategyShorthand: TypeAlias = Literal["default", "rls", "session_context", "identifier"] | bool
+TenantStrategyShorthand: TypeAlias = (
+    Literal["default", "rls", "session_context", "identifier", "rcac", "global_variable"] | bool
+)
 
 
 def validate_session_setting_name(name: object) -> str:

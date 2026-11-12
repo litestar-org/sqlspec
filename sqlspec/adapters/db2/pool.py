@@ -526,6 +526,23 @@ class Db2AsyncConnectionPool:
                 if self._closed and not self._checked_out:
                     self._semaphore_instance = None
 
+    async def discard(self, connection: Any) -> None:
+        """Close a checked-out connection instead of returning it to the pool.
+
+        The pool slot is freed even when closing fails, so the connection is never reused.
+
+        Args:
+            connection: Connection previously returned by ``acquire()``.
+        """
+        record = self._checked_out.pop(id(connection), None)
+        try:
+            await connection.close()
+        finally:
+            if record is not None and self._semaphore_instance is not None:
+                self._semaphore_instance.release()
+                if self._closed and not self._checked_out:
+                    self._semaphore_instance = None
+
     def get_connection(self) -> "Db2AsyncPoolConnectionContext":
         """Return an async context manager that acquires and releases a pooled connection.
 

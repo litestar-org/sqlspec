@@ -307,6 +307,7 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         for adapter in (
             "asyncpg",
             "cockroach_asyncpg",
+            "db2",
             "cockroach_psycopg",
             "mssql_python",
             "oracledb",

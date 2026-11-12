@@ -26,6 +26,7 @@ All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="
 | CockroachDB | `cockroach_asyncpg`, `cockroach_psycopg` | `"rls"` | Sets session variables for database row policies. |
 | SQL Server | `mssql_python`, `pymssql` | `"rls"` or `"session_context"` | Sets mutable `SESSION_CONTEXT` keys for database row policies. |
 | Oracle | `oracledb` | `"identifier"` | Sets client-identifier metadata. |
+| IBM Db2 | `db2` | `"rcac"` or `"global_variable"` | Sets session global variables for row and column access control. |
 
 Oracle VPD requires an explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` with trusted setter, clearer, namespace, and attribute names. There is no parameter-free `"vpd"` shorthand. See the [Oracle reference](adapters/oracledb.md#tenant-strategies).
 

@@ -386,3 +386,18 @@ async def test_pool_closed_while_opening_rejects_and_closes_connection(fake_ibm_
         await task
     assert opened[0].sync_connection.closed is True
     assert pool.size() == 0
+
+
+async def test_discard_closes_connection_and_frees_capacity(fake_ibm_db: FakeModules) -> None:
+    """A discarded connection is closed, never reused, and its slot is available again."""
+    pool = Db2AsyncConnectionPool({"database": "TESTDB", "max_size": 1, "acquire_timeout": 0.05})
+    try:
+        connection = await pool.acquire()
+        await pool.discard(connection)
+        assert _as_fake(connection).sync_connection.closed
+        assert (pool.size(), pool.checked_out()) == (0, 0)
+        replacement = await pool.acquire()
+        assert replacement is not connection
+        await pool.release(replacement)
+    finally:
+        await pool.close()

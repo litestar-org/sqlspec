@@ -20,6 +20,7 @@ class CommitCase:
     build: Callable[[Any, bool], Any]
     text_type: str = "VARCHAR(32)"
     read_hint: str = ""
+    setup_sql: tuple[str, ...] = ()
 
 
 def _postgres(config_type: str) -> Callable[[Any, bool], Any]:
@@ -94,6 +95,27 @@ def _mssql(config_type: str) -> Callable[[Any, bool], Any]:
     return build
 
 
+def _db2(asynchronous: bool) -> Callable[[Any, bool], Any]:
+    def build(service: Any, tenant: bool) -> Any:
+        from sqlspec.adapters.db2 import Db2AsyncConfig, Db2SyncConfig
+
+        config_cls = Db2AsyncConfig if asynchronous else Db2SyncConfig
+        features: dict[str, Any] = {"tenant_strategy": "rcac"} if tenant else {}
+        connection_config = {
+            "database": service.db_name,
+            "hostname": service.host,
+            "port": service.port,
+            "protocol": "TCPIP",
+            "user": service.username,
+            "password": service.password,
+        }
+        return config_cls(connection_config=connection_config, driver_features=features)
+
+    return build
+
+
+_DB2_SETUP = ("CREATE OR REPLACE VARIABLE APP.CURRENT_TENANT_ID VARCHAR(256) DEFAULT NULL",)
+_DB2 = pytest.mark.xdist_group("db2")
 _POSTGRES = pytest.mark.xdist_group("postgres")
 _COCKROACH = pytest.mark.xdist_group("cockroachdb")
 _ORACLE = pytest.mark.xdist_group("oracle")
@@ -125,6 +147,8 @@ CASES = [
     pytest.param(
         CommitCase("mssql_service", _mssql("pymssql"), read_hint=" WITH (READPAST)"), id="pymssql", marks=_MSSQL
     ),
+    pytest.param(CommitCase("db2_service", _db2(False), setup_sql=_DB2_SETUP), id="db2_sync", marks=_DB2),
+    pytest.param(CommitCase("db2_service", _db2(True), setup_sql=_DB2_SETUP), id="db2_async", marks=_DB2),
 ]
 
 
@@ -186,6 +210,8 @@ async def test_tenant_session_exit_matches_native_commit_behavior(
     admin = case.build(service, False)
     try:
         async with _session(admin) as session:
+            for statement in case.setup_sql:
+                await _invoke(session.execute, statement)
             await _invoke(session.execute, f"CREATE TABLE {table} (marker {case.text_type})")
             await _invoke(session.commit)
         outcomes: dict[str, bool] = {}
