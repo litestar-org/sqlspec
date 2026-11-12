@@ -74,7 +74,7 @@ __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionConte
 
 logger = get_logger("sqlspec.adapters.adbc")
 _DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake", "teradata"})
-_DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"teradata"})
+_DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"snowflake", "teradata"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
@@ -289,29 +289,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._previous_autocommit: bool | None = None
         self._has_streams = False
         self._stream_closers: list[Callable[[], None]] = []
-
-    @property
-    def observability(self) -> ObservabilityRuntime:
-        """Return the observability runtime for the selected ADBC backend."""
-        if self._observability is None:
-            name = "AdbcDriver[snowflake]" if self._dialect_name == "snowflake" else type(self).__name__
-            self._observability = ObservabilityRuntime(config_name=name)
-        return self._observability
-
-    def attach_observability(self, runtime: ObservabilityRuntime) -> None:
-        """Attach observability while preserving the shared configuration runtime."""
-        if self._dialect_name == "snowflake" and resolve_db_system(runtime.config_name) != "snowflake":
-            scoped = ObservabilityRuntime(
-                runtime.config, bind_key=runtime.bind_key, config_name=f"{runtime.config_name}[snowflake]"
-            )
-            scoped.lifecycle = runtime.lifecycle
-            scoped.span_manager = runtime.span_manager
-            scoped._statement_observers = runtime._statement_observers
-            scoped._redaction = runtime._redaction
-            scoped._metrics = runtime._metrics
-            scoped._is_idle_cached = runtime._is_idle_cached
-            runtime = scoped
-        super().attach_observability(runtime)
 
     @property
     def has_streams(self) -> bool:
@@ -556,7 +533,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     @property
     def observability_db_system(self) -> str | None:
-        """Return the Teradata db.system for Teradata sessions; other ADBC backends keep the adapter attribution."""
+        """Return the backend db.system for Teradata and Snowflake sessions, else the adapter attribution."""
         if self._dialect_name in _DB_SYSTEM_OVERRIDE_DIALECTS:
             return resolve_db_system(self._dialect_name)
         return None

@@ -222,6 +222,7 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
         processed_statement, features = apply_driver_features(
             statement_config, driver_features, paramstyle=normalized_static["paramstyle"]
         )
+        features["query_tag"] = normalized_static.get("session_parameters", {}).get("QUERY_TAG")
         type(self).driver_type = cast(
             "type[SnowflakeDriver]",
             (import_optional_attr("sqlspec.adapters.snowflake.driver", "SnowflakeDriver") or SyncDriverAdapterBase),
@@ -267,6 +268,20 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
+
+    def _prepare_driver(self, driver: "SnowflakeDriver") -> "SnowflakeDriver":
+        driver = super()._prepare_driver(driver)
+        if (
+            driver.driver_features.get("enable_query_tag_correlation")
+            and driver.driver_features.get("query_tag") is None
+        ):
+            connector_config = getattr(driver.connection, "config", None)
+            session_parameters = getattr(connector_config, "session_parameters", None)
+            if not isinstance(session_parameters, Mapping):
+                session_parameters = getattr(driver.connection, "_session_parameters", None)
+            if isinstance(session_parameters, Mapping):
+                driver.driver_features["query_tag"] = session_parameters.get("QUERY_TAG")
+        return driver
 
     def get_event_runtime_hints(self) -> EventRuntimeHints:
         """Return polling and lease defaults suitable for Snowflake warehouses."""

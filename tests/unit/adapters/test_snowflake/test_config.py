@@ -1,6 +1,7 @@
 """Snowflake configuration and authentication normalization tests."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.adapters.snowflake.core import apply_driver_features, build_statement_config, normalize_connection_params
 from sqlspec.core import ParameterStyle
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.correlation import CorrelationContext
 
 
 @pytest.mark.parametrize(
@@ -152,3 +154,81 @@ def test_derive_pool_preserves_base_configuration_and_separates_pool() -> None:
 def test_stage_threshold_requires_positive_integer(threshold: object) -> None:
     with pytest.raises(ImproperConfigurationError, match="positive integer"):
         apply_driver_features(None, {"stage_parquet_threshold_rows": threshold})
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_tag"),
+    [
+        ({"query_tag": "sales-report"}, "sales-report"),
+        (
+            {"query_tag": "ignored", "session_parameters": {"QUERY_TAG": "nested-report", "TIMEZONE": "Asia/Tokyo"}},
+            "nested-report",
+        ),
+        ({"query_tag": "custom:tag/with spaces"}, "custom:tag/with spaces"),
+    ],
+)
+def test_config_preserves_query_tag_when_correlating_cached_statements(
+    monkeypatch: pytest.MonkeyPatch, snowflake_connection: Any, options: dict[str, Any], expected_tag: str
+) -> None:
+    from sqlspec.adapters.snowflake import pool as pool_module
+
+    connected: list[dict[str, Any]] = []
+
+    def connect(**kwargs: Any) -> Any:
+        connected.append(kwargs)
+        snowflake_connection.is_closed = lambda: False
+        snowflake_connection.close = lambda: None
+        return snowflake_connection
+
+    monkeypatch.setattr(pool_module, "import_optional", lambda _: SimpleNamespace(connect=connect))
+    snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
+    config = SnowflakeConfig(
+        connection_config=options,
+        driver_features={"enable_query_tag_correlation": True},
+        statement_config=build_statement_config().replace(enable_caching=True),
+    )
+    try:
+        with config.provide_session() as session:
+            for correlation_id in ("request-a", "request-b"):
+                with CorrelationContext.context(correlation_id):
+                    assert session.select("SELECT 1 AS ID") == [{"id": 1}]
+            session.select("SELECT 1 AS ID")
+        assert [call[2] for call in snowflake_connection.calls] == [
+            {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-a"}},
+            {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-b"}},
+            {},
+        ]
+        expected_session = dict(options.get("session_parameters", {}))
+        expected_session.setdefault("QUERY_TAG", options.get("query_tag"))
+        assert connected[0]["session_parameters"] == expected_session
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize("session_source", ["config", "legacy"])
+def test_named_profile_query_tag_is_preserved_for_correlation(
+    monkeypatch: pytest.MonkeyPatch, snowflake_connection: Any, session_source: str
+) -> None:
+    from sqlspec.adapters.snowflake import pool as pool_module
+
+    def connect(**kwargs: Any) -> Any:
+        assert kwargs["connection_name"] == "reporting"
+        if session_source == "config":
+            snowflake_connection.config = SimpleNamespace(session_parameters={"QUERY_TAG": "profile-report"})
+        else:
+            snowflake_connection._session_parameters = {"QUERY_TAG": "profile-report"}
+        snowflake_connection.is_closed = lambda: False
+        snowflake_connection.close = lambda: None
+        return snowflake_connection
+
+    monkeypatch.setattr(pool_module, "import_optional", lambda _: SimpleNamespace(connect=connect))
+    snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
+    config = SnowflakeConfig(
+        connection_config={"connection_name": "reporting"}, driver_features={"enable_query_tag_correlation": True}
+    )
+    try:
+        with config.provide_session() as session, CorrelationContext.context("request-a"):
+            session.select("SELECT 1 AS ID")
+        assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "profile-report:request-a"}}
+    finally:
+        config.close_pool()

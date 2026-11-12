@@ -1352,3 +1352,66 @@ def test_adbc_non_snowflake_cursor_has_no_statement_options() -> None:
     with driver.with_cursor(cast("Any", connection)) as opened:
         assert opened is cursor
     assert calls == [{}]
+
+
+def test_adbc_snowflake_observability_observes_hooks_registered_after_attach() -> None:
+    """Attaching an idle runtime preserves later hook registration and backend identity."""
+    from sqlspec.observability import ObservabilityRuntime
+
+    queries: list[dict[str, Any]] = []
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"OK": [1]}),
+        description=[("OK",)],
+        rowcount=1,
+    )
+    connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
+    runtime = ObservabilityRuntime(config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+    runtime.register_lifecycle_hook("on_query_start", queries.append)
+
+    assert driver.select_one("SELECT 1 AS ok") == {"ok": 1}
+    assert len(queries) == 1
+    assert driver.observability is runtime
+    assert queries[0]["sql"] == "SELECT 1 AS ok"
+    assert queries[0]["driver"] == "AdbcDriver"
+    event = runtime.create_statement_event(
+        sql=queries[0]["sql"],
+        parameters=None,
+        driver=queries[0]["driver"],
+        db_system=queries[0]["db_system"],
+        operation="SELECT",
+    )
+    assert event.db_system == "snowflake"
+    assert runtime.config_name == "AdbcConfig"
+
+
+def test_adbc_backend_identity_does_not_leak_across_shared_runtime() -> None:
+    """One live runtime keeps distinct Snowflake and SQLite ADBC statement identities."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    started: list[dict[str, Any]] = []
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"VALUE": [1]}),
+        description=[("VALUE",)],
+        rowcount=1,
+    )
+    snowflake_connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    sqlite_connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "SQLite"})
+    snowflake = AdbcDriver(cast("Any", snowflake_connection), dialect="snowflake")
+    sqlite = AdbcDriver(cast("Any", sqlite_connection), dialect="sqlite")
+    snowflake.attach_observability(runtime)
+    sqlite.attach_observability(runtime)
+    runtime.register_lifecycle_hook("on_query_start", started.append)
+    for driver in (snowflake, sqlite, snowflake):
+        assert driver.select_value("SELECT 1 AS value") == 1
+    assert [event.db_system for event in events] == ["snowflake", "adbc", "snowflake"]
+    assert [event.driver for event in events] == ["AdbcDriver", "AdbcDriver", "AdbcDriver"]
+    assert len(started) == 3
+    assert runtime.config_name == "AdbcConfig"

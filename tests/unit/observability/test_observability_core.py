@@ -959,11 +959,13 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
     [
         ("SQLSpecConfig", "AsyncpgDriver", None, "postgresql"),
         ("AdbcConfig", "AdbcDriver", "teradata", "teradata"),
+        ("AdbcConfig", "AdbcDriver", "snowflake", "snowflake"),
         ("AdbcConfig", "AdbcDriver", "postgresql", "postgresql"),
         ("AdbcConfig", "AdbcDriver", None, "adbc"),
         ("AdbcConfig", "UnmappedCustomDriver", None, "adbc"),
         ("TeradataConfig", "TeradataDriver", None, "teradata"),
         ("VantageConfig", "AdbcDriver", None, "teradata"),
+        ("SnowflakeConfig", "SnowflakeDriver", None, "snowflake"),
         ("SybaseConfig", "PymssqlDriver", None, "sybase"),
         ("SqlanywhereConfig", "SqlanywhereDriver", None, "sqlanywhere"),
         ("SQLSpecConfig", "SybaseDriver", None, "sybase"),
