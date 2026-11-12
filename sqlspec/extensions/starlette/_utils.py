@@ -136,7 +136,6 @@ def get_request_tenant(request: "Request", config_state: "SQLSpecConfigState") -
     if isinstance(bind_key, str) and bind_key:
         candidate_keys.append(_tenant_state_key(bind_key))
     candidate_keys.append(_TENANT_STATE_KEY)
-    candidate_keys.append("tenant_context")
 
     raw_scope = getattr(request, "scope", None)
     scope_state = raw_scope.get("state") if isinstance(raw_scope, Mapping) else None
