@@ -675,9 +675,9 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             update_data_expr = f"TO_BINARY({p1}, 'HEX')" if dialect == "snowflake" else p1
             with self._config.provide_session() as driver:
                 try:
-                    check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
+                    check_sql = f"SELECT COUNT(*) AS session_count FROM {self._table_name} WHERE session_id = {p1}"
                     result = driver.select_one(check_sql, key)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = _count_value(result, "session_count")
                     exists = bool(raw_count and int(raw_count) > 0)
 
                     if exists:
@@ -830,13 +830,13 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         if is_postgres_dialect(dialect):
             sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts} RETURNING session_id"
         else:
-            count_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE expires_at <= {current_ts}"
+            count_sql = f"SELECT COUNT(*) AS expired_count FROM {self._table_name} WHERE expires_at <= {current_ts}"
             delete_sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts}"
 
             with self._config.provide_session() as driver:
                 try:
                     result = driver.select_one(count_sql)
-                    raw_count = (result.get("count") if "count" in result else result.get("COUNT", 0)) if result else 0
+                    raw_count = _count_value(result, "expired_count")
                     count = int(raw_count) if raw_count else 0
 
                     if count > 0:
@@ -863,3 +863,10 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
             else:
                 return count
+
+
+def _count_value(row: "dict[str, Any] | None", alias: str) -> Any:
+    """Return a COUNT alias from a row regardless of the backend's label case."""
+    if not row:
+        return 0
+    return row.get(alias, row.get(alias.upper(), 0))

@@ -53,14 +53,14 @@ def test_adbc_litestar_store_enterprise_drop_sql(dialect: str, expected_drop_fra
     assert expected_drop_fragment in drop_sql
 
 
-@pytest.mark.parametrize("dialect", ["oracle", "db2", "mssql"])
+@pytest.mark.parametrize("dialect", ["oracle", "db2", "mssql", "teradata"])
 def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dialect: str) -> None:
     executed: list[tuple[str, tuple[Any, ...]]] = []
 
     class _DriverStub:
         def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
             executed.append((sql.strip(), params))
-            return {"count": 0}
+            return {"session_count": 0}
 
         def execute(self, sql: str, *params: Any) -> None:
             executed.append((sql.strip(), params))
@@ -74,7 +74,7 @@ def test_adbc_litestar_store_enterprise_set_uses_check_then_insert_or_update(dia
     store._set("sess_1", b"payload", expires_in=None)
 
     assert len(executed) == 2
-    assert "SELECT COUNT(*)" in executed[0][0]
+    assert "SELECT COUNT(*) AS session_count" in executed[0][0]
     assert "INSERT INTO" in executed[1][0]
     assert "ON CONFLICT" not in executed[1][0]
 
@@ -100,6 +100,29 @@ def test_adbc_event_queue_store_enterprise_dialects(
     assert expected_drop_fragment in drop_sql
 
 
+@pytest.mark.parametrize("label", ["expired_count", "EXPIRED_COUNT"])
+def test_adbc_litestar_store_delete_expired_reads_count_alias(label: str) -> None:
+    executed: list[str] = []
+
+    class _DriverStub:
+        def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
+            executed.append(sql)
+            return {label: 2}
+
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append(sql)
+
+        def commit(self) -> None:
+            pass
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "teradata"
+    assert store._delete_expired() == 2
+    assert "COUNT(*) AS expired_count" in executed[0]
+    assert executed[1].startswith("DELETE FROM")
+
+
 def test_adbc_litestar_store_concurrent_set_fallback() -> None:
     """AdbcStore._set catches IntegrityError on INSERT race condition and falls back to UPDATE."""
     executed: list[tuple[str, tuple[Any, ...]]] = []
@@ -107,7 +130,7 @@ def test_adbc_litestar_store_concurrent_set_fallback() -> None:
     class _DriverStub:
         def select_one(self, sql: str, *params: Any) -> dict[str, Any]:
             executed.append((sql.strip(), params))
-            return {"count": 0}
+            return {"session_count": 0}
 
         def execute(self, sql: str, *params: Any) -> None:
             executed.append((sql.strip(), params))
