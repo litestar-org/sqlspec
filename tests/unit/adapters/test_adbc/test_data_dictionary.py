@@ -834,3 +834,86 @@ def test_teradata_vantage_dialect_normalization_in_data_dictionary(raw_dialect: 
     driver.dialect = raw_dialect
     assert dictionary._normalize_dialect(driver) == "teradata"
     assert dictionary.resolve_ddl_dialect(driver) == "teradata"
+
+
+def test_snowflake_version_feature_flags_and_optimal_types() -> None:
+    """Static Snowflake JSON support does not require a version query."""
+    from sqlspec.data_dictionary import VersionInfo
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.select_value_or_none.return_value = "8.43.1"
+    for category, expected in {
+        "json": "VARIANT",
+        "datetime": "TIMESTAMP_TZ",
+        "blob": "BINARY",
+        "boolean": "BOOLEAN",
+        "uuid": "VARCHAR(36)",
+    }.items():
+        assert dictionary.get_optimal_type(driver, category) == expected
+    driver.select_value_or_none.assert_not_called()
+    assert dictionary.get_version(driver) == VersionInfo(8, 43, 1)
+    assert dictionary.get_feature_flag(driver, "supports_transactions") is True
+    assert dictionary.get_feature_flag(driver, "supports_transactional_ddl") is False
+
+
+@pytest.mark.parametrize(
+    ("table", "expected_scope"),
+    [
+        ("orders", 'IN TABLE "PUBLIC"."ORDERS"'),
+        (None, 'IN SCHEMA "PUBLIC"'),
+        ('"Mixed.Table"', 'IN TABLE "PUBLIC"."Mixed.Table"'),
+    ],
+)
+def test_snowflake_foreign_key_catalog_fallback(table: str | None, expected_scope: str) -> None:
+    """Unsupported GetObjects falls back to SHOW with exact quoted identifiers."""
+    from sqlspec.data_dictionary import ForeignKeyMetadata
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    actual_table = "Mixed.Table" if table == '"Mixed.Table"' else "ORDERS"
+    driver.select.return_value = [
+        {
+            "fk_name": "FK_ORD_USR",
+            "pk_name": "PK_USR",
+            "fk_schema_name": "PUBLIC",
+            "fk_table_name": actual_table,
+            "fk_column_name": "USER_ID",
+            "pk_schema_name": "PUBLIC",
+            "pk_table_name": "USERS",
+            "pk_column_name": "ID",
+        }
+    ]
+    assert dictionary.get_foreign_keys(driver, table=table, schema="public") == [
+        ForeignKeyMetadata(actual_table, "USER_ID", "USERS", "ID", "FK_ORD_USR", "PUBLIC", "PUBLIC")
+    ]
+    assert driver.select.call_args.args[0].strip() == f"SHOW IMPORTED KEYS {expected_scope};"
+
+
+@pytest.mark.parametrize("domain", ["schemas", "objects", "views", "sequences", "routines"])
+def test_snowflake_catalog_domain_results(domain: str) -> None:
+    """Catalog methods expose native capability and normalize result column labels."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "OBJECT_NAME": "ORDERS"}]
+    result = getattr(dictionary, f"get_{domain}")(driver)
+    assert result.items == ({"schema_name": "PUBLIC", "object_name": "ORDERS"},)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.capability.source == MetadataSource.CATALOG
+    assert result.capability.fidelity == MetadataFidelity.NATIVE
+
+
+def test_snowflake_foreign_keys_reject_nul_identifier() -> None:
+    """Invalid catalog identifiers fail before SHOW SQL is sent to the driver."""
+    from sqlspec.exceptions import SQLSpecError
+
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    with pytest.raises(SQLSpecError, match="NUL"):
+        AdbcDataDictionary().get_foreign_keys(driver, table="orders\x00", schema="public")
+    driver.select.assert_not_called()

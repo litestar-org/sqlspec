@@ -11,6 +11,8 @@ important operational fixes.
 
 **Added:**
 
+* Added the native `SnowflakeConfig` and `SnowflakeDriver` adapter (`sqlspec[snowflake]`) with workload identity, access-token and key-pair authentication, bounded pooling, Arrow batch streaming, Parquet stage loads, catalog reflection, and Litestar, Events, and Google ADK stores. See the [Snowflake guide](databases/snowflake.md). ([#909](https://github.com/litestar-org/sqlspec/issues/909))
+* Fixed Snowflake ADBC connection options and authentication, preserved stage and session variables during parameter compilation, and added Snowflake catalog reflection. ([#908](https://github.com/litestar-org/sqlspec/issues/908))
 * Added the synchronous Teradata Vantage adapter (`sqlspec[teradata]`), a `vantage` SQLGlot dialect with Teradata pagination and type rendering (SQLGlot's built-in `teradata` dialect is left unchanged), Unicode catalog introspection, Arrow and extension store support, plus Columnar `dbc` and Flight SQL Teradata routing through ADBC.
 * Added `sql.func(name, *args, dialect=None)` to `SQLFactory` for building scalar and table-valued SQL function expressions (`from_(sql.func("generate_series", 1, 3), alias="g")`, `sql.func("nullif", sql.c.a, 0)`), converting Python primitives to SQL literals while unwrapping builder column and expression objects.
 * Added `sql.col(name, table=None)` and `sql.c` (`ColumnNamespace` supporting `sql.c("name", table="u")`, `sql.c.name`, `sql.c["first-name"]`, and `sql.c["u.name"]`) alongside `sql.column()`, plus `sql.var(name)` for unquoted SQL keyword/variable tokens such as `sql.var("DEFAULT")` and `sql.var("CURRENT_TIMESTAMP")`.

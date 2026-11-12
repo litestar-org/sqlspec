@@ -26,7 +26,7 @@ from sqlspec.adapters.adbc.core import (
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.config import ADKConfig
-from sqlspec.core.parameters._validator import PARAMETER_REGEX
+from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import ImproperConfigurationError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 __all__ = ("AdbcADKConfig", "AdbcADKMemoryStore", "AdbcADKStore", "decode_adbc_pgvector", "format_pgvector_literal")
 
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
+_STORE_PARAMETER_VALIDATOR: Final[ParameterValidator] = ParameterValidator()
 
 
 class AdbcADKConfig(ADKConfig):
@@ -2976,11 +2977,11 @@ def _postgresql_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="postgres"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f"${index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f"${index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -2991,11 +2992,11 @@ def _oracle_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="oracle"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f":{index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f":{index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -3048,7 +3049,7 @@ def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, s
 
 
 def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> str:
-    driver_name = config.connection_config.get("driver_name", "")
+    driver_name = config.connection_config.get("driver_name") or config.connection_config.get("driver") or ""
     if (
         isinstance(driver_name, str)
         and driver_name

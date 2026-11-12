@@ -48,3 +48,127 @@ def test_logical_types_use_dialect_syntax(
         assert isinstance(exp.DataType.build(actual, dialect=parser_dialect), exp.DataType)
     assert config.get_optimal_type("varchar") == unbounded
     assert config.get_optimal_type("text") == unbounded
+
+
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        ("json", "VARIANT"),
+        ("datetime", "TIMESTAMP_TZ"),
+        ("timestamp", "TIMESTAMP_TZ"),
+        ("timestamptz", "TIMESTAMP_TZ"),
+        ("binary", "BINARY"),
+        ("boolean", "BOOLEAN"),
+        ("uuid", "VARCHAR(36)"),
+        ("integer", "NUMBER(38,0)"),
+        ("varchar", "VARCHAR"),
+    ],
+)
+def test_snowflake_dialect_types(category: str, expected: str) -> None:
+    """Snowflake catalog configuration exposes lossless native logical types."""
+    config = get_dialect_config("snowflake")
+    assert config.get_optimal_type(category) == expected
+    assert config.default_schema == "PUBLIC"
+    assert config.parameter_style == "qmark"
+    assert config.get_feature_flag("supports_time_travel") is True
+    assert config.get_feature_flag("supports_returning") is False
+
+
+def test_snowflake_composite_primary_and_unique_keys() -> None:
+    """SHOW keys preserve catalog identity and composite column order."""
+    from sqlspec.data_dictionary.dialects.snowflake import parse_snowflake_primary_or_unique_keys
+
+    rows = [
+        {
+            "schema_name": "PUBLIC",
+            "table_name": "ITEMS",
+            "constraint_name": "PK_ITEMS",
+            "column_name": "LINE",
+            "key_sequence": 2,
+        },
+        {
+            "SCHEMA_NAME": "PUBLIC",
+            "TABLE_NAME": "ITEMS",
+            "CONSTRAINT_NAME": "PK_ITEMS",
+            "COLUMN_NAME": "ORDER_ID",
+            "KEY_SEQUENCE": "1",
+        },
+    ]
+    assert parse_snowflake_primary_or_unique_keys(rows) == [
+        {
+            "schema_name": "PUBLIC",
+            "database_name": None,
+            "table_name": "ITEMS",
+            "constraint_name": "PK_ITEMS",
+            "constraint_type": "PRIMARY KEY",
+            "column_names": ["ORDER_ID", "LINE"],
+            "columns": ["ORDER_ID", "LINE"],
+        }
+    ]
+    unique = parse_snowflake_primary_or_unique_keys(rows, unique=True)
+    assert unique[0]["constraint_type"] == "UNIQUE"
+    assert parse_snowflake_primary_or_unique_keys(rows, table_name="OTHER") == []
+
+
+def test_snowflake_imported_keys_order_and_referential_actions() -> None:
+    """Foreign keys use fk_name and normalize actions without guessing unnamed keys."""
+    from sqlspec.data_dictionary import ForeignKeyMetadata
+    from sqlspec.data_dictionary.dialects.snowflake import parse_snowflake_imported_keys
+
+    base = {
+        "fk_table_name": "LEDGER",
+        "fk_schema_name": "FIN",
+        "fk_name": "FK_LEDGER",
+        "pk_name": "PK_ACCOUNTS",
+        "pk_table_name": "ACCOUNTS",
+        "pk_schema_name": "CORE",
+        "delete_rule": "set_null",
+        "update_rule": "NO ACTION",
+    }
+    rows = [
+        {**base, "fk_column_name": "LINE_ID", "pk_column_name": "ID_2", "key_sequence": 2},
+        {**base, "fk_column_name": "ACCT_ID", "pk_column_name": "ID_1", "key_sequence": "1"},
+    ]
+    assert parse_snowflake_imported_keys(rows) == [
+        ForeignKeyMetadata(
+            "LEDGER", "ACCT_ID", "ACCOUNTS", "ID_1", "FK_LEDGER", "FIN", "CORE", "SET NULL", "NO ACTION"
+        ),
+        ForeignKeyMetadata(
+            "LEDGER", "LINE_ID", "ACCOUNTS", "ID_2", "FK_LEDGER", "FIN", "CORE", "SET NULL", "NO ACTION"
+        ),
+    ]
+    unnamed = parse_snowflake_imported_keys([{**rows[0], "fk_name": ""}])
+    assert unnamed[0].constraint_name is None
+    assert parse_snowflake_imported_keys(rows, table_name="OTHER") == []
+
+
+@pytest.mark.parametrize(
+    ("identifier", "dialect", "expected"),
+    [
+        ("orders", "snowflake", "ORDERS"),
+        ("MyTable", "sf", "MYTABLE"),
+        ('"MyTable"', "snowflake", "MyTable"),
+        ('  "My""Table"  ', "snowflake", 'My"Table'),
+    ],
+)
+def test_snowflake_identifier_folding(identifier: str, dialect: str, expected: str) -> None:
+    """Quoted identifiers retain exact case and escaped double quotes."""
+    from sqlspec.utils.text import normalize_identifier
+
+    assert normalize_identifier(identifier, dialect) == expected
+
+
+def test_snowflake_key_parsers_handle_incomplete_catalog_rows() -> None:
+    """Incomplete rows do not fabricate keys, and malformed ordinals remain stable."""
+    from sqlspec.data_dictionary.dialects.snowflake import (
+        parse_snowflake_imported_keys,
+        parse_snowflake_primary_or_unique_keys,
+    )
+
+    assert parse_snowflake_imported_keys([{}, {"fk_table_name": "ORDERS"}]) == []
+    rows = [
+        {},
+        {"table_name": "ORDERS", "column_name": "ID", "key_sequence": "unknown"},
+        {"table_name": "ORDERS", "column_name": "ID", "key_sequence": None},
+    ]
+    assert parse_snowflake_primary_or_unique_keys(rows)[0]["column_names"] == ["ID"]

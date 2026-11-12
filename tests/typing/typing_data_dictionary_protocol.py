@@ -6,6 +6,7 @@ below to type check.
 """
 
 from sqlspec.adapters.aiosqlite.data_dictionary import AiosqliteDataDictionary
+from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 from sqlspec.protocols import AsyncDataDictionaryProtocol, SyncDataDictionaryProtocol
@@ -28,6 +29,10 @@ def async_base_satisfies_protocol(value: AsyncDataDictionaryBase) -> str:
 
 
 def sync_adapter_satisfies_protocol(value: SqliteDataDictionary) -> str:
+    return accepts_sync_dictionary(value)
+
+
+def snowflake_adapter_satisfies_protocol(value: SnowflakeSyncDataDictionary) -> str:
     return accepts_sync_dictionary(value)
 
 

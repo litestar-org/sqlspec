@@ -23,6 +23,7 @@ __all__ = (
 
 _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
 _SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
+_INDEXLESS_DIALECTS: Final[frozenset[str]] = frozenset({"bigquery", "snowflake"})
 _CREATE_UNIQUE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
 _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
 
@@ -95,7 +96,7 @@ def build_drop_index_sql(
         Dialect-specific ``DROP INDEX`` SQL string, or ``None`` when unsupported.
     """
     norm = _canonical_index_dialect(dialect)
-    if norm == "bigquery":
+    if norm in _INDEXLESS_DIALECTS:
         return None
     idx_name = str(index_meta.get("index_name") or index_meta.get("name") or "").strip()
     if not idx_name:
@@ -157,7 +158,7 @@ def build_create_index_sql(
         Dialect-specific ``CREATE INDEX`` SQL string, or ``None`` when unsupported.
     """
     norm = _canonical_index_dialect(dialect)
-    if norm == "bigquery":
+    if norm in _INDEXLESS_DIALECTS:
         return None
     raw_ddl = (
         ddl_override
@@ -231,7 +232,7 @@ class SyncWithoutIndexesContext:
 
     def __enter__(self) -> Self:
         dialect = _canonical_index_dialect(str(getattr(self._driver, "dialect", "") or ""))
-        if dialect == "bigquery":
+        if dialect in _INDEXLESS_DIALECTS:
             return self
         ensure_teradata_ddl_outside_transaction(self._driver, "index drop and rebuild")
         schema_name, table_name = _split_schema_and_table(self._table, self._schema)
@@ -320,7 +321,7 @@ class AsyncWithoutIndexesContext:
 
     async def __aenter__(self) -> Self:
         dialect = _canonical_index_dialect(str(getattr(self._driver, "dialect", "") or ""))
-        if dialect == "bigquery":
+        if dialect in _INDEXLESS_DIALECTS:
             return self
         ensure_teradata_ddl_outside_transaction(self._driver, "index drop and rebuild")
         schema_name, table_name = _split_schema_and_table(self._table, self._schema)

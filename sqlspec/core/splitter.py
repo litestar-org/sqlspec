@@ -10,7 +10,7 @@ Components:
     Caching: Pattern and result caching for performance
 
 Supported dialects include Oracle PL/SQL, T-SQL, PostgreSQL,
-MySQL, SQLite, DuckDB, and BigQuery.
+MySQL, SQLite, DuckDB, BigQuery, and Snowflake.
 """
 
 import logging
@@ -31,6 +31,7 @@ __all__ = (
     "DialectConfig",
     "OracleDialectConfig",
     "PostgreSQLDialectConfig",
+    "SnowflakeDialectConfig",
     "StatementSplitter",
     "TSQLDialectConfig",
     "Token",
@@ -40,6 +41,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.core.splitter")
 
+_BEGIN_BLOCK_KEYWORD: Final[str] = "BEGIN"
 _TOKENIZE_DEBUG_SAMPLE_LIMIT: Final[int] = 3
 _TOKENIZE_SNIPPET_LENGTH: Final[int] = 20
 _DOLLAR_QUOTE_START_PATTERN: Final[Pattern[str]] = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_]*)?\$")
@@ -535,6 +537,35 @@ class Db2DialectConfig(_EagerDialectConfig):
     _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
+@final
+class SnowflakeDialectConfig(_EagerDialectConfig):
+    """Configuration for Snowflake SQL and Snowflake Scripting blocks."""
+
+    __slots__ = ()
+
+    _DIALECT_NAME = "snowflake"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+
+    def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
+        """Match literals before comments and distinguish transactions from blocks."""
+        patterns: list[tuple[TokenType, TokenPattern]] = [
+            (TokenType.STRING_LITERAL, r"'(?:''|\\.|[^'\\])*'"),
+            (TokenType.QUOTED_IDENTIFIER, r'"(?:""|\\.|[^"\\])*"'),
+            (TokenType.STRING_LITERAL, r"\$\$[\s\S]*?\$\$"),
+            (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
+            (TokenType.COMMENT_LINE, r"--[^\r\n]*"),
+            (TokenType.COMMENT_LINE, r"(?<!:)//[^\r\n]*"),
+            (TokenType.OTHER, r"\bBEGIN\b(?=\s*(?:;|TRANSACTION\b|WORK\b|NAME\b))"),
+            (TokenType.OTHER, r"\bEND\s+(?:IF|FOR|WHILE|LOOP|REPEAT)\b"),
+            (TokenType.KEYWORD, r"\bEND\s+CASE\b"),
+        ]
+        keywords = self.block_starters | self.block_enders | self.batch_separators
+        patterns.append((TokenType.KEYWORD, r"\b(" + "|".join(sorted(keywords)) + r")\b"))
+        patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in self.statement_terminators)))
+        patterns.extend([(TokenType.WHITESPACE, r"\s+"), (TokenType.OTHER, r".")])
+        return patterns
+
+
 _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "generic": GenericDialectConfig,
     "oracle": OracleDialectConfig,
@@ -554,6 +585,7 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "spanner": BigQueryDialectConfig,
     "spangres": PostgreSQLDialectConfig,
     "db2": Db2DialectConfig,
+    "snowflake": SnowflakeDialectConfig,
 }
 
 
@@ -719,7 +751,7 @@ class StatementSplitter:
         current_statement_writer = string_writer_type() if string_writer_type is not None else None
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0
-        block_stack = []
+        block_stack: list[str] = []
         dialect = self._dialect
         block_starters = dialect.block_starters
         block_enders = dialect.block_enders
@@ -747,11 +779,24 @@ class StatementSplitter:
 
             if token.type == TokenType.KEYWORD:
                 if token_upper in block_starters:
-                    block_stack.append(token_upper)
-                    if len(block_stack) > max_nesting_depth:
-                        msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
-                        raise ValueError(msg)
-                elif token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx):
+                    if (
+                        dialect.name == "snowflake"
+                        and token_upper == _BEGIN_BLOCK_KEYWORD
+                        and block_stack
+                        and block_stack[-1] == "DECLARE"
+                    ):
+                        block_stack[-1] = "BEGIN"
+                    else:
+                        block_stack.append(token_upper)
+                        if len(block_stack) > max_nesting_depth:
+                            msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
+                            raise ValueError(msg)
+                elif (
+                    dialect.name == "snowflake"
+                    and re.fullmatch(r"END\s+CASE", token_upper)
+                    and block_stack
+                    and block_stack[-1] == "CASE"
+                ) or (token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)):
                     block_stack.pop()
 
             is_terminator = False

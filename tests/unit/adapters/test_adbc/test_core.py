@@ -1070,6 +1070,52 @@ def test_teradata_error_mapping(code: int, expected: type[SQLSpecError]) -> None
     assert mapped.__cause__ is error
 
 
+@pytest.mark.parametrize(
+    ("sql", "parameters", "expected_sql", "expected_parameters"),
+    [
+        ("SELECT :name AS name", {"name": "ada"}, "SELECT ? AS name", ["ada"]),
+        ("SELECT :1 AS value", [7], "SELECT ? AS value", [7]),
+        (
+            "SELECT $1 FROM @stage WHERE $1 = :expected",
+            {"expected": "ok"},
+            "SELECT $1 FROM @stage WHERE $1 = ?",
+            ["ok"],
+        ),
+    ],
+)
+def test_snowflake_adbc_compiles_to_qmark(
+    sql: str, parameters: Any, expected_sql: str, expected_parameters: list[Any]
+) -> None:
+    """Snowflake source markers convert to qmarks while stage ordinals remain SQL tokens."""
+    statement = SQL(sql, parameters, statement_config=get_statement_config("snowflake"))
+    compiled_sql, compiled_parameters = statement.compile()
+    assert compiled_sql == expected_sql
+    assert list(compiled_parameters) == expected_parameters
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("002003", NotFoundError),
+        ("000604", QueryTimeoutError),
+        ("000606", OperationalError),
+        ("250001", DatabaseConnectionError),
+    ],
+)
+@pytest.mark.parametrize("diagnostic", ["message", "vendor_code"])
+def test_snowflake_vendor_diagnostics(code: str, expected: type[SQLSpecError], diagnostic: str) -> None:
+    """Snowflake vendor diagnostics take precedence over generic SQLSTATE fallbacks."""
+    error = Exception(
+        f"{code} (42000): Snowflake operation failed" if diagnostic == "message" else "Snowflake operation failed"
+    )
+    setattr(error, "sqlstate", "42000")
+    if diagnostic == "vendor_code":
+        setattr(error, "vendor_code", int(code))
+    mapped = adbc_core.create_mapped_exception(error)
+    assert isinstance(mapped, expected)
+    assert mapped.__cause__ is error
+
+
 @pytest.mark.parametrize("port", [0, 70000, True, "bad"])
 def test_teradata_invalid_port(port: Any) -> None:
     with pytest.raises(ImproperConfigurationError, match="port"):
@@ -1239,3 +1285,70 @@ def test_teradata_error_codes_map_only_for_teradata_sources() -> None:
         with handler:
             raise make_error("[Error 3523] request rejected")
         assert type(handler.pending_exception) is expected
+
+
+def test_snowflake_script_binds_only_real_placeholders() -> None:
+    """Stages, pipe ordinals, and comment markers do not consume subsequent statement binds."""
+    executed: list[tuple[str, Any]] = []
+    cursor = SimpleNamespace(
+        execute=lambda sql, parameters=None: executed.append((sql, parameters)),
+        close=lambda: None,
+        rowcount=0,
+        description=None,
+    )
+    connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
+    result = driver.execute_script("SELECT $1 FROM @stage; SELECT ? AS value; SELECT ? AS other", (7, 8))
+    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT 7 AS value", None), ("SELECT 8 AS other", None)]
+    assert result.successful_statements == 3
+
+
+def test_adbc_snowflake_observability_and_statement_query_tags() -> None:
+    """Per-session Snowflake telemetry and correlation tags preserve shared runtime identity."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+    from sqlspec.utils.correlation import CorrelationContext
+
+    calls: list[dict[str, Any]] = []
+    events: list[Any] = []
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        close=lambda: None,
+        fetch_arrow_table=lambda: pa.table({"OK": [1]}),
+        description=[("OK",)],
+        rowcount=1,
+    )
+
+    def make_cursor(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return cursor
+
+    connection = SimpleNamespace(cursor=make_cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
+    driver = AdbcDriver(cast("Any", connection), dialect="snowflake", driver_features={"query_tag": "etl"})
+    runtime = ObservabilityRuntime(ObservabilityConfig(statement_observers=[events.append]), config_name="AdbcConfig")
+    driver.attach_observability(runtime)
+    with CorrelationContext.context("req-7"):
+        assert driver.select_one("SELECT 1 AS ok") == {"ok": 1}
+    driver.execute("SELECT 1 AS ok")
+    assert calls == [
+        {"adbc_stmt_kwargs": {"adbc.snowflake.statement.query_tag": "etl:req-7"}},
+        {"adbc_stmt_kwargs": {"adbc.snowflake.statement.query_tag": "etl"}},
+    ]
+    assert [event.db_system for event in events] == ["snowflake", "snowflake"]
+    assert events[0].correlation_id == "req-7"
+    assert runtime.config_name == "AdbcConfig"
+
+
+def test_adbc_non_snowflake_cursor_has_no_statement_options() -> None:
+    """Other ADBC backends retain the zero-keyword cursor contract."""
+    calls: list[dict[str, Any]] = []
+    cursor = SimpleNamespace(close=lambda: None)
+
+    def make_cursor(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return cursor
+
+    connection = SimpleNamespace(cursor=make_cursor, adbc_get_info=lambda: {"vendor_name": "SQLite"})
+    driver = AdbcDriver(cast("Any", connection), dialect="sqlite", driver_features={"query_tag": "unused"})
+    with driver.with_cursor(cast("Any", connection)) as opened:
+        assert opened is cursor
+    assert calls == [{}]

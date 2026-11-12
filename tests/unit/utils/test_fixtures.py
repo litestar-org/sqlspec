@@ -3203,3 +3203,45 @@ def test_teradata_byte_and_varbyte_columns_decode_base64_payloads(type_label: st
     rows: list[dict[str, Any]] = [{"payload": encoded}]
     fixture_module._decode_row_values(rows, "teradata", [col])
     assert rows == [{"payload": b"\x01\x02\xff"}]
+
+
+def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path) -> None:
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    class Cursor:
+        def __init__(self, connection: Any) -> None:
+            self.connection = connection
+            self.description = [
+                ("column_name", 2, None, None, None, None, False),
+                ("data_type", 2, None, None, None, None, False),
+                ("ordinal_position", 0, None, None, 18, 0, False),
+            ]
+            self.rowcount = 1
+
+        def execute(self, sql: str, parameters: Any = None, **kwargs: Any) -> None:
+            self.connection.calls.append((sql, parameters))
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return [("id", "NUMBER", 1), ("payload", "VARIANT", 2), ("items", "ARRAY", 3), ("object", "OBJECT", 4)]
+
+        def executemany(self, sql: str, parameters: Any) -> None:
+            self.connection.calls.append((sql, parameters))
+            self.rowcount = len(parameters)
+
+        def close(self) -> None:
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Any]] = []
+
+        def cursor(self) -> Cursor:
+            return Cursor(self)
+
+    (tmp_path / "records.json").write_text('[{"id":1,"payload":{"k":1},"items":["a"],"object":null}]', encoding="utf-8")
+    connection = Connection()
+    loaded = load_table_fixtures_sync(SnowflakeDriver(connection), tmp_path, tables=["records"])
+    assert loaded == {"records": 1}
+    insert, parameters = connection.calls[-1]
+    assert "SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)" in insert
+    assert parameters == [(1, '{"k":1}', '["a"]', None)]

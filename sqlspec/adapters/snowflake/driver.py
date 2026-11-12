@@ -1,0 +1,700 @@
+"""Synchronous Snowflake execution and native Arrow storage pipelines."""
+
+import contextlib
+import re
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+from sqlspec.adapters.snowflake._typing import SnowflakeCursor
+from sqlspec.adapters.snowflake.core import (
+    build_empty_arrow_table_from_description,
+    collect_rows,
+    create_mapped_exception,
+    default_statement_config,
+    driver_profile,
+    is_snowflake_error,
+    normalize_column_names,
+    normalize_execute_parameters,
+    normalize_many_parameters,
+    resolve_rowcount,
+)
+from sqlspec.core import (
+    SQL,
+    StatementConfig,
+    build_arrow_result_from_reader,
+    build_arrow_result_from_table,
+    get_cache_config,
+    register_driver_profile,
+)
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.storage._staging_sql import build_create_table_from_arrow_schema
+from sqlspec.typing import ArrowReturnFormat, StatementParameters
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
+from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.serializers import to_json as encode_json
+from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.uuids import uuid4
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, CachedQuery, SQLResult, Statement, StatementFilter
+    from sqlspec.driver import ExecutionResult
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+
+__all__ = ("SnowflakeDriver", "SnowflakeExceptionHandler")
+
+
+_QUALIFIED_IDENTIFIER_PART = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
+
+
+def _format_identifier(identifier: str) -> str:
+    position = 0
+    parts: list[str] = []
+    while position < len(identifier):
+        matched = _QUALIFIED_IDENTIFIER_PART.match(identifier, position)
+        if matched is None:
+            msg = "Invalid Snowflake identifier"
+            raise SQLSpecError(msg)
+        parts.append(quote_identifier(normalize_identifier(matched.group(1), "snowflake")))
+        position = matched.end()
+        if matched.group(2) == "." and position == len(identifier):
+            msg = "Invalid Snowflake identifier"
+            raise SQLSpecError(msg)
+    if not parts:
+        msg = "Snowflake identifier must not be empty"
+        raise SQLSpecError(msg)
+    return ".".join(parts)
+
+
+def _normalize_arrow_table(table: Any, features: Mapping[str, Any]) -> Any:
+    names = normalize_column_names(
+        table.column_names, enable_lowercase_column_names=bool(features.get("enable_lowercase_column_names", True))
+    )
+    return table.rename_columns(names) if names != table.column_names else table
+
+
+def _iter_arrow_tables(cursor: Any, features: Mapping[str, Any]) -> Iterator[Any]:
+    try:
+        for table in cursor.fetch_arrow_batches():
+            yield _normalize_arrow_table(table, features)
+    except Exception as exc:
+        from snowflake.connector.errors import NotSupportedError
+
+        if not isinstance(exc, NotSupportedError):
+            raise
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        names = normalize_column_names(
+            [str(column[0]) for column in cursor.description or ()],
+            enable_lowercase_column_names=bool(features.get("enable_lowercase_column_names", True)),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            yield build_empty_arrow_table_from_description(cursor.description, features)
+        else:
+            dictionaries = [
+                dict(zip(names, row.values() if isinstance(row, Mapping) else row, strict=False)) for row in rows
+            ]
+            yield pa.Table.from_pylist(dictionaries)
+
+
+def materialize_arrow_table_from_batches(cursor: Any, driver_features: Mapping[str, Any]) -> Any:
+    """Read native Arrow batches, preserving metadata for empty and JSON results."""
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    tables = list(_iter_arrow_tables(cursor, driver_features))
+    if not tables:
+        return build_empty_arrow_table_from_description(cursor.description, driver_features)
+    return tables[0] if len(tables) == 1 else pa.concat_tables(tables)
+
+
+def build_arrow_reader_from_cursor(
+    cursor: Any,
+    cursor_close_callback: Callable[[], None],
+    driver_features: Mapping[str, Any],
+    *,
+    batch_size: int | None = None,
+) -> Any:
+    """Stream Arrow batches and close the cursor on exhaustion or early close."""
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    tables = iter(_iter_arrow_tables(cursor, driver_features))
+    try:
+        first = next(tables, None)
+        if first is None:
+            first = build_empty_arrow_table_from_description(cursor.description, driver_features)
+    except BaseException:
+        cursor_close_callback()
+        raise
+
+    def batches() -> Iterator[Any]:
+        try:
+            yield from first.to_batches(max_chunksize=batch_size)
+            for table in tables:
+                yield from table.to_batches(max_chunksize=batch_size)
+        finally:
+            cursor_close_callback()
+
+    reader = pa.RecordBatchReader.from_batches(first.schema, batches())
+    return arrow_reader_with_deferred_close(reader, cursor_close_callback)
+
+
+class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
+    """Capture mapped connector exceptions outside compiled context-manager frames."""
+
+    __slots__ = ()
+
+    def _handle_exception(self, exc_type: type[BaseException] | None, exc_val: BaseException) -> bool:
+        if exc_type is not None and is_snowflake_error(exc_val):
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
+        return False
+
+
+class SnowflakeDriver(SyncDriverAdapterBase):
+    """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
+
+    __slots__ = ("_active_stream_cursors", "_data_dictionary", "_in_transaction")
+    dialect = "snowflake"
+    native_arrow_export: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        connection: Any,
+        statement_config: StatementConfig | None = None,
+        driver_features: dict[str, Any] | None = None,
+    ) -> None:
+        if statement_config is None:
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
+        features = dict(driver_features or {})
+        features.setdefault(
+            "storage_capabilities",
+            {
+                "arrow_export_enabled": True,
+                "arrow_import_enabled": True,
+                "parquet_export_enabled": True,
+                "parquet_import_enabled": True,
+                "partition_strategies": ["rows_per_chunk"],
+            },
+        )
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
+        self._data_dictionary: SnowflakeSyncDataDictionary | None = None
+        self._in_transaction = False
+        self._active_stream_cursors: dict[int, Any] = {}
+
+    def close(self) -> None:
+        """Close outstanding native Arrow cursors before returning the connection."""
+        cursors, self._active_stream_cursors = self._active_stream_cursors, {}
+        for cursor in cursors.values():
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+    @property
+    def data_dictionary(self) -> "SnowflakeSyncDataDictionary":
+        """Return the Snowflake catalog dictionary."""
+        if self._data_dictionary is None:
+            from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
+
+            self._data_dictionary = SnowflakeSyncDataDictionary()
+        return self._data_dictionary
+
+    def with_cursor(self, connection: Any) -> SnowflakeCursor:
+        """Acquire a deterministically closed connector cursor."""
+        return SnowflakeCursor(connection)
+
+    def handle_database_exceptions(self) -> SnowflakeExceptionHandler:
+        """Create a deferred connector exception handler."""
+        return SnowflakeExceptionHandler()
+
+    def _execute_cursor(self, cursor: Any, sql: str, params: Any) -> None:
+        options: dict[str, Any] = {}
+        if self.driver_features.get("enable_query_tag_correlation") and (correlation := CorrelationContext.get()):
+            tag = self.driver_features.get("query_tag")
+            options["_statement_params"] = {"QUERY_TAG": f"{tag}:{correlation}" if tag else correlation}
+        cursor.execute(sql, normalize_execute_parameters(params), **options)
+
+    def collect_rows(self, cursor: Any, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
+        """Materialize rows with consistent identifier casing."""
+        from sqlspec.adapters.snowflake.type_converter import SnowflakeOutputConverter
+
+        converter = (
+            SnowflakeOutputConverter(self.driver_features.get("json_deserializer"))
+            if self.driver_features.get("enable_json_deserialization", True)
+            else None
+        )
+        data, names, row_format = collect_rows(
+            fetched,
+            cursor.description,
+            {},
+            converter=converter,
+            enable_lowercase_column_names=bool(self.driver_features.get("enable_lowercase_column_names", True)),
+        )
+        if row_format == "dict":
+            data = [tuple(row.get(name) for name in names) for row in data]
+        return data, names, len(data)
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: tuple[Any, ...] | list[Any] | dict[str, Any], cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Apply statement correlation and Snowflake row semantics on cache hits."""
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+        )
+        try:
+            with self.with_cursor(self.connection) as cursor:
+                return self.build_statement_result(statement, self.dispatch_execute(cursor, statement))
+        finally:
+            self._release_pooled_statement(statement)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        """Return connector DML affected rows."""
+        return resolve_rowcount(cursor)
+
+    def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Compile, bind and materialize one statement."""
+        sql, params = self._compiled_sql(statement, self.statement_config)
+        self._execute_cursor(cursor, sql, params)
+        if statement.returns_rows() or self._should_force_select(statement, cursor):
+            data, names, count = self.collect_rows(cursor, cursor.fetchall())
+            return self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=names,
+                data_row_count=count,
+                is_select_result=True,
+                row_format="tuple",
+            )
+        return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+
+    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Execute a batch of bound parameter sets."""
+        sql, params = self._compiled_sql(statement, self.statement_config)
+        rows = normalize_many_parameters(params)
+        if rows:
+            cursor.executemany(sql, rows)
+        return self.create_execution_result(
+            cursor, rowcount_override=resolve_rowcount(cursor) if rows else 0, is_many_result=True
+        )
+
+    def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
+        """Execute unbound scripts through the connector's Snowflake parser."""
+        sql, params = self._compiled_sql(statement, self.statement_config)
+        count = 0
+        if not params and callable(getattr(self.connection, "execute_string", None)):
+            cursors = self.connection.execute_string(sql, remove_comments=False, return_cursors=True)
+            try:
+                for result in cursors:
+                    count += 1
+                    result.close()
+            finally:
+                for result in cursors:
+                    with contextlib.suppress(Exception):
+                        result.close()
+        else:
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            offset = 0
+            from sqlspec.core.parameters import ParameterValidator
+
+            validator = ParameterValidator()
+            for text in statements:
+                bindings = params
+                if isinstance(params, (list, tuple)):
+                    width = len(validator.extract_parameters(text, dialect="snowflake"))
+                    bindings = params[offset : offset + width]
+                    offset += width
+                self._execute_cursor(cursor, text, bindings)
+                count += 1
+        return self.create_execution_result(
+            cursor, statement_count=count, successful_statements=count, is_script_result=True
+        )
+
+    def begin(self) -> None:
+        """Begin a DML transaction; Snowflake DDL remains autocommitting."""
+        self.execute("BEGIN")
+        self._in_transaction = True
+
+    def commit(self) -> None:
+        """Commit the active transaction."""
+        handler = self.handle_database_exceptions()
+        self._run_with_exception_handler(handler, self.connection.commit)
+        self._check_pending_exception(handler)
+        self._in_transaction = False
+
+    def rollback(self) -> None:
+        """Roll back the active transaction."""
+        handler = self.handle_database_exceptions()
+        self._run_with_exception_handler(handler, self.connection.rollback)
+        self._check_pending_exception(handler)
+        self._in_transaction = False
+
+    def _connection_in_transaction(self) -> bool:
+        return self._in_transaction
+
+    def create_savepoint(self, name: str) -> None:
+        """Reject unsupported Snowflake savepoints."""
+        msg = "Snowflake does not support savepoints"
+        raise NotImplementedError(msg)
+
+    def release_savepoint(self, name: str) -> None:
+        """Reject unsupported Snowflake savepoints."""
+        msg = "Snowflake does not support savepoints"
+        raise NotImplementedError(msg)
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Reject unsupported Snowflake savepoints."""
+        msg = "Snowflake does not support savepoints"
+        raise NotImplementedError(msg)
+
+    def execute_async_query(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: StatementConfig | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """Submit a warehouse job and return its query identifier."""
+        config = statement_config or self.statement_config
+        prepared = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        handler = self.handle_database_exceptions()
+        query_id = None
+        with handler, self.with_cursor(self.connection) as cursor:
+            sql, params = self._compiled_sql(prepared, config)
+            cursor.execute_async(sql, normalize_execute_parameters(params))
+            query_id = cursor.sfqid
+        self._check_pending_exception(handler)
+        if not query_id:
+            msg = "Snowflake did not return an asynchronous query identifier"
+            raise SQLSpecError(msg)
+        return str(query_id)
+
+    def fetch_async_query_result(
+        self, query_id: str, *, statement_config: StatementConfig | None = None
+    ) -> "SQLResult":
+        """Wait for a submitted job and materialize its result."""
+        statement = self.prepare_statement("SELECT 1", statement_config=statement_config)
+        handler = self.handle_database_exceptions()
+        result = None
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.get_results_from_sfqid(query_id)
+            fetched = cursor.fetchall()
+            if cursor.description:
+                data, names, count = self.collect_rows(cursor, fetched)
+                execution = self.create_execution_result(
+                    cursor,
+                    selected_data=data,
+                    column_names=names,
+                    data_row_count=count,
+                    is_select_result=True,
+                    row_format="tuple",
+                )
+            else:
+                execution = self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+            result = self.build_statement_result(statement, execution)
+        self._check_pending_exception(handler)
+        if result is None:
+            msg = "Snowflake asynchronous result is unavailable"
+            raise SQLSpecError(msg)
+        return result
+
+    def has_schema(self, schema: str) -> bool:
+        """Check a schema through a bound catalog lookup."""
+        return bool(
+            self.select_value_or_none(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = :schema_name",
+                schema_name=normalize_identifier(schema, "snowflake"),
+            )
+        )
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Capture and change the migration schema."""
+        from sqlspec.adapters.snowflake.migrations import apply_snowflake_migration_schema
+
+        apply_snowflake_migration_schema(self, schema)
+
+    def reset_migration_session_schema(self) -> None:
+        """Restore the exact schema captured before migrations."""
+        from sqlspec.adapters.snowflake.migrations import restore_snowflake_migration_schema
+
+        restore_snowflake_migration_schema(self)
+
+    def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: StatementConfig | None = None,
+        return_format: ArrowReturnFormat = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Export native nanoarrow batches without requiring pandas."""
+        ensure_pyarrow()
+        config = statement_config or self.statement_config
+        prepared = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        cursor = self.connection.cursor()
+        handler = self.handle_database_exceptions()
+        result = None
+        reader_owned = False
+        try:
+            with handler:
+                sql, params = self._compiled_sql(prepared, config)
+                self._execute_cursor(cursor, sql, params)
+                if return_format == "reader":
+                    self._active_stream_cursors[id(cursor)] = cursor
+
+                    def close_cursor() -> None:
+                        owned = self._active_stream_cursors.pop(id(cursor), None)
+                        if owned is not None:
+                            owned.close()
+
+                    reader = build_arrow_reader_from_cursor(
+                        cursor, close_cursor, self.driver_features, batch_size=batch_size
+                    )
+                    result = build_arrow_result_from_reader(
+                        prepared, reader, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+                    )
+                    reader_owned = True
+                else:
+                    table = materialize_arrow_table_from_batches(cursor, self.driver_features)
+                    result = build_arrow_result_from_table(
+                        prepared, table, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
+                    )
+            self._check_pending_exception(handler)
+        finally:
+            if not reader_owned:
+                self._active_stream_cursors.pop(id(cursor), None)
+                cursor.close()
+        if result is None:
+            msg = "Snowflake did not produce an Arrow result"
+            raise SQLSpecError(msg)
+        return result
+
+    def dispatch_select_stream(self, statement: SQL, chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a lazy Arrow-backed row stream."""
+        return SyncRowStream(_SnowflakeArrowStreamSource(self, statement, chunk_size))
+
+    def select_to_storage(
+        self,
+        statement: "SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: StatementConfig | None = None,
+        partitioner: dict[str, object] | None = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Stream a query to object storage through the Arrow bridge."""
+        self._require_capability("arrow_export_enabled")
+        result = self._select_for_storage(statement, *parameters, statement_config=statement_config)
+        payload = self._write_storage_result(
+            result, destination, format_hint=format_hint, pipeline=self._storage_pipeline()
+        )
+        self._attach_partition_telemetry(payload, partitioner)
+        return self._storage_job(payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        batch_size: int = 10_000,
+        if_not_exists: bool = False,
+        partitioner: dict[str, object] | None = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+        stage_table: bool | str | None = None,
+        conflict_keys: Sequence[str] | None = None,
+        on_conflict: Literal["update", "nothing"] = "update",
+        exclude_update_columns: Sequence[str] | None = None,
+        drop_stage_table: bool = True,
+        drop_indexes: bool = False,
+        concurrent_indexes: bool = False,
+        type_casts: Mapping[str, str] | None = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow rows with batched binding or a temporary Parquet stage."""
+        self._require_capability("arrow_import_enabled")
+        if batch_size <= 0:
+            msg = "batch_size must be positive"
+            raise ValueError(msg)
+        arrow_table = self._coerce_arrow_table(source)
+        formatted = _format_identifier(table)
+        if if_not_exists:
+            self.execute(build_create_table_from_arrow_schema(formatted, arrow_table, dialect="snowflake"))
+        arrow_table = arrow_table.rename_columns([
+            normalize_identifier(name, "snowflake") for name in arrow_table.column_names
+        ])
+        if stage_table or conflict_keys or drop_indexes:
+            return self._execute_staged_load_sync(
+                formatted,
+                arrow_table,
+                raw_loader=self._load_from_arrow_physical,
+                partitioner=partitioner,
+                overwrite=overwrite,
+                telemetry=telemetry,
+                stage_table=_format_identifier(stage_table) if isinstance(stage_table, str) else stage_table,
+                conflict_keys=[normalize_identifier(key, "snowflake") for key in conflict_keys]
+                if conflict_keys
+                else None,
+                on_conflict=on_conflict,
+                exclude_update_columns=[normalize_identifier(key, "snowflake") for key in exclude_update_columns]
+                if exclude_update_columns
+                else None,
+                drop_stage_table=drop_stage_table,
+                drop_indexes=drop_indexes,
+                concurrent_indexes=concurrent_indexes,
+                type_casts={normalize_identifier(key, "snowflake"): value for key, value in type_casts.items()}
+                if type_casts
+                else None,
+            )
+        return self._load_from_arrow_physical(
+            formatted,
+            arrow_table,
+            batch_size=batch_size,
+            partitioner=partitioner,
+            overwrite=overwrite,
+            telemetry=telemetry,
+        )
+
+    def _load_from_arrow_physical(
+        self,
+        table: str,
+        source: Any,
+        *,
+        batch_size: int = 10_000,
+        partitioner: dict[str, object] | None = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load already normalized physical columns without folding them again."""
+        arrow_table = self._coerce_arrow_table(source)
+        formatted = _format_identifier(table)
+        if overwrite:
+            self.execute(f"TRUNCATE TABLE {formatted}")
+        threshold = int(self.driver_features.get("stage_parquet_threshold_rows", 10_000))
+        if (
+            arrow_table.num_rows
+            and self.driver_features.get("enable_stage_parquet_load", True)
+            and arrow_table.num_rows >= threshold
+        ):
+            self._load_parquet_stage(formatted, arrow_table)
+        elif arrow_table.num_rows:
+            import pyarrow as pa
+
+            nested = {field.name for field in arrow_table.schema if pa.types.is_nested(field.type)}
+            serializer = self.driver_features.get("json_serializer", encode_json)
+            columns = ", ".join(quote_identifier(name) for name in arrow_table.column_names)
+            values = ", ".join("PARSE_JSON(?)" if name in nested else "?" for name in arrow_table.column_names)
+            insert = f"INSERT INTO {formatted} ({columns}) " + (f"SELECT {values}" if nested else f"VALUES ({values})")
+            handler = self.handle_database_exceptions()
+            with handler, self.with_cursor(self.connection) as cursor:
+                for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                    rows = [
+                        tuple(
+                            serializer(value) if name in nested and value is not None else value
+                            for name, value in row.items()
+                        )
+                        for row in batch.to_pylist()
+                    ]
+                    cursor.executemany(insert, rows)
+            self._check_pending_exception(handler)
+        payload = self._ingest_telemetry(arrow_table)
+        payload["destination"] = table
+        self._attach_partition_telemetry(payload, partitioner)
+        return self._storage_job(payload, telemetry)
+
+    def _load_parquet_stage(self, table: str, arrow_table: Any) -> None:
+        import pyarrow.parquet as pq
+
+        stage = f"@~/sqlspec_stage/{uuid4().hex}/"
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            try:
+                with TemporaryDirectory(prefix="sqlspec_sf_") as directory:
+                    path = Path(directory) / "part_0.parquet"
+                    pq.write_table(arrow_table, path)
+                    uri = path.as_uri().replace("'", "''")
+                    cursor.execute(f"PUT '{uri}' {stage} AUTO_COMPRESS=FALSE OVERWRITE=TRUE")
+                    cursor.execute(
+                        f"COPY INTO {table} FROM {stage} FILE_FORMAT=(TYPE=PARQUET) MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE PURGE=TRUE"
+                    )
+            finally:
+                with contextlib.suppress(Exception):
+                    cursor.execute(f"REMOVE {stage}")
+        self._check_pending_exception(handler)
+
+
+class _SnowflakeArrowStreamSource:
+    __slots__ = ("_chunk_size", "_driver", "_iterator", "_reader", "_statement", "_variant_names")
+
+    def __init__(self, driver: SnowflakeDriver, statement: SQL, chunk_size: int) -> None:
+        self._driver = driver
+        self._statement = statement
+        self._chunk_size = chunk_size
+        self._reader: Any = None
+        self._iterator: Any = None
+        self._variant_names: set[str] = set()
+
+    def start(self) -> None:
+        cursor = self._driver.connection.cursor()
+        handler = self._driver.handle_database_exceptions()
+        try:
+            with handler:
+                sql, params = self._driver._compiled_sql(self._statement, self._driver.statement_config)
+                self._driver._execute_cursor(cursor, sql, params)
+                names = normalize_column_names(
+                    [str(item[0]) for item in cursor.description or ()],
+                    enable_lowercase_column_names=bool(
+                        self._driver.driver_features.get("enable_lowercase_column_names", True)
+                    ),
+                )
+                self._variant_names = {
+                    names[index] for index, item in enumerate(cursor.description or ()) if item[1] in {5, 9, 10}
+                }
+                self._reader = build_arrow_reader_from_cursor(
+                    cursor, cursor.close, self._driver.driver_features, batch_size=self._chunk_size
+                )
+                self._iterator = iter(self._reader)
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            cursor.close()
+            raise
+
+    def fetch_chunk(self) -> list[dict[str, Any]]:
+        handler = self._driver.handle_database_exceptions()
+        rows: list[dict[str, Any]] = []
+        with handler:
+            batch = next(self._iterator, None)
+            if batch is not None:
+                rows = batch.to_pylist()
+                if self._variant_names and self._driver.driver_features.get("enable_json_deserialization", True):
+                    from sqlspec.utils.serializers import from_json as decode_json
+
+                    decoder = self._driver.driver_features.get("json_deserializer", decode_json)
+                    for row in rows:
+                        for name in self._variant_names:
+                            if isinstance(row.get(name), str):
+                                row[name] = decoder(row[name])
+        self._driver._check_pending_exception(handler)
+        return rows
+
+    def close(self, error: bool = False) -> None:
+        if self._reader is not None:
+            self._reader.close()
+            self._reader = None
+
+
+register_driver_profile("snowflake", driver_profile)

@@ -103,6 +103,7 @@ _AWARE_TIMESTAMP_TYPES: "dict[str, str]" = {
     "mssql": "DATETIMEOFFSET(6)",
     "sybase": "BIGDATETIME",
     "sqlanywhere": "TIMESTAMP WITH TIME ZONE",
+    "snowflake": "TIMESTAMP_TZ",
     "teradata": "TIMESTAMP(6) WITH TIME ZONE",
 }
 _BOUNDED_KEY_TEXT_DIALECTS: "frozenset[str]" = frozenset({
@@ -119,6 +120,7 @@ _KEY_TEXT_LENGTH = 255
 _DEFAULT_DECIMAL_PRECISION = 38
 _DEFAULT_DECIMAL_SCALE = 9
 _DECIMAL_MAX_PRECISION: "dict[str, int]" = {
+    "snowflake": 38,
     "sybase": 38,
     "sqlanywhere": 127,
     "duckdb": 38,

@@ -19,7 +19,7 @@ from sqlspec.adapters.adbc.core import resolve_dialect_name
 from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from adbc_driver_flightsql import DatabaseOptions as AdbcFlightSqlDatabaseOptions
@@ -48,14 +48,19 @@ __all__ = (
 class AdbcCursor:
     """Context manager for cursor management."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("adbc_stmt_kwargs", "connection", "cursor")
 
-    def __init__(self, connection: "AdbcConnection") -> None:
+    def __init__(self, connection: "AdbcConnection", *, adbc_stmt_kwargs: "Mapping[str, Any] | None" = None) -> None:
         self.connection = connection
+        self.adbc_stmt_kwargs = adbc_stmt_kwargs
         self.cursor: AdbcRawCursor | None = None
 
     def __enter__(self) -> "AdbcRawCursor":
-        self.cursor = self.connection.cursor()
+        self.cursor = (
+            self.connection.cursor(adbc_stmt_kwargs=dict(self.adbc_stmt_kwargs))
+            if self.adbc_stmt_kwargs
+            else self.connection.cursor()
+        )
         return self.cursor
 
     def __exit__(self, *_: object) -> None:

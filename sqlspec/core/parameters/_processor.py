@@ -398,7 +398,7 @@ class ParameterProcessor:
                 )
             self._cache_misses += 1
 
-        param_info = self._validator.extract_parameters(sql)
+        param_info = self._validator.extract_parameters(sql, dialect=dialect)
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_placeholder_conversion(param_info, config)
 
@@ -432,12 +432,16 @@ class ParameterProcessor:
             and not config.output_transformer
             and not requires_mapping
         ):
-            normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
+            normalized_sql = (
+                self._normalize_sql_for_parsing(sql, param_info, config, dialect=dialect)
+                if normalize_for_parsing
+                else sql
+            )
             fast_sql, fast_info = sql, param_info
             if has_qmark_escape:
-                normalized_sql = unescape_qmark_operator(normalized_sql)[0]
+                normalized_sql = unescape_qmark_operator(normalized_sql, dialect=dialect)[0]
                 if unescape_output:
-                    fast_sql, fast_info = unescape_qmark_operator(sql, param_info)
+                    fast_sql, fast_info = unescape_qmark_operator(sql, param_info, dialect=dialect)
             result = ParameterProcessingResult(
                 fast_sql,
                 parameters,
@@ -465,6 +469,7 @@ class ParameterProcessor:
                 strict_named_parameters=config.strict_named_parameters,
                 param_info=param_info,
                 precomputed_plan=mapping_plan,
+                dialect=dialect,
             )
             original_styles = {target_style}
             needs_execution_conversion = False
@@ -491,6 +496,7 @@ class ParameterProcessor:
             original_styles,
             needs_execution_conversion,
             is_many,
+            dialect=dialect,
         )
 
         if config.output_transformer:
@@ -498,14 +504,16 @@ class ParameterProcessor:
 
         final_param_info = converted_param_info if converted_param_info is not None else param_info
         sqlglot_sql = (
-            self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
+            self._normalize_sql_for_parsing(processed_sql, final_param_info, config, dialect=dialect)
             if normalize_for_parsing
             else processed_sql
         )
         if has_qmark_escape:
-            sqlglot_sql = unescape_qmark_operator(sqlglot_sql)[0]
+            sqlglot_sql = unescape_qmark_operator(sqlglot_sql, dialect=dialect)[0]
             if unescape_output:
-                processed_sql, final_param_info = unescape_qmark_operator(processed_sql, final_param_info)
+                processed_sql, final_param_info = unescape_qmark_operator(
+                    processed_sql, final_param_info, dialect=dialect
+                )
         final_profile = ParameterProfile(final_param_info)
         result = ParameterProcessingResult(
             processed_sql,
@@ -542,7 +550,7 @@ class ParameterProcessor:
             dialect=dialect,
             strict_named_parameters=config.strict_named_parameters,
         )
-        parse_sql = unescape_qmark_operator(static_sql)[0]
+        parse_sql = unescape_qmark_operator(static_sql, dialect=dialect)[0]
         if unescape_output:
             static_sql = parse_sql
         result = ParameterProcessingResult(
@@ -806,7 +814,7 @@ class ParameterProcessor:
         return False
 
     def _normalize_sql_for_parsing(
-        self, sql: str, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig"
+        self, sql: str, param_info: "list[ParameterInfo]", config: "ParameterStyleConfig", dialect: str | None = None
     ) -> str:
         """Normalize SQL for sqlglot parsing by converting unsupported parameter styles.
 
@@ -817,6 +825,7 @@ class ParameterProcessor:
             sql: SQL string with parameters.
             param_info: List of detected parameter placeholders.
             config: Parameter style configuration.
+            dialect: SQL dialect used for parameter extraction and conversion.
 
         Returns:
             SQL string with parameters converted to a sqlglot-compatible style.
@@ -825,7 +834,7 @@ class ParameterProcessor:
             return sql
         target_style = config.default_parameter_style
         normalized_sql, _ = self._converter.convert_placeholder_style(
-            sql, None, target_style, is_many=False, param_info=param_info
+            sql, None, target_style, is_many=False, param_info=param_info, dialect=dialect
         )
         return normalized_sql
 
@@ -920,6 +929,7 @@ class ParameterProcessor:
         original_styles: "set[ParameterStyle]",
         needs_execution_conversion: bool,
         is_many: bool,
+        dialect: str | None = None,
     ) -> "tuple[str, ConvertedParameters, list[ParameterInfo] | None]":
         if not needs_execution_conversion:
             if parameters is None:
@@ -953,6 +963,7 @@ class ParameterProcessor:
             param_info=param_info,
             precomputed_plan=execution_plan,
             preserve_original_batch=preserve_batch,
+            dialect=dialect,
         )
         return processed_sql, processed_parameters, converted_param_info
 

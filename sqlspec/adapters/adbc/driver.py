@@ -48,11 +48,13 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.parameters import ParameterValidator
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import to_json
@@ -77,6 +79,7 @@ _DB_SYSTEM_OVERRIDE_DIALECTS = frozenset({"teradata"})
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
 _SCHEMA_QUALIFIED_PARTS = 2
 _CATALOG_QUALIFIED_PARTS = 3
+_SCRIPT_PARAMETER_VALIDATOR = ParameterValidator()
 
 
 @final
@@ -288,6 +291,29 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._stream_closers: list[Callable[[], None]] = []
 
     @property
+    def observability(self) -> ObservabilityRuntime:
+        """Return the observability runtime for the selected ADBC backend."""
+        if self._observability is None:
+            name = "AdbcDriver[snowflake]" if self._dialect_name == "snowflake" else type(self).__name__
+            self._observability = ObservabilityRuntime(config_name=name)
+        return self._observability
+
+    def attach_observability(self, runtime: ObservabilityRuntime) -> None:
+        """Attach observability while preserving the shared configuration runtime."""
+        if self._dialect_name == "snowflake" and resolve_db_system(runtime.config_name) != "snowflake":
+            scoped = ObservabilityRuntime(
+                runtime.config, bind_key=runtime.bind_key, config_name=f"{runtime.config_name}[snowflake]"
+            )
+            scoped.lifecycle = runtime.lifecycle
+            scoped.span_manager = runtime.span_manager
+            scoped._statement_observers = runtime._statement_observers
+            scoped._redaction = runtime._redaction
+            scoped._metrics = runtime._metrics
+            scoped._is_idle_cached = runtime._is_idle_cached
+            runtime = scoped
+        super().attach_observability(runtime)
+
+    @property
     def has_streams(self) -> bool:
         """Return whether this session created any lazy native stream."""
         return self._has_streams
@@ -449,14 +475,25 @@ class AdbcDriver(SyncDriverAdapterBase):
         )
         if profiling_enabled:
             self._ensure_statement_profiling()
+        parameter_offset = 0
+        validator = _SCRIPT_PARAMETER_VALIDATOR
         try:
             for idx, stmt in enumerate(statements):
                 stmt_started = perf_counter() if has_observers else 0.0
                 stmt_params: Any = ()
-                if prepared_parameters and (
-                    total_statements == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
-                ):
+                placeholders = (
+                    validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
+                )
+                if prepared_parameters and (total_statements == 1 or placeholders):
                     stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+                    if (
+                        self._dialect_name == "snowflake"
+                        and total_statements > 1
+                        and isinstance(stmt_params, (list, tuple))
+                    ):
+                        count = len(placeholders)
+                        stmt_params = stmt_params[parameter_offset : parameter_offset + count]
+                        parameter_offset += count
                     if (
                         self._dialect_name == "db2"
                         and stmt_params
@@ -657,6 +694,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Cursor context manager
         """
+        if self._dialect_name == "snowflake":
+            raw_tag = self.driver_features.get("query_tag")
+            tag = raw_tag.strip() if isinstance(raw_tag, str) else ""
+            correlation = CorrelationContext.get()
+            if correlation and correlation != tag:
+                tag = f"{tag}:{correlation}" if tag else correlation
+            if tag:
+                return AdbcCursor(connection, adbc_stmt_kwargs={"adbc.snowflake.statement.query_tag": tag})
         return AdbcCursor(connection)
 
     def _map_native_error(self, error: BaseException) -> SQLSpecError:

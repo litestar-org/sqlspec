@@ -3,11 +3,12 @@
 import os
 import re
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.text import split_qualified_identifier
+from sqlspec.utils.arrow_helpers import sql_type_from_arrow_type
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.uuids import uuid4
 
 __all__ = (
@@ -15,11 +16,13 @@ __all__ = (
     "build_checkpoint_insert_sql",
     "build_checkpoint_select_sql",
     "build_checkpoint_table_ddl",
+    "build_create_table_from_arrow_schema",
     "build_drop_stage_table_sql",
     "build_stage_merge_sql",
     "build_stage_table_ddl",
     "build_teradata_checkpoint_probe",
     "compute_worker_thread_budget",
+    "format_storage_identifier",
     "normalize_storage_dialect",
     "resolve_stage_table_name",
 )
@@ -75,6 +78,67 @@ def compute_worker_thread_budget(
         "OPENBLAS_NUM_THREADS": threads,
         "MKL_NUM_THREADS": threads,
     }
+
+
+def format_storage_identifier(identifier: str, *, allow_qualified: bool = False) -> str:
+    """Render identifiers safely, preserving explicit quotes and bare engine folding.
+
+    Args:
+        identifier: A column or table identifier.
+        allow_qualified: Whether dots separate schema and table components.
+
+    Returns:
+        Safely rendered SQL identifier text.
+
+    Raises:
+        ValueError: When an identifier is empty or contains a NUL character.
+    """
+    if not identifier.strip() or "\x00" in identifier:
+        msg = "Storage identifier must not be empty or contain NUL"
+        raise ValueError(msg)
+    parts = re.findall(r'"(?:[^"]|"")*"|[^.]+', identifier) if allow_qualified else [identifier]
+    rendered = []
+    for component in parts:
+        part = component.strip()
+        if not part:
+            msg = "Storage identifier component must not be empty"
+            raise ValueError(msg)
+        if part.startswith('"') and part.endswith('"'):
+            rendered.append(quote_identifier(part[1:-1].replace('""', '"')))
+        elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", part):
+            rendered.append(part)
+        else:
+            rendered.append(quote_identifier(part))
+    return ".".join(rendered)
+
+
+def build_create_table_from_arrow_schema(
+    table_name: str, arrow_schema: Any, *, dialect: str = "snowflake", if_not_exists: bool = True
+) -> str:
+    """Build CREATE TABLE from a PyArrow schema without interpolating values.
+
+    Args:
+        table_name: Target table, optionally qualified with a schema.
+        arrow_schema: PyArrow schema or table with at least one field.
+        dialect: Target SQL dialect for field type mapping.
+        if_not_exists: Whether to include the idempotent creation clause.
+
+    Returns:
+        CREATE TABLE SQL without a trailing semicolon.
+
+    Raises:
+        ValueError: When the table name or schema is empty.
+    """
+    schema = getattr(arrow_schema, "schema", arrow_schema)
+    if not len(schema):
+        msg = "Arrow schema must contain at least one field"
+        raise ValueError(msg)
+    table = format_storage_identifier(table_name, allow_qualified=True)
+    fields = ", ".join(
+        f"{format_storage_identifier(field.name)} {sql_type_from_arrow_type(field.type, dialect)}" for field in schema
+    )
+    conditional = " IF NOT EXISTS" if if_not_exists else ""
+    return f"CREATE TABLE{conditional} {table} ({fields})"
 
 
 def build_teradata_checkpoint_probe(checkpoint_table: str) -> tuple[str, tuple[str | None, str]]:
@@ -273,6 +337,13 @@ def build_stage_merge_sql(
 ) -> str:
     """Build dialect-specific server-side ``INSERT ... SELECT`` or ``MERGE`` SQL from ``stage_table`` into ``target_table``."""
     norm = normalize_storage_dialect(dialect)
+    if norm == "snowflake":
+        columns = [quote_identifier(column) for column in columns]
+        conflict_keys = [quote_identifier(column) for column in conflict_keys] if conflict_keys else None
+        exclude_update_columns = (
+            [quote_identifier(column) for column in exclude_update_columns] if exclude_update_columns else None
+        )
+        type_casts = {quote_identifier(column): value for column, value in type_casts.items()} if type_casts else None
     col_list = ", ".join(columns)
     select_exprs = [
         f"CAST({col} AS {type_casts[col]})" if (type_casts and col in type_casts) else col for col in columns

@@ -1,0 +1,166 @@
+"""Snowflake public execution, transaction, and migration behavior."""
+
+from typing import Any
+
+import pytest
+
+from sqlspec.adapters.snowflake import SnowflakeDriver
+from sqlspec.exceptions import PermissionDeniedError, SQLParsingError, SQLSpecError
+from sqlspec.utils.correlation import CorrelationContext
+
+
+def test_select_normalizes_names_and_decodes_variant(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [
+            ("ID", 0, None, None, 18, 0, False),
+            ("camelCase", 2, None, None, None, None, True),
+            ("PAYLOAD", 5, None, None, None, None, True),
+        ],
+        "rows": [(7, "kept", '{"k":1}')],
+    }
+    driver = SnowflakeDriver(snowflake_connection)
+    assert driver.select("SELECT :id AS ID, 'kept' AS \"camelCase\", payload FROM data", id=7) == [
+        {"id": 7, "camelCase": "kept", "payload": {"k": 1}}
+    ]
+    sql, parameters, _ = snowflake_connection.calls[-1]
+    assert "?" in sql
+    assert list(parameters) == [7]
+    assert snowflake_connection.cursors[-1].closed
+
+
+def test_dml_description_does_not_turn_insert_into_select(snowflake_connection: Any) -> None:
+    result = SnowflakeDriver(snowflake_connection).execute("INSERT INTO data(id) VALUES (:id)", id=1)
+    assert result.rows_affected == 1
+    assert result.get_data() == []
+
+
+def test_script_preserves_snowflake_blocks_and_closes_all_cursors(snowflake_connection: Any) -> None:
+    script = "BEGIN LET x INTEGER := 1; RETURN x; END; SHOW TABLES ->> SELECT * FROM $1;"
+    SnowflakeDriver(snowflake_connection).execute_script(script)
+    assert snowflake_connection.scripts == [script]
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+def test_query_tag_applies_on_repeated_queries(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
+    driver = SnowflakeDriver(
+        snowflake_connection, driver_features={"enable_query_tag_correlation": True, "query_tag": "worker"}
+    )
+    with CorrelationContext.context("request-a"):
+        driver.select("SELECT 1 AS ID")
+    with CorrelationContext.context("request-b"):
+        driver.select("SELECT 1 AS ID")
+    assert [call[2]["_statement_params"] for call in snowflake_connection.calls] == [
+        {"QUERY_TAG": "worker:request-a"},
+        {"QUERY_TAG": "worker:request-b"},
+    ]
+
+
+def test_transaction_boundaries_and_savepoints(snowflake_connection: Any) -> None:
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.begin()
+    driver.commit()
+    driver.begin()
+    driver.rollback()
+    assert [call[0] for call in snowflake_connection.calls] == ["BEGIN", "BEGIN"]
+    assert (snowflake_connection.commits, snowflake_connection.rollbacks) == (1, 1)
+    for operation in (driver.create_savepoint, driver.release_savepoint, driver.rollback_to_savepoint):
+        with pytest.raises(NotImplementedError, match="Snowflake does not support savepoints"):
+            operation("savepoint_1")
+
+
+@pytest.mark.parametrize(
+    ("errno", "sqlstate", "expected"), [(1003, "42000", SQLParsingError), (250005, "42501", PermissionDeniedError)]
+)
+def test_connector_errors_map_outside_context(
+    snowflake_connection: Any, errno: int, sqlstate: str, expected: type[SQLSpecError]
+) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    snowflake_connection.fail_on = "SELECT"
+    snowflake_connection.failure = ProgrammingError(msg="warehouse refusal", errno=errno, sqlstate=sqlstate)
+    with pytest.raises(expected, match="warehouse refusal"):
+        SnowflakeDriver(snowflake_connection).select("SELECT 1")
+    assert snowflake_connection.cursors[-1].closed
+
+
+def test_async_query_submission_and_fetch(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {"description": [("ANSWER", 0, None, None, 18, 0, False)], "rows": [(42,)]}
+    driver = SnowflakeDriver(snowflake_connection)
+    query_id = driver.execute_async_query("SELECT :value", value=42)
+    assert query_id == "sfqid-123"
+    assert driver.fetch_async_query_result(query_id).get_data() == [{"answer": 42}]
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+def test_migration_schema_restores_exact_case_after_repeated_switch(snowflake_connection: Any) -> None:
+    snowflake_connection.results['SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name"'] = {
+        "description": [
+            ("database_name", 2, None, None, None, None, False),
+            ("schema_name", 2, None, None, None, None, False),
+        ],
+        "rows": [("WarehouseDB", "MixedSchema")],
+    }
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.set_migration_session_schema("analytics")
+    driver.set_migration_session_schema('"OtherSchema"')
+    driver.reset_migration_session_schema()
+    switches = [call[0] for call in snowflake_connection.calls if call[0].startswith("USE SCHEMA")]
+    assert switches == ['USE SCHEMA "ANALYTICS"', 'USE SCHEMA "OtherSchema"', 'USE SCHEMA "WarehouseDB"."MixedSchema"']
+    driver.reset_migration_session_schema()
+    assert len(snowflake_connection.calls) == 4
+
+
+def test_migration_schema_retries_failed_restore(snowflake_connection: Any) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    snowflake_connection.results['SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name"'] = {
+        "description": [
+            ("database_name", 2, None, None, None, None, False),
+            ("schema_name", 2, None, None, None, None, False),
+        ],
+        "rows": [("DB", "Mixed")],
+    }
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.set_migration_session_schema("new_schema")
+    snowflake_connection.fail_on = '"DB"."Mixed"'
+    snowflake_connection.failure = ProgrammingError(msg="temporarily denied", errno=1003, sqlstate="42000")
+    with pytest.raises(SQLParsingError):
+        driver.reset_migration_session_schema()
+    snowflake_connection.fail_on = None
+    driver.reset_migration_session_schema()
+    assert snowflake_connection.calls[-1][0] == 'USE SCHEMA "DB"."Mixed"'
+
+
+@pytest.mark.parametrize("schema", ["", "bad; DROP TABLE users", "schema..other", '"unterminated'])
+def test_migration_schema_rejects_invalid_identifiers_without_sql(snowflake_connection: Any, schema: str) -> None:
+    with pytest.raises(SQLSpecError):
+        SnowflakeDriver(snowflake_connection).set_migration_session_schema(schema)
+    assert snowflake_connection.calls == []
+
+
+def test_migration_schema_without_current_schema_refuses_unrestorable_switch(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [
+            ("database_name", 2, None, None, None, None, True),
+            ("schema_name", 2, None, None, None, None, True),
+        ],
+        "rows": [("DB", None)],
+    }
+    with pytest.raises(SQLSpecError, match="restorable current schema"):
+        SnowflakeDriver(snowflake_connection).set_migration_session_schema("target")
+    assert len(snowflake_connection.calls) == 1
+
+
+def test_migration_schema_restores_schema_without_current_database(snowflake_connection: Any) -> None:
+    snowflake_connection.default_result = {
+        "description": [
+            ("database_name", 2, None, None, None, None, True),
+            ("schema_name", 2, None, None, None, None, True),
+        ],
+        "rows": [(None, "OriginalSchema")],
+    }
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.set_migration_session_schema("target")
+    driver.reset_migration_session_schema()
+    assert snowflake_connection.calls[-1][0] == 'USE SCHEMA "OriginalSchema"'

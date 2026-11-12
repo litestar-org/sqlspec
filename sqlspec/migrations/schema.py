@@ -979,9 +979,9 @@ def _type_families_compatible(target_family: str, catalog_family: str) -> bool:
     """Return whether target and catalog type families are compatible under strict mode."""
     if target_family == catalog_family:
         return True
-    if target_family == "json" and catalog_family in {"text", "binary"}:
+    if target_family == "json" and catalog_family in {"text", "binary", "struct"}:
         return True
-    if catalog_family == "json" and target_family in {"text", "binary"}:
+    if catalog_family == "json" and target_family in {"text", "binary", "struct"}:
         return True
     if target_family == "boolean" and catalog_family in {"numeric", "bit"}:
         return True

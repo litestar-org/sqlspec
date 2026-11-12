@@ -56,6 +56,12 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("sqlite_pool", "sqlspec.adapters.sqlite.pool", "SqliteConnectionPool", True),
     SmokeImport("sybase_pool", "sqlspec.adapters.sybase.pool", "SybaseConnectionPool", True, "pymssql"),
     SmokeImport("sqlanywhere_pool", "sqlspec.adapters.sqlanywhere.pool", "SqlanywhereConnectionPool", True, "sqlanydb"),
+    SmokeImport(
+        "snowflake_pool", "sqlspec.adapters.snowflake.pool", "SnowflakeConnectionPool", True, "snowflake.connector"
+    ),
+    SmokeImport(
+        "snowflake_core", "sqlspec.adapters.snowflake.core", "normalize_connection_params", True, "snowflake.connector"
+    ),
     SmokeImport("data_dictionary_registry", "sqlspec.data_dictionary._registry", "get_dialect_config", True),
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("data_dictionary_index_ddl", "sqlspec.data_dictionary._index_ddl", "SyncWithoutIndexesContext", True),

@@ -28,6 +28,7 @@ DIALECT_ALIASES: dict[str, str] = {
     "sqlserver": "mssql",
     "ase": "sybase",
     "sa": "sqlanywhere",
+    "sf": "snowflake",
     "vantage": "teradata",
 }
 

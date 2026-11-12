@@ -1400,3 +1400,277 @@ def test_teradata_shared_object_preserves_driver(optional_driver_imports: Callab
         "entrypoint": "AdbcDriverTeradataInit",
         "db_kwargs": {"uri": "teradata://dbc:dbc@td.corp:1025/prod"},
     }
+
+
+def test_snowflake_lifts_endpoint_and_extra_without_mutating_input() -> None:
+    """Public Snowflake options become independent string-valued database options."""
+    nested = {"adbc.snowflake.sql.account": "explicit"}
+    config = {
+        "driver": "snowflake",
+        "account": "ignored",
+        "warehouse": "wh",
+        "database": "analytics",
+        "schema": "public",
+        "role": "analyst",
+        "region": "us-west-2",
+        "host": "localhost",
+        "port": 3000,
+        "protocol": "http",
+        "application": "sqlspec",
+        "db_kwargs": nested,
+        "extra": {"CLIENT_SESSION_KEEP_ALIVE_HEARTBEAT_FREQUENCY": 900},
+    }
+    normalized = build_connection_config(config)
+    assert normalized == {
+        "db_kwargs": {
+            "adbc.snowflake.sql.account": "explicit",
+            "adbc.snowflake.sql.warehouse": "wh",
+            "adbc.snowflake.sql.db": "analytics",
+            "adbc.snowflake.sql.schema": "public",
+            "adbc.snowflake.sql.role": "analyst",
+            "adbc.snowflake.sql.region": "us-west-2",
+            "adbc.snowflake.sql.uri.host": "localhost",
+            "adbc.snowflake.sql.uri.port": "3000",
+            "adbc.snowflake.sql.uri.protocol": "http",
+            "adbc.snowflake.sql.client_option.app_name": "sqlspec",
+            "CLIENT_SESSION_KEEP_ALIVE_HEARTBEAT_FREQUENCY": "900",
+        }
+    }
+    assert nested == {"adbc.snowflake.sql.account": "explicit"}
+    assert config["account"] == "ignored"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_snowflake_uri_normalization(nested: bool) -> None:
+    """Snowflake URI schemes are stripped before the Go driver parses credentials."""
+    fields = {"uri": "SNOWFLAKE://svc:pw@org-acct/db/public"}
+    config = {"driver": "snowflake", "db_kwargs": fields} if nested else {"driver": "snowflake", **fields}
+    assert build_connection_config(config) == {"db_kwargs": {"uri": "svc:pw@org-acct/db/public"}}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(30, "30s"), (0.5, "500ms"), (0, "0s"), ("1m30s", "1m30s"), ("0.25", "250ms"), (0.000001, "1000ns")],
+)
+def test_snowflake_duration_normalization(value: Any, expected: str) -> None:
+    """Numeric timeouts carry the Go driver's required duration suffix."""
+    normalized = build_connection_config({"driver": "snowflake", "login_timeout": value})
+    assert normalized["db_kwargs"]["adbc.snowflake.sql.client_option.login_timeout"] == expected
+
+
+@pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "later", "-1s"])
+def test_snowflake_rejects_invalid_duration(value: Any) -> None:
+    """Invalid durations fail before an external connection is attempted."""
+    with pytest.raises(ImproperConfigurationError, match="duration"):
+        build_connection_config({"driver": "snowflake", "login_timeout": value})
+
+
+@pytest.mark.parametrize(
+    ("auth_type", "expected"),
+    [
+        ("snowflake", "auth_snowflake"),
+        ("jwt", "auth_jwt"),
+        ("keypair", "auth_jwt"),
+        ("pat", "auth_pat"),
+        ("programmatic_access_token", "auth_pat"),
+        ("oauth", "auth_oauth"),
+        ("workload_identity", "auth_wif"),
+        ("wif", "auth_wif"),
+        ("externalbrowser", "auth_ext_browser"),
+        ("okta", "auth_okta"),
+        ("mfa", "auth_mfa"),
+        ("AUTH_JWT", "auth_jwt"),
+    ],
+)
+def test_snowflake_authentication_aliases(auth_type: str, expected: str) -> None:
+    """Snowflake authentication aliases normalize to the driver's declared values."""
+    assert build_connection_config({"driver": "snowflake", "auth_type": auth_type}) == {
+        "db_kwargs": {"adbc.snowflake.sql.auth_type": expected}
+    }
+
+
+def test_snowflake_rejects_unknown_authentication() -> None:
+    """Unknown authentication modes fail with a configuration error."""
+    with pytest.raises(ImproperConfigurationError, match="authentication"):
+        build_connection_config({"driver": "snowflake", "auth_type": "invalid_mode"})
+
+
+@pytest.mark.parametrize("auth_type", ["pat", "oauth", "wif"])
+def test_snowflake_refreshes_token_for_every_connection(auth_type: str) -> None:
+    """Refreshed bearer tokens replace stale nested tokens without becoming passwords."""
+    tokens = iter(["tok_1", "tok_2"])
+    config = {
+        "driver": "snowflake",
+        "auth_type": auth_type,
+        "username": "svc",
+        "auth_token_provider": lambda: next(tokens),
+        "db_kwargs": {"adbc.snowflake.sql.client_option.auth_token": "expired"},
+    }
+    first = build_connection_config(config)
+    second = build_connection_config(config)
+    assert first["db_kwargs"]["adbc.snowflake.sql.client_option.auth_token"] == "tok_1"
+    assert second["db_kwargs"]["adbc.snowflake.sql.client_option.auth_token"] == "tok_2"
+    assert set(first["db_kwargs"]) == {
+        "username",
+        "adbc.snowflake.sql.auth_type",
+        "adbc.snowflake.sql.client_option.auth_token",
+    }
+    assert config["db_kwargs"] == {"adbc.snowflake.sql.client_option.auth_token": "expired"}
+
+
+def test_snowflake_token_provider_infers_oauth_or_refreshes_password() -> None:
+    """Token-only credentials infer OAuth while explicit password auth stays password-based."""
+    oauth = build_connection_config({"driver": "snowflake", "auth_token_provider": lambda: "oauth_tok"})
+    assert oauth == {
+        "db_kwargs": {
+            "adbc.snowflake.sql.client_option.auth_token": "oauth_tok",
+            "adbc.snowflake.sql.auth_type": "auth_oauth",
+        }
+    }
+    password = build_connection_config({
+        "driver": "snowflake",
+        "auth_type": "snowflake",
+        "username": "svc",
+        "auth_token_provider": lambda: "pw_tok",
+    })
+    assert password == {
+        "db_kwargs": {"username": "svc", "password": "pw_tok", "adbc.snowflake.sql.auth_type": "auth_snowflake"}
+    }
+
+
+def test_snowflake_session_parameters_and_driver_query_tag() -> None:
+    """Session parameters use lowercase booleans and the tag reaches driver features."""
+    config = AdbcConfig(
+        connection_config={
+            "driver": "snowflake",
+            "query_tag": "etl",
+            "session_parameters": {"TIMEZONE": "UTC", "AUTOCOMMIT": False},
+            "keep_session_alive": True,
+            "tls_skip_verify": False,
+            "use_high_precision": False,
+        }
+    )
+    normalized = build_connection_config(config.connection_config)
+    assert config.driver_features["query_tag"] == "etl"
+    assert normalized == {
+        "db_kwargs": {
+            "QUERY_TAG": "etl",
+            "TIMEZONE": "UTC",
+            "AUTOCOMMIT": "false",
+            "adbc.snowflake.sql.client_option.keep_session_alive": "true",
+            "adbc.snowflake.sql.client_option.tls_skip_verify": "false",
+            "adbc.snowflake.sql.client_option.use_high_precision": "false",
+        }
+    }
+
+
+def test_snowflake_private_key_path_and_pem() -> None:
+    """File paths and in-memory PEM keys retain the driver's supported representations."""
+    from pathlib import Path
+
+    path = build_connection_config({"driver": "snowflake", "private_key": Path("/tmp/key.p8")})
+    assert path == {
+        "db_kwargs": {
+            "adbc.snowflake.sql.client_option.jwt_private_key": "/tmp/key.p8",
+            "adbc.snowflake.sql.auth_type": "auth_jwt",
+        }
+    }
+    pem = "-----BEGIN ENCRYPTED PRIVATE KEY-----\ndata\n-----END ENCRYPTED PRIVATE KEY-----"
+    normalized = build_connection_config({
+        "driver": "snowflake",
+        "private_key": pem,
+        "private_key_passphrase": b"secret",
+    })
+    assert normalized == {
+        "db_kwargs": {
+            "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value": pem,
+            "adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password": "secret",
+            "adbc.snowflake.sql.auth_type": "auth_jwt",
+        }
+    }
+
+
+@pytest.mark.parametrize("as_der", [False, True])
+def test_snowflake_private_key_object_and_encrypted_der(as_der: bool) -> None:
+    """Cryptographic key objects and encrypted DER normalize to decryptable PKCS8 PEM."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    value = (
+        key.private_bytes(
+            serialization.Encoding.DER,
+            serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(b"secret"),
+        )
+        if as_der
+        else key
+    )
+    normalized = build_connection_config({
+        "driver": "snowflake",
+        "private_key": value,
+        "private_key_passphrase": "secret",
+    })
+    options = normalized["db_kwargs"]
+    restored = serialization.load_pem_private_key(
+        options["adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value"].encode(), password=b"secret"
+    )
+    assert isinstance(restored, rsa.RSAPrivateKey)
+    assert restored.private_numbers() == key.private_numbers()
+    assert options["adbc.snowflake.sql.auth_type"] == "auth_jwt"
+    assert options["adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_password"] == "secret"
+
+
+@pytest.mark.parametrize("value", [1, "yes", None])
+def test_snowflake_rejects_invalid_boolean_options(value: Any) -> None:
+    """Boolean driver options reject ambiguous values."""
+    with pytest.raises(ImproperConfigurationError, match="boolean"):
+        build_connection_config({"driver": "snowflake", "tls_skip_verify": value})
+
+
+@pytest.mark.parametrize("value", [object(), b"not-a-private-key"])
+def test_snowflake_rejects_invalid_private_key(value: Any) -> None:
+    """Invalid in-memory keys fail before a connection is opened."""
+    with pytest.raises(ImproperConfigurationError, match=r"private.key"):
+        build_connection_config({"driver": "snowflake", "private_key": value})
+
+
+def test_snowflake_encrypted_private_key_path(tmp_path: Any) -> None:
+    """An encrypted private key file normalizes to decryptable in-memory PKCS8 PEM."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    path = tmp_path / "key.p8"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.DER,
+            serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(b"secret"),
+        )
+    )
+    options = build_connection_config({"driver": "snowflake", "private_key": path, "private_key_passphrase": "secret"})[
+        "db_kwargs"
+    ]
+    restored = serialization.load_pem_private_key(
+        options["adbc.snowflake.sql.client_option.jwt_private_key_pkcs8_value"].encode(), password=b"secret"
+    )
+    assert isinstance(restored, rsa.RSAPrivateKey)
+    assert restored.private_numbers() == key.private_numbers()
+
+
+def test_snowflake_private_key_missing_path(tmp_path: Any) -> None:
+    """Missing encrypted private key files produce a configuration error with a cause."""
+    with pytest.raises(ImproperConfigurationError, match="read Snowflake") as raised:
+        build_connection_config({
+            "driver": "snowflake",
+            "private_key": tmp_path / "missing.p8",
+            "private_key_passphrase": "secret",
+        })
+    assert isinstance(raised.value.__cause__, OSError)
+
+
+def test_snowflake_private_key_rejects_invalid_passphrase() -> None:
+    """Private key passphrases must be strings or bytes."""
+    with pytest.raises(ImproperConfigurationError, match="passphrase"):
+        build_connection_config({"driver": "snowflake", "private_key": b"der", "private_key_passphrase": 1})

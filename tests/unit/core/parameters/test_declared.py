@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -106,3 +107,34 @@ def test_public_exports() -> None:
     assert TopDecl is ParameterDeclaration
     assert top_matches is matches_param_type
     assert top_register is register_param_type
+
+
+@pytest.mark.parametrize("placeholder", [":id", "?"])
+def test_snowflake_loader_declared_parameters_ignore_stage_and_native_variables(
+    placeholder: str, tmp_path: "Path"
+) -> None:
+    from sqlspec.loader import SQLFileLoader
+
+    path = tmp_path / "snowflake.sql"
+    path.write_text(
+        "-- name: stage_rows\n-- dialect: snowflake\n-- param: id int\n"
+        f"SELECT $1, $2 FROM @%sales WHERE dt >= $min_dt AND id = {placeholder};\n"
+    )
+    loader = SQLFileLoader()
+    loader.load_sql(path)
+    statement = loader.get_sql("stage_rows")
+    sql, _ = statement.compile()
+    assert "$1, $2 FROM @%sales" in sql
+    assert "$min_dt" in sql
+    assert [parameter.name for parameter in statement.declared_parameters] == ["id"]
+
+
+def test_snowflake_loader_slot_parameter_does_not_collide_with_stage_name() -> None:
+    from sqlspec.core import SQL
+    from sqlspec.loader import SQLFileLoader
+
+    loader = SQLFileLoader()
+    loader.add_named_sql("q", "SELECT $1 FROM @sales /* slot: filter */", dialect="snowflake")
+    statement = loader.get_sql("q", filter=SQL("WHERE region = :sales", {"sales": "west"}))
+    assert statement.named_parameters == {"sales": "west"}
+    assert statement.raw_sql == "SELECT $1 FROM @sales WHERE region = :sales"

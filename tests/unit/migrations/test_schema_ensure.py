@@ -638,3 +638,19 @@ def test_ensure_schema_strict_skips_unknown_tokens(caplog: pytest.LogCaptureFixt
         record for record in caplog.records if record.getMessage() == "migration.schema.type_unclassified"
     ]
     assert len(unclassified_records) == 2
+
+
+@pytest.mark.parametrize(("catalog_type", "target_type"), [("VARIANT", "JSON"), ("JSON", "VARIANT")])
+def test_ensure_schema_json_variant_compatibility_is_symmetric(catalog_type: str, target_type: str) -> None:
+    from sqlspec.adapters.sqlite import SqliteConfig
+
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute(f"CREATE TABLE documents (payload {catalog_type})")
+            target = SchemaTarget("documents", sql.create_table("documents").column("payload", target_type))
+            result = ensure_schema_sync(driver, [target], manage_schema=True, commit=False, strict=True)
+            assert result.created_tables == []
+            assert result.added_columns == {}
+    finally:
+        config.close_pool()

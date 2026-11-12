@@ -105,6 +105,9 @@ class _BaseTableEventQueue:
 
     def _insert_sql(self) -> str:
         columns = "event_id, channel, payload_json, metadata_json, status, available_at, lease_expires_at, attempts, created_at"
+        if self._dialect == "snowflake":
+            values = ":event_id, :channel, PARSE_JSON(:payload_json), PARSE_JSON(:metadata_json), :status, :available_at, :lease_expires_at, :attempts, :created_at"
+            return f"INSERT INTO {self._table_name} ({columns}) SELECT {values}"
         values = ":event_id, :channel, :payload_json, :metadata_json, :status, :available_at, :lease_expires_at, :attempts, :created_at"
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
 

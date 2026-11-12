@@ -4,7 +4,7 @@ import contextlib
 import importlib.metadata
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
@@ -162,6 +162,51 @@ class AdbcConnectionParams(TypedDict):
     extra: NotRequired[dict[str, Any]]
     """Additional driver options merged into ``db_kwargs``."""
 
+    region: NotRequired[str]
+    """Snowflake cloud region identifier."""
+    host: NotRequired[str]
+    """Snowflake or proxy endpoint hostname."""
+    port: NotRequired[int | str]
+    """Snowflake endpoint port."""
+    protocol: NotRequired[str]
+    """Snowflake endpoint transport protocol."""
+    application: NotRequired[str]
+    """Client application identifier."""
+    keep_session_alive: NotRequired[bool]
+    """Keep the Snowflake session active during idle intervals."""
+    login_timeout: NotRequired[int | float | str]
+    """Authentication timeout in seconds or a Go duration string."""
+    request_timeout: NotRequired[int | float | str]
+    """HTTP request timeout in seconds or a Go duration string."""
+    client_timeout: NotRequired[int | float | str]
+    """Overall client timeout in seconds or a Go duration string."""
+    ocsp_fail_open_mode: NotRequired[bool]
+    """Allow connections when the certificate status responder is unreachable."""
+    use_high_precision: NotRequired[bool]
+    """Return fixed-point Snowflake numbers as lossless Arrow decimal values by default."""
+    okta_url: NotRequired[str]
+    """Okta authentication endpoint URL."""
+    identity_provider: NotRequired[str]
+    """Workload identity provider name."""
+    workload_identity_provider: NotRequired[str]
+    """Alias for identity_provider."""
+    private_key: NotRequired[str | bytes | Path | Any]
+    """JWT private key as PEM text, DER bytes, a path, or a private key object."""
+    private_key_passphrase: NotRequired[str | bytes]
+    """Passphrase for an encrypted private key."""
+    jwt_private_key: NotRequired[str | Path]
+    """Filesystem path to a private key."""
+    jwt_private_key_pkcs8_value: NotRequired[str]
+    """In-memory PKCS8 private key text."""
+    jwt_private_key_pkcs8_password: NotRequired[str]
+    """Passphrase for the in-memory private key."""
+    jwt_expire_timeout: NotRequired[int | float | str]
+    """JWT lifetime in seconds or a Go duration string."""
+    query_tag: NotRequired[str]
+    """Default Snowflake query tag for session and statement correlation."""
+    session_parameters: NotRequired[Mapping[str, Any]]
+    """Additional Snowflake session parameters."""
+
 
 class AdbcDriverFeatures(TypedDict):
     """ADBC driver feature flags controlling Arrow type handling, dialect probes, and DuckDB profiling."""
@@ -188,6 +233,8 @@ class AdbcDriverFeatures(TypedDict):
     """Callback invoked with the raw ADBC connection immediately after ``connect()``."""
     events_backend: NotRequired[Literal["poll_queue"]]
     """Event queue backend name (``'poll_queue'``)."""
+    query_tag: NotRequired[str]
+    """Default Snowflake statement tag combined with the current correlation ID."""
     enable_statement_profiling: NotRequired[bool]
     """Capture per-statement DuckDB JSON operator profiles on ``StatementEvent.profile`` when using DuckDB ADBC (defaults to ``False``)."""
 
@@ -361,6 +408,13 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         features_dict = dict(driver_features) if driver_features else {}
         if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2", "snowflake", "teradata", "vantage"}:
             features_dict["enable_lowercase_column_names"] = True
+        if self._resolved_dialect == "snowflake":
+            nested_options = self.connection_config.get("db_kwargs")
+            query_tag = self.connection_config.get("query_tag")
+            if query_tag is None and isinstance(nested_options, Mapping):
+                query_tag = nested_options.get("QUERY_TAG")
+            if isinstance(query_tag, str) and query_tag.strip():
+                features_dict.setdefault("query_tag", query_tag.strip())
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
         )

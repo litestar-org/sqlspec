@@ -8,6 +8,7 @@ from sqlspec.data_dictionary.dialects.mssql import MSSQL_CONFIG
 from sqlspec.data_dictionary.dialects.mysql import MARIADB_CONFIG, MYSQL_CONFIG
 from sqlspec.data_dictionary.dialects.oracle import ORACLE_CONFIG
 from sqlspec.data_dictionary.dialects.postgres import POSTGRES_CONFIG
+from sqlspec.data_dictionary.dialects.snowflake import SNOWFLAKE_CONFIG
 from sqlspec.data_dictionary.dialects.spanner import SPANNER_CONFIG
 from sqlspec.data_dictionary.dialects.sqlanywhere import SQLANYWHERE_CONFIG
 from sqlspec.data_dictionary.dialects.sqlite import SQLITE_CONFIG
@@ -24,6 +25,7 @@ __all__ = (
     "MYSQL_CONFIG",
     "ORACLE_CONFIG",
     "POSTGRES_CONFIG",
+    "SNOWFLAKE_CONFIG",
     "SPANNER_CONFIG",
     "SQLANYWHERE_CONFIG",
     "SQLITE_CONFIG",

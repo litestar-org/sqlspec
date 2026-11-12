@@ -41,6 +41,7 @@ from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_jso
 from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
+from sqlspec.data_dictionary.dialects.snowflake import parse_snowflake_imported_keys
 from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import OperationalError, SQLFileNotFoundError, SQLSpecError
@@ -69,6 +70,7 @@ _ADBC_METADATA_DOMAINS: Final = (
     "indexes",
     "views",
     "routines",
+    "sequences",
     "privileges",
     "dependencies",
     "ddl",
@@ -168,6 +170,8 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return self.get_default_type_mapping().get(type_category, "TEXT")
 
         if type_category == "json":
+            if dialect == "snowflake":
+                return config.get_optimal_type(type_category)
             version_info = self.get_version(driver)
             if dialect == "postgres":
                 return resolve_postgres_json_type(version_info)
@@ -348,6 +352,13 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         except (*_NATIVE_FALLBACK_ERRORS, _NativeMetadataIncompleteError) as exc:
             logger.debug("ADBC native get_objects unavailable for foreign keys: %s", exc)
 
+        if dialect == "snowflake":
+            operation = "by_table" if resolved_table is not None else "by_schema"
+            query_text = self._get_query_text(dialect, "foreign_keys", operation).format(
+                scope_clause=_format_snowflake_show_scope(schema_name, resolved_table)
+            )
+            return parse_snowflake_imported_keys(driver.select(query_text), table_name=resolved_table)
+
         if dialect == "bigquery":
             _, kcu_table, rc_table = format_bigquery_information_schema_tables(schema_name)
             if table is None:
@@ -416,6 +427,45 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return [
             entry for entry in _normalize_native_statistics(rows, statistic_names) if entry["table_name"] == table_name
         ]
+
+    def get_schemas(self, driver: "AdbcDriver") -> "MetadataResult":
+        """Get schema metadata from the dialect catalog pack."""
+        return self._select_catalog_domain(driver, "schemas", "list", schema=None)
+
+    def get_objects(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
+        """Get schema object metadata from the dialect catalog pack."""
+        return self._select_catalog_domain(driver, "objects", "by_schema", schema=schema)
+
+    def get_views(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
+        """Get view metadata from the dialect catalog pack."""
+        return self._select_catalog_domain(driver, "views", "by_schema", schema=schema)
+
+    def get_sequences(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
+        """Get sequence metadata from the dialect catalog pack."""
+        return self._select_catalog_domain(driver, "sequences", "by_schema", schema=schema)
+
+    def get_routines(self, driver: "AdbcDriver", schema: str | None = None) -> "MetadataResult":
+        """Get routine metadata from the dialect catalog pack."""
+        return self._select_catalog_domain(driver, "routines", "by_schema", schema=schema)
+
+    def _select_catalog_domain(
+        self, driver: "AdbcDriver", domain: str, operation: str, *, schema: str | None
+    ) -> "MetadataResult":
+        dialect = self._normalize_dialect(driver)
+        query_text = self._get_query_text_or_none(dialect, domain, operation)
+        if query_text is None or "{" in query_text:
+            return self._unsupported_metadata(domain)
+        query = self._get_query(dialect, domain, operation)
+        schema_name = self._resolve_schema(dialect, schema)
+        self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation=domain)
+        rows = driver.select(query, schema_name=schema_name) if domain != "schemas" else driver.select(query)
+        capability = MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+        return MetadataResult(domain=domain, capability=capability, items=tuple(_lowercase_dict_rows(rows)))
 
     def get_constraints(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -641,6 +691,18 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 source=MetadataSource.DRIVER_METADATA,
                 warnings=(_ADBC_DDL_UNSUPPORTED_WARNING,),
             )
+        if domain in {"views", "routines", "sequences"} or (
+            domain in {"schemas", "objects"} and not (probes["objects"] or probes["table_types"])
+        ):
+            operation = "list" if domain == "schemas" else "by_schema"
+            query_text = self._get_query_text_or_none(dialect, domain, operation)
+            if query_text is not None and "{" not in query_text:
+                return MetadataCapability(
+                    domain=domain,
+                    support=MetadataSupport.SUPPORTED,
+                    fidelity=MetadataFidelity.NATIVE,
+                    source=MetadataSource.CATALOG,
+                )
         if domain in {"views", "routines", "privileges", "dependencies"}:
             return MetadataCapability(
                 domain=domain,
@@ -803,55 +865,24 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 raise _NativeMetadataIncompleteError
         return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
 
-    def _snowflake_get_tables(self, driver: "AdbcDriver", schema_name: "str | None") -> "list[TableMetadata]":
-        if schema_name is not None:
-            rows = driver.select(
-                "SELECT table_schema AS schema_name, table_name, table_type "
-                "FROM information_schema.tables "
-                "WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE') AND UPPER(table_schema) = UPPER(?) "
-                "ORDER BY table_schema, table_name",
-                schema_name,
-            )
-        else:
-            rows = driver.select(
-                "SELECT table_schema AS schema_name, table_name, table_type "
-                "FROM information_schema.tables "
-                "WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE') "
-                "AND UPPER(table_schema) != 'INFORMATION_SCHEMA' "
-                "ORDER BY table_schema, table_name"
-            )
+    def _snowflake_get_tables(self, driver: "AdbcDriver", schema_name: str | None) -> "list[TableMetadata]":
+        operation = "by_schema" if schema_name is not None else "by_database"
+        query = self._get_query("snowflake", "tables", operation)
+        rows = driver.select(query, schema_name=schema_name) if schema_name is not None else driver.select(query)
         return cast("list[TableMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
     def _snowflake_get_columns(
-        self, driver: "AdbcDriver", table_name: "str | None", schema_name: "str | None"
+        self, driver: "AdbcDriver", table_name: str | None, schema_name: str | None
     ) -> "list[ColumnMetadata]":
-        base_select = (
-            "SELECT table_schema AS schema_name, table_name, column_name, data_type, "
-            "ordinal_position, is_nullable, column_default "
-            "FROM information_schema.columns "
-        )
-        if table_name is not None and schema_name is not None:
-            rows = driver.select(
-                f"{base_select}WHERE UPPER(table_schema) = UPPER(?) AND UPPER(table_name) = UPPER(?) "
-                "ORDER BY ordinal_position",
-                schema_name,
-                table_name,
-            )
-        elif table_name is not None:
-            rows = driver.select(
-                f"{base_select}WHERE UPPER(table_schema) != 'INFORMATION_SCHEMA' AND UPPER(table_name) = UPPER(?) "
-                "ORDER BY table_schema, ordinal_position",
-                table_name,
-            )
-        elif schema_name is not None:
-            rows = driver.select(
-                f"{base_select}WHERE UPPER(table_schema) = UPPER(?) ORDER BY table_name, ordinal_position", schema_name
-            )
+        parameters: dict[str, Any] = {}
+        if schema_name is not None:
+            parameters["schema_name"] = schema_name
+        if table_name is not None:
+            parameters["table_name"] = table_name
+            operation = "by_table" if schema_name is not None else "by_table_all_schemas"
         else:
-            rows = driver.select(
-                f"{base_select}WHERE UPPER(table_schema) != 'INFORMATION_SCHEMA' "
-                "ORDER BY table_schema, table_name, ordinal_position"
-            )
+            operation = "by_schema" if schema_name is not None else "by_database"
+        rows = driver.select(self._get_query("snowflake", "columns", operation), **parameters)
         return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, "snowflake"))
 
 
@@ -1224,3 +1255,23 @@ def _coerce_index_unique(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().upper() in {"1", "TRUE", "T", "Y", "YES", "U", "Q", "K", "P"}
     return bool(value) if isinstance(value, (bool, int, float)) else False
+
+
+def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str | None = None) -> str:
+    """Format Snowflake SHOW scope clauses using quoted catalog identifiers."""
+    if table_name is not None:
+        table = _format_snowflake_identifier(table_name)
+        if schema_name is not None:
+            return f"IN TABLE {_format_snowflake_identifier(schema_name)}.{table}"
+        return f"IN TABLE {table}"
+    if schema_name is not None:
+        return f"IN SCHEMA {_format_snowflake_identifier(schema_name)}"
+    return "IN SCHEMA"
+
+
+def _format_snowflake_identifier(identifier: str) -> str:
+    """Validate and quote an exact Snowflake catalog identifier."""
+    if not identifier.strip() or "\x00" in identifier:
+        msg = "Snowflake identifier must not be empty or contain NUL"
+        raise SQLSpecError(msg)
+    return quote_identifier(identifier)

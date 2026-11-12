@@ -351,7 +351,7 @@ class SQLFileLoader:
         slots = _merge_slot_markers((), clean_sql)
         has_includes = bool(_include_markers(clean_sql))
         if not slots and not has_includes:
-            self._check_declared_parameters(clean_sql, declared, name, "<directly added>")
+            self._check_declared_parameters(clean_sql, declared, name, "<directly added>", dialect=dialect)
 
         statement = NamedStatement(
             name=normalized_name,
@@ -611,6 +611,7 @@ class SQLFileLoader:
                 name,
                 self._query_to_file.get(safe_name, "<directly added>"),
                 start_line=parsed_statement.start_line,
+                dialect=sqlglot_dialect,
             )
 
         sql = SQL(statement_text, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
@@ -921,6 +922,7 @@ class SQLFileLoader:
         statement_name: str,
         file_path: str,
         start_line: "int | None" = None,
+        dialect: str | None = None,
     ) -> None:
         """Validate declared parameters against the query's actual placeholders.
 
@@ -934,6 +936,7 @@ class SQLFileLoader:
             statement_name: Raw query name for error messages.
             file_path: File path for error reporting.
             start_line: Optional 0-based line of the statement within the file.
+            dialect: SQL dialect used to distinguish placeholders from native syntax.
 
         Raises:
             SQLFileParseError: On name drift (named) or count mismatch (positional).
@@ -941,7 +944,7 @@ class SQLFileLoader:
         if not declared:
             return
         error_line = start_line + 1 if start_line is not None else None
-        infos = ParameterValidator().extract_parameters(clean_sql)
+        infos = ParameterValidator().extract_parameters(clean_sql, dialect=dialect)
         named = {info.name for info in infos if info.name and not info.name.isdigit()}
         if named:
             for decl in declared:
@@ -1058,7 +1061,12 @@ class SQLFileLoader:
             has_includes = bool(_include_markers(clean_sql))
             if not slots and not has_includes:
                 SQLFileLoader._check_declared_parameters(
-                    clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
+                    clean_sql,
+                    declared_params,
+                    raw_statement_name,
+                    file_path,
+                    start_line=statement_start_line,
+                    dialect=dialect,
                 )
 
             statements[normalized_name] = NamedStatement(
@@ -1324,7 +1332,9 @@ class SQLFileLoader:
 
         if merged_parameters:
             body_text = _substitute_slot_markers(resolved_text, body_fills)
-            body_names = {info.name for info in ParameterValidator().extract_parameters(body_text) if info.name}
+            body_names = {
+                info.name for info in ParameterValidator().extract_parameters(body_text, dialect=dialect) if info.name
+            }
             for parameter_name, source_slot in parameter_sources.items():
                 if parameter_name in body_names:
                     raise SQLSlotError(
