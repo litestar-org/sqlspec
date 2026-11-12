@@ -30,11 +30,13 @@
 
 ## Basic Setup
 
-Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), configure `extension_config["sanic"]` (`SanicConfig`), and retrieve the session with `db_plugin.get_session(request, "db")`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), configure `extension_config["sanic"]` (`SanicConfig`), and retrieve the session with `await db_plugin.get_session_async(request, "db")`:
 
 ```{ .python title="docs/examples/frameworks/sanic/basic_setup.py" }
 --8<-- "docs/examples/frameworks/sanic/basic_setup.py:example"
 ```
+
+Request connections are checked out on first access, so routes that never touch the database open none. Async configurations use `await db_plugin.get_session_async(request)` or `await db_plugin.get_connection_async(request)`; the synchronous `get_session(request)` and `get_connection(request)` accessors work for synchronous configurations and raise `ImproperConfigurationError` for asynchronous ones. Autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Commit Modes and Custom Rollback Statuses
 
@@ -98,7 +100,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
-| `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.ctx. Default: 'db_connection' |
+| `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.ctx once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
@@ -116,5 +118,5 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 ## Recap
 
 - Configure `session_key`, `commit_mode`, `disable_di`, and observability flags in `extension_config["sanic"]`.
-- Retrieve sessions via `db_plugin.get_session(request, key)`, or set `disable_di` and acquire connections from `request.app.ctx.<pool_key>`.
+- Retrieve sessions via `await db_plugin.get_session_async(request, key)` (or `db_plugin.get_session(request, key)` for sync configurations); connections are checked out on first access. Set `disable_di` to acquire connections from `request.app.ctx.<pool_key>` yourself.
 - See the [Sanic Extension Reference](/reference/extensions/sanic/) for `SQLSpecPlugin` and `SanicConfig` signatures.

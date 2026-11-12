@@ -14,7 +14,7 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._utils import (
-    get_request_tenant,
+    get_scope_tenant,
     get_state_value,
     has_state_value,
     pop_state_value,
@@ -318,7 +318,7 @@ class SQLSpecTenantRequestMiddleware:
             return TenantContextPayload.bypass()
         if state is None:
             return None
-        receipt = get_request_tenant(Request(scope), state)
+        receipt = get_scope_tenant(scope, state)
         if receipt is not None:
             return receipt
         if state.tenant_extractor is not None:
@@ -342,11 +342,11 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
 
 
 async def acquire_pending_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Acquire a deferred tenant-scoped connection asynchronously if not yet checked out."""
+    """Acquire the deferred request connection asynchronously if not yet checked out."""
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
     pending_key = _pending_connection_key(config_state.connection_key)
-    pending = cast("_PendingTenantConnection | None", get_state_value(request.state, pending_key, None))
+    pending = cast("_PendingConnection | None", get_state_value(request.state, pending_key, None))
     if pending is None:
         return get_state_value(request.state, config_state.connection_key)
     async with pending.lock:
@@ -358,7 +358,7 @@ async def acquire_pending_connection_async(request: "Request", config_state: "SQ
 
 
 def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Acquire a deferred tenant-scoped synchronous connection on demand.
+    """Acquire the deferred request connection synchronously on first access.
 
     Raises:
         ImproperConfigurationError: The configuration is asynchronous.
@@ -366,14 +366,14 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
     pending_key = _pending_connection_key(config_state.connection_key)
-    pending = cast("_PendingTenantConnection | None", get_state_value(request.state, pending_key, None))
+    pending = cast("_PendingConnection | None", get_state_value(request.state, pending_key, None))
     if pending is None:
         return get_state_value(request.state, config_state.connection_key)
 
     config = config_state.config
     if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
         msg = (
-            "Async tenant-scoped connections are acquired on first use; call await plugin.get_session_async(request), "
+            "Async request connections are acquired on first use; call await plugin.get_session_async(request), "
             "await plugin.get_connection_async(request), or use Depends(plugin.provide_session())."
         )
         raise ImproperConfigurationError(msg)
@@ -408,8 +408,8 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     return connection
 
 
-class _PendingTenantConnection:
-    """Deferred request-scoped connection slot for a tenant-enabled configuration."""
+class _PendingConnection:
+    """Deferred request-scoped connection slot checked out on first access."""
 
     __slots__ = ("config_state", "lock", "request", "stack")
 
@@ -492,20 +492,18 @@ async def _open_config_connection(config_state: "SQLSpecConfigState", request: "
 
 @asynccontextmanager
 async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
-    """Own an eager or deferred request connection through verified cleanup.
+    """Own a deferred request connection through verified cleanup.
 
-    Tenant-enabled configurations defer checkout until the request first asks for a session or
-    connection; the lease resolves the request tenant at that point.
+    No connection is checked out until the request first asks for a session or connection, so
+    routes that never touch the database open none; a tenant lease resolves the request tenant
+    at that point.
 
     Yields:
-        The active request connection, or None while a tenant connection is deferred.
+        None; the connection is published on request state once it is checked out.
     """
     async with AsyncExitStack() as stack:
-        if not has_tenant_strategy(config_state.config):
-            yield await stack.enter_async_context(_open_config_connection(config_state, request))
-            return
         pending_key = _pending_connection_key(config_state.connection_key)
-        set_state_value(request.state, pending_key, _PendingTenantConnection(stack, request, config_state))
+        set_state_value(request.state, pending_key, _PendingConnection(stack, request, config_state))
         try:
             yield None
         finally:

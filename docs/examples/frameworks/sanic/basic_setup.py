@@ -21,7 +21,7 @@ def create_app() -> Sanic:
 
     @app.get("/health")
     async def health(request: Request) -> HTTPResponse:
-        db: AiosqliteDriver = db_plugin.get_session(request, "db")
+        db: AiosqliteDriver = await db_plugin.get_session_async(request, "db")
         return response.json(await db.select_one("SELECT 1 AS ok"))
 
     return app

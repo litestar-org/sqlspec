@@ -208,3 +208,90 @@ async def test_async_bypass_finish_failure_disposes_once() -> None:
     with pytest.raises(TenantCleanupError):
         await lease.release()
     assert calls == ["acquire", "finish:None", "invalidate"]
+
+
+async def test_owned_release_failure_takes_precedence_over_caller_cancellation() -> None:
+    from sqlspec.driver._tenant import await_owned_release
+
+    started = asyncio.Event()
+    proceed = asyncio.Event()
+    failure = RuntimeError("release failed")
+
+    async def operation() -> None:
+        started.set()
+        await proceed.wait()
+        raise failure
+
+    caller = asyncio.create_task(await_owned_release(operation()))
+    await started.wait()
+    caller.cancel()
+    await asyncio.sleep(0)
+    assert not caller.done()
+    proceed.set()
+    with pytest.raises(RuntimeError) as caught:
+        await caller
+    assert caught.value is failure
+
+
+async def test_owned_release_reraises_cancellation_only_after_the_work_finishes() -> None:
+    from sqlspec.driver._tenant import await_owned_release
+
+    started = asyncio.Event()
+    proceed = asyncio.Event()
+    finished: list[bool] = []
+
+    async def operation() -> None:
+        started.set()
+        await proceed.wait()
+        finished.append(True)
+
+    caller = asyncio.create_task(await_owned_release(operation()))
+    await started.wait()
+    for _ in range(3):
+        caller.cancel()
+        await asyncio.sleep(0)
+    assert not caller.done()
+    proceed.set()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert finished == [True]
+
+
+async def test_owned_disposal_returns_failure_and_finishes_despite_cancellation() -> None:
+    from sqlspec.driver._tenant import await_owned_disposal
+
+    started = asyncio.Event()
+    proceed = asyncio.Event()
+    failure = RuntimeError("disposal failed")
+
+    async def dispose() -> None:
+        started.set()
+        await proceed.wait()
+        raise failure
+
+    caller = asyncio.create_task(await_owned_disposal(dispose()))
+    await started.wait()
+    caller.cancel()
+    await asyncio.sleep(0)
+    proceed.set()
+    assert await caller is failure
+
+
+async def test_owned_wait_deadline_reports_timeout_without_cancelling_the_work() -> None:
+    from sqlspec.driver._tenant import _await_owned, _start_owned
+
+    proceed = asyncio.Event()
+    finished: list[bool] = []
+
+    async def slow() -> None:
+        await proceed.wait()
+        finished.append(True)
+
+    owned = _start_owned(slow())
+    error, cancellation = await _await_owned(owned, 0.01)
+    assert isinstance(error, TimeoutError)
+    assert cancellation is None
+    assert finished == []
+    proceed.set()
+    assert await _await_owned(owned) == (None, None)
+    assert finished == [True]

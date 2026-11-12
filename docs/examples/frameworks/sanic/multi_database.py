@@ -45,7 +45,7 @@ def create_app() -> Sanic:
 
     @app.get("/report")
     async def report(request: Request) -> HTTPResponse:
-        primary: AiosqliteDriver = db_plugin.get_session(request, "primary_db")
+        primary: AiosqliteDriver = await db_plugin.get_session_async(request, "primary_db")
         analytics: SqliteDriver = db_plugin.get_session(request, "analytics_db")
         users = await primary.select("SELECT 1 AS id, 'Alice' AS name")
         metrics = analytics.select("SELECT 'active_users' AS name, 100 AS value")

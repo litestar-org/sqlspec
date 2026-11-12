@@ -54,7 +54,8 @@ from sqlspec.extensions.litestar.handlers import (
 from sqlspec.extensions.litestar.tenant import (
     TenantResolutionSettings,
     raise_missing_tenant_http_exception,
-    resolve_litestar_tenant,
+    receipt_state_key,
+    resolve_route_tenant,
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
@@ -228,7 +229,7 @@ class _TenantResolutionTarget:
 
     config: Any
     settings: TenantResolutionSettings
-    receipt_keys: tuple[str, ...]
+    receipt_state_keys: tuple[str, ...]
 
 
 class TenantRequestMiddleware:
@@ -281,9 +282,7 @@ class TenantRequestMiddleware:
         target = self._targets.get(id(key), self._default)
         if target is None:
             return None
-        return resolve_litestar_tenant(
-            cast("MutableMapping[str, Any]", scope), target.settings, receipt_keys=target.receipt_keys
-        )
+        return resolve_route_tenant(cast("MutableMapping[str, Any]", scope), target.settings, target.receipt_state_keys)
 
 
 class ConnectionCleanupMiddleware:
@@ -747,8 +746,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             _TenantResolutionTarget(
                 config=state.config,
                 settings=state.tenant_settings,
-                receipt_keys=tuple(
-                    key
+                receipt_state_keys=tuple(
+                    receipt_state_key(key)
                     for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
                     if isinstance(key, str) and key
                 ),

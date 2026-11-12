@@ -1,9 +1,10 @@
 """Request state helpers for the Starlette SQLSpec extension."""
 
 from collections.abc import Mapping, MutableMapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from sqlspec.extensions.starlette._state import tenant_receipt_key
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ __all__ = (
     "get_connection_from_request",
     "get_or_create_session",
     "get_request_tenant",
+    "get_scope_tenant",
     "get_state_value",
     "has_state_value",
     "pop_state_value",
@@ -23,7 +25,6 @@ __all__ = (
 )
 
 _MISSING = object()
-_TENANT_STATE_KEY: Final = "_sqlspec_tenant_context"
 
 
 def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
@@ -54,7 +55,7 @@ def has_state_value(state: Any, key: str) -> bool:
 
 
 def get_connection_from_request(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Get database connection from request state.
+    """Get the request connection, checking it out on first access.
 
     Args:
         request: Starlette request instance.
@@ -62,8 +63,16 @@ def get_connection_from_request(request: "Request", config_state: "SQLSpecConfig
 
     Returns:
         Database connection object.
+
+    Raises:
+        ImproperConfigurationError: The configuration is asynchronous and its connection has not
+            been checked out; use the plugin's async accessors.
     """
-    return get_state_value(request.state, config_state.connection_key)
+    if has_state_value(request.state, config_state.connection_key):
+        return get_state_value(request.state, config_state.connection_key)
+    from sqlspec.extensions.starlette.middleware import acquire_pending_connection_sync
+
+    return acquire_pending_connection_sync(request, config_state)
 
 
 def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
@@ -117,7 +126,7 @@ def set_request_tenant(
         payload = TenantContextPayload(
             payload.tenant_id, variables={**payload.variables, **variables}, is_bypass=payload.is_bypass
         )
-    target_key = _tenant_state_key(key)
+    target_key = tenant_receipt_key(key)
     if isinstance(request_or_scope, MutableMapping):
         state_map = request_or_scope.setdefault("state", {})
         if isinstance(state_map, MutableMapping):
@@ -131,11 +140,7 @@ def set_request_tenant(
 
 def get_request_tenant(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Return any explicit tenant receipt stored for ``config_state`` on ``request``."""
-    candidate_keys = [_tenant_state_key(config_state.session_key), _tenant_state_key(config_state.connection_key)]
-    bind_key = getattr(config_state.config, "bind_key", None)
-    if isinstance(bind_key, str) and bind_key:
-        candidate_keys.append(_tenant_state_key(bind_key))
-    candidate_keys.append(_TENANT_STATE_KEY)
+    candidate_keys = config_state.tenant_receipt_keys
 
     raw_scope = getattr(request, "scope", None)
     scope_state = raw_scope.get("state") if isinstance(raw_scope, Mapping) else None
@@ -148,8 +153,16 @@ def get_request_tenant(request: "Request", config_state: "SQLSpecConfigState") -
     return None
 
 
-def _tenant_state_key(key: str | None) -> str:
-    return _TENANT_STATE_KEY if key is None else f"{_TENANT_STATE_KEY}_{key}"
+def get_scope_tenant(scope: "Mapping[str, Any]", config_state: "SQLSpecConfigState") -> Any:
+    """Return any explicit tenant receipt stored for ``config_state`` in the request scope state."""
+    scope_state = scope.get("state")
+    if not isinstance(scope_state, Mapping):
+        return None
+    for state_key in config_state.tenant_receipt_keys:
+        stored = scope_state.get(state_key)
+        if stored is not None:
+            return stored
+    return None
 
 
 def _state_dict(state: Any) -> dict[str, Any]:

@@ -331,7 +331,7 @@ class FlaskConfig(TypedDict):
     """Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request."""
 
     connection_key: NotRequired[str]
-    """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
+    """Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key."""
 
     session_key: NotRequired[str]
     """Key for accessing session via plugin.get_session(). Default: 'db_session'."""
@@ -500,7 +500,7 @@ class StarletteConfig(TypedDict):
     """Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
 
     connection_key: NotRequired[str]
-    """Key for storing connection in request.state. Default: 'db_connection'"""
+    """Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection'"""
 
     pool_key: NotRequired[str]
     """Key for storing connection pool in app.state. Default: 'db_pool'"""
@@ -572,7 +572,7 @@ class SanicConfig(TypedDict):
     """Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
 
     connection_key: NotRequired[str]
-    """Key for storing connection in request.ctx. Default: 'db_connection'"""
+    """Key for storing the connection in request.ctx once it is checked out on first access. Default: 'db_connection'"""
 
     pool_key: NotRequired[str]
     """Key for storing connection pool in app.ctx. Default: 'db_pool'"""

@@ -13,10 +13,10 @@ from sqlspec.extensions.litestar._tenant_resolution import (
     TenantResolutionSettings,
     is_scope_authenticated,
     resolve_tenant_from_auth,
-    scope_value,
+    route_tenant_plan,
 )
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
-from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload, is_tenant_bypass_route
+from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Generator
@@ -29,13 +29,20 @@ __all__ = (
     "TenantResolutionSettings",
     "is_scope_authenticated",
     "raise_missing_tenant_http_exception",
+    "receipt_state_key",
     "require_tenant",
     "resolve_litestar_tenant",
+    "resolve_route_tenant",
     "set_connection_tenant",
 )
 
 _TENANT_SCOPE_KEY: Final = "_sqlspec_tenant_context"
 _UNSET: Final[Any] = object()
+
+
+def receipt_state_key(key: str | None) -> str:
+    """Return the scope state key holding a tenant receipt for ``key``, or the shared receipt."""
+    return _receipt_key(key)
 
 
 def _receipt_key(key: str | None) -> str:
@@ -88,19 +95,33 @@ def resolve_litestar_tenant(
     Returns:
         The resolved payload, None, or an awaitable resolving to either.
     """
-    route = scope.get("route_handler")
-    if scope_value(getattr(route, "opt", None), "tenant_bypass") is True or is_tenant_bypass_route(route):
+    return resolve_route_tenant(scope, settings, tuple(_receipt_key(key) for key in receipt_keys))
+
+
+def resolve_route_tenant(
+    scope: MutableMapping[str, Any], settings: TenantResolutionSettings, receipt_state_keys: Sequence[str]
+) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
+    """Resolve the route tenant using precomputed receipt scope keys and the cached route plan.
+
+    Args:
+        scope: The ASGI connection scope.
+        settings: Tenant resolution settings for the database configuration.
+        receipt_state_keys: Scope state keys of keyed receipts, checked before the shared receipt.
+
+    Returns:
+        The resolved payload, None, or an awaitable resolving to either.
+    """
+    plan = route_tenant_plan(scope.get("route_handler"))
+    if plan.bypass:
         return TenantContextPayload.bypass()
-    receipt = next(
-        (
-            value
-            for value in (get_sqlspec_scope_state(cast("Scope", scope), _receipt_key(key)) for key in receipt_keys)
-            if value is not None
-        ),
-        None,
-    )
+    state = cast("Scope", scope)
+    receipt = None
+    for key in receipt_state_keys:
+        receipt = get_sqlspec_scope_state(state, key)
+        if receipt is not None:
+            break
     if receipt is None:
-        receipt = get_sqlspec_scope_state(cast("Scope", scope), _TENANT_SCOPE_KEY)
+        receipt = get_sqlspec_scope_state(state, _TENANT_SCOPE_KEY)
     if receipt is not None:
         return coerce_tenant_payload(receipt)
     if settings.tenant_extractor is not None:
@@ -108,7 +129,7 @@ def resolve_litestar_tenant(
         if inspect.isawaitable(result):
             return _TenantPayloadAwaitable(result)
         return coerce_tenant_payload(result)
-    return resolve_tenant_from_auth(scope, settings)
+    return resolve_tenant_from_auth(scope, settings, guard_parameters=plan.guard_parameters)
 
 
 def raise_missing_tenant_http_exception(scope: Mapping[str, Any]) -> NoReturn:
@@ -171,7 +192,7 @@ def require_tenant(
         overrides["jwt_claim"] = jwt_claim
 
     async def guard(connection: "ASGIConnection[Any, Any, Any, Any]", route_handler: "BaseRouteHandler") -> None:
-        if scope_value(getattr(route_handler, "opt", None), "tenant_bypass") is True:
+        if route_tenant_plan(route_handler).bypass:
             set_connection_tenant(connection, TenantContextPayload.bypass())
             return
         scope = cast("MutableMapping[str, Any]", connection.scope)

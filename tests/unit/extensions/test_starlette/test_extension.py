@@ -23,7 +23,11 @@ from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
-from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
+from sqlspec.extensions.starlette.middleware import (
+    SQLSpecAutocommitMiddleware,
+    SQLSpecManualMiddleware,
+    acquire_pending_connection_async,
+)
 from sqlspec.utils.tenant import TenantContext
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
@@ -75,7 +79,7 @@ def test_get_session_works_in_route() -> None:
 
     async def test_route(request: Request) -> JSONResponse:
         assert plugin_ref is not None
-        db = plugin_ref.get_session(request)
+        db = await plugin_ref.get_session_async(request)
         result = await db.execute("SELECT 1 as value")
         return JSONResponse({"value": result.scalar()})
 
@@ -164,7 +168,7 @@ async def test_middleware_manual_middleware_connection_cm_no_pool_sets_and_close
     seen: list[_Connection] = []
 
     async def call_next(request_: Any) -> Response:
-        seen.append(request_.state.db_connection)
+        seen.append(await acquire_pending_connection_async(request_, middleware.config_state))
         return Response(status_code=204)
 
     response = await middleware.dispatch(request, call_next)
@@ -184,7 +188,7 @@ async def test_middleware_manual_middleware_connection_cm_pool_uses_pool_context
     request = _make_request(pool)
 
     async def call_next(request_: Any) -> Response:
-        assert request_.state.db_connection is connection
+        assert await acquire_pending_connection_async(request_, middleware.config_state) is connection
         return Response(status_code=200)
 
     response = await middleware.dispatch(request, call_next)
@@ -203,7 +207,7 @@ async def test_middleware_autocommit_middleware_connection_cm_no_pool_commits_an
     request = _make_request()
 
     async def call_next(request_: Any) -> Response:
-        assert request_.state.db_connection is connection
+        assert await acquire_pending_connection_async(request_, middleware.config_state) is connection
         return Response(status_code=201)
 
     response = await middleware.dispatch(request, call_next)
@@ -222,6 +226,7 @@ async def test_middleware_autocommit_middleware_connection_cm_pool_rolls_back_on
     request = _make_request(object())
 
     async def call_next(_request: Any) -> Response:
+        await acquire_pending_connection_async(_request, middleware.config_state)
         raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -331,6 +336,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             raise ValueError("background failure")
 
     async def endpoint(request: Request) -> StreamingResponse:
+        await acquire_pending_connection_async(request, state)
         return StreamingResponse(body(), background=BackgroundTask(background))
 
     if framework == "fastapi":
@@ -340,6 +346,7 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
         app.add_api_route("/", endpoint)
     else:
         app = Starlette(routes=[Route("/", endpoint)])
+    app.state.db_pool = object()
     config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
     state = _make_state(config, cast("CommitMode", mode))
     middleware_type = SQLSpecManualMiddleware if mode == "manual" else SQLSpecAutocommitMiddleware
@@ -419,6 +426,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
         yield connection
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
+        await acquire_pending_connection_async(Request(scope), state)
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"partial", "more_body": True})
 
@@ -480,6 +488,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
             events.append("release")
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
+        await acquire_pending_connection_async(Request(scope), state)
         raise body_error
 
     async def receive() -> "Message":
@@ -615,3 +624,80 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
         assert err.status_code == 500
         assert events[2:] == ["rollback:acme", "release:acme"]
     assert TenantContext.get() is None
+
+
+@pytest.mark.parametrize("framework", ["starlette", "fastapi"])
+def test_request_connection_is_checked_out_on_first_access_only(framework: str, tmp_path: Any) -> None:
+    import sqlite3
+
+    database = str(tmp_path / "lazy.db")
+    setup = sqlite3.connect(database)
+    setup.execute("CREATE TABLE items (status INTEGER)")
+    setup.commit()
+    setup.close()
+    checkouts: list[int] = []
+
+    class CountingConfig(AiosqliteConfig):
+        def provide_connection(self, *args: Any, **kwargs: Any) -> Any:
+            checkouts.append(1)
+            return super().provide_connection(*args, **kwargs)
+
+    config = CountingConfig(
+        connection_config={"database": database}, extension_config={framework: {"commit_mode": "autocommit"}}
+    )
+
+    async def nodb(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    async def write(request: Request) -> JSONResponse:
+        status = int(request.path_params["status"])
+        session = await plugin.get_session_async(request)
+        await session.begin()
+        await session.execute("INSERT INTO items VALUES (:status)", {"status": status})
+        assert await plugin.get_session_async(request) is session
+        assert await plugin.get_connection_async(request) is session.connection
+        return JSONResponse({"ok": True}, status_code=status)
+
+    routes: list[Any] = [Route("/nodb", nodb), Route("/write/{status:int}", write)]
+    plugin: Any
+    if framework == "fastapi":
+        from fastapi import FastAPI
+
+        from sqlspec.extensions.fastapi import SQLSpecPlugin as FastAPIPlugin
+
+        app: Any = FastAPI(routes=routes)
+        plugin = FastAPIPlugin(config, app)
+    else:
+        app = Starlette(routes=routes)
+        plugin = SQLSpecPlugin(config, app)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/nodb").status_code == 200
+        assert checkouts == []
+        assert client.get("/write/201").status_code == 201
+        assert checkouts == [1]
+        assert client.get("/write/500").status_code == 500
+        assert checkouts == [1, 1]
+    reader = sqlite3.connect(database)
+    try:
+        assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
+    finally:
+        reader.close()
+
+
+def test_sync_accessor_on_async_configuration_requires_async_access() -> None:
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    errors: list[str] = []
+
+    async def route(request: Request) -> JSONResponse:
+        try:
+            plugin.get_session(request)
+        except ImproperConfigurationError as exc:
+            errors.append(str(exc))
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/", route)])
+    plugin = SQLSpecPlugin(config, app)
+    with TestClient(app) as client:
+        assert client.get("/").status_code == 200
+    assert len(errors) == 1
+    assert "get_session_async" in errors[0]

@@ -82,9 +82,9 @@ no tenant strategy, and scopes its receipt to the tenant configuration with
 ```
 
 The runnable example uses in-memory SQLite, which has no tenant strategy, so it
-acquires eagerly and shows only the authorization and `set_request_tenant`
-flow; deferred checkout applies once the tenant bind uses a tenant-enabled
-adapter such as `AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`.
+shows only the authorization and `set_request_tenant` flow; tenant isolation
+applies once the tenant bind uses a tenant-enabled adapter such as
+`AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`.
 
 ## Upfront Extractor
 
@@ -156,7 +156,7 @@ pass the verified tenant identifier to the worker and open
 ## Sync and Async Accessors
 
 `Depends(db_ext.provide_session())` is an async dependency for sync and async
-configurations alike and acquires deferred tenant leases on demand. Outside
-dependency injection, call `await db_ext.get_session_async(request)`; the
-synchronous `db_ext.get_session(request)` raises `ImproperConfigurationError`
-for async tenant configurations, which are checked out on first use.
+configurations alike and checks out the request connection on first use.
+Outside dependency injection, call `await db_ext.get_session_async(request)`;
+the synchronous `db_ext.get_session(request)` raises `ImproperConfigurationError`
+for async configurations, which are checked out on first use.

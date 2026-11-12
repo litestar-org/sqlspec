@@ -36,7 +36,7 @@ Pass a single database configuration, a sequence of configurations, or a `SQLSpe
 --8<-- "docs/examples/frameworks/fastapi/basic_setup.py:example"
 ```
 
-`SQLSpecPlugin` automatically opens configured connection pools when FastAPI starts and closes them when the application shuts down.
+`SQLSpecPlugin` automatically opens configured connection pools when FastAPI starts and closes them when the application shuts down. A request connection is checked out the first time a dependency such as `Depends(db_plugin.provide_session())` resolves it, so routes that never touch the database open none, and autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Multi-Database Configuration
 
@@ -54,7 +54,7 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
-| `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
+| `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |

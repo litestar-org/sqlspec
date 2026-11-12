@@ -132,9 +132,8 @@ there; see [Tenant Operations](multi-tenancy-operations.md).
 
 ## Sync and Async Accessors
 
-Async configurations, including every async tenant configuration, use
-`await db_plugin.get_session_async(request)` or
-`await db_plugin.get_connection_async(request)`; both acquire deferred tenant
-leases on demand. Sync adapters can call `db_plugin.get_session(request)`. The
-synchronous accessors raise `ImproperConfigurationError` for async tenant
-configurations, which are checked out on first use.
+Every request connection, tenant or not, is checked out on first access. Async
+configurations use `await db_plugin.get_session_async(request)` or
+`await db_plugin.get_connection_async(request)`; sync adapters can call
+`db_plugin.get_session(request)`. The synchronous accessors raise
+`ImproperConfigurationError` for async configurations.
