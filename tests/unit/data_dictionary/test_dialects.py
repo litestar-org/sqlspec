@@ -230,3 +230,30 @@ def test_snowflake_scope_exactness_follows_quoting(
     assert snowflake_scope_exactness(schema, table) == expected
     if table is not None:
         assert snowflake_scope_exactness(None, f"{schema}.{table}") == expected
+
+
+@pytest.mark.parametrize(
+    ("schema", "table", "database", "expected"),
+    [
+        (None, None, None, "IN SCHEMA"),
+        ("SALES", None, None, 'IN SCHEMA "SALES"'),
+        ("SALES", None, "DB", 'IN SCHEMA "DB"."SALES"'),
+        (None, None, "DB", 'IN DATABASE "DB"'),
+        ("sales", "Orders", "DB", 'IN TABLE "DB"."sales"."Orders"'),
+        (None, "Orders", None, 'IN TABLE "Orders"'),
+    ],
+)
+def test_snowflake_show_scope_quotes_exact_names(
+    schema: str | None, table: str | None, database: str | None, expected: str
+) -> None:
+    from sqlspec.data_dictionary.dialects.snowflake import format_snowflake_show_scope
+
+    assert format_snowflake_show_scope(schema, table, database_name=database) == expected
+
+
+def test_snowflake_show_scope_rejects_nul_names() -> None:
+    from sqlspec.data_dictionary.dialects.snowflake import format_snowflake_show_scope
+    from sqlspec.exceptions import SQLSpecError
+
+    with pytest.raises(SQLSpecError, match="NUL"):
+        format_snowflake_show_scope("sales", "orders\x00")

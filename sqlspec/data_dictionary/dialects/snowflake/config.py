@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata, register_dialect
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.text import quote_identifier, resolve_catalog_identifier
 
 __all__ = (
@@ -13,6 +14,7 @@ __all__ = (
     "SNOWFLAKE_FEATURE_VERSIONS",
     "SNOWFLAKE_TYPE_MAPPINGS",
     "SNOWFLAKE_VERSION_PATTERN",
+    "format_snowflake_show_scope",
     "match_snowflake_catalog_rows",
     "parse_snowflake_imported_keys",
     "parse_snowflake_primary_or_unique_keys",
@@ -280,3 +282,39 @@ def match_snowflake_catalog_rows(
             resolved = resolve_catalog_identifier(requested, candidates)
         selected = [row for row in selected if resolved is not None and row.get(key) == resolved]
     return selected
+
+
+def _quote_catalog_name(name: str) -> str:
+    if not name.strip() or "\x00" in name:
+        msg = "Snowflake identifier must not be empty or contain NUL"
+        raise SQLSpecError(msg)
+    return quote_identifier(name)
+
+
+def format_snowflake_show_scope(
+    schema_name: str | None = None, table_name: str | None = None, *, database_name: str | None = None
+) -> str:
+    """Format the ``IN ...`` scope clause of a SHOW command from exact catalog names.
+
+    Args:
+        schema_name: Exact schema name, or ``None`` for the session schema.
+        table_name: Exact table name, or ``None`` to scope by schema or database.
+        database_name: Exact database name qualifying the schema, or ``None`` for the session database.
+
+    Returns:
+        Scope clause with every name double-quoted; ``IN SCHEMA`` alone targets the session schema.
+
+    Raises:
+        SQLSpecError: If a name is empty or contains NUL.
+    """
+    database_prefix = f"{_quote_catalog_name(database_name)}." if database_name is not None else ""
+    if table_name is not None:
+        table = _quote_catalog_name(table_name)
+        if schema_name is not None:
+            return f"IN TABLE {database_prefix}{_quote_catalog_name(schema_name)}.{table}"
+        return f"IN TABLE {table}"
+    if schema_name is not None:
+        return f"IN SCHEMA {database_prefix}{_quote_catalog_name(schema_name)}"
+    if database_name is not None:
+        return f"IN DATABASE {_quote_catalog_name(database_name)}"
+    return "IN SCHEMA"

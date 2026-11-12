@@ -44,6 +44,7 @@ from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.snowflake import (
+    format_snowflake_show_scope,
     match_snowflake_catalog_rows,
     parse_snowflake_imported_keys,
     qualify_snowflake_information_schema,
@@ -389,7 +390,7 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if dialect == "snowflake":
             operation = "by_table" if resolved_table is not None else "by_schema"
             query_text = self._get_query_text(dialect, "foreign_keys", operation).format(
-                scope_clause=_format_snowflake_show_scope(schema_name, resolved_table, database_name=database_name)
+                scope_clause=format_snowflake_show_scope(schema_name, resolved_table, database_name=database_name)
             )
             return parse_snowflake_imported_keys(driver.select(query_text), table_name=resolved_table)
 
@@ -1445,28 +1446,3 @@ def _split_snowflake_catalog_identifier(identifier: str) -> "tuple[str, ...]":
             msg = f"Invalid Snowflake identifier: {identifier!r}"
             raise SQLSpecError(msg)
     return tuple(parts)
-
-
-def _format_snowflake_show_scope(
-    schema_name: str | None = None, table_name: str | None = None, *, database_name: str | None = None
-) -> str:
-    """Format Snowflake SHOW scope clauses using quoted catalog identifiers."""
-    database_prefix = f"{_format_snowflake_identifier(database_name)}." if database_name is not None else ""
-    if table_name is not None:
-        table = _format_snowflake_identifier(table_name)
-        if schema_name is not None:
-            return f"IN TABLE {database_prefix}{_format_snowflake_identifier(schema_name)}.{table}"
-        return f"IN TABLE {table}"
-    if schema_name is not None:
-        return f"IN SCHEMA {database_prefix}{_format_snowflake_identifier(schema_name)}"
-    if database_name is not None:
-        return f"IN DATABASE {_format_snowflake_identifier(database_name)}"
-    return "IN SCHEMA"
-
-
-def _format_snowflake_identifier(identifier: str) -> str:
-    """Validate and quote an exact Snowflake catalog identifier."""
-    if not identifier.strip() or "\x00" in identifier:
-        msg = "Snowflake identifier must not be empty or contain NUL"
-        raise SQLSpecError(msg)
-    return quote_identifier(identifier)

@@ -23,6 +23,7 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary.dialects.snowflake import (
     SNOWFLAKE_CONFIG,
+    format_snowflake_show_scope,
     match_snowflake_catalog_rows,
     parse_snowflake_imported_keys,
     parse_snowflake_primary_or_unique_keys,
@@ -57,20 +58,10 @@ _DDL_TYPES: Final[dict[str, str]] = {
 }
 
 
-def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str | None = None) -> str:
-    if table_name is not None:
-        qualified = format_snowflake_identifier(table_name)
-        if schema_name is not None and len(split_qualified_identifier(table_name)) == 1:
-            qualified = f"{format_snowflake_identifier(schema_name)}.{qualified}"
-        return f"IN TABLE {qualified}"
-    return f"IN SCHEMA {format_snowflake_identifier(schema_name)}" if schema_name is not None else "IN SCHEMA"
-
-
 def _resolve_snowflake_catalog_scope(
     schema: str | None, table: str | None
 ) -> tuple[str | None, str | None, str | None, str]:
     """Resolve exact catalog identity and SHOW scope from the same quoted identifiers."""
-    scope = _format_snowflake_show_scope(schema, table)
     database_name = None
     schema_name = None
     if schema is not None:
@@ -85,6 +76,7 @@ def _resolve_snowflake_catalog_scope(
         if len(table_parts) > 1:
             schema_name = table_parts[-2]
             database_name = table_parts[-3] if len(table_parts) >= _DATABASE_QUALIFIED_PARTS else None
+    scope = format_snowflake_show_scope(schema_name, table_name, database_name=database_name)
     return database_name, schema_name, table_name, scope
 
 
