@@ -7,6 +7,7 @@ from sqlspec.extensions.sanic import (
     get_connection_from_request,
     get_or_create_session,
     set_request_tenant,
+    tenant_bypass,
 )
 ```
 
@@ -33,5 +34,9 @@ Sanic server listener and request/response middleware extension for pool lifecyc
       heading_level: 3
 
 ::: sqlspec.extensions.sanic._utils.set_request_tenant
+    options:
+      heading_level: 3
+
+::: sqlspec.utils.tenant.tenant_bypass
     options:
       heading_level: 3

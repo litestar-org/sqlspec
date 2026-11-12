@@ -53,7 +53,7 @@ Configure `extension_config["fastapi"]` (`FastAPIConfig`, which inherits from `S
 <!-- GENERATED:START config-table:sqlspec.config.FastAPIConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable. Optional when handlers or dependencies call set_request_tenant() before acquiring a session. |
+| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
@@ -73,13 +73,13 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Tenant-Aware Requests
 
-When a database configuration enables `driver_features={"tenant_strategy": "rls"}` without an upfront `tenant_extractor`, FastAPI defers checking out the tenant connection until an authorization dependency calls `set_request_tenant(request, org_id, key=...)` and a route resolves `Depends(db_ext.provide_session(...))`. Public and login endpoints never acquire a tenant connection and can query user memberships through a separate auth bind or `config.provide_session(bypass_tenant=True)`. The runnable example uses in-memory SQLite, which has no tenant strategy, so it acquires eagerly and shows only the authorization and `set_request_tenant` flow; deferral applies once the tenant bind uses a tenant-enabled adapter such as `AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`:
+When a database configuration enables `driver_features={"tenant_strategy": "rls"}`, FastAPI checks out the tenant connection only when a route resolves `Depends(db_ext.provide_session(...))`, after an authorization dependency calls `set_request_tenant(request, org_id, key=...)`. Public and login endpoints never acquire a tenant connection and can query user memberships through a separate auth bind or `config.provide_session(bypass_tenant=True)`. The runnable example uses in-memory SQLite, which has no tenant strategy, so it acquires eagerly and shows only the authorization and `set_request_tenant` flow; deferral applies once the tenant bind uses a tenant-enabled adapter such as `AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`:
 
 ```{ .python title="docs/examples/frameworks/fastapi/tenant_setup.py" }
 --8<-- "docs/examples/frameworks/fastapi/tenant_setup.py:example"
 ```
 
-When upstream ASGI middleware already verifies the caller before SQLSpec runs, set a per-bind `tenant_extractor` in `extension_config["fastapi"]` for automatic upfront binding; see [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md).
+When upstream ASGI middleware already verifies the caller before SQLSpec runs, set a per-bind `tenant_extractor` in `extension_config["fastapi"]` ; SQLSpec calls it on first use. SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
 
 ## Declarative Filter Dependencies
 

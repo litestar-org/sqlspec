@@ -88,6 +88,8 @@ For high-throughput endpoints that only acquire connections on demand rather tha
 
 ## Tenant-Aware Requests
 
+SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
+
 Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (such as `asyncpg`, `psqlpy`, `psycopg`, `cockroach_asyncpg`, or `oracledb`; see [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for database role and policy setup).
 
 When no `tenant_extractor` is set, Sanic defers checking out the tenant connection until an authentication middleware or route verifies membership, calls `set_request_tenant(request, org_id)` (accepting `key=...` for multi-database setups), and awaits `db_plugin.get_session_async(request)`. Public and login routes never check out a tenant connection and can look up users via a separate auth bind or `config.provide_session(bypass_tenant=True)`:
@@ -121,9 +123,9 @@ def register_routes(app: Sanic[Any, Any]) -> None:
         return json(await session.select("SELECT id, name FROM projects"))
 ```
 
-When your authentication middleware runs before SQLSpec's request hook and populates `request.ctx.user`, you can instead configure a sync or async `tenant_extractor` per bind in `extension_config["sanic"]` (returning `TenantContextPayload`, `str`, `UUID`, or `None`) so handlers can read `db_plugin.get_session(request)` directly. Multiple binds on one plugin can each define their own extractor or use deferred `set_request_tenant(...)` independently.
+When your authentication middleware runs before SQLSpec's request hook and populates `request.ctx.user`, you can instead configure a sync or async `tenant_extractor` per bind in `extension_config["sanic"]` (returning `TenantContextPayload`, `str`, `UUID`, or `None`) so handlers can await `db_plugin.get_session_async(request)` without calling `set_request_tenant`; SQLSpec calls the extractor on first use. Multiple binds on one plugin can each define their own extractor or use deferred `set_request_tenant(...)` independently.
 
-Response cleanup and the `http.lifecycle.complete` signal listener exit every open tenant lease and restore outer scopes on normal responses, mapped exceptions, and cancellations. At cleanup, most tenant-enabled connection leases roll back open transactions (including in `"manual"` mode), while psycopg and CockroachDB psycopg connection leases commit a clean exit, so commit explicitly or set `commit_mode="autocommit"` to control persistence. The lease is released when SQLSpec's response handling runs, which for a streaming handler is the `request.respond()` call, so finish database work before starting a streamed response. Always verify requested header or path selectors against trusted user memberships; explicit bypass payloads skip SQLSpec's session identity setup while keeping database RLS policies active. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
+Response cleanup and the `http.lifecycle.complete` signal listener exit every open tenant lease and restore outer scopes on normal responses, mapped exceptions, and cancellations. At cleanup, most tenant-enabled connection leases roll back open transactions (including in `"manual"` mode), while psycopg and CockroachDB psycopg connection leases commit a clean exit, so commit explicitly or set `commit_mode="autocommit"` to control persistence. The request connection is released when SQLSpec's response handling runs, which for a streaming handler is the `request.respond()` call; the request tenant stays in effect until the handler returns, so open a new session after `respond()` instead of reusing the request session. Always verify requested header or path selectors against trusted user memberships; explicit bypass payloads skip SQLSpec's session identity setup while keeping database RLS policies active. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) and [Tenant Operations](../learn/recipes/multi-tenancy-operations.md).
 
 ## Configuration Options
 
@@ -132,7 +134,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 <!-- GENERATED:START config-table:sqlspec.config.SanicConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Optional when handlers call set_request_tenant() before get_session_async() or wrap work in TenantContext.scope(). |
+| `tenant_extractor` | `Callable[[Any], TenantExtractorValue or Awaitable[TenantExtractorValue]]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.ctx. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |

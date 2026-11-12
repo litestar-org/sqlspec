@@ -53,7 +53,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 <!-- GENERATED:START config-table:sqlspec.config.LitestarConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[[MutableMapping[str, Any]], Any]` | - | Trusted scope callable returning a tenant identity, payload, None or an awaitable. |
+| `tenant_extractor` | `Callable[[MutableMapping[str, Any]], Any]` | - | Trusted scope callable returning a tenant identity, payload, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
 | `tenant_user_attr` | `str` | `'tenant_id'` | Verified direct tenant attribute or mapping key. Default: 'tenant_id'. |
 | `tenant_memberships_attr` | `str` | `'tenant_ids'` | Verified membership attribute or mapping key. Default: 'tenant_ids'. |
 | `tenant_variables_attr` | `str` | `'tenant_variables'` | Extra session variables attribute or mapping key. Default: 'tenant_variables'. |
@@ -99,14 +99,16 @@ In custom guards, middleware, streaming iterators, or event hooks where standard
 
 ## Tenant-Aware Requests
 
-Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`, `mssql_python`, `pymssql`) and configure tenant selector and user attribute names once in `extension_config["litestar"]`. Both injected sessions and `guards=[require_tenant()]` inherit those settings automatically from `app.state.sqlspec`:
+SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
+
+Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`asyncpg`, `psycopg`, `psqlpy`, `cockroach_asyncpg`, `cockroach_psycopg`, `oracledb`, `mssql_python`, `pymssql`, `db2`) and configure tenant selector and user attribute names once in `extension_config["litestar"]`. Both injected sessions and `guards=[require_tenant()]` inherit those settings automatically from `app.state.sqlspec`:
 
 ```python
 --8<-- "docs/examples/extensions/litestar/tenant_resolution.py:example"
 ```
 
 - Mark public or login routes under guarded controllers with `opt={"tenant_bypass": True}`, and query user credentials before a tenant exists with `config.provide_session(bypass_tenant=True)` (database RLS policies remain enforced unless linked to an explicit restricted auth lookup policy or separate auth bind).
-- In custom authorization guards or dependencies, verify membership and bind the selected organization via `set_connection_tenant(connection, org_id)`.
+- In custom authorization guards or dependencies, verify membership and bind the selected organization via `set_connection_tenant(connection, org_id)`; pass `key=` with a session, connection, or bind key to scope the receipt to one database.
 - Applications using `litestar-security` resolve tenants directly from the authenticated `scope["user"]` and `scope["auth"]` values (including `AuthorizationSnapshot.tenant_ids`, `tenant_roles`, and `CredentialRestrictions(tenant_ids=...)`) without extra wiring. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete JWT, server-side session, and `litestar-security` guides.
 
 ## Automatic HTTP 404 and 409 Exception Mapping

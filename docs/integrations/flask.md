@@ -48,7 +48,9 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 
 ## Tenant-Aware Requests
 
-Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`psycopg`, `asyncpg`, `psqlpy`, `cockroach_psycopg`, `cockroach_asyncpg`, `oracledb`, `mssql_python`, `pymssql`; start with the role and policy setup in [Multi-Tenancy](../learn/recipes/multi-tenancy.md)).
+SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
+
+Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapters (`psycopg`, `asyncpg`, `psqlpy`, `cockroach_psycopg`, `cockroach_asyncpg`, `oracledb`, `mssql_python`, `pymssql`, `db2`; start with the role and policy setup in [Multi-Tenancy](../learn/recipes/multi-tenancy.md)).
 
 When no `tenant_extractor` is configured, Flask defers checking out the tenant connection until your view or `@app.before_request` hook verifies membership, calls `set_request_tenant(org_id)` (accepting `key=...` for multi-database binds), and calls `plugin.get_session()`. Unauthenticated endpoints such as `/login` or `/health` skip tenant checkout completely and can query user memberships through a dedicated auth bind or `config.provide_session(bypass_tenant=True)`:
 
@@ -89,7 +91,7 @@ SQLSpec binds the verified tenant before opening a connection, forwards that cap
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None for the request. Optional when routes call set_request_tenant() or wrap work in TenantContext.scope(); evaluated lazily on first session or connection access. Accepts zero arguments or the Flask request. |
+| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
 | `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |

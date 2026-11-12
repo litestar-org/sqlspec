@@ -5,6 +5,7 @@ from sqlspec.extensions.flask import (
     FlaskConfigState,
     SQLSpecPlugin,
     set_request_tenant,
+    tenant_bypass,
 )
 ```
 
@@ -23,5 +24,9 @@ Flask WSGI extension managing `flask.g` request-scoped sessions, deferred tenant
 ## Request Tenant Helpers
 
 ::: sqlspec.extensions.flask._utils.set_request_tenant
+    options:
+      heading_level: 3
+
+::: sqlspec.utils.tenant.tenant_bypass
     options:
       heading_level: 3

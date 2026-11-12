@@ -14,6 +14,57 @@ flowchart LR
     Handler --> Reset["Verify Reset & Checkin"]
 ```
 
+## One Request Contract
+
+Litestar, FastAPI, Starlette, Flask, and Sanic follow the same rules once a
+registered configuration enables `driver_features["tenant_strategy"]`. Without
+one, the plugin installs no tenant handling and adds no per-request work.
+
+- **Lazy resolution**: At request start the plugin binds a lazy resolver; it does
+  not run your extractor or auth lookup. The tenant is resolved the first time a
+  lease, `provide_session()`, a `SQLSpec*Service(config=...)`, or
+  `TenantContext.get()` / `TenantContext.require()` needs it, once per
+  database configuration. Async extractors resolve at async access points; use
+  `await TenantContext.aget()` instead of the synchronous `get()` when your
+  extractor is asynchronous.
+- **Precedence** (highest first):
+    1. `provide_session(tenant=...)` or `provide_session(bypass_tenant=True)`.
+    2. A `TenantContext.scope(...)` or `TenantContext.bypass()` entered inside the handler.
+    3. Route resolution: the `tenant_bypass` route marker (or Litestar
+       `opt={"tenant_bypass": True}`), the request receipt from
+       `set_request_tenant(...)` / `set_connection_tenant(...)`, the configured
+       `tenant_extractor`, and, on Litestar, verified auth resolution.
+    4. A `TenantContext` scope bound outside the request, such as
+       `SQLSpecTenantMiddleware` installed in front of the application.
+- **No tenant**: An extractor that returns `None` only means that source has no
+  tenant; resolution continues down the list. If nothing resolves and the route
+  is not bypassed, the request fails with the framework's 401 (no authenticated
+  user) or 403 (authenticated user without an authorized tenant) instead of a
+  500. Scripts and workers outside a request still get `TenantContextError`.
+- **Streaming and background work**: Pending resolutions finish before the final
+  response message, so streaming bodies and background tasks keep the tenant
+  resolved for their request; nothing reads request state after the response.
+- **Configuration**: `tenant_extractor` requires `tenant_strategy` on the same
+  configuration. Async tenant configurations are checked out on first use, so
+  use the async accessors (`await plugin.get_session_async(request)`,
+  `Depends(plugin.provide_session())`, or Litestar dependency injection); the
+  synchronous accessor raises `ImproperConfigurationError` for them.
+- **Ambient middleware placement**: Register an outer tenant source (Flask and
+  Sanic request hooks, ASGI middleware) before the SQLSpec plugin so it counts
+  as ambient; a source that runs after the plugin's request hook behaves like a
+  handler scope.
+
+Mark public routes with `tenant_bypass`, exported by every framework extension:
+
+```python
+from sqlspec.extensions.starlette import tenant_bypass
+
+
+@tenant_bypass
+async def health(request):
+    ...
+```
+
 ## Installation
 
 === "uv"
@@ -438,11 +489,10 @@ How SQLSpec cooperates with `litestar-security`:
 ## FastAPI, Starlette, Flask, and Sanic
 
 Outside Litestar, authentication often runs inside route dependencies (FastAPI
-`Depends(...)`) or view decorators rather than outer ASGI middleware. When a
-database configuration enables `tenant_strategy` without a `tenant_extractor`
-(or when `tenant_extractor` returns `None`), SQLSpec defers tenant connection
-checkout until the route requests a session. Public endpoints such as `/health`,
-`/login`, and FastAPI's `/docs` never check out a tenant connection.
+`Depends(...)`) or view decorators rather than outer ASGI middleware. SQLSpec
+checks out a tenant connection only when the route first requests a session or
+connection, so public endpoints such as `/health`, `/login`, and FastAPI's
+`/docs` never check one out.
 
 ### FastAPI Dependency Resolution
 
@@ -503,9 +553,8 @@ Each framework exports `set_request_tenant` alongside `SQLSpecPlugin`:
   and await `db.get_session_async(request)` (`db.get_session(request)` on sync
   adapters); see [Starlette Tenant-Aware Requests](../../integrations/starlette.md#tenant-aware-requests).
 - **Sanic**: Verify membership, call `set_request_tenant(request, org_id)`, and
-  await `db.get_session_async(request)` (`db.get_session(request)` when an
-  upfront `tenant_extractor` or sync adapter is active); see
-  [Sanic Tenant-Aware Requests](../../integrations/sanic.md#tenant-aware-requests).
+  await `db.get_session_async(request)` (`db.get_session(request)` on sync
+  adapters); see [Sanic Tenant-Aware Requests](../../integrations/sanic.md#tenant-aware-requests).
 - **Flask**: Verify membership, call `set_request_tenant(org_id)`, and call
   `plugin.get_session()`, which bridges both sync and portal-backed async
   adapters lazily; see [Flask Tenant-Aware Requests](../../integrations/flask.md#tenant-aware-requests).
@@ -514,8 +563,8 @@ Each framework exports `set_request_tenant` alongside `SQLSpecPlugin`:
 
 When authentication middleware runs before SQLSpec and populates `scope["user"]`,
 `g.user`, or `request.ctx.user`, attach a per-bind `tenant_extractor` under
-`extension_config["starlette"]`, `"fastapi"`, `"flask"`, or `"sanic"` to acquire
-leases eagerly whenever a verified tenant is resolved. The extractor argument
+`extension_config["starlette"]`, `"fastapi"`, `"flask"`, or `"sanic"`. SQLSpec
+calls it on first use, not at request start. The extractor argument
 depends on the framework: Starlette and FastAPI pass the ASGI scope, Flask passes
 the Flask request (or nothing for a zero-argument extractor), and Sanic passes the
 Sanic request. This Starlette example reads `scope["user"]`; a Flask extractor
@@ -554,12 +603,15 @@ HTTP and WebSocket scopes.
 
 ## Request Lifetime and Streaming Semantics
 
-- **Per-connection capture**: Framework plugins snapshot `TenantContextPayload`
-  per connection lease, keeping auth and multi-tenant binds isolated through
-  commit, rollback, and checkin.
-- **Streaming and background tasks**: Starlette and FastAPI hold leases open
-  through streaming bodies and Starlette `BackgroundTask` completion, rolling
-  back uncommitted work on disconnects, errors, or cancellations before checkin.
+- **Per-connection capture**: Each lease snapshots its `TenantContextPayload`,
+  keeping auth and multi-tenant binds isolated through commit, rollback, and
+  checkin.
+- **Streaming and background tasks**: The tenant resolved for the request stays
+  in effect for streaming bodies and background tasks in every framework.
+  Starlette and FastAPI also hold request leases open through streaming bodies
+  and `BackgroundTask` completion; Litestar and Sanic release the request
+  connection when the response starts, so open a new session inside the stream
+  or task.
 - **Detached workers**: Never pass a request session to work outliving the HTTP
   response; pass the verified `tenant_id` and open
   `config.provide_session(tenant=tenant_id)` in the worker (see

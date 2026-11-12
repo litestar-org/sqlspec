@@ -328,7 +328,7 @@ class FlaskConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[..., "TenantExtractorValue"]]
-    """Return the authorized tenant payload, string, UUID, or None for the request. Optional when routes call set_request_tenant() or wrap work in TenantContext.scope(); evaluated lazily on first session or connection access. Accepts zero arguments or the Flask request."""
+    """Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in Flask g object. Default: auto-generated from session_key."""
@@ -383,7 +383,7 @@ class LitestarConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired["Callable[[MutableMapping[str, Any]], Any]"]
-    """Trusted scope callable returning a tenant identity, payload, None or an awaitable."""
+    """Trusted scope callable returning a tenant identity, payload, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
 
     tenant_user_attr: NotRequired[str]
     """Verified direct tenant attribute or mapping key. Default: 'tenant_id'."""
@@ -497,7 +497,7 @@ class StarletteConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[[Any], Any]]
-    """Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable. Optional when handlers or dependencies call set_request_tenant() before acquiring a session."""
+    """Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in request.state. Default: 'db_connection'"""
@@ -569,7 +569,7 @@ class SanicConfig(TypedDict):
     """
 
     tenant_extractor: NotRequired[Callable[[Any], "TenantExtractorValue | Awaitable[TenantExtractorValue]"]]
-    """Return the authorized tenant payload, string, UUID, or None, optionally as an awaitable. Optional when handlers call set_request_tenant() before get_session_async() or wrap work in TenantContext.scope()."""
+    """Return the authorized tenant payload, string, UUID, or None (no tenant from this source), optionally as an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start."""
 
     connection_key: NotRequired[str]
     """Key for storing connection in request.ctx. Default: 'db_connection'"""

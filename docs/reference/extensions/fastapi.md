@@ -10,6 +10,7 @@ from sqlspec.extensions.fastapi import (
     SQLSpecPlugin,
     provide_filters,
     set_request_tenant,
+    tenant_bypass,
 )
 ```
 
@@ -37,6 +38,10 @@ FastAPI lifespan plugin, request-scoped `Depends()` session/connection providers
         - provide_filters
 
 ::: sqlspec.extensions.starlette._utils.set_request_tenant
+    options:
+      heading_level: 3
+
+::: sqlspec.utils.tenant.tenant_bypass
     options:
       heading_level: 3
 

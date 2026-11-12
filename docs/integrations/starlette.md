@@ -46,7 +46,9 @@ Bind multiple async or sync configurations by specifying unique `session_key`, `
 
 ## Tenant-Aware Requests
 
-When a configuration sets `driver_features={"tenant_strategy": "rls"}` without a `tenant_extractor`, Starlette defers connection acquisition until your route or auth middleware verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)` (or calls `db_plugin.get_session(request)` for sync adapters). Public and login routes skip tenant checkout entirely and can query user records through `config.provide_session(bypass_tenant=True)` or a dedicated auth bind:
+SQLSpec resolves the request tenant lazily on first use with one precedence order in every framework, returns 401 or 403 when no tenant resolves, and exports `tenant_bypass` for public routes; see [One Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract).
+
+When a configuration sets `driver_features={"tenant_strategy": "rls"}`, Starlette defers connection acquisition until your route or auth middleware verifies membership, calls `set_request_tenant(request, org_id)`, and awaits `db_plugin.get_session_async(request)` (or calls `db_plugin.get_session(request)` for sync adapters). Public and login routes skip tenant checkout entirely and can query user records through `config.provide_session(bypass_tenant=True)` or a dedicated auth bind:
 
 ```python
 from starlette.requests import Request
@@ -81,7 +83,7 @@ Alternatively, configure an independent sync or async `tenant_extractor` per bin
 <!-- GENERATED:START config-table:sqlspec.config.StarletteConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None, or an awaitable. Optional when handlers or dependencies call set_request_tenant() before acquiring a session. |
+| `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
