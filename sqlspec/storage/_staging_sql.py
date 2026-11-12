@@ -321,12 +321,6 @@ def build_stage_merge_sql(
         )
         if on_conflict == "nothing" or not update_columns:
             return insert_sql
-        assignments = ", ".join(
-            f"{col} = CAST(stg.{col} AS {type_casts[col]})"
-            if (type_casts and col in type_casts)
-            else f"{col} = stg.{col}"
-            for col in update_columns
-        )
         if norm == "teradata":
             src_assignments = ", ".join(
                 f"{col} = CAST(src.{col} AS {type_casts[col]})"
@@ -336,6 +330,12 @@ def build_stage_merge_sql(
             )
             where_clause = " AND ".join(f"tgt.{key} = src.{key}" for key in conflict_keys)
             return f"UPDATE tgt FROM {target_table} tgt, {stage_table} src SET {src_assignments} WHERE {where_clause}; {insert_sql}"
+        assignments = ", ".join(
+            f"{col} = CAST(stg.{col} AS {type_casts[col]})"
+            if (type_casts and col in type_casts)
+            else f"{col} = stg.{col}"
+            for col in update_columns
+        )
         return (
             f"UPDATE {target_table} SET {assignments} "
             f"FROM {target_table} tgt, {stage_table} stg WHERE {on_clause}; {insert_sql}"
