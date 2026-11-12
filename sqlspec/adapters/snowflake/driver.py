@@ -27,7 +27,6 @@ from sqlspec.adapters.snowflake.core import (
 )
 from sqlspec.core import (
     SQL,
-    ParameterStyle,
     StatementConfig,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
@@ -54,6 +53,8 @@ if TYPE_CHECKING:
 
 __all__ = ("SnowflakeDriver", "SnowflakeExceptionHandler")
 
+_RESULT_SCAN_SQL = "SELECT * FROM TABLE(RESULT_SCAN(?))"
+
 
 _INSERT_SOURCE_TOKENS = re.compile(
     r"'(?:''|\\.|[^'])*'|\"(?:\"\"|[^\"])*\"|\$\$.*?\$\$|--[^\r\n]*|//[^\r\n]*|/\*.*?\*/|(?P<paren>[()])|(?P<source>\b(?:INSERT|SELECT|VALUES)\b)",
@@ -74,6 +75,12 @@ def _insert_uses_select(sql: str) -> bool:
             elif insert_seen:
                 return keyword == "SELECT"
     return False
+
+
+def _connection_paramstyle(connection: Any) -> str:
+    """Return the paramstyle a connector connection binds parameters with, defaulting to ``qmark``."""
+    style = str(getattr(connection, "paramstyle", None) or getattr(connection, "_paramstyle", None) or "qmark")
+    return style.lower() if style.lower() in {"qmark", "numeric", "pyformat", "format"} else "qmark"
 
 
 def _session_query_tag(connection: Any) -> str | None:
@@ -189,9 +196,11 @@ class SnowflakeDriver(SyncDriverAdapterBase):
 
     __slots__ = (
         "_active_stream_cursors",
+        "_async_statements",
         "_column_name_cache",
         "_data_dictionary",
         "_migration_schema_restore",
+        "_paramstyle",
         "_session_query_tag",
     )
     dialect = "snowflake"
@@ -223,6 +232,8 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         self._active_stream_cursors: dict[int, Any] = {}
         self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
         self._migration_schema_restore: str | None = None
+        self._async_statements: dict[str, SQL] = {}
+        self._paramstyle = _connection_paramstyle(connection)
         self._session_query_tag: str | None = (
             _session_query_tag(connection) if self.driver_features.get("enable_query_tag_correlation") else None
         )
@@ -251,11 +262,9 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         """Create a deferred connector exception handler."""
         return SnowflakeExceptionHandler()
 
-    def _binding_mode(self, config: StatementConfig | None = None) -> str:
-        style = (config or self.statement_config).parameter_config.default_execution_parameter_style
-        if style in {ParameterStyle.NAMED_PYFORMAT, ParameterStyle.POSITIONAL_PYFORMAT}:
-            return "pyformat"
-        return "numeric" if style == ParameterStyle.POSITIONAL_COLON else "qmark"
+    def _binding_mode(self) -> str:
+        """Return the connection's connector paramstyle, which decides server or client binding."""
+        return self._paramstyle
 
     def _track_stream_cursor(self, cursor: Any) -> Callable[[], None]:
         self._active_stream_cursors[id(cursor)] = cursor
@@ -274,10 +283,10 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             options["_statement_params"] = {"QUERY_TAG": f"{tag}:{correlation}" if tag else correlation}
         return options
 
-    def _execute_cursor(self, cursor: Any, sql: str, params: Any, config: StatementConfig | None = None) -> None:
+    def _execute_cursor(self, cursor: Any, sql: str, params: Any) -> None:
         cursor.execute(
             sql,
-            normalize_execute_parameters(params, paramstyle=self._binding_mode(config)),
+            normalize_execute_parameters(params, paramstyle=self._binding_mode()),
             **self._statement_execute_options(),
         )
 
@@ -319,7 +328,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Compile, bind and materialize one statement."""
         sql, params = self._compiled_sql(statement, self.statement_config)
-        self._execute_cursor(cursor, sql, params, statement.statement_config)
+        self._execute_cursor(cursor, sql, params)
         if statement.returns_rows() or self._should_force_select(statement, cursor):
             data, names, count = self.collect_rows(cursor, cursor.fetchall())
             return self.create_execution_result(
@@ -335,12 +344,12 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Batch VALUES inserts and scalar-bind SELECT inserts under caller transaction control."""
         sql, params = self._compiled_sql(statement, self.statement_config)
-        rows = normalize_many_parameters(params, paramstyle=self._binding_mode(statement.statement_config))
+        rows = normalize_many_parameters(params, paramstyle=self._binding_mode())
         affected = 0
         if rows and _insert_uses_select(sql):
             known_count = True
             for parameters in rows:
-                self._execute_cursor(cursor, sql, parameters, statement.statement_config)
+                self._execute_cursor(cursor, sql, parameters)
                 count = resolve_rowcount(cursor)
                 known_count = known_count and count >= 0
                 affected += max(count, 0)
@@ -363,7 +372,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             started = perf_counter() if has_observers else 0.0
             rows_affected: int | None = None
             with self.with_cursor(self.connection) as owned_cursor:
-                self._execute_cursor(owned_cursor, text, None, statement.statement_config)
+                self._execute_cursor(owned_cursor, text, None)
                 if has_observers:
                     rows_affected = resolve_rowcount(owned_cursor)
             if has_observers:
@@ -447,50 +456,89 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         """Submit a warehouse job and return its query identifier."""
         config = statement_config or self.statement_config
         prepared = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        handler = self.handle_database_exceptions()
-        query_id = None
-        with handler, self.with_cursor(self.connection) as cursor:
-            sql, params = self._compiled_sql(prepared, config)
-            cursor.execute_async(
-                sql,
-                normalize_execute_parameters(params, paramstyle=self._binding_mode(config)),
-                **self._statement_execute_options(),
-            )
-            query_id = cursor.sfqid
-        self._check_pending_exception(handler)
-        if not query_id:
+        sql, params = self._compiled_sql(prepared, config)
+        query_ids: list[str] = []
+
+        def submit() -> "SQLResult":
+            handler = self.handle_database_exceptions()
+            result = None
+            with handler, self.with_cursor(self.connection) as cursor:
+                cursor.execute_async(
+                    sql,
+                    normalize_execute_parameters(params, paramstyle=self._binding_mode()),
+                    **self._statement_execute_options(),
+                )
+                if cursor.sfqid:
+                    query_ids.append(str(cursor.sfqid))
+                result = self.build_statement_result(
+                    prepared, self.create_execution_result(cursor, rowcount_override=0)
+                )
+            self._check_pending_exception(handler)
+            if result is None:
+                msg = "Snowflake asynchronous submission produced no result"
+                raise SQLSpecError(msg)
+            return result
+
+        self._execute_with_observability_sync(
+            compiled_sql=sql,
+            execution_parameters=params,
+            operation=prepared.operation_type,
+            is_many=False,
+            is_script=False,
+            runner=submit,
+        )
+        if not query_ids:
             msg = "Snowflake did not return an asynchronous query identifier"
             raise SQLSpecError(msg)
-        return str(query_id)
+        self._async_statements[query_ids[0]] = prepared
+        return query_ids[0]
 
     def fetch_async_query_result(
         self, query_id: str, *, statement_config: StatementConfig | None = None
     ) -> "SQLResult":
-        """Wait for a submitted job and materialize its result."""
-        statement = self.prepare_statement("SELECT 1", statement_config=statement_config)
-        handler = self.handle_database_exceptions()
-        result = None
-        with handler, self.with_cursor(self.connection) as cursor:
-            cursor.get_results_from_sfqid(query_id)
-            fetched = cursor.fetchall()
-            if cursor.description:
-                data, names, count = self.collect_rows(cursor, fetched)
-                execution = self.create_execution_result(
-                    cursor,
-                    selected_data=data,
-                    column_names=names,
-                    data_row_count=count,
-                    is_select_result=True,
-                    row_format="tuple",
-                )
-            else:
-                execution = self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
-            result = self.build_statement_result(statement, execution)
-        self._check_pending_exception(handler)
-        if result is None:
-            msg = "Snowflake asynchronous result is unavailable"
-            raise SQLSpecError(msg)
-        return result
+        """Wait for a submitted job and materialize its result.
+
+        The result reports the submitted statement when this driver submitted the job, and otherwise the
+        equivalent ``RESULT_SCAN`` query for ``query_id``.
+        """
+        statement = self._async_statements.pop(query_id, None) or self.prepare_statement(
+            _RESULT_SCAN_SQL, (query_id,), statement_config=statement_config
+        )
+        sql, params = statement.compile()
+
+        def fetch() -> "SQLResult":
+            handler = self.handle_database_exceptions()
+            result = None
+            with handler, self.with_cursor(self.connection) as cursor:
+                cursor.get_results_from_sfqid(query_id)
+                fetched = cursor.fetchall()
+                if cursor.description:
+                    data, names, count = self.collect_rows(cursor, fetched)
+                    execution = self.create_execution_result(
+                        cursor,
+                        selected_data=data,
+                        column_names=names,
+                        data_row_count=count,
+                        is_select_result=True,
+                        row_format="tuple",
+                    )
+                else:
+                    execution = self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+                result = self.build_statement_result(statement, execution)
+            self._check_pending_exception(handler)
+            if result is None:
+                msg = "Snowflake asynchronous result is unavailable"
+                raise SQLSpecError(msg)
+            return result
+
+        return self._execute_with_observability_sync(
+            compiled_sql=sql,
+            execution_parameters=params,
+            operation=statement.operation_type,
+            is_many=False,
+            is_script=False,
+            runner=fetch,
+        )
 
     def has_schema(self, schema: str) -> bool:
         """Check a schema through a bound catalog lookup."""
@@ -547,7 +595,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         try:
             with handler:
                 sql, params = self._compiled_sql(prepared, config)
-                self._execute_cursor(cursor, sql, params, config)
+                self._execute_cursor(cursor, sql, params)
                 if return_format == "reader":
                     close_cursor = self._track_stream_cursor(cursor)
 
@@ -783,7 +831,7 @@ class _SnowflakeArrowStreamSource:
         try:
             with handler:
                 sql, params = self._driver._compiled_sql(self._statement, self._driver.statement_config)
-                self._driver._execute_cursor(cursor, sql, params, self._statement.statement_config)
+                self._driver._execute_cursor(cursor, sql, params)
                 names = normalize_column_names(
                     [descriptor_column_name(item) for item in cursor.description or ()],
                     enable_lowercase_column_names=bool(

@@ -158,6 +158,7 @@ def test_public_driver_client_modes_keep_datetime_values(snowflake_connection: A
     from sqlspec.adapters.snowflake import SnowflakeDriver
 
     aware = datetime(2026, 11, 11, 12, 30, tzinfo=UTC)
+    snowflake_connection.paramstyle = paramstyle
     driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
     driver.execute("INSERT INTO events(created) VALUES (:created)", {"created": aware})
     assert list(snowflake_connection.calls[-1][1]) == [aware]

@@ -346,3 +346,26 @@ def test_script_statements_emit_observer_events(snowflake_connection: Any) -> No
         (0, "CREATE TABLE a (id INTEGER)"),
         (1, "INSERT INTO a VALUES (1)"),
     ]
+
+
+def test_async_query_reports_statement_and_emits_observer_events(snowflake_connection: Any) -> None:
+    """Async submit and fetch report the real statement and reach statement observers."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    snowflake_connection.default_result = {"description": [("ID", 0, None, None, 18, 0, False)], "rows": [(1,)]}
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.attach_observability(ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,))))
+
+    query_id = driver.execute_async_query("SELECT ID FROM items WHERE ID = ?", 1)
+    result = driver.fetch_async_query_result(query_id)
+    foreign = driver.fetch_async_query_result("other-session-query")
+
+    assert result.statement.raw_sql == "SELECT ID FROM items WHERE ID = ?"
+    assert foreign.statement.raw_sql == "SELECT * FROM TABLE(RESULT_SCAN(?))"
+    assert foreign.statement.positional_parameters == ["other-session-query"]
+    assert [event.sql for event in events] == [
+        "SELECT ID FROM items WHERE ID = ?",
+        "SELECT ID FROM items WHERE ID = ?",
+        "SELECT * FROM TABLE(RESULT_SCAN(?))",
+    ]
