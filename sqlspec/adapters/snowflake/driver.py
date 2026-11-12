@@ -5,6 +5,7 @@ import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from sqlspec.adapters.snowflake._typing import SnowflakeCursor
@@ -115,14 +116,15 @@ def _normalize_arrow_table(table: Any, features: Mapping[str, Any]) -> Any:
 
 
 def _iter_arrow_tables(cursor: Any, features: Mapping[str, Any]) -> Iterator[Any]:
+    from snowflake.connector.errors import NotSupportedError
+
+    row_fallback = False
     try:
         for table in cursor.fetch_arrow_batches():
             yield _normalize_arrow_table(table, features)
-    except Exception as exc:
-        from snowflake.connector.errors import NotSupportedError
-
-        if not isinstance(exc, NotSupportedError):
-            raise
+    except NotSupportedError:
+        row_fallback = True
+    if row_fallback:
         ensure_pyarrow()
         import pyarrow as pa
 
@@ -365,20 +367,48 @@ class SnowflakeDriver(SyncDriverAdapterBase):
 
     def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute hardened Snowflake script splits with a cursor per statement."""
-        sql, _ = self._compiled_sql(statement, statement.statement_config)
+        sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        statement_count = len(statements)
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
         successful = 0
-        for text in statements:
+        for index, text in enumerate(statements):
+            started = perf_counter() if has_observers else 0.0
+            rows_affected: int | None = None
             with self.with_cursor(self.connection) as owned_cursor:
                 self._execute_cursor(owned_cursor, text, None, statement.statement_config)
+                if has_observers:
+                    rows_affected = resolve_rowcount(owned_cursor)
+            if has_observers:
+                duration = perf_counter() - started
+                single_statement = self._sub_statement(text, prepared_parameters)
+                try:
+                    operation = single_statement.operation_type
+                finally:
+                    self._release_pooled_statement(single_statement)
+                self._emit_script_statement_event(
+                    sql=text,
+                    parameters=prepared_parameters,
+                    operation=operation,
+                    rows_affected=rows_affected,
+                    duration_s=duration,
+                    started_at=started,
+                    profile=None,
+                    script_ordinal=index,
+                    script_statement_count=statement_count,
+                )
             successful += 1
         return self.create_execution_result(
-            cursor, statement_count=len(statements), successful_statements=successful, is_script_result=True
+            cursor, statement_count=statement_count, successful_statements=successful, is_script_result=True
         )
 
     def begin(self) -> None:
         """Begin a DML transaction; Snowflake DDL remains autocommitting."""
-        self.execute("BEGIN")
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("BEGIN")
+        self._check_pending_exception(handler)
 
     def commit(self) -> None:
         """Commit the active transaction."""
@@ -652,9 +682,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             and self.driver_features.get("enable_stage_parquet_load", True)
             and arrow_table.num_rows >= threshold
         ):
-            if overwrite:
-                self.execute(f"TRUNCATE TABLE {formatted}")
-            self._load_parquet_stage(formatted, arrow_table)
+            self._load_parquet_stage(formatted, arrow_table, overwrite=overwrite)
         elif arrow_table.num_rows or overwrite:
             import pyarrow as pa
 
@@ -667,12 +695,10 @@ class SnowflakeDriver(SyncDriverAdapterBase):
                 for name, parameter in zip(arrow_table.column_names, names, strict=True)
             )
             insert = f"INSERT INTO {formatted} ({columns}) " + (f"SELECT {values}" if nested else f"VALUES ({values})")
-            owns_transaction = not self._connection_in_transaction()
-            if owns_transaction:
-                self.begin()
-            try:
+
+            def insert_batches() -> None:
                 if overwrite:
-                    self.execute(f"TRUNCATE TABLE {formatted}")
+                    self.execute(f"DELETE FROM {formatted}")
                 for batch in arrow_table.to_batches(max_chunksize=batch_size):
                     rows = [
                         dict(
@@ -692,19 +718,30 @@ class SnowflakeDriver(SyncDriverAdapterBase):
                             self.execute(insert, row)
                     else:
                         self.execute_many(insert, rows)
-                if owns_transaction:
-                    self.commit()
-            except BaseException:
-                if owns_transaction:
-                    with contextlib.suppress(Exception):
-                        self.rollback()
-                raise
+
+            self._run_in_load_transaction(insert_batches)
         payload = self._ingest_telemetry(arrow_table)
         payload["destination"] = table
         self._attach_partition_telemetry(payload, partitioner)
         return self._storage_job(payload, telemetry)
 
-    def _load_parquet_stage(self, table: str, arrow_table: Any) -> None:
+    def _run_in_load_transaction(self, operation: Callable[[], None]) -> None:
+        """Run DML in the caller's transaction, or in one owned transaction when none is active."""
+        owns_transaction = not self._connection_in_transaction()
+        if owns_transaction:
+            self.begin()
+        try:
+            operation()
+            if owns_transaction:
+                self.commit()
+        except BaseException:
+            if owns_transaction:
+                with contextlib.suppress(Exception):
+                    self.rollback()
+            raise
+
+    def _load_parquet_stage(self, table: str, arrow_table: Any, *, overwrite: bool) -> None:
+        """Upload Parquet to a user stage, then replace or append rows and copy them in one DML transaction."""
         import pyarrow.parquet as pq
 
         stage = f"@~/sqlspec_stage/{uuid4().hex}/"
@@ -716,9 +753,15 @@ class SnowflakeDriver(SyncDriverAdapterBase):
                     pq.write_table(arrow_table, path)
                     uri = path.as_uri().replace("'", "''")
                     cursor.execute(f"PUT '{uri}' {stage} AUTO_COMPRESS=FALSE OVERWRITE=TRUE")
+
+                def copy_stage() -> None:
+                    if overwrite:
+                        cursor.execute(f"DELETE FROM {table}")
                     cursor.execute(
                         f"COPY INTO {table} FROM {stage} FILE_FORMAT=(TYPE=PARQUET) MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE PURGE=TRUE"
                     )
+
+                self._run_in_load_transaction(copy_stage)
             finally:
                 with contextlib.suppress(Exception):
                     cursor.execute(f"REMOVE {stage}")

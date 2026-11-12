@@ -330,3 +330,19 @@ def test_dict_cursor_rows_and_async_query_tag_correlation(
     assert query_id == "sfqid-123"
     assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "batch:job-42"}}
 
+
+def test_script_statements_emit_observer_events(snowflake_connection: Any) -> None:
+    """Each script statement reaches statement observers with its ordinal."""
+    from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
+
+    events: list[Any] = []
+    driver = SnowflakeDriver(snowflake_connection)
+    driver.attach_observability(ObservabilityRuntime(ObservabilityConfig(statement_observers=(events.append,))))
+
+    result = driver.execute_script("CREATE TABLE a (id INTEGER); INSERT INTO a VALUES (1)")
+
+    assert result.total_statements == 2
+    assert [(event.script_ordinal, event.sql) for event in events if event.script_ordinal is not None] == [
+        (0, "CREATE TABLE a (id INTEGER)"),
+        (1, "INSERT INTO a VALUES (1)"),
+    ]

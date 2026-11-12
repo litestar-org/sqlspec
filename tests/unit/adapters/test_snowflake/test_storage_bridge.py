@@ -41,9 +41,11 @@ def test_arrow_large_load_cleans_remote_and_local_stage(snowflake_connection: An
     assert job.telemetry["rows_processed"] == 2
     statements = [call[0] for call in snowflake_connection.calls]
     assert statements[0].startswith("PUT 'file://")
-    assert statements[1].startswith('COPY INTO "ORDERS" FROM @~/sqlspec_stage/')
-    assert "MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE PURGE=TRUE" in statements[1]
-    assert statements[2].startswith("REMOVE @~/sqlspec_stage/")
+    assert statements[1:3] == ["SELECT CURRENT_TRANSACTION()", "BEGIN"]
+    assert statements[3].startswith('COPY INTO "ORDERS" FROM @~/sqlspec_stage/')
+    assert "MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE PURGE=TRUE" in statements[3]
+    assert statements[4].startswith("REMOVE @~/sqlspec_stage/")
+    assert snowflake_connection.commits == 1
     local_uri = statements[0].split("'", 2)[1]
     local_path = Path(local_uri.removeprefix("file://"))
     assert list(local_path.parent.parent.glob(local_path.parent.name)) == []
@@ -174,3 +176,20 @@ def test_arrow_batch_failure_keeps_caller_transaction_under_caller_control(snowf
     assert len(snowflake_connection.pending_rows) == 2
     driver.rollback()
     assert snowflake_connection.committed_rows == []
+
+
+@pytest.mark.parametrize("threshold", [1, 1000])
+def test_overwrite_failure_keeps_existing_rows(snowflake_connection: Any, threshold: int) -> None:
+    """A failed overwrite rolls back the delete so previously committed rows survive."""
+    snowflake_connection.committed_rows.append({"id": 0})
+    snowflake_connection.fail_on = "COPY INTO" if threshold == 1 else None
+    snowflake_connection.fail_on_batch = None if threshold == 1 else 1
+    snowflake_connection.failure = RuntimeError("load failed")
+    driver = SnowflakeDriver(snowflake_connection, driver_features={"stage_parquet_threshold_rows": threshold})
+
+    with pytest.raises(Exception, match="load failed"):
+        driver.load_from_arrow("orders", pa.table({"id": [1, 2]}), overwrite=True)
+
+    assert snowflake_connection.committed_rows == [{"id": 0}]
+    assert snowflake_connection.rollbacks == 1
+    assert not any(call[0].startswith("TRUNCATE") for call in snowflake_connection.calls)

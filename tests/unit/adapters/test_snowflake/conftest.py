@@ -35,6 +35,15 @@ class SnowflakeCursorFake:
             self.connection.transaction_active = True
         elif normalized.startswith(("CREATE ", "ALTER ", "DROP ")):
             self.connection.commit_pending()
+        elif normalized.startswith("TRUNCATE "):
+            self.connection.commit_pending()
+            self.connection.committed_rows.clear()
+        elif normalized.startswith("DELETE FROM "):
+            if self.connection.transaction_active:
+                self.connection.pending_delete = True
+                self.connection.pending_rows.clear()
+            else:
+                self.connection.committed_rows.clear()
         elif normalized.startswith("INSERT "):
             self.connection.insert_calls += 1
             if self.connection.fail_on_insert == self.connection.insert_calls:
@@ -115,6 +124,7 @@ class SnowflakeConnectionFake:
         self.transaction_active = False
         self.autocommit_enabled = True
         self.pending_rows: list[Any] = []
+        self.pending_delete = False
         self.committed_rows: list[Any] = []
         self.batch_calls = 0
         self.insert_calls = 0
@@ -133,6 +143,9 @@ class SnowflakeConnectionFake:
         (self.pending_rows if self.transaction_active else self.committed_rows).extend(rows)
 
     def commit_pending(self) -> None:
+        if self.pending_delete:
+            self.committed_rows.clear()
+            self.pending_delete = False
         self.committed_rows.extend(self.pending_rows)
         self.pending_rows.clear()
         self.transaction_active = False
@@ -144,17 +157,8 @@ class SnowflakeConnectionFake:
     def rollback(self) -> None:
         self.rollbacks += 1
         self.pending_rows.clear()
+        self.pending_delete = False
         self.transaction_active = False
-
-    def execute_string(self, sql: str, *, remove_comments: bool, return_cursors: bool) -> list[SnowflakeCursorFake]:
-        self.scripts.append(sql)
-        cursors = []
-        for statement in sql.split(";"):
-            if statement.strip():
-                cursor = self.cursor()
-                cursor.execute(statement.strip())
-                cursors.append(cursor)
-        return cursors
 
 
 @pytest.fixture

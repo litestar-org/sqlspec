@@ -177,7 +177,7 @@ Pass connection and pool keys in `connection_config`, and feature flags in `driv
 
 `select_to_arrow()` returns an `ArrowResult`; `get_data()` exposes its Arrow table. `select_stream()` reads batches lazily, and readers close their cursor on exhaustion, early close, or session close. Reads use `fetch_arrow_batches()` without pandas, preserve empty schemas, and fall back to rows for unsupported commands. Materialization promotes compatible Arrow schemas; streams cast later batches to the first schema. Uppercase column names become lowercase by default; mixed-case names remain unchanged.
 
-`load_from_arrow(table, source)` uses bound batches below the stage threshold, which defaults to 1000 rows for config-managed sessions. Standalone bound loads own one DML transaction; existing caller transactions stay open. Table creation and truncation retain Snowflake DDL commit behavior. Larger loads write temporary Parquet, run user-stage `PUT` and `COPY INTO`, then remove staged files. Use `stage_table=True` with `conflict_keys` for staged `MERGE`; `load_from_storage()` accepts the same conflict options. See [Arrow and storage](../learn/arrow-and-storage.md).
+`load_from_arrow(table, source)` uses bound batches below the stage threshold, which defaults to 1000 rows for config-managed sessions. Standalone loads own one DML transaction; existing caller transactions stay open. With `overwrite=True`, existing rows are deleted inside that transaction, so a failed load keeps them. `if_not_exists=True` table creation retains Snowflake DDL commit behavior. Larger loads write temporary Parquet, upload it with a user-stage `PUT`, run `COPY INTO` inside the load transaction, then remove staged files. Use `stage_table=True` with `conflict_keys` for staged `MERGE`; `load_from_storage()` accepts the same conflict options. See [Arrow and storage](../learn/arrow-and-storage.md).
 
 ## SQL, Query Jobs, and Extension Stores
 
@@ -185,7 +185,7 @@ Write `:name`, `:1`, `%s`, or `%(name)s` parameters; the default wire format is 
 
 `execute_script()` binds supplied values statically, splits SQL with SQLSpec's Snowflake splitter, and executes each statement through its own managed cursor. Scripting blocks, comments, and dollar-quoted bodies stay intact. Transaction ownership comes from `CURRENT_TRANSACTION()` on the server. `execute_async_query()` submits a warehouse query and returns its query ID; `fetch_async_query_result(query_id)` waits for its result. These methods are synchronous Python calls. Async frameworks use `sqlspec.utils.sync_tools.async_()` to bridge synchronous work.
 
-Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQueueStore` (`SnowflakeSyncEventQueueStore` alias) with VARIANT payloads and the `poll_queue` backend by default. Google ADK uses `SnowflakeADKStore` and `SnowflakeADKMemoryStore`; memory recall uses `ILIKE`, and vector embeddings are unsupported. Built-in schema reconciliation creates extension tables without secondary indexes.
+Litestar uses `SnowflakeStore` for binary sessions. Events use `SnowflakeEventQueueStore` with VARIANT payloads and the `poll_queue` backend by default. Google ADK uses `SnowflakeADKStore` and `SnowflakeADKMemoryStore`; memory recall uses `ILIKE`, and vector embeddings are unsupported. Built-in schema reconciliation creates extension tables without secondary indexes.
 
 ## Type Mappings and Related Reference
 
