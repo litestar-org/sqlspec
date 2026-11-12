@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection
+from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection, MssqlPythonPoolingManager
+from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,6 +35,7 @@ class MssqlPythonConnectionPool:
         "idle_timeout",
         "max_size",
         "on_connection_create",
+        "require_unpooled",
     )
 
     def __init__(
@@ -44,6 +46,7 @@ class MssqlPythonConnectionPool:
         max_size: int = 100,
         idle_timeout: int = 600,
         enabled: bool = True,
+        require_unpooled: bool = False,
         on_connection_create: "Callable[[MssqlPythonConnection], None] | None" = None,
     ) -> None:
         """Initialize the pool facade and synchronize process-global mssql-python pooling state.
@@ -51,17 +54,29 @@ class MssqlPythonConnectionPool:
         ``mssql-python`` auto-enables native DDBC connection pooling on the first
         ``connect()`` call unless ``mssql_python.pooling(enabled=False)`` has been
         called explicitly, so disabled pools must still initialize the driver state.
+        A pool created with ``require_unpooled=True`` refuses to start while native pooling is
+        enabled, and blocks enabled pools from starting while it remains open.
+
+        Raises:
+            ImproperConfigurationError: Native pooling conflicts with an unpooled tenant pool.
         """
         self.connection_string = connection_string
         self.connect_kwargs = connect_kwargs or {}
         self.max_size = max_size
         self.idle_timeout = idle_timeout
         self.enabled = enabled
+        self.require_unpooled = require_unpooled
         self.on_connection_create = on_connection_create
         self._closed = False
         global _POOLING_PARAMS
         new_params = (max_size, idle_timeout, True) if enabled else (0, 0, False)
         with _POOL_LOCK:
+            if require_unpooled and (enabled or _ACTIVE_ENABLED_POOLS or MssqlPythonPoolingManager.is_enabled()):
+                msg = "Tenant mode requires pool_enabled=False on every configuration; disable SDK pooling before the first connection"
+                raise ImproperConfigurationError(msg)
+            if enabled and any(pool.require_unpooled for pool in _ACTIVE_DISABLED_POOLS):
+                msg = "Tenant mode requires pool_enabled=False on every configuration"
+                raise ImproperConfigurationError(msg)
             active_pools_exist = bool(_ACTIVE_ENABLED_POOLS or _ACTIVE_DISABLED_POOLS)
             params_changed = _POOLING_PARAMS is None or new_params != _POOLING_PARAMS
             if active_pools_exist and _POOLING_PARAMS is not None and new_params != _POOLING_PARAMS:
@@ -91,7 +106,12 @@ class MssqlPythonConnectionPool:
             "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
         )
         if self.on_connection_create is not None and not getattr(connection, "_sqlspec_initialized", False):
-            self.on_connection_create(connection)
+            try:
+                self.on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
             with contextlib.suppress(AttributeError):
                 setattr(connection, "_sqlspec_initialized", True)
         return connection

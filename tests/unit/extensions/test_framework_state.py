@@ -60,17 +60,26 @@ _COMMON_FIELDS = [
 
 
 def test_starlette_config_state_field_order() -> None:
-    """SQLSpecConfigState keeps its historical field set and order."""
-    assert [f.name for f in fields(SQLSpecConfigState)] == [*_COMMON_FIELDS, "sqlcommenter_framework"]
+    """SQLSpecConfigState preserves its positional fields and includes tenant extraction."""
+    assert [f.name for f in fields(SQLSpecConfigState)] == [
+        *_COMMON_FIELDS,
+        "sqlcommenter_framework",
+        "tenant_extractor",
+    ]
 
 
 def test_sanic_config_state_field_order() -> None:
-    """SanicConfigState keeps its historical field set and order."""
-    assert [f.name for f in fields(SanicConfigState)] == [*_COMMON_FIELDS, "sqlcommenter_framework"]
+    """SanicConfigState exposes its request tenant extractor after core fields."""
+    assert [f.name for f in fields(SanicConfigState)] == [
+        *_COMMON_FIELDS[:8],
+        "tenant_extractor",
+        *_COMMON_FIELDS[8:],
+        "sqlcommenter_framework",
+    ]
 
 
 def test_flask_config_state_field_order() -> None:
-    """FlaskConfigState keeps its historical field set and order."""
+    """FlaskConfigState exposes its request tenant extractor after core fields."""
     assert [f.name for f in fields(FlaskConfigState)] == [
         "config",
         "connection_key",
@@ -80,6 +89,8 @@ def test_flask_config_state_field_order() -> None:
         "extra_rollback_statuses",
         "is_async",
         "disable_di",
+        "tenant_extractor",
+        "extractor_takes_request",
         "enable_correlation_middleware",
         "correlation_header",
         "correlation_headers",

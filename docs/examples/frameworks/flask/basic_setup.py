@@ -5,7 +5,6 @@ from typing import Any
 
 from flask import Flask
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.extensions.flask import SQLSpecPlugin
 
@@ -23,13 +22,11 @@ def create_app(plugin: SQLSpecPlugin) -> Flask:
     return app
 
 
-spec = SQLSpec()
-spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
-plugin = SQLSpecPlugin(spec)
+plugin = SQLSpecPlugin(SqliteConfig(connection_config={"database": ":memory:"}))
 app = create_app(plugin)
 # --8<-- [end:example]
 
-__all__ = ("app", "create_app", "main")
+__all__ = ("app", "create_app", "main", "plugin")
 
 
 def main() -> Flask:

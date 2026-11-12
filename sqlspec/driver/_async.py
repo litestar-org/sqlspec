@@ -107,14 +107,17 @@ class AsyncPoolConnectionContext:
     adapter-specific pool acquisition and release logic.
     """
 
-    __slots__ = ("_config", "_connection", "_pool")
+    __slots__ = ("_config", "_connection", "_pool", "_tenant_lease")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._connection: Any = None
         self._pool: Any = None
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     async def __aenter__(self) -> Any:
+        if self._tenant_lease is not None:
+            return await self._tenant_lease.acquire()
         if hasattr(self._config, "provide_pool"):
             pool = await self._config.provide_pool()
         else:
@@ -129,6 +132,9 @@ class AsyncPoolConnectionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         if self._connection is not None:
             pool = self._pool or getattr(self._config, "connection_instance", None)
             if pool is not None:
@@ -146,14 +152,17 @@ class AsyncPoolSessionFactory:
     for adapter-specific pool acquisition and release logic.
     """
 
-    __slots__ = ("_config", "_connection", "_pool")
+    __slots__ = ("_config", "_connection", "_pool", "_tenant_lease")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._connection: Any = None
         self._pool: Any = None
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     async def acquire_connection(self) -> Any:
+        if self._tenant_lease is not None:
+            return await self._tenant_lease.acquire()
         if hasattr(self._config, "provide_pool"):
             pool = await self._config.provide_pool()
         else:
@@ -166,6 +175,9 @@ class AsyncPoolSessionFactory:
         return self._connection
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            await self._tenant_lease.release(_conn, **kwargs)
+            return
         if self._connection is not None:
             pool = self._pool or getattr(self._config, "connection_instance", None)
             if pool is not None:

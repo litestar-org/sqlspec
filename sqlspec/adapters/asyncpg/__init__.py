@@ -9,6 +9,7 @@ from sqlspec.adapters.asyncpg.config import (
 )
 from sqlspec.adapters.asyncpg.core import build_connection_config, default_statement_config
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
+from sqlspec.adapters.asyncpg.tenant import AsyncpgRLSStrategy
 
 __all__ = (
     "AsyncpgConfig",
@@ -21,6 +22,7 @@ __all__ = (
     "AsyncpgPool",
     "AsyncpgPoolConfig",
     "AsyncpgPreparedStatement",
+    "AsyncpgRLSStrategy",
     "build_connection_config",
     "default_statement_config",
 )

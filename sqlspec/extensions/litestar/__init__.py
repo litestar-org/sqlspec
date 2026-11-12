@@ -15,7 +15,15 @@ from sqlspec.extensions.litestar.plugin import (
     SQLSpecPlugin,
 )
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
+from sqlspec.extensions.litestar.tenant import (
+    TenantResolutionSettings,
+    is_scope_authenticated,
+    require_tenant,
+    resolve_litestar_tenant,
+    set_connection_tenant,
+)
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.utils.tenant import SQLSpecTenantMiddleware, tenant_bypass
 
 __all__ = (
     "DEFAULT_COMMIT_MODE",
@@ -31,7 +39,14 @@ __all__ = (
     "SQLSpecChannelsBackend",
     "SQLSpecPlugin",
     "SQLSpecSyncService",
+    "SQLSpecTenantMiddleware",
+    "TenantResolutionSettings",
     "database_group",
     "get_sqlspec_scope_state",
+    "is_scope_authenticated",
+    "require_tenant",
+    "resolve_litestar_tenant",
+    "set_connection_tenant",
     "set_sqlspec_scope_state",
+    "tenant_bypass",
 )

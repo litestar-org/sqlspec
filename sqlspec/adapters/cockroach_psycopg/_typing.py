@@ -10,10 +10,12 @@ import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as cockroach_psycopg_crdb
 from psycopg import errors as cockroach_psycopg_errors
+from psycopg import pq as cockroach_psycopg_pq
 from psycopg import sql as cockroach_psycopg_sql
 from psycopg.adapt import AdaptersMap as CockroachPsycopgAdaptersMap
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
+from psycopg.rows import tuple_row as cockroach_psycopg_tuple_row
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
 from psycopg.types.json import set_json_dumps as cockroach_psycopg_set_json_dumps
 from psycopg.types.json import set_json_loads as cockroach_psycopg_set_json_loads
@@ -58,9 +60,11 @@ __all__ = (
     "cockroach_psycopg_dict_row",
     "cockroach_psycopg_errors",
     "cockroach_psycopg_module",
+    "cockroach_psycopg_pq",
     "cockroach_psycopg_set_json_dumps",
     "cockroach_psycopg_set_json_loads",
     "cockroach_psycopg_sql",
+    "cockroach_psycopg_tuple_row",
 )
 
 _COCKROACH_PSYCOPG_SYNC_DRIVER_CLS: "type[CockroachPsycopgSyncDriver] | None" = None
@@ -99,11 +103,15 @@ class CockroachPsycopgSyncSessionContext:
     def __enter__(self) -> "CockroachPsycopgSyncDriver":
         driver_cls = _resolve_cockroach_psycopg_sync_driver()
         self._connection = self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -146,11 +154,15 @@ class CockroachPsycopgAsyncSessionContext:
     async def __aenter__(self) -> "CockroachPsycopgAsyncDriver":
         driver_cls = _resolve_cockroach_psycopg_async_driver()
         self._connection = await self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

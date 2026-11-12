@@ -14,12 +14,14 @@ from psycopg import Connection as PsycopgConnection
 from psycopg import Cursor as PsycopgCursor
 from psycopg import ProgrammingError as PsycopgProgrammingError
 from psycopg import errors as psycopg_errors
+from psycopg import pq as psycopg_pq
 from psycopg import sql as psycopg_sql
 from psycopg.abc import AdaptContext as PsycopgAdaptContext
 from psycopg.rows import AsyncRowFactory as PsycopgAsyncRowFactory
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import RowFactory as PsycopgRowFactory
 from psycopg.rows import dict_row as psycopg_dict_row
+from psycopg.rows import tuple_row as psycopg_tuple_row
 from psycopg.sql import SQL as PsycopgSQL  # noqa: N811
 from psycopg.sql import Composed as PsycopgComposed
 from psycopg.sql import Identifier as PsycopgIdentifier
@@ -92,7 +94,9 @@ __all__ = (
     "psycopg_dict_row",
     "psycopg_errors",
     "psycopg_module",
+    "psycopg_pq",
     "psycopg_sql",
+    "psycopg_tuple_row",
 )
 
 _psycopg_sync_driver_cls: "type[PsycopgSyncDriver] | None" = None
@@ -205,11 +209,16 @@ class PsycopgSyncSessionContext:
     def __enter__(self) -> "PsycopgSyncDriver":
         driver_cls = _resolve_psycopg_sync_driver()
         self._connection = self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            connection, self._connection = self._connection, None
+            self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -269,11 +278,16 @@ class PsycopgAsyncSessionContext:
     async def __aenter__(self) -> "PsycopgAsyncDriver":
         driver_cls = _resolve_psycopg_async_driver()
         self._connection = await self._acquire_connection()
-        statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
+            self._driver = driver_cls(
+                connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            connection, self._connection = self._connection, None
+            await self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

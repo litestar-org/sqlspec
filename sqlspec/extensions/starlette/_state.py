@@ -1,5 +1,6 @@
 """Internal configuration state models for the Starlette SQLSpec extension."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -35,9 +36,13 @@ class SQLSpecConfigState:
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "starlette"
+    tenant_extractor: Callable[[Any], Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate transaction status overrides."""
+        if self.tenant_extractor is not None and not callable(self.tenant_extractor):
+            msg = "tenant_extractor must be callable"
+            raise ImproperConfigurationError(msg)
         if (self.extra_commit_statuses or set()) & (self.extra_rollback_statuses or set()):
             msg = "Extra rollback statuses and commit statuses must not share any status codes"
             raise ImproperConfigurationError(msg)

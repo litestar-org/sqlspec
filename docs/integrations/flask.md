@@ -30,7 +30,7 @@
 
 ## Application Factory Setup
 
-Create a `SQLSpecPlugin(spec)` instance, initialize it inside your `create_app` factory with `plugin.init_app(app)`, and retrieve the active request session via `plugin.get_session()`:
+Pass a single database configuration, a sequence of configurations, or a `SQLSpec` registry to `SQLSpecPlugin(...)`, initialize it inside your `create_app` factory with `plugin.init_app(app)` (or `SQLSpecPlugin(config, app)`), and retrieve the active request session via `plugin.get_session()`:
 
 ```{ .python title="docs/examples/frameworks/flask/basic_setup.py" }
 --8<-- "docs/examples/frameworks/flask/basic_setup.py:example"
@@ -46,11 +46,16 @@ Configure distinct `session_key` and optional `connection_key` values under `ext
 --8<-- "docs/examples/frameworks/flask/multi_database.py:example"
 ```
 
+## Tenant-Aware Requests
+
+With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask defers checkout until a view or `before_request` hook verifies membership, calls `set_request_tenant(org_id)`, and calls `plugin.get_session()`; a synchronous per-bind `tenant_extractor` can resolve the tenant from `g.user` instead. See [Flask Multi-Tenancy](../learn/recipes/multi-tenancy-flask.md) for complete examples and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
 ## Configuration Options
 
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
 | `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |

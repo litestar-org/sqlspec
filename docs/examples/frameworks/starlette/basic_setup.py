@@ -6,13 +6,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.extensions.starlette import SQLSpecPlugin
 
-spec = SQLSpec()
-spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-db_plugin = SQLSpecPlugin(spec)
+db_plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
 
 
 async def health(request: Request) -> JSONResponse:
@@ -24,7 +21,7 @@ app = Starlette(routes=[Route("/health", health)])
 db_plugin.init_app(app)
 # --8<-- [end:example]
 
-__all__ = ("app", "db_plugin", "health", "main", "spec")
+__all__ = ("app", "db_plugin", "health", "main")
 
 
 def main() -> Starlette:

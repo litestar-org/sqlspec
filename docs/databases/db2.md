@@ -118,6 +118,7 @@ Pass `Db2DriverFeatures` keys inside `driver_features={...}` on `Db2SyncConfig` 
 <!-- GENERATED:START config-table:sqlspec.adapters.db2.config.Db2DriverFeatures -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `tenant_strategy` | `SyncTenantStrategy or AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"rcac"` shorthand, applied to every session and connection lease. |
 | `json_serializer` | `Callable[[Any], str]` | `sqlspec.utils.serializers.to_json` | Serializer converting dict/list parameters to JSON text (defaults to `sqlspec.utils.serializers.to_json`). |
 | `json_deserializer` | `Callable[[str], Any]` | `sqlspec.utils.serializers.from_json` | Deserializer parsing JSON text payloads (defaults to `sqlspec.utils.serializers.from_json`). |
 | `on_connection_create` | `Callable[[Any], Any]` | - | Callback invoked with the raw `ibm_db_dbi` sync or async connection after open. |

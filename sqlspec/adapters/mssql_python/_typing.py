@@ -7,6 +7,7 @@ import mssql_python as _mssql_python  # pyright: ignore[reportMissingImports]
 from mssql_python import Error as MssqlPythonError
 from mssql_python.connection import Connection, TokenProvider  # pyright: ignore
 from mssql_python.cursor import Cursor  # pyright: ignore
+from mssql_python.pooling import PoolingManager as MssqlPythonPoolingManager
 
 from sqlspec.utils.module_loader import import_optional_attr
 
@@ -32,6 +33,7 @@ __all__ = (
     "MssqlPythonConnection",
     "MssqlPythonCursor",
     "MssqlPythonError",
+    "MssqlPythonPoolingManager",
     "MssqlPythonRawCursor",
     "MssqlPythonSessionContext",
     "TokenProvider",
@@ -91,16 +93,26 @@ class MssqlPythonSessionContext:
         if _DRIVER_CLS is None:
             _DRIVER_CLS = import_optional_attr("sqlspec.adapters.mssql_python.driver", "MssqlPythonDriver")
         self._connection = self._acquire_connection()
-        self._driver = _DRIVER_CLS(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        assert self._driver is not None
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = _DRIVER_CLS(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            assert self._driver is not None
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
+        if (
+            self._driver_features.get("tenant_strategy") is None
+            and self._driver is not None
+            and (exc_type is not None or self._driver._connection_in_transaction())
+        ):
             with contextlib.suppress(Exception):
                 self._driver.rollback()
         if self._connection is not None:

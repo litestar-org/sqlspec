@@ -57,3 +57,12 @@ def test_pymssql_failed_migration_leaves_no_partial_work(
     assert_failed_migration_leaves_no_partial_work(
         tmp_path, PymssqlConfig, connection_config, SQLParsingError, "Invalid object name"
     )
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+def test_pymssql_tenant_policy_and_transaction_ownership(
+    pymssql_connection_config: dict[str, Any], autocommit: bool
+) -> None:
+    from tests.integration.adapters.mssql._tenant import assert_native_tenant_acceptance
+
+    assert_native_tenant_acceptance("pymssql", pymssql_connection_config, autocommit)

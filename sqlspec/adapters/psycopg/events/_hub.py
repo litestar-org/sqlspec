@@ -18,6 +18,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
@@ -295,6 +297,7 @@ class PsycopgAsyncListenerHub:
         self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
+@mypyc_attr(native_class=False)
 class PsycopgSyncListenerHub:
     """Sync psycopg persistent listener hub backed by a single worker thread.
 

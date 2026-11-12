@@ -1,48 +1,82 @@
 """Tests for FastAPI SQLSpec plugin."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Annotated, Any, ClassVar
+
 import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.extensions.fastapi import SQLSpecPlugin
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import TenantContextError
+from sqlspec.extensions.fastapi import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
+from sqlspec.utils.tenant import TenantContext
 
 
 def test_provide_session_method_exists() -> None:
-    """Test that provide_session() method exists (not session_dependency())."""
-    sqlspec = SQLSpec()
+    """Verify provide_session() method exists without legacy session_dependency()."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    sqlspec.add_config(config)
+    plugin = SQLSpecPlugin(config)
 
-    plugin = SQLSpecPlugin(sqlspec)
-
-    # Should have provide_session method
     assert hasattr(plugin, "provide_session")
     assert callable(plugin.provide_session)
-
-    # Should NOT have old method names from incorrect documentation
     assert not hasattr(plugin, "session_dependency")
 
 
 def test_provide_connection_method_exists() -> None:
-    """Test that provide_connection() method exists (not connection_dependency())."""
-    sqlspec = SQLSpec()
+    """Verify provide_connection() method exists without legacy connection_dependency()."""
     config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    sqlspec.add_config(config)
+    plugin = SQLSpecPlugin(config)
 
-    plugin = SQLSpecPlugin(sqlspec)
-
-    # Should have provide_connection method
     assert hasattr(plugin, "provide_connection")
     assert callable(plugin.provide_connection)
-
-    # Should NOT have old method names from incorrect documentation
     assert not hasattr(plugin, "connection_dependency")
+
+
+def test_plugin_direct_config_sequences_and_get_config() -> None:
+    """SQLSpecPlugin accepts SQLSpec, single configs, and config sequences cleanly."""
+    auth_cfg = AiosqliteConfig(
+        bind_key="auth",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "fastapi": {"session_key": "auth_session", "connection_key": "auth_conn", "pool_key": "auth_pool"}
+        },
+    )
+    sync_cfg = SqliteConfig(
+        bind_key="reporting",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "fastapi": {"session_key": "report_session", "connection_key": "report_conn", "pool_key": "report_pool"}
+        },
+    )
+
+    single = SQLSpecPlugin(auth_cfg)
+    assert isinstance(single.sqlspec, SQLSpec)
+    assert single.config == [auth_cfg]
+    assert single.get_config() is auth_cfg
+    assert single.get_config(AiosqliteConfig) is auth_cfg
+    assert single.get_config(auth_cfg) is auth_cfg
+    assert single.get_config("auth") is auth_cfg
+    assert single.get_config("auth_session") is auth_cfg
+
+    multi = SQLSpecPlugin([auth_cfg, sync_cfg])
+    assert multi.config == [auth_cfg, sync_cfg]
+    assert multi.get_config(AiosqliteConfig) is auth_cfg
+    assert multi.get_config(SqliteConfig) is sync_cfg
+    assert multi.get_config("reporting") is sync_cfg
+    with pytest.raises(KeyError, match="Multiple database configurations"):
+        multi.get_config()
+
+    empty = SQLSpecPlugin(SQLSpec())
+    with pytest.raises(KeyError, match="No database configurations"):
+        empty.get_config()
 
 
 def test_uses_default_session_key() -> None:
@@ -149,3 +183,143 @@ def test_provide_session_works_in_route() -> None:
         response = client.get("/test")
         assert response.status_code == 200
         assert response.json() == {"value": 1}
+
+
+class _TenantConn:
+    def __init__(self, tenant_id: str | None, variables: dict[str, str]) -> None:
+        self.tenant_id = tenant_id
+        self.variables = variables
+        self.commits: list[str | None] = []
+        self.rollbacks: list[str | None] = []
+
+    async def commit(self) -> None:
+        self.commits.append(self.tenant_id)
+
+    async def rollback(self) -> None:
+        self.rollbacks.append(self.tenant_id)
+
+
+class _TenantDriver:
+    def __init__(self, connection: _TenantConn, **_kwargs: Any) -> None:
+        self.connection = connection
+
+
+def _make_deferred_tenant_config(checkouts: list[_TenantConn]) -> AiosqliteConfig:
+    class _DeferredTenantConfig(AiosqliteConfig):
+        driver_type: ClassVar[type[Any]] = _TenantDriver
+
+        async def create_pool(self) -> Any:
+            return object()
+
+        async def close_pool(self) -> None:
+            return None
+
+        @asynccontextmanager
+        async def provide_connection(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+            payload = TenantContext.get()
+            if payload is None:
+                raise TenantContextError("Tenant context required")
+            conn = _TenantConn(payload.tenant_id, dict(payload.variables))
+            checkouts.append(conn)
+            yield conn
+
+    cfg = _DeferredTenantConfig(
+        bind_key="tenant_db",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "fastapi": {
+                "session_key": "tenant_session",
+                "connection_key": "tenant_conn",
+                "pool_key": "tenant_pool",
+                "commit_mode": "autocommit",
+                "enable_correlation_middleware": False,
+                "enable_sqlcommenter_middleware": False,
+            }
+        },
+    )
+    cfg.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
+    return cfg
+
+
+def test_fastapi_deferred_tenant_depends_skips_public_routes_and_handles_transactions() -> None:
+    """Deferred tenant leases acquire lazily after auth Depends() without blocking /docs or /health."""
+    checkouts: list[_TenantConn] = []
+    auth_cfg = AiosqliteConfig(
+        bind_key="auth",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "fastapi": {
+                "session_key": "auth_session",
+                "connection_key": "auth_conn",
+                "pool_key": "auth_pool",
+                "enable_correlation_middleware": False,
+                "enable_sqlcommenter_middleware": False,
+            }
+        },
+    )
+    tenant_cfg = _make_deferred_tenant_config(checkouts)
+    app = FastAPI()
+    plugin = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
+
+    async def bind_tenant(
+        request: Request, org_id: str, auth_db: Annotated[Any, Depends(plugin.provide_session(auth_cfg))]
+    ) -> str:
+        probe = await auth_db.execute("SELECT 1 AS ok")
+        assert probe.scalar() == 1
+        token = request.headers.get("authorization")
+        if token != "Bearer valid":
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if org_id not in {"acme", "globex"}:
+            raise HTTPException(status_code=403, detail="Forbidden tenant")
+        set_request_tenant(request, org_id, variables={"region": "eu"})
+        return org_id
+
+    @app.get("/health")
+    async def health() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/orgs/{org_id}/projects")
+    async def list_projects(
+        _org_id: Annotated[str, Depends(bind_tenant)],
+        db: Annotated[_TenantDriver, Depends(plugin.provide_session(tenant_cfg))],
+        conn: Annotated[_TenantConn, Depends(plugin.provide_connection("tenant_session"))],
+    ) -> dict[str, Any]:
+        assert db.connection is conn
+        return {"tenant": db.connection.tenant_id, "variables": db.connection.variables}
+
+    @app.post("/orgs/{org_id}/fail")
+    async def fail_write(
+        _org_id: Annotated[str, Depends(bind_tenant)],
+        _db: Annotated[_TenantDriver, Depends(plugin.provide_session(tenant_cfg))],
+    ) -> None:
+        raise RuntimeError("write failure")
+
+    @app.get("/unguarded")
+    async def unguarded(_db: Annotated[_TenantDriver, Depends(plugin.provide_session(tenant_cfg))]) -> dict[str, str]:
+        return {"status": "unexpected"}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/health").json() == {"ok": True}
+        assert client.get("/openapi.json").status_code == 200
+        assert client.get("/docs").status_code == 200
+        assert client.get("/orgs/acme/projects").status_code == 401
+        assert client.get("/orgs/evil/projects", headers={"authorization": "Bearer valid"}).status_code == 403
+        assert checkouts == []
+
+        ok = client.get("/orgs/globex/projects", headers={"authorization": "Bearer valid"})
+        assert ok.status_code == 200
+        assert ok.json() == {"tenant": "globex", "variables": {"region": "eu"}}
+        assert len(checkouts) == 1
+        assert checkouts[0].commits == ["globex"]
+        assert checkouts[0].rollbacks == []
+
+        failed = client.post("/orgs/acme/fail", headers={"authorization": "Bearer valid"})
+        assert failed.status_code == 500
+        assert len(checkouts) == 2
+        assert checkouts[1].commits == []
+        assert checkouts[1].rollbacks == ["acme"]
+
+    with TestClient(app, raise_server_exceptions=True) as strict_client, pytest.raises(TenantContextError):
+        strict_client.get("/unguarded")
+    assert len(checkouts) == 2
+    assert TenantContext.get() is None

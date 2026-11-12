@@ -47,7 +47,16 @@ nav = [
     { "Recipes" = [
       "learn/recipes/index.md",
       { "Service Layer" = "learn/recipes/service-layer.md" },
-      { "Multi-Tenancy" = "learn/recipes/multi-tenancy.md" },
+      { "Multi-Tenancy" = [
+        "learn/recipes/multi-tenancy.md",
+        { "Request Contract" = "learn/recipes/multi-tenancy-frameworks.md" },
+        { "Litestar" = "learn/recipes/multi-tenancy-litestar.md" },
+        { "FastAPI" = "learn/recipes/multi-tenancy-fastapi.md" },
+        { "Starlette" = "learn/recipes/multi-tenancy-starlette.md" },
+        { "Flask" = "learn/recipes/multi-tenancy-flask.md" },
+        { "Sanic" = "learn/recipes/multi-tenancy-sanic.md" },
+        { "Operations" = "learn/recipes/multi-tenancy-operations.md" },
+      ] },
       { "Health Checks" = "learn/recipes/health-checks.md" },
       { "ETL & Bulk Ingest" = "learn/recipes/etl-and-bulk-ingest.md" },
     ] },
@@ -150,6 +159,7 @@ nav = [
       { "Service Layer" = "reference/service.md" },
       { "Dialects" = "reference/dialects.md" },
       { "Utilities" = "reference/utils.md" },
+      { "Tenant APIs" = "reference/tenant.md" },
     ] },
     { "Extensions" = [
       "reference/extensions/index.md",
@@ -211,6 +221,7 @@ features = [
   "content.tabs.link",
   "navigation.indexes",
   "navigation.path",
+  "navigation.prune",
   "navigation.sections",
   "navigation.tabs",
   "navigation.top",

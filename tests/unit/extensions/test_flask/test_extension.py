@@ -2,6 +2,7 @@
 """Tests for Flask SQLSpec plugin lifecycle and configuration."""
 
 import tempfile
+from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -11,11 +12,16 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin
+from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
+from sqlspec.utils.portal import PortalProvider
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from tests.unit.extensions._tenant_configs import SyncRecordingStrategy, TenantSqliteConfig
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from sqlspec.config import DatabaseConfigProtocol
 
 pytest.importorskip("flask")
@@ -156,3 +162,275 @@ def test_config_state_by_key_unknown_key_raises_improper_configuration_error() -
     plugin = SQLSpecPlugin(SQLSpec())
     with pytest.raises(ImproperConfigurationError, match="No configuration found for key: missing"):
         plugin._config_state_by_key("missing")
+
+
+class _AsyncExtractorCallable:
+    async def __call__(self) -> str:
+        return "a"
+
+
+@pytest.mark.parametrize("invalid", ["async_fn", "async_callable", "non_callable"])
+def test_flask_rejects_invalid_tenant_extractors(invalid: str) -> None:
+    async def async_extractor() -> str:
+        return "a"
+
+    extractor: Any = (
+        async_extractor
+        if invalid == "async_fn"
+        else _AsyncExtractorCallable()
+        if invalid == "async_callable"
+        else "untrusted"
+    )
+    cfg = TenantSqliteConfig(
+        connection_config={"database": ":memory:"},
+        driver_features={"tenant_strategy": SyncRecordingStrategy()},
+        extension_config={"flask": {"tenant_extractor": extractor}},
+    )
+    with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
+        SQLSpecPlugin(cfg, Flask(__name__))
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_flask_defers_tenant_connection_and_supports_set_request_tenant(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    seen: list[tuple[str, TenantContextPayload | None]] = []
+
+    @contextmanager
+    def sync_conn(self: Any, pool: Any = None) -> "Iterator[object]":
+        seen.append(("enter", TenantContext.get()))
+        try:
+            yield self.create_connection()
+        finally:
+            seen.append(("exit", TenantContext.get()))
+
+    @asynccontextmanager
+    async def async_conn(self: Any, pool: Any = None) -> "AsyncIterator[object]":
+        seen.append(("enter", TenantContext.get()))
+        conn = await self.create_connection()
+        try:
+            yield conn
+        finally:
+            seen.append(("exit", TenantContext.get()))
+            await conn.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
+        config: Any = (
+            AiosqliteConfig(connection_config={"database": tmp.name})
+            if asynchronous
+            else SqliteConfig(connection_config={"database": ":memory:"})
+        )
+        config.driver_features["tenant_strategy"] = object()
+        monkeypatch.setattr(type(config), "provide_connection", async_conn if asynchronous else sync_conn)
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+        assert plugin.config == [config]
+        assert plugin.get_config() is config
+
+        @app.get("/health")
+        def health() -> str:
+            return "ok"
+
+        @app.get("/projects/<org_id>")
+        def projects(org_id: str) -> str:
+            set_request_tenant(org_id)
+            session = plugin.get_session()
+            if asynchronous:
+                value = cast("PortalProvider", plugin._portal).portal.call(session.select_value, "SELECT 1")
+            else:
+                value = session.select_value("SELECT 1")
+            return f"{org_id}:{value}"
+
+        try:
+            client = app.test_client()
+            assert client.get("/health").status_code == 200
+            assert seen == []
+            resp = client.get("/projects/acme")
+            assert resp.status_code == 200
+            assert resp.get_data(as_text=True) == "acme:1"
+            assert seen == [("enter", TenantContextPayload("acme")), ("exit", TenantContextPayload("acme"))]
+        finally:
+            plugin.shutdown()
+
+
+def test_flask_supports_multi_config_auth_and_deferred_tenant_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_tenant: list[str | None] = []
+    auth_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"session_key": "auth_db", "commit_mode": "autocommit"}},
+    )
+    tenant_cfg = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"session_key": "tenant_db", "commit_mode": "autocommit"}},
+    )
+    tenant_cfg.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
+    original_provide = SqliteConfig.provide_connection
+
+    @contextmanager
+    def tracked_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Iterator[Any]":
+        if self is tenant_cfg:
+            seen_tenant.append(TenantContext.get_tenant_id())
+            conn = self.create_connection()
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+        with original_provide(self, *args, **kwargs) as conn:
+            yield conn
+
+    monkeypatch.setattr(SqliteConfig, "provide_connection", tracked_provide)
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin([auth_cfg, tenant_cfg], app)
+    assert plugin.get_config("auth_db") is auth_cfg
+    assert plugin.get_config("tenant_db") is tenant_cfg
+
+    @app.get("/login")
+    def login() -> str:
+        val = plugin.get_session("auth_db").select_value("SELECT 1")
+        return f"auth:{val}"
+
+    @app.get("/tenant")
+    def tenant_route() -> str:
+        auth_session = plugin.get_session("auth_db")
+        assert auth_session.select_value("SELECT 1") == 1
+        set_request_tenant("globex", key="tenant_db")
+        tenant_session = plugin.get_session(tenant_cfg)
+        return f"tenant:{tenant_session.select_value('SELECT 2')}"
+
+    try:
+        client = app.test_client()
+        assert client.get("/login").get_data(as_text=True) == "auth:1"
+        assert seen_tenant == []
+        assert client.get("/tenant").get_data(as_text=True) == "tenant:2"
+        assert seen_tenant == ["globex"]
+    finally:
+        plugin.shutdown()
+
+
+def test_flask_tenant_resets_after_handler_error_and_short_circuit() -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    spec = SQLSpec()
+    spec.add_config(
+        TenantSqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features={"tenant_strategy": SyncRecordingStrategy()},
+            extension_config={"flask": {"tenant_extractor": lambda req: "a"}},
+        )
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+
+    seen = []
+
+    @app.get("/")
+    def error_handler() -> str:
+        seen.append(TenantContext.get_tenant_id())
+        raise ValueError("handler")
+
+    try:
+        with TenantContext.scope("outer"):
+            assert app.test_client().get("/").status_code == 500
+            assert TenantContext.get_tenant_id() == "outer"
+            assert seen == ["a"]
+    finally:
+        plugin.shutdown()
+    early = Flask("early")
+    early.before_request(lambda: ("denied", 401))
+    plugin = SQLSpecPlugin(spec, early)
+    try:
+        with TenantContext.scope("outer"):
+            assert early.test_client().get("/").status_code == 401
+            assert TenantContext.get_tenant_id() == "outer"
+    finally:
+        plugin.shutdown()
+
+
+def test_flask_extractor_failure_leaves_ambient_context_untouched() -> None:
+    from sqlspec.utils.tenant import TenantContext
+
+    def extractor() -> str:
+        raise KeyError("authentication failed")
+
+    strategy = SyncRecordingStrategy()
+    config = TenantSqliteConfig(
+        connection_config={"database": ":memory:"},
+        driver_features={"tenant_strategy": strategy},
+        extension_config={"flask": {"tenant_extractor": extractor}},
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+    app.add_url_rule("/", view_func=lambda: str(plugin.get_session().select_value("SELECT 1")))
+    try:
+        with TenantContext.scope("outer"):
+            assert app.test_client().get("/").status_code == 500
+            assert TenantContext.get_tenant_id() == "outer"
+        assert strategy.checkouts == []
+    finally:
+        plugin.shutdown()
+
+
+def test_flask_rejects_extractor_with_invalid_request_signature() -> None:
+    def extractor(first: object, second: object) -> str:
+        return "a"
+
+    spec = SQLSpec()
+    spec.add_config(
+        TenantSqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features={"tenant_strategy": SyncRecordingStrategy()},
+            extension_config={"flask": {"tenant_extractor": extractor}},
+        )
+    )
+    with pytest.raises(ImproperConfigurationError, match="zero arguments or one request"):
+        SQLSpecPlugin(spec, Flask(__name__))
+
+
+def test_flask_disabled_injection_needs_no_tenant_extractor() -> None:
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"flask": {"disable_di": True}})
+    config.driver_features["tenant_strategy"] = object()
+    spec.add_config(config)
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(spec, app)
+    app.add_url_rule("/", view_func=lambda: "ok")
+    try:
+        assert app.test_client().get("/").status_code == 200
+    finally:
+        plugin.shutdown()
+
+
+@pytest.mark.parametrize("status", [200, 500])
+def test_flask_autocommit_finishes_connection_only_requests(status: int) -> None:
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as directory:
+        database = f"{directory}/autocommit.db"
+        setup = sqlite3.connect(database)
+        setup.execute("CREATE TABLE items (value INTEGER)")
+        setup.commit()
+        setup.close()
+        config = SqliteConfig(
+            connection_config={"database": database}, extension_config={"flask": {"commit_mode": "autocommit"}}
+        )
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+
+        @app.post("/items")
+        def create_item() -> tuple[str, int]:
+            connection = plugin.get_connection()
+            connection.execute("BEGIN")
+            connection.execute("INSERT INTO items VALUES (1)")
+            return "", status
+
+        try:
+            assert app.test_client().post("/items").status_code == status
+        finally:
+            plugin.shutdown()
+            config.close_pool()
+        reader = sqlite3.connect(database)
+        try:
+            assert reader.execute("SELECT COUNT(*) FROM items").fetchone()[0] == int(status == 200)
+        finally:
+            reader.close()

@@ -5,9 +5,10 @@ connection lifecycle and request-scoped sessions.
 """
 
 from sqlspec.extensions.sanic._state import SanicConfigState
-from sqlspec.extensions.sanic._utils import get_connection_from_request, get_or_create_session
+from sqlspec.extensions.sanic._utils import get_connection_from_request, get_or_create_session, set_request_tenant
 from sqlspec.extensions.sanic.extension import SQLSpecPlugin
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.utils.tenant import tenant_bypass
 
 __all__ = (
     "SQLSpecAsyncService",
@@ -16,4 +17,6 @@ __all__ = (
     "SanicConfigState",
     "get_connection_from_request",
     "get_or_create_session",
+    "set_request_tenant",
+    "tenant_bypass",
 )

@@ -195,10 +195,19 @@ class OracleSyncSessionContext:
     def __enter__(self) -> "OracleSyncDriver":
         driver_cls = _resolve_sync_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = driver_cls(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            try:
+                self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            finally:
+                self._connection = None
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -249,10 +258,21 @@ class OracleAsyncSessionContext:
     async def __aenter__(self) -> "OracleAsyncDriver":
         driver_cls = _resolve_async_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = driver_cls(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            try:
+                await self._release_connection(
+                    self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
+                )
+            finally:
+                self._connection = None
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
