@@ -349,3 +349,12 @@ def test_adbc_teradata_extension_downgrades_skip_tables_already_dropped(monkeypa
     adk_stores[1].drop_tables()
     assert driver.dropped[-2:] == ["ADK_SESSION", "ADK_MEMORY"]
     assert driver.tables == set()
+
+
+@pytest.mark.parametrize("uri", ["postgresql://user:pass@host/db", "sqlite:///:memory:", "duckdb:///:memory:"])
+def test_adbc_litestar_store_rejects_qualified_session_table_outside_teradata(uri: str) -> None:
+    config = AdbcConfig(
+        connection_config={"uri": uri}, extension_config={"litestar": {"session_table": "app.sessions"}}
+    )
+    with pytest.raises(ValueError, match="app.sessions"):
+        AdbcStore(config)

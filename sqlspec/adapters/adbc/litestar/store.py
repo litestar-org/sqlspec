@@ -74,16 +74,27 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect: str | None = None
 
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate bare or schema-qualified session table names for SQL safety."""
-        if "." in table_name:
+    def _ensure_table_name(self, table_name: str) -> None:
+        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
+
+        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
+        """
+        if "." in table_name and self._configured_dialect() == "teradata":
             schema_part, _, table_part = table_name.partition(".")
             if schema_part and table_part and "." not in table_part:
                 BaseSQLSpecStore._ensure_table_name(schema_part)
                 BaseSQLSpecStore._ensure_table_name(table_part)
                 return
         BaseSQLSpecStore._ensure_table_name(table_name)
+
+    def _configured_dialect(self) -> "str | None":
+        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
+        connection_config = getattr(self._config, "connection_config", None)
+        if not isinstance(connection_config, Mapping):
+            return None
+        return resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
