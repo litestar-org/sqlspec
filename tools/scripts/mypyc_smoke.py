@@ -31,7 +31,7 @@ class SmokeImport(NamedTuple):
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
-    SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Teradata"),
+    SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Vantage"),
     SmokeImport("teradata_generators", "sqlspec.dialects.teradata._generators", "teradata_dispatch", True),
     SmokeImport("teradata_dd_config", "sqlspec.data_dictionary.dialects.teradata.config", "TERADATA_CONFIG", True),
     SmokeImport("teradata_core", "sqlspec.adapters.teradata.core", "build_connection_config", True),
