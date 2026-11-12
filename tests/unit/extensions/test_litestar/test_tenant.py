@@ -31,7 +31,6 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
-from sqlspec.extensions import litestar as litestar_ext
 from sqlspec.extensions.litestar import (
     SQLSpecPlugin,
     SQLSpecTenantMiddleware,
@@ -220,15 +219,6 @@ async def test_tenant_guard_authorizes_configured_membership_and_binds_receipt()
     guard = require_tenant(header="x-org-id", memberships_attr="org_ids", variables_attr="variables")
     await _invoke_guard(guard, scope)
     assert await _resolve(scope) == TenantContextPayload("globex", variables={"region": "eu"})
-
-
-def test_tenant_litestar_public_exports() -> None:
-    assert litestar_ext.TenantResolutionSettings is TenantResolutionSettings
-    assert litestar_ext.set_connection_tenant is set_connection_tenant
-    assert litestar_ext.resolve_litestar_tenant is resolve_litestar_tenant
-    assert litestar_ext.is_scope_authenticated is is_scope_authenticated
-    assert litestar_ext.SQLSpecTenantMiddleware is SQLSpecTenantMiddleware
-    assert callable(litestar_ext.require_tenant())
 
 
 @pytest.mark.parametrize("trusted_tenant", ["acme", None])

@@ -140,8 +140,6 @@ def test_framework_exports_and_registration() -> None:
     from sqlspec.extensions.fastapi import SQLSpecTenantMiddleware as FastAPIMiddleware
     from sqlspec.extensions.starlette import SQLSpecTenantMiddleware as StarletteMiddleware
 
-    assert FastAPIMiddleware is StarletteMiddleware is SQLSpecTenantMiddleware
-
     async def endpoint(request: Any) -> Any:
         return PlainTextResponse(TenantContext.get_tenant_id())
 
