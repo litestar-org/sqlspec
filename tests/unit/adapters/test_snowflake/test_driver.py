@@ -318,7 +318,6 @@ def test_dict_cursor_rows_and_async_query_tag_correlation(
             "enable_query_tag_correlation": True,
         },
     )
-    assert driver.driver_features["storage_capabilities"]["partition_strategies"] == ["fixed", "rows_per_chunk"]
     rows = driver.select("SELECT ID, MixedName, PAYLOAD FROM items")
     id_key = "id" if enable_lowercase_column_names else "ID"
     payload_key = "payload" if enable_lowercase_column_names else "PAYLOAD"

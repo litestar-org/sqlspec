@@ -9,7 +9,6 @@ from sqlspec.adapters.snowflake import (
     SnowflakeDriverFeatures,
     SnowflakeExceptionHandler,
     SnowflakePoolParams,
-    SnowflakePoolSessionFactory,
     SnowflakeSyncDataDictionary,
     SnowflakeSyncMigrationTracker,
 )
@@ -67,11 +66,6 @@ See the [Snowflake setup guide](../../databases/snowflake.md) and [Snowflake cat
 ::: sqlspec.adapters.snowflake.SnowflakeSyncDataDictionary
     options:
       heading_level: 3
-      members: false
-
-::: sqlspec.adapters.snowflake.SnowflakePoolSessionFactory
-    options:
-      heading_level: 4
       members: false
 
 ::: sqlspec.adapters.snowflake.SnowflakeSyncMigrationTracker

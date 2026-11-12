@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import apply_driver_features, default_statement_config, normalize_connection_params
@@ -264,40 +264,6 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
         """Return polling and lease defaults suitable for Snowflake warehouses."""
         return EventRuntimeHints(
             poll_interval=2.0, lease_seconds=60, retention_seconds=172_800, select_for_update=False, skip_locked=False
-        )
-
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: Mapping[str, Any] | None = None,
-        driver_features_overrides: Mapping[str, Any] | None = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: dict[str, Any] | MigrationConfig | None = None,
-        extension_config: ExtensionConfigs | None = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: str | None = None,
-        role: str | None = None,
-        warehouse: str | None = None,
-        database: str | None = None,
-        schema: str | None = None,
-        **overrides: Any,
-    ) -> Self:
-        """Create an independent pool configuration with connection and feature overrides."""
-        merged = dict(connection_config_overrides or {})
-        merged.update({
-            key: value
-            for key, value in (("role", role), ("warehouse", warehouse), ("database", database), ("schema", schema))
-            if value is not None
-        })
-        return super().derive_pool(
-            connection_config_overrides=merged,
-            driver_features_overrides=driver_features_overrides,
-            statement_config=statement_config,
-            migration_config=migration_config,
-            extension_config=extension_config,
-            observability_config=observability_config,
-            bind_key=bind_key,
-            **overrides,
         )
 
     def get_signature_namespace(self) -> dict[str, Any]:

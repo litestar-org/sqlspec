@@ -29,3 +29,9 @@ def store_config(
 
     monkeypatch.setattr(SnowflakeConfig, "provide_session", provide_session)
     return config, driver
+
+
+def storage_driver_features(**features: Any) -> dict[str, Any]:
+    """Return driver features carrying the storage capabilities a Snowflake config seeds."""
+    capabilities = SnowflakeConfig(connection_config={"account": "acct"}).storage_capabilities()
+    return {"storage_capabilities": capabilities, **features}

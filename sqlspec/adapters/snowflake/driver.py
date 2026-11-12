@@ -216,18 +216,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-        features = dict(driver_features or {})
-        features.setdefault(
-            "storage_capabilities",
-            {
-                "arrow_export_enabled": True,
-                "arrow_import_enabled": True,
-                "parquet_export_enabled": True,
-                "parquet_import_enabled": True,
-                "partition_strategies": ["fixed", "rows_per_chunk"],
-            },
-        )
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SnowflakeSyncDataDictionary | None = None
         self._active_stream_cursors: dict[int, Any] = {}
         self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
