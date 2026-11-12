@@ -1,6 +1,6 @@
 # Teradata Vantage
 
-Use `TeradataConfig` to connect synchronously to Teradata Vantage through `teradatasql`. The adapter uses `?` parameter markers, a bounded connection pool, and the `teradata` SQL dialect. The alias `vantage` selects the same dialect.
+Use `TeradataConfig` to connect synchronously to Teradata Vantage through `teradatasql`. The adapter uses `?` parameter markers, a bounded connection pool, and SQLSpec's Teradata SQL dialect. SQLSpec registers that dialect with sqlglot as `vantage` and maps `teradata` to it in its own builders and statement configs, so sqlglot's built-in `teradata` dialect stays unchanged for other libraries.
 
 ## Install and connect
 

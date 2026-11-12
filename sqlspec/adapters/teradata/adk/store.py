@@ -1027,4 +1027,4 @@ def _transaction(config: "TeradataConfig") -> Iterator[tuple[Any, Any]]:
 
 def _schema_target(table_name: str, ddl: str) -> SchemaTarget:
     schema, table = split_schema_and_table(table_name)
-    return SchemaTarget.from_ddl(table, ddl, schema=schema, dialect="teradata")
+    return SchemaTarget.from_ddl(table, ddl, schema=schema, dialect="vantage")

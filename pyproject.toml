@@ -162,7 +162,7 @@ spangres = "sqlspec.dialects.spanner:Spangres"
 spanner = "sqlspec.dialects.spanner:Spanner"
 sqlanywhere = "sqlspec.dialects.sybase:SQLAnywhere"
 sybase = "sqlspec.dialects.sybase:Sybase"
-teradata = "sqlspec.dialects.teradata:Teradata"
+vantage = "sqlspec.dialects.teradata:Vantage"
 
 [tool.uv]
 exclude-newer = "7 days"

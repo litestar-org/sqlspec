@@ -80,7 +80,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
 
     def _schema_target(self) -> SchemaTarget:
         schema, table = split_schema_and_table(self._table_name)
-        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
+        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="vantage")
 
     def get_companion_indexes(self) -> list[CompanionIndex]:
         schema, table = split_schema_and_table(self._table_name)

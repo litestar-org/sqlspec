@@ -44,7 +44,9 @@ Custom SQLGlot dialect implementations registered automatically via Python entry
 
 ## Teradata Vantage Dialect
 
-::: sqlspec.dialects.teradata.Teradata
+SQLSpec registers its Teradata dialect with sqlglot as `vantage` and leaves sqlglot's built-in `teradata` dialect unchanged. SQLSpec builders, statement configs, and the Teradata adapters resolve `teradata` to `vantage`; call sqlglot with `vantage` directly to get the same output.
+
+::: sqlspec.dialects.teradata.Vantage
     options:
       heading_level: 3
 

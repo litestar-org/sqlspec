@@ -332,3 +332,9 @@ def test_feature_validation_runs_query_band_and_preserves_custom_json_serializer
     assert config.driver_features["enable_lowercase_column_names"] is False
     with pytest.raises(ImproperConfigurationError, match="query band"):
         TeradataConfig(driver_features={"query_band": {"bad;key": "x"}})
+
+
+def test_native_statement_config_uses_vantage_sqlglot_dialect() -> None:
+    from sqlspec.adapters.teradata.core import default_statement_config
+
+    assert default_statement_config.dialect == "vantage"

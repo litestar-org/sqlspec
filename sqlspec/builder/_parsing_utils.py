@@ -104,9 +104,14 @@ _BARE_KEYWORDS: Final[frozenset[str]] = frozenset({
 })
 _PARAMETER_VALIDATOR = ParameterValidator()
 _NON_IDENTIFIER_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\W+")
+_SQLSPEC_DIALECT_MODULES: Final[dict[str, str]] = {
+    "sqlanywhere": "sqlspec.dialects.sybase",
+    "sybase": "sqlspec.dialects.sybase",
+    "vantage": "sqlspec.dialects.teradata",
+}
 _DIALECT_ALIASES: Final[dict[str, str]] = {
     "ase": "sybase",
-    "vantage": "teradata",
+    "teradata": "vantage",
     "cockroach": "postgres",
     "cockroachdb": "postgres",
     "mariadb": "mysql",
@@ -842,13 +847,12 @@ def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None
 
 
 def _ensure_sqlspec_dialects_loaded(dialect_name: str) -> None:
-    """Load SQLSpec overlays before SQLGlot resolves built-in dialect names."""
-    classes = Dialect._classes
-    if dialect_name == "teradata":
-        module = importlib.import_module("sqlspec.dialects.teradata")
-        classes["teradata"] = module.Teradata
-    elif dialect_name in {"sybase", "sqlanywhere"} and dialect_name not in classes:
-        importlib.import_module("sqlspec.dialects.sybase")
+    """Register SQLSpec dialects that sqlglot does not ship before resolving their names."""
+    if dialect_name in Dialect.classes:
+        return
+    module_name = _SQLSPEC_DIALECT_MODULES.get(dialect_name)
+    if module_name is not None:
+        importlib.import_module(module_name)
 
 
 def _normalize_dialect(dialect: "DialectType | None") -> str | None:

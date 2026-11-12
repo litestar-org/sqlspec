@@ -6,6 +6,7 @@ from logging import Logger
 from typing import Any, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.dialects.teradata import Vantage as _VantageDialect
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -120,7 +121,7 @@ def build_profile() -> DriverParameterProfile:
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={bool: int, bytearray: bytes, memoryview: bytes, **build_uuid_coercions()},
-        default_dialect="teradata",
+        default_dialect="vantage",
     )
 
 
@@ -130,7 +131,7 @@ def build_statement_config(
     """Build the Teradata statement configuration."""
     return build_statement_config_from_profile(
         driver_profile,
-        statement_overrides={"dialect": "teradata"},
+        statement_overrides={"dialect": "vantage"},
         json_serializer=json_serializer or to_json,
         json_deserializer=json_deserializer or from_json,
     )
@@ -372,4 +373,5 @@ def create_mapped_exception(error: BaseException, *, logger: Logger | None = Non
 
 
 driver_profile = build_profile()
+_ = _VantageDialect
 default_statement_config = build_statement_config()

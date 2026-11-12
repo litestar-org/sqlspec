@@ -3,6 +3,7 @@
 import contextlib
 import datetime as dt
 import decimal
+import importlib
 import re
 import tempfile
 from collections.abc import Mapping, Sized
@@ -744,8 +745,6 @@ def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", state
     hint = connection_config.get("adbc_dialect")
     if isinstance(hint, str) and hint.strip():
         normalized_hint = normalize_dialect_name(hint.strip())
-        if normalized_hint == "teradata":
-            import_optional("sqlspec.dialects.teradata")
         return normalized_hint if normalized_hint in RECONCILE_ADBC_DIALECTS else None
 
     backend = connection_config.get("gizmosql_backend")
@@ -784,16 +783,12 @@ def resolve_reconcile_adbc_dialect(connection_config: "Mapping[str, Any]", state
     if driver_kind not in {"flightsql", "grpc"}:
         resolved = normalize_dialect_name(resolve_dialect_from_config(connection_config))
         if resolved in RECONCILE_ADBC_DIALECTS and resolved != "sqlite":
-            if resolved == "teradata":
-                import_optional("sqlspec.dialects.teradata")
             return resolved
         return None
 
     if isinstance(statement_dialect, str) and statement_dialect.strip():
         normalized_statement = normalize_dialect_name(statement_dialect.strip())
         if normalized_statement in RECONCILE_ADBC_DIALECTS and normalized_statement != "sqlite":
-            if normalized_statement == "teradata":
-                import_optional("sqlspec.dialects.teradata")
             return normalized_statement
 
     return None
@@ -1151,8 +1146,6 @@ def build_profile() -> "DriverParameterProfile":
 def get_statement_config(detected_dialect: str) -> StatementConfig:
     """Create statement configuration for the specified dialect."""
     detected_dialect = "teradata" if detected_dialect == "vantage" else detected_dialect
-    if detected_dialect == "teradata":
-        import_optional("sqlspec.dialects.teradata")
     default_style, supported_styles = DIALECT_PARAMETER_STYLES.get(
         "postgres" if is_postgres_dialect(detected_dialect) else detected_dialect,
         (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
@@ -1162,6 +1155,9 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         sqlglot_dialect = "postgres"
     elif detected_dialect == "mssql":
         sqlglot_dialect = "tsql"
+    elif detected_dialect == "teradata":
+        importlib.import_module("sqlspec.dialects.teradata")
+        sqlglot_dialect = "vantage"
     else:
         sqlglot_dialect = detected_dialect
     profile = driver_profile

@@ -18,17 +18,17 @@ from sqlglot import parse_one, transpile
     ],
 )
 def test_teradata_generation(source: str, expected: str) -> None:
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
-    assert transpile(source, write=Teradata)[0] == expected
+    assert transpile(source, write=Vantage)[0] == expected
 
 
 def test_teradata_pagination_preserves_ast() -> None:
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
     node = parse_one("SELECT DISTINCT id FROM users ORDER BY id LIMIT 5 OFFSET 10")
     original = node.copy()
-    rendered = node.sql(dialect=Teradata)
+    rendered = node.sql(dialect=Vantage)
     assert node == original
     assert (
         rendered
@@ -53,16 +53,16 @@ def test_teradata_pagination_preserves_ast() -> None:
     ],
 )
 def test_teradata_types_and_set_pagination(source: str, expected: str) -> None:
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
-    assert transpile(source, write=Teradata)[0] == expected
+    assert transpile(source, write=Vantage)[0] == expected
 
 
 def test_teradata_native_byte_types() -> None:
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
     assert (
-        transpile("SELECT CAST(x AS BYTEINT), CAST(y AS VARBYTE(12))", read=Teradata, write=Teradata)[0]
+        transpile("SELECT CAST(x AS BYTEINT), CAST(y AS VARBYTE(12))", read=Vantage, write=Vantage)[0]
         == "SELECT CAST(x AS BYTEINT), CAST(y AS VARBYTE(12))"
     )
 
@@ -99,32 +99,36 @@ def test_teradata_native_byte_types() -> None:
     ],
 )
 def test_teradata_set_limits_and_fetch(source: str, expected: str) -> None:
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
     node = parse_one(source)
     original = node.copy()
-    assert node.sql(dialect=Teradata) == expected
+    assert node.sql(dialect=Vantage) == expected
     assert node == original
 
 
 def test_teradata_stock_dialect_isolation() -> None:
+    from sqlglot.dialects.dialect import Dialect
     from sqlglot.dialects.teradata import Teradata as StockTeradata
     from sqlglot.generators.teradata import TeradataGenerator
 
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
     transforms_before = dict(TeradataGenerator.TRANSFORMS)
     type_mapping_before = dict(TeradataGenerator.TYPE_MAPPING)
 
-    assert transpile("SELECT CAST(x AS BOOLEAN)", write=Teradata)[0] == "SELECT CAST(x AS BYTEINT)"
+    assert transpile("SELECT CAST(x AS BOOLEAN)", write=Vantage)[0] == "SELECT CAST(x AS BYTEINT)"
     assert (
-        transpile("SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 20", write=Teradata)[0]
+        transpile("SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 20", write=Vantage)[0]
         == "SELECT id FROM users QUALIFY ROW_NUMBER() OVER (ORDER BY id) BETWEEN 21 AND 30"
     )
 
     assert TeradataGenerator.TRANSFORMS == transforms_before
     assert TeradataGenerator.TYPE_MAPPING == type_mapping_before
+    assert Dialect.get("teradata") is StockTeradata
+    assert Dialect.get("vantage") is Vantage
     assert transpile("SELECT CAST(x AS BOOLEAN)", write=StockTeradata)[0] == "SELECT CAST(x AS BOOLEAN)"
+    assert transpile("SELECT CAST(x AS BOOLEAN)", write="teradata")[0] == "SELECT CAST(x AS BOOLEAN)"
     assert transpile("SELECT CAST(x AS BOOLEAN)", write="postgres")[0] == "SELECT CAST(x AS BOOLEAN)"
     assert (
         transpile("SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 20", write="postgres")[0]

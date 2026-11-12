@@ -134,7 +134,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
     def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         builder = cast("QueryBuilder", self)
-        is_teradata = builder.dialect_name == "teradata"
+        is_teradata = builder.dialect_name == "vantage"
         source_expr: exp.Expr
         unwrapped_source = unwrap_expression_source(source, builder=cast("SQLBuilderProtocol", self))
         if isinstance(source, str):
@@ -240,7 +240,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
             return self._create_oracle_json_source(data, columns, alias)
-        if dialect == "teradata":
+        if dialect == "vantage":
             return self._create_teradata_select_source(data, alias)
         if dialect == "db2":
             return self._create_db2_select_source(data, columns, is_list, alias)
@@ -442,7 +442,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     for row, resolved_row in zip(rows, resolved_rows, strict=True)
                     if resolved_row[index] is None
                 ]),
-                dialect="teradata",
+                dialect="vantage",
             )
             for index, column in enumerate(columns)
         }
@@ -806,7 +806,7 @@ class Merge(
             if not copy:
                 expression = expression.copy()
             self._move_oracle_when_conditions_on_expr(expression)
-        elif resolved_dialect == "teradata":
+        elif resolved_dialect == "vantage":
             if not copy:
                 expression = expression.copy()
             self._ensure_teradata_using_alias_on_expr(expression)

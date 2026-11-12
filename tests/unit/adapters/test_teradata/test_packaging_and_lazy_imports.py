@@ -50,8 +50,8 @@ def test_dialect_entry_point_loads_without_teradatasql(monkeypatch: pytest.Monke
     from sqlspec import sql
     from sqlspec.data_dictionary import get_dialect_config
 
-    dialect = EntryPoint(name="teradata", value="sqlspec.dialects.teradata:Teradata", group="sqlglot.dialects").load()
-    assert dialect.__name__ == "Teradata"
+    dialect = EntryPoint(name="vantage", value="sqlspec.dialects.teradata:Vantage", group="sqlglot.dialects").load()
+    assert dialect.__name__ == "Vantage"
     result = sql.select("id").from_("orders").order_by("id").limit(5).offset(10).build(dialect="teradata")
     assert "BETWEEN 11 AND 15" in result.sql
     assert get_dialect_config("vantage").name == "teradata"

@@ -1192,3 +1192,13 @@ def test_resolve_reconcile_adbc_dialect_normalizes_vantage() -> None:
     assert (
         resolve_reconcile_adbc_dialect({"driver": "flightsql", "uri": "grpc+tls://host:443"}, "vantage") == "teradata"
     )
+
+
+@pytest.mark.parametrize("detected", ["teradata", "vantage"])
+def test_teradata_statement_config_uses_vantage_sqlglot_dialect(detected: str) -> None:
+    from sqlglot.dialects.dialect import Dialect
+
+    from sqlspec.adapters.adbc.core import get_statement_config
+
+    assert get_statement_config(detected).dialect == "vantage"
+    assert Dialect.get("vantage") is not None

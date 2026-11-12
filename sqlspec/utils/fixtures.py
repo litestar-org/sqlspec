@@ -723,7 +723,7 @@ def _sqlglot_dialect(dialect: "DialectType", family: str) -> "DialectType":
     """
     if family == "teradata":
         importlib.import_module("sqlspec.dialects.teradata")
-        return "teradata"
+        return "vantage"
     if family in {"postgres", "mysql", "tsql"}:
         return family
     if family in {"sybase", "sqlanywhere"} and family not in Dialect.classes:

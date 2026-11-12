@@ -44,7 +44,7 @@ class TeradataEventQueueStore(BaseEventQueueStore[TeradataConfig]):
     def _schema_target(self) -> SchemaTarget:
         """Build the schema target with the database-qualified queue identity."""
         schema, table = split_schema_and_table(self.table_name)
-        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="teradata")
+        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="vantage")
 
     def _index_existence_target(self) -> "tuple[str | None, str]":
         """Return the catalog database and table used to check for the queue index."""

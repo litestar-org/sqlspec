@@ -194,7 +194,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         "_stream_sources",
         "_transaction_active",
     )
-    dialect = "teradata"
+    dialect = "vantage"
 
     def __init__(
         self,

@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from sqlspec.dialects.postgres import ParadeDB, PGTextSearch, PGVector
     from sqlspec.dialects.spanner import Spangres, Spanner
     from sqlspec.dialects.sybase import SQLAnywhere, Sybase
-    from sqlspec.dialects.teradata import Teradata
+    from sqlspec.dialects.teradata import Vantage
 
-__all__ = ("DB2", "PGTextSearch", "PGVector", "ParadeDB", "SQLAnywhere", "Spangres", "Spanner", "Sybase", "Teradata")
+__all__ = ("DB2", "PGTextSearch", "PGVector", "ParadeDB", "SQLAnywhere", "Spangres", "Spanner", "Sybase", "Vantage")
 
 _DIALECT_MODULES = {
     "DB2": "sqlspec.dialects.db2",
@@ -31,7 +31,7 @@ _DIALECT_MODULES = {
     "Spangres": "sqlspec.dialects.spanner",
     "Spanner": "sqlspec.dialects.spanner",
     "Sybase": "sqlspec.dialects.sybase",
-    "Teradata": "sqlspec.dialects.teradata",
+    "Vantage": "sqlspec.dialects.teradata",
 }
 
 
