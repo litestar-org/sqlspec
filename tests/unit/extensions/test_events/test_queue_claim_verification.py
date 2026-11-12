@@ -172,6 +172,5 @@ async def test_async_locked_candidate_verifies_claim_when_rowcount_unreported() 
     )
     queue = AsyncTableEventQueue(cast("Any", config_stub), queue_table=_QUEUE_TABLE)
     claimed = await queue.dequeue("alerts")
-    assert claimed is not None
-    assert claimed.event_id == "evt-locked-1"
+    assert getattr(claimed, "event_id", None) == "evt-locked-1"
     driver.commit.assert_awaited_once()

@@ -13,7 +13,6 @@ from pytest_databases.helpers import get_xdist_worker_num
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.core import StatementConfig
-from tests.fixtures.snowflake import _EmbucketSnowflakeProxyHandler as _EmbucketSnowflakeProxyHandler
 from tests.fixtures.snowflake import _provide_embucket_snowflake_proxy
 
 if TYPE_CHECKING:
