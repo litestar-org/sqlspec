@@ -20,14 +20,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = (
-    "SnowflakeConfig",
-    "SnowflakeConnectionParams",
-    "SnowflakeDriverFeatures",
-    "SnowflakePoolConnectionContext",
-    "SnowflakePoolParams",
-    "SnowflakePoolSessionFactory",
-)
+__all__ = ("SnowflakeConfig", "SnowflakeConnectionParams", "SnowflakeDriverFeatures", "SnowflakePoolParams")
 
 
 class SnowflakeConnectionParams(TypedDict):

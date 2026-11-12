@@ -168,9 +168,10 @@ Pass connection and pool keys in `connection_config`, and feature flags in `driv
 | `enable_lowercase_column_names` | `bool` | - | Lowercase implicitly uppercase result names while preserving mixed-case aliases. |
 | `enable_stage_parquet_load` | `bool` | - | Enable temporary-stage Parquet uploads for large Arrow loads. |
 | `stage_parquet_threshold_rows` | `int` | `1000` | Minimum row count selecting stage-based loads; defaults to `1000`. |
+| `enable_json_deserialization` | `bool` | `True` | Decode VARIANT, OBJECT, and ARRAY result values with `json_deserializer`; defaults to `True`. |
 | `enable_query_tag_correlation` | `bool` | - | Attach statement correlation information to Snowflake query tags. |
 | `enable_events` | `bool` | - | Enable SQLSpec table-backed event channels. |
-| `events_backend` | `str` | - | Event backend used for Snowflake table queues. |
+| `events_backend` | `Literal['poll_queue']` | - | Event backend used for Snowflake table queues (`'poll_queue'`). |
 <!-- GENERATED:END config-table:sqlspec.adapters.snowflake.config.SnowflakeDriverFeatures -->
 
 ## Arrow Streaming and Bulk Loads

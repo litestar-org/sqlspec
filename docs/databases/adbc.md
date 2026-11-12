@@ -198,7 +198,7 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 | --- | --- | --- | --- |
 | `host` | `str` | - | Database server or proxy endpoint hostname (for example Teradata or Snowflake). |
 | `port` | `int or str` | - | Database server endpoint port (for example Teradata `1025` or Snowflake `443`). |
-| `user` | `str` | - | Alias for the Teradata connection username. |
+| `user` | `str` | - | Alias for the connection username on Teradata and Snowflake. |
 | `adbc_dialect` | `str` | - | Explicit database dialect for generic FlightSQL transports. |
 | `uri` | `str` | - | Backend connection URI (such as `postgresql://`, `sqlite://`, `duckdb://`, `grpc+tls://`, `oracle://`, `db2://`, or `quack://`). |
 | `dsn` | `str` | - | Connection string alias normalized to `uri` when `uri` is unset. |
