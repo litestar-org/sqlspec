@@ -203,6 +203,7 @@ class AiosqliteConnectionPool:
     """Multi-connection pool for aiosqlite."""
 
     __slots__ = (
+        "_abandoned_workers",
         "_anchor_connection",
         "_closed_event",
         "_connect_timeout",
@@ -266,6 +267,7 @@ class AiosqliteConnectionPool:
         self._runtime_setup = runtime_setup
 
         self._anchor_connection: sqlite3.Connection | None = None
+        self._abandoned_workers: set[Thread] = set()
         self._connection_registry: dict[str, AiosqlitePoolConnection] = {}
         self._in_flight_creations = 0
         self._warmed = False
@@ -319,12 +321,7 @@ class AiosqliteConnectionPool:
         try:
             connection = await connect_proxy
         except BaseException:
-            with suppress(BaseException):
-                stop_fn = getattr(connect_proxy, "stop", None)
-                if callable(stop_fn):
-                    stop_res = stop_fn()
-                    if isawaitable(stop_res):
-                        await stop_res
+            self._detach_worker(connect_proxy)
             raise
 
         pragma_lines: list[str] = []
@@ -388,8 +385,7 @@ class AiosqliteConnectionPool:
             if self._on_connection_create is not None:
                 await self._on_connection_create(connection)
         except BaseException:
-            with suppress(BaseException):
-                await connection.close()
+            await self._discard_connection(connection)
             raise
 
         return connection
@@ -461,7 +457,12 @@ class AiosqliteConnectionPool:
         return AiosqlitePoolConnectionContext(self)
 
     async def close(self) -> None:
-        """Close the connection pool."""
+        """Close the connection pool and join every worker thread it started.
+
+        Pooled connections are closed, then the worker threads of those connections and of
+        connections whose creation or retirement was interrupted are joined, so no worker
+        delivers a result to the event loop after this coroutine returns.
+        """
         if self.is_closed:
             return
         self._closed_event.set()
@@ -497,19 +498,18 @@ class AiosqliteConnectionPool:
                         connection_id=connections[i].id,
                         error=str(result),
                     )
+            for conn in connections:
+                self._detach_worker(conn.connection)
         if anchor is not None:
             with suppress(Exception):
                 anchor.close()
+        await self._join_abandoned_workers()
 
     def _set_connect_proxy_daemon(self, connect_proxy: Any) -> None:
         """Set daemon mode on aiosqlite worker thread before await."""
         try:
-            if isinstance(connect_proxy, Thread):
-                connect_proxy.daemon = True
-                return
-
-            worker_thread = getattr(connect_proxy, "_thread", None)
-            if isinstance(worker_thread, Thread):
+            worker_thread = _worker_thread(connect_proxy)
+            if worker_thread is not None:
                 worker_thread.daemon = True
         except Exception:
             log_with_context(
@@ -520,6 +520,55 @@ class AiosqliteConnectionPool:
                 pool_id=self._pool_id,
                 database=self._database_name,
             )
+
+    def _detach_worker(self, connection: Any) -> None:
+        """Make sure a connection's worker thread is stopping and keep it until the pool joins it.
+
+        Requests a stop when the connection has not already queued one, without awaiting the
+        result, so the call is safe inside a cancelled task.
+
+        Args:
+            connection: An aiosqlite connection or connection proxy.
+        """
+        worker = _worker_thread(connection)
+        if worker is None or not worker.is_alive():
+            return
+        if getattr(connection, "_running", False):
+            with suppress(Exception):
+                connection.stop()
+        self._abandoned_workers = {thread for thread in self._abandoned_workers if thread.is_alive()}
+        self._abandoned_workers.add(worker)
+
+    async def _discard_connection(self, connection: "AiosqliteConnection") -> None:
+        """Close a connection that never entered the pool and track its worker thread.
+
+        Args:
+            connection: The connection to discard.
+        """
+        try:
+            with suppress(BaseException):
+                await connection.close()
+        finally:
+            self._detach_worker(connection)
+
+    async def _join_abandoned_workers(self) -> None:
+        """Wait for tracked worker threads to exit, bounded by the operation timeout."""
+        workers = [thread for thread in self._abandoned_workers if thread.is_alive()]
+        self._abandoned_workers.clear()
+        if not workers:
+            return
+        await asyncio.to_thread(_join_threads, workers, self._operation_timeout)
+        for worker in workers:
+            if worker.is_alive():
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "pool.close.worker.timeout",
+                    adapter=_ADAPTER_NAME,
+                    pool_id=self._pool_id,
+                    worker=worker.name,
+                    timeout_seconds=self._operation_timeout,
+                )
 
     async def _force_stop_connection(self, connection: AiosqlitePoolConnection, *, reason: str) -> None:
         """Force-stop aiosqlite worker thread when graceful close times out."""
@@ -616,8 +665,7 @@ class AiosqliteConnectionPool:
                         self._anchor_connection = sqlite3.connect(**sqlite_kwargs)
                 self._connection_registry[pool_connection.id] = pool_connection
         except BaseException:
-            with suppress(BaseException):
-                await connection.close()
+            await self._discard_connection(connection)
             raise
 
         return pool_connection
@@ -689,6 +737,8 @@ class AiosqliteConnectionPool:
                 timeout_seconds=self._operation_timeout,
             )
             await self._force_stop_connection(connection, reason="retire_close_timeout")
+        finally:
+            self._detach_worker(connection.connection)
 
     async def _try_provision_new_connection(self) -> "AiosqlitePoolConnection | None":
         """Try to create a new connection if under capacity.
@@ -872,6 +922,21 @@ class AiosqliteConnectionPool:
                 return new_connection
 
         return await self._wait_for_healthy_connection()
+
+
+def _worker_thread(connection: Any) -> "Thread | None":
+    """Return the worker thread behind an aiosqlite connection or connection proxy."""
+    if isinstance(connection, Thread):
+        return connection
+    worker = getattr(connection, "_thread", None)
+    return worker if isinstance(worker, Thread) else None
+
+
+def _join_threads(threads: "list[Thread]", timeout: float) -> None:
+    """Join threads until they exit or the shared timeout elapses."""
+    deadline = time.monotonic() + timeout
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
 
 
 async def _attempt_wal_switch(connection: "AiosqliteConnection", attempt: int) -> bool:
