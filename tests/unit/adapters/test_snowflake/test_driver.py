@@ -226,3 +226,49 @@ def test_script_parameters_compile_statically_in_configured_modes(snowflake_conn
     assert snowflake_connection.calls[1][0].endswith("INSERT INTO orders VALUES (2)")
     assert [call[1] for call in snowflake_connection.calls] == [None, None]
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+@pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
+def test_execute_many_insert_select_uses_atomic_scalar_bindings(snowflake_connection: Any, paramstyle: str) -> None:
+    from sqlspec.adapters.snowflake.core import build_statement_config
+
+    snowflake_connection.paramstyle = paramstyle
+    driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
+    result = driver.execute_many(
+        "INSERT INTO orders (id, payload) SELECT :id, PARSE_JSON(:payload)",
+        [{"id": 1, "payload": '{"k":1}'}, {"id": 2, "payload": '{"k":2}'}],
+    )
+    assert result.rows_affected == 2
+    assert snowflake_connection.batch_calls == 0
+    assert len(snowflake_connection.committed_rows) == 2
+    assert snowflake_connection.commits == 1
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+@pytest.mark.parametrize("caller_transaction", [False, True])
+def test_execute_many_insert_select_failure_respects_transaction_owner(
+    snowflake_connection: Any, caller_transaction: bool
+) -> None:
+    from snowflake.connector.errors import ProgrammingError
+
+    driver = SnowflakeDriver(snowflake_connection)
+    if caller_transaction:
+        driver.execute("BEGIN")
+    snowflake_connection.fail_on_insert = 2
+    snowflake_connection.failure = ProgrammingError(msg="second row rejected", errno=1003, sqlstate="42000")
+    with pytest.raises(SQLParsingError, match="second row rejected"):
+        driver.execute_many("INSERT INTO orders (id) SELECT :id", [{"id": 1}, {"id": 2}])
+    assert snowflake_connection.committed_rows == []
+    assert snowflake_connection.rollbacks == (0 if caller_transaction else 1)
+    assert len(snowflake_connection.pending_rows) == (1 if caller_transaction else 0)
+    assert snowflake_connection.commits == 0
+    assert all(cursor.closed for cursor in snowflake_connection.cursors)
+
+
+def test_execute_many_values_retains_fast_batch_with_quoted_select_column(snowflake_connection: Any) -> None:
+    result = SnowflakeDriver(snowflake_connection).execute_many(
+        'INSERT INTO orders ("SELECT") VALUES (:id)', [{"id": 1}, {"id": 2}]
+    )
+    assert result.rows_affected == 2
+    assert snowflake_connection.batch_calls == 1
+    assert len(snowflake_connection.calls) == 1

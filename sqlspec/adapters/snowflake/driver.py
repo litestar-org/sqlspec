@@ -53,6 +53,27 @@ __all__ = ("SnowflakeDriver", "SnowflakeExceptionHandler")
 _QUALIFIED_IDENTIFIER_PART = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
 
 
+_INSERT_SOURCE_TOKENS = re.compile(
+    r"'(?:''|\\.|[^'])*'|\"(?:\"\"|[^\"])*\"|\$\$.*?\$\$|--[^\r\n]*|//[^\r\n]*|/\*.*?\*/|(?P<paren>[()])|(?P<source>\b(?:INSERT|SELECT|VALUES)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _insert_uses_select(sql: str) -> bool:
+    depth = 0
+    insert_seen = False
+    for token in _INSERT_SOURCE_TOKENS.finditer(sql):
+        if token.lastgroup == "paren":
+            depth += 1 if token.group() == "(" else -1
+        elif token.lastgroup == "source" and depth == 0:
+            keyword = token.group().upper()
+            if keyword == "INSERT":
+                insert_seen = True
+            elif insert_seen:
+                return keyword == "SELECT"
+    return False
+
+
 def _format_identifier(identifier: str) -> str:
     position = 0
     parts: list[str] = []
@@ -295,14 +316,34 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        """Execute a batch of bound parameter sets."""
+        """Batch VALUES inserts and execute SELECT-source inserts with scalar binds."""
         sql, params = self._compiled_sql(statement, self.statement_config)
         rows = normalize_many_parameters(params, paramstyle=self._binding_mode(statement.statement_config))
-        if rows:
+        affected = 0
+        if rows and _insert_uses_select(sql):
+            owns_transaction = not self._connection_in_transaction()
+            if owns_transaction:
+                self.begin()
+            try:
+                known_count = True
+                for parameters in rows:
+                    self._execute_cursor(cursor, sql, parameters, statement.statement_config)
+                    count = resolve_rowcount(cursor)
+                    known_count = known_count and count >= 0
+                    affected += max(count, 0)
+                if not known_count:
+                    affected = -1
+                if owns_transaction:
+                    self.commit()
+            except BaseException:
+                if owns_transaction:
+                    with contextlib.suppress(Exception):
+                        self.rollback()
+                raise
+        elif rows:
             cursor.executemany(sql, rows)
-        return self.create_execution_result(
-            cursor, rowcount_override=resolve_rowcount(cursor) if rows else 0, is_many_result=True
-        )
+            affected = resolve_rowcount(cursor)
+        return self.create_execution_result(cursor, rowcount_override=affected, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         """Execute hardened Snowflake script splits with a cursor per statement."""

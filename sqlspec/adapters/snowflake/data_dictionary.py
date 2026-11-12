@@ -41,6 +41,7 @@ _SUPPORTED: Final[frozenset[str]] = frozenset({
     "sequences",
     "ddl",
 })
+_DATABASE_QUALIFIED_PARTS: Final = 3
 _DDL_TYPES: Final[dict[str, str]] = {
     "table": "TABLE",
     "base table": "TABLE",
@@ -67,21 +68,27 @@ def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str
     return f"IN SCHEMA {_format_snowflake_identifier(schema_name)}" if schema_name is not None else "IN SCHEMA"
 
 
-def _resolve_snowflake_catalog_scope(schema: str | None, table: str | None) -> tuple[str | None, str | None, str]:
+def _resolve_snowflake_catalog_scope(
+    schema: str | None, table: str | None
+) -> tuple[str | None, str | None, str | None, str]:
     """Resolve exact catalog identity and SHOW scope from the same quoted identifiers."""
     schema_input = schema if schema is not None else SNOWFLAKE_CONFIG.default_schema
     scope = _format_snowflake_show_scope(schema_input, table)
+    database_name = None
     schema_name = None
     if schema_input is not None:
         schema_parts = split_qualified_identifier(_format_snowflake_identifier(schema_input))
         schema_name = schema_parts[-1]
+        if len(schema_parts) > 1:
+            database_name = schema_parts[-2]
     table_name = None
     if table is not None:
         table_parts = split_qualified_identifier(_format_snowflake_identifier(table))
         table_name = table_parts[-1]
         if len(table_parts) > 1:
             schema_name = table_parts[-2]
-    return schema_name, table_name, scope
+            database_name = table_parts[-3] if len(table_parts) >= _DATABASE_QUALIFIED_PARTS else None
+    return database_name, schema_name, table_name, scope
 
 
 def _capability(domain: str) -> MetadataCapability:
@@ -99,7 +106,6 @@ def _capability(domain: str) -> MetadataCapability:
 class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
     """Reflect tables, typed columns, SHOW keys and native GET_DDL definitions."""
 
-    __slots__ = ()
     dialect: ClassVar[str] = "snowflake"
 
     def get_metadata_capabilities(self, driver: Any, domains: Sequence[str] | None = None) -> MetadataCapabilityProfile:
@@ -185,19 +191,26 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         self, driver: Any, table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Read ordered imported-key metadata without KEY_COLUMN_USAGE."""
-        _, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        _, _, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
         rows = driver.select(f"SHOW IMPORTED KEYS {scope}")
         return parse_snowflake_imported_keys(rows, table_name=table_name)
 
     def get_constraints(self, driver: Any, table: str | None = None, schema: str | None = None) -> MetadataResult:
         """Combine catalog constraints with column-ordered SHOW key metadata."""
-        schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        database_name, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
         params: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
         if table_name is not None:
             params["table_name"] = table_name
             operation = "by_table"
-        rows = list(driver.select(self.get_query("constraints", operation), **params))
+        catalog_query = self.get_query("constraints", operation)
+        if database_name is not None:
+            catalog_query = catalog_query.copy(
+                catalog_query.raw_sql.replace(
+                    "information_schema.", f"{quote_identifier(database_name)}.information_schema."
+                )
+            )
+        rows = list(driver.select(catalog_query, **params))
         keys = parse_snowflake_primary_or_unique_keys(
             driver.select(f"SHOW PRIMARY KEYS {scope}"), table_name=table_name
         )

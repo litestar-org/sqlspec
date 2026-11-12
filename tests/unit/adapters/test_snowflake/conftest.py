@@ -36,6 +36,9 @@ class SnowflakeCursorFake:
         elif normalized.startswith(("CREATE ", "ALTER ", "DROP ")):
             self.connection.commit_pending()
         elif normalized.startswith("INSERT "):
+            self.connection.insert_calls += 1
+            if self.connection.fail_on_insert == self.connection.insert_calls:
+                raise self.connection.failure
             self.connection.write_rows([parameters])
         result = self.connection.results.get(sql, self.connection.default_result)
         if result is not None and (
@@ -59,7 +62,7 @@ class SnowflakeCursorFake:
         self.connection.batch_calls += 1
         if self.connection.fail_on_batch == self.connection.batch_calls:
             raise self.connection.failure
-        if self.connection.paramstyle in {"pyformat", "format"} and "VALUES" not in sql.upper():
+        if "VALUES" not in sql.upper():
             from snowflake.connector.errors import InterfaceError
 
             raise InterfaceError(msg="Failed to rewrite multi-row insert")
@@ -114,6 +117,8 @@ class SnowflakeConnectionFake:
         self.pending_rows: list[Any] = []
         self.committed_rows: list[Any] = []
         self.batch_calls = 0
+        self.insert_calls = 0
+        self.fail_on_insert: int | None = None
         self.fail_on_batch: int | None = None
         self.paramstyle = "qmark"
 

@@ -1522,7 +1522,7 @@ class SQL:
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
         logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
         mixed = self._mixed_parameter_inputs()
-        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
+        params = mixed[1] if mixed is not None else self._named_parameters.copy() or self._positional_parameters.copy()
         return self._build_processed_state(
             compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
             execution_parameters=params,
@@ -1608,16 +1608,15 @@ class SQL:
                     return parsed
             except ParseError:
                 pass
-        if state is not Empty:
-            parsed_expr = state.parsed_expression
-            if parsed_expr is not None:
-                return parsed_expr.copy()
-        stmt_expr = self.statement_expression
-        if stmt_expr is not None:
-            return stmt_expr.copy()
-        raw_expr = self._raw_expression
-        if raw_expr is not None:
-            return raw_expr.copy()
+        parsed_expression = state.parsed_expression if state is not Empty else None
+        if parsed_expression is not None:
+            return parsed_expression.copy()
+        statement_expression = self.statement_expression
+        if statement_expression is not None:
+            return statement_expression.copy()
+        raw_expression = self._raw_expression
+        if raw_expression is not None:
+            return raw_expression.copy()
         if not self._statement_config.enable_parsing:
             return self._wrapped_raw_sql_expression(raw_sql)
         try:

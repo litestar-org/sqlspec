@@ -186,6 +186,19 @@ async def test_snowflake_live_extension_stores_round_trip(snowflake_live_connect
         finally:
             if close := getattr(events, "close", None):
                 close()
+        event_ids = channel.publish_many([
+            ("batch_jobs", {"job": 1}, {"source": "test"}),
+            ("batch_jobs", {"job": 2}, {"source": "test"}),
+        ])
+        batch_events = channel.iter_events("batch_jobs", poll_interval=0.01)
+        try:
+            received = [next(batch_events), next(batch_events)]
+            assert {event.event_id for event in received} == set(event_ids)
+            assert sorted(event.payload["job"] for event in received) == [1, 2]
+            assert [event.metadata for event in received] == [{"source": "test"}, {"source": "test"}]
+        finally:
+            if close := getattr(batch_events, "close", None):
+                close()
     finally:
         try:
             with contextlib.suppress(Exception):

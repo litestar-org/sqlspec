@@ -235,3 +235,89 @@ def test_static_feature_flags_need_no_version_query(snowflake_connection: Any) -
     assert dictionary.get_feature_flag(driver, "supports_returning") is False
     assert dictionary.get_feature_flag(driver, "supports_savepoints") is False
     assert snowflake_connection.calls == []
+
+
+@pytest.mark.parametrize(
+    ("table", "schema", "database", "schema_name", "table_name", "scope"),
+    [
+        ("OTHER_DB.SALES.ORDERS", None, "OTHER_DB", "SALES", "ORDERS", 'IN TABLE "OTHER_DB"."SALES"."ORDERS"'),
+        ("ORDERS", "OTHER_DB.SALES", "OTHER_DB", "SALES", "ORDERS", 'IN TABLE "OTHER_DB"."SALES"."ORDERS"'),
+        (None, "OTHER_DB.SALES", "OTHER_DB", "SALES", "ORDERS", 'IN SCHEMA "OTHER_DB"."SALES"'),
+        (
+            '"Other.DB"."Sales.Area"."Order.Items"',
+            "ignored",
+            "Other.DB",
+            "Sales.Area",
+            "Order.Items",
+            'IN TABLE "Other.DB"."Sales.Area"."Order.Items"',
+        ),
+    ],
+)
+def test_cross_database_constraints_keep_catalog_and_show_identity(
+    table: str | None, schema: str | None, database: str, schema_name: str, table_name: str, scope: str
+) -> None:
+    """Cross-database reflection cannot combine current-database rows with remote SHOW keys."""
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.snowflake.data_dictionary import SnowflakeSyncDataDictionary
+    from sqlspec.core import SQL
+
+    expected_from = f'FROM "{database}".information_schema.table_constraints tc'
+    expected_join = f'LEFT JOIN "{database}".information_schema.referential_constraints rc'
+
+    def select(statement: SQL | str, **parameters: Any) -> list[dict[str, Any]]:
+        query = statement.raw_sql if isinstance(statement, SQL) else statement
+        if query.startswith("SHOW PRIMARY KEYS"):
+            return [
+                {
+                    "database_name": database,
+                    "schema_name": schema_name,
+                    "table_name": table_name,
+                    "constraint_name": "PK_ORDERS",
+                    "column_name": "ID",
+                    "key_sequence": 1,
+                }
+            ]
+        if query.startswith("SHOW UNIQUE KEYS"):
+            return []
+        if expected_from in query and expected_join in query:
+            return [
+                {
+                    "catalog_name": database,
+                    "schema_name": schema_name,
+                    "table_name": table_name,
+                    "constraint_name": "CHECK_REMOTE",
+                    "constraint_type": "CHECK",
+                }
+            ]
+        return [
+            {
+                "catalog_name": "CURRENT_DB",
+                "schema_name": schema_name,
+                "table_name": table_name,
+                "constraint_name": "CHECK_CURRENT",
+                "constraint_type": "CHECK",
+            }
+        ]
+
+    driver = Mock()
+    driver.select.side_effect = select
+
+    metadata = SnowflakeSyncDataDictionary().get_constraints(driver, table, schema)
+
+    constraints = cast("tuple[dict[str, Any], ...]", metadata.items)
+    assert [row["constraint_name"] for row in constraints] == ["CHECK_REMOTE", "PK_ORDERS"]
+    assert constraints[0]["catalog_name"] == database
+    assert constraints[1]["database_name"] == database
+    assert constraints[1]["column_names"] == ["ID"]
+    catalog_query = driver.select.call_args_list[0].args[0]
+    query_text = catalog_query.raw_sql if isinstance(catalog_query, SQL) else catalog_query
+    assert expected_from in query_text
+    assert expected_join in query_text
+    assert driver.select.call_args_list[0].kwargs == (
+        {"schema_name": schema_name} if table is None else {"schema_name": schema_name, "table_name": table_name}
+    )
+    assert [call.args[0] for call in driver.select.call_args_list[1:]] == [
+        f"SHOW PRIMARY KEYS {scope}",
+        f"SHOW UNIQUE KEYS {scope}",
+    ]
