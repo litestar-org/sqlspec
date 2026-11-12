@@ -10,11 +10,11 @@ from sqlspec.adapters.teradata._typing import TeradataCursor
 from sqlspec.adapters.teradata.core import (
     TABLE_EXISTS_SQL,
     extract_error_code,
+    format_identifier,
     format_table_ref,
     resolve_rowcount,
     split_schema_and_table,
 )
-from sqlspec.adapters.teradata.core import format_identifier as quote_double_identifier
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
@@ -43,16 +43,19 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
 
     _max_table_name_parts = 2
 
-    def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
-        with self._config.provide_session() as driver:
-            for statement in statements:
-                schema, table = split_schema_and_table(statement.removeprefix("DROP TABLE ").strip())
-                if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
-                    driver.execute(statement)
-                    driver.commit()
-
-    def __init__(self, config: "TeradataConfig") -> None:
-        super().__init__(config)
+    def drop_tables(self) -> None:
+        """Drop existing ADK tables in FK-safe order using catalog guards."""
+        _drop_existing_tables(
+            self._config,
+            (
+                self._metadata_table,
+                self._user_state_table,
+                self._app_state_table,
+                self._events_table,
+                self._session_table,
+            ),
+        )
+        self._log_tables_dropped()
 
     def create_tables(self) -> None:
         """Create ADK tables and indexes using catalog guards and MULTISET DDL."""
@@ -76,7 +79,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new ADK session."""
-        owner_column = f", {quote_double_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_column = f", {format_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
         insert_sql = f"""
         INSERT INTO {format_table_ref(self._session_table)} (
@@ -427,13 +430,10 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
     ) -> "tuple[str, tuple[Any, ...]]":
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
+    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = ()) -> "Any | None":
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
-            row = cursor.fetchone()
-            if commit and getattr(conn, "autocommit", True) is False:
-                conn.commit()
-            return row
+            return cursor.fetchone()
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
@@ -458,18 +458,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
 
     def drop_tables(self) -> None:
         """Drop an existing memory table using a catalog guard."""
-        self._execute_lifecycle_scripts(self._drop_memory_table_sql())
-
-    def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
-        with self._config.provide_session() as driver:
-            for statement in statements:
-                schema, table = split_schema_and_table(statement.removeprefix("DROP TABLE ").strip())
-                if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
-                    driver.execute(statement)
-                    driver.commit()
-
-    def __init__(self, config: "TeradataConfig") -> None:
-        super().__init__(config)
+        _drop_existing_tables(self._config, (self._memory_table,))
 
     def create_tables(self) -> None:
         """Create the memory table and indexes using catalog guards and MULTISET DDL."""
@@ -522,7 +511,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
                 deduped_entries.append(entry)
 
         table_ref = format_table_ref(self._memory_table)
-        owner_column = f", {quote_double_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_column = f", {format_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", ?" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {table_ref} (
@@ -802,7 +791,7 @@ def _metadata_table_ddl(table: str) -> str:
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     columns = re.sub(r"\s+(?:ASC|DESC)\b", "", columns, flags=re.IGNORECASE)
-    return f"CREATE INDEX {quote_double_identifier(index_name)} ({columns}) ON {format_table_ref(table)}"
+    return f"CREATE INDEX {format_identifier(index_name)} ({columns}) ON {format_table_ref(table)}"
 
 
 def _insert_event_sql(table: str) -> str:
@@ -817,12 +806,11 @@ def _insert_event_sql(table: str) -> str:
 def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     columns = (*key_columns, "state")
     source = ", ".join(
-        f"CAST(? AS {'JSON' if col == 'state' else 'VARCHAR(128)'}) AS {quote_double_identifier(col)}"
-        for col in columns
+        f"CAST(? AS {'JSON' if col == 'state' else 'VARCHAR(128)'}) AS {format_identifier(col)}" for col in columns
     )
-    join = " AND ".join(f"t.{quote_double_identifier(col)} = s.{quote_double_identifier(col)}" for col in key_columns)
-    names = ", ".join(quote_double_identifier(col) for col in (*columns, "update_time"))
-    values = ", ".join(f"s.{quote_double_identifier(col)}" for col in columns)
+    join = " AND ".join(f"t.{format_identifier(col)} = s.{format_identifier(col)}" for col in key_columns)
+    names = ", ".join(format_identifier(col) for col in (*columns, "update_time"))
+    values = ", ".join(f"s.{format_identifier(col)}" for col in columns)
     return (
         f"MERGE INTO {format_table_ref(table)} AS t USING (SELECT {source}) AS s ON {join} "
         "WHEN MATCHED THEN UPDATE SET state = s.state, update_time = CURRENT_TIMESTAMP(6) "
@@ -939,13 +927,12 @@ def _json_dict(value: Any) -> "dict[str, Any]":
 
 
 def _is_teradata_table_missing(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return "error 3807" in text or extract_error_code(exc) == TERADATA_TABLE_NOT_FOUND_SQLCODE
+    return extract_error_code(exc) == TERADATA_TABLE_NOT_FOUND_SQLCODE
 
 
 def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     _, table_name = split_schema_and_table(table)
-    return quote_double_identifier(f"{prefix}_{table_name}_{suffix}")
+    return format_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
 def _raise_session_not_found(session_id: str) -> None:
@@ -999,6 +986,16 @@ def _create_missing_table(driver: Any, table_name: str, ddl: str) -> None:
     if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
         driver.execute(ddl)
         driver.commit()
+
+
+def _drop_existing_tables(config: "TeradataConfig", table_names: "Sequence[str]") -> None:
+    """Drop each table that exists in the catalog, committing each DDL step."""
+    with config.provide_session() as driver:
+        for table_name in table_names:
+            schema, table = split_schema_and_table(table_name)
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
+                driver.execute(f"DROP TABLE {format_table_ref(table_name)}")
+                driver.commit()
 
 
 def _create_missing_index(driver: Any, table_name: str, index_name: str, columns: str) -> None:
