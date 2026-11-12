@@ -1264,6 +1264,8 @@ class IndexMetadata(TypedDict, total=False):
     """Single expression for expression-based indexes."""
     expressions: str | None
     """Comma-separated expressions for expression-based indexes."""
+    catalog_name_generated: bool
+    """Whether ``index_name`` was synthesized because the catalog stores no name for the index."""
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

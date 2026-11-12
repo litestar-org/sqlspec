@@ -48,6 +48,16 @@ def _canonical_index_dialect(dialect: str | None) -> str:
     return normalize_dialect_name(mapped)
 
 
+def _teradata_index_column_list(index_meta: Mapping[str, Any]) -> str:
+    """Return the comma-separated key columns used to address an unnamed Teradata index."""
+    cols = index_meta.get("columns") or index_meta.get("column_names") or []
+    if isinstance(cols, str):
+        return cols
+    if isinstance(cols, Sequence):
+        return ", ".join(str(c) for c in cols if c)
+    return ""
+
+
 def filter_droppable_table_indexes(
     indexes: Sequence[Mapping[str, Any]], constraints: Sequence[Mapping[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -112,6 +122,9 @@ def build_drop_index_sql(
         if len(parts) == 1 and resolved_schema:
             parts = (*split_qualified_identifier(resolved_schema), *parts)
         qualified_table = ".".join(quote_identifier(part) for part in parts)
+        if index_meta.get("catalog_name_generated"):
+            column_list = _teradata_index_column_list(index_meta)
+            return f"DROP INDEX ({column_list}) ON {qualified_table}" if column_list else None
         return f"DROP INDEX {quote_identifier(idx_name)} ON {qualified_table}"
     if norm in _SAP_DIALECTS:
         table_parts = split_qualified_identifier(table)
@@ -191,6 +204,8 @@ def build_create_index_sql(
                 parts = (*split_qualified_identifier(resolved_schema), *parts)
             qualified_table = ".".join(quote_identifier(part) for part in parts)
             clean_cols = re.sub(r"\s+(?:ASC|DESC)(?=\s*(?:,|$))", "", col_list, flags=re.IGNORECASE)
+            if index_meta.get("catalog_name_generated"):
+                return f"CREATE {unique_kw}INDEX ({clean_cols}) ON {qualified_table}"
             return f"CREATE {unique_kw}INDEX {quote_identifier(idx_name)} ({clean_cols}) ON {qualified_table}"
         if norm in _SAP_DIALECTS:
             table_parts = split_qualified_identifier(table)
@@ -251,6 +266,7 @@ class SyncWithoutIndexesContext:
             idx_name = str(idx.get("index_name") or idx.get("name") or "").strip()
             if (
                 idx_name
+                and not idx.get("catalog_name_generated")
                 and not (idx.get("definition") or idx.get("native_sql") or idx.get("ddl"))
                 and hasattr(dd, "get_ddl")
             ):
@@ -269,9 +285,20 @@ class SyncWithoutIndexesContext:
             )
             drop_sql = build_drop_index_sql(dialect, idx, table_name, schema=schema_name)
             if drop_sql and create_sql:
-                self._driver.execute(drop_sql)
+                try:
+                    self._driver.execute(drop_sql)
+                except Exception:
+                    self._restore_dropped_indexes()
+                    raise
                 self._rebuild_statements.append(create_sql)
         return self
+
+    def _restore_dropped_indexes(self) -> None:
+        """Recreate indexes dropped before a later drop failed, keeping the original error."""
+        for stmt in self._rebuild_statements:
+            with contextlib.suppress(Exception):
+                self._driver.execute(stmt)
+        self._rebuild_statements.clear()
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -327,6 +354,7 @@ class AsyncWithoutIndexesContext:
             idx_name = str(idx.get("index_name") or idx.get("name") or "").strip()
             if (
                 idx_name
+                and not idx.get("catalog_name_generated")
                 and not (idx.get("definition") or idx.get("native_sql") or idx.get("ddl"))
                 and hasattr(dd, "get_ddl")
             ):
@@ -345,9 +373,20 @@ class AsyncWithoutIndexesContext:
             )
             drop_sql = build_drop_index_sql(dialect, idx, table_name, schema=schema_name)
             if drop_sql and create_sql:
-                await self._driver.execute(drop_sql)
+                try:
+                    await self._driver.execute(drop_sql)
+                except Exception:
+                    await self._restore_dropped_indexes()
+                    raise
                 self._rebuild_statements.append(create_sql)
         return self
+
+    async def _restore_dropped_indexes(self) -> None:
+        """Recreate indexes dropped before a later drop failed, keeping the original error."""
+        for stmt in self._rebuild_statements:
+            with contextlib.suppress(Exception):
+                await self._driver.execute(stmt)
+        self._rebuild_statements.clear()
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

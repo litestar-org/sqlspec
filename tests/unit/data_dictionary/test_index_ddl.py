@@ -235,3 +235,101 @@ async def test_without_indexes_ddl_override_transaction_and_rebuild_error() -> N
         'DROP INDEX IF EXISTS "public"."idx_async_custom"',
         "CREATE INDEX idx_async_custom ON public.orders (customer_id)",
     ]
+
+
+def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_index_by_columns() -> None:
+    """Teradata primary indexes stay in place and unnamed secondary indexes are dropped and rebuilt by columns."""
+    from sqlspec.adapters.teradata.data_dictionary import build_index_metadata
+
+    rows = [
+        {"schema_name": "mart", "table_name": "orders", "index_name": "PI_orders_1", "column_name": "id"}
+        | {"is_unique": 0, "is_primary": 1, "catalog_name_generated": 1},
+        {"schema_name": "mart", "table_name": "orders", "index_name": "IDX_orders_4", "column_name": "region"}
+        | {"is_unique": 0, "is_primary": 0, "catalog_name_generated": 1},
+        {"schema_name": "mart", "table_name": "orders", "index_name": "IDX_orders_4", "column_name": "status"}
+        | {"is_unique": 0, "is_primary": 0, "catalog_name_generated": 1},
+        {"schema_name": "mart", "table_name": "orders", "index_name": "idx_orders_customer", "column_name": "cust"}
+        | {"is_unique": 1, "is_primary": 0, "catalog_name_generated": 0},
+    ]
+    executed: list[str] = []
+
+    class _DD:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> list[Any]:
+            return list(build_index_metadata(rows))
+
+        def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+        def get_ddl(self, _driver: Any, name: str, *, schema: str | None, object_type: str) -> str:
+            raise RuntimeError("no stored text")
+
+    class _Driver:
+        dialect = "teradata"
+        data_dictionary = _DD()
+
+        def is_in_transaction(self) -> bool:
+            return False
+
+        def execute(self, sql: str) -> None:
+            executed.append(sql)
+
+    with SyncWithoutIndexesContext(_Driver(), "mart.orders"):
+        pass
+    assert executed == [
+        'DROP INDEX (region, status) ON "mart"."orders"',
+        'DROP INDEX "idx_orders_customer" ON "mart"."orders"',
+        'CREATE INDEX (region, status) ON "mart"."orders"',
+        'CREATE UNIQUE INDEX "idx_orders_customer" (cust) ON "mart"."orders"',
+    ]
+
+
+@pytest.mark.anyio
+async def test_without_indexes_restores_dropped_indexes_when_a_later_drop_fails() -> None:
+    """A failed drop recreates indexes already dropped by the same context before the error propagates."""
+    indexes = ({"index_name": "idx_a", "columns": ["a"]}, {"index_name": "idx_b", "columns": ["b"]})
+    executed_sync: list[str] = []
+    executed_async: list[str] = []
+
+    class _SyncDD:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            return indexes
+
+        def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _SyncDriver:
+        dialect = "sqlite"
+        data_dictionary = _SyncDD()
+
+        def execute(self, sql: str) -> None:
+            if "idx_b" in sql and sql.startswith("DROP"):
+                raise RuntimeError("drop failed")
+            executed_sync.append(sql)
+
+    with pytest.raises(RuntimeError, match="drop failed"):
+        with SyncWithoutIndexesContext(_SyncDriver(), "orders"):
+            pass
+    assert len(executed_sync) == 2
+    assert executed_sync[0].startswith("DROP INDEX")
+    assert executed_sync[1].startswith("CREATE INDEX") and "idx_a" in executed_sync[1]
+
+    class _AsyncDD:
+        async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            return indexes
+
+        async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _AsyncDriver:
+        dialect = "sqlite"
+        data_dictionary = _AsyncDD()
+
+        async def execute(self, sql: str) -> None:
+            if "idx_b" in sql and sql.startswith("DROP"):
+                raise RuntimeError("drop failed")
+            executed_async.append(sql)
+
+    with pytest.raises(RuntimeError, match="drop failed"):
+        async with AsyncWithoutIndexesContext(_AsyncDriver(), "orders"):
+            pass
+    assert executed_async == executed_sync

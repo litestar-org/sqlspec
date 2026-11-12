@@ -95,6 +95,7 @@ def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadat
                 "columns": [],
                 "is_unique": bool(r.get("is_unique", 0)),
                 "is_primary": bool(r.get("is_primary", 0)),
+                "catalog_name_generated": bool(r.get("catalog_name_generated", 0)),
             }
         col_name = str(r.get("column_name", ""))
         if col_name:
@@ -108,6 +109,7 @@ def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadat
             columns=idx["columns"],
             is_unique=idx["is_unique"],
             is_primary=idx["is_primary"],
+            catalog_name_generated=idx["catalog_name_generated"],
         )
         for idx in indexes_map.values()
     ]
