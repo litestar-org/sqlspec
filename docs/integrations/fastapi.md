@@ -73,7 +73,7 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Tenant-Aware Requests
 
-When a database configuration enables `driver_features={"tenant_strategy": "rls"}` without an upfront `tenant_extractor`, FastAPI defers checking out the tenant connection until an authorization dependency calls `set_request_tenant(request, org_id, key=...)` and a route resolves `Depends(db_ext.provide_session(...))`. Public and login endpoints never acquire a tenant connection and can query user memberships through a separate auth bind or `config.provide_session(bypass_tenant=True)`:
+When a database configuration enables `driver_features={"tenant_strategy": "rls"}` without an upfront `tenant_extractor`, FastAPI defers checking out the tenant connection until an authorization dependency calls `set_request_tenant(request, org_id, key=...)` and a route resolves `Depends(db_ext.provide_session(...))`. Public and login endpoints never acquire a tenant connection and can query user memberships through a separate auth bind or `config.provide_session(bypass_tenant=True)`. The runnable example uses in-memory SQLite, which has no tenant strategy, so it acquires eagerly and shows only the authorization and `set_request_tenant` flow; deferral applies once the tenant bind uses a tenant-enabled adapter such as `AsyncpgConfig(driver_features={"tenant_strategy": "rls"})`:
 
 ```{ .python title="docs/examples/frameworks/fastapi/tenant_setup.py" }
 --8<-- "docs/examples/frameworks/fastapi/tenant_setup.py:example"

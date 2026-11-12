@@ -125,6 +125,11 @@ config = AsyncpgConfig(
 )
 
 
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify the password with the application's password hasher."""
+    ...
+
+
 async def retrieve_user_handler(token: Token, connection: Any) -> User | None:
     async with config.provide_session(bypass_tenant=True) as session:
         return await session.select_one_or_none(
@@ -153,7 +158,7 @@ async def login(
         "SELECT id, password_hash FROM public.users WHERE email = :email",
         email=data.email,
     )
-    if row is None or not row["password_hash"]:
+    if row is None or not verify_password(data.password, row["password_hash"]):
         raise NotAuthorizedException("Invalid credentials")
     return {"access_token": jwt_auth.create_token(identifier=row["id"])}
 
@@ -510,7 +515,11 @@ Each framework exports `set_request_tenant` alongside `SQLSpecPlugin`:
 When authentication middleware runs before SQLSpec and populates `scope["user"]`,
 `g.user`, or `request.ctx.user`, attach a per-bind `tenant_extractor` under
 `extension_config["starlette"]`, `"fastapi"`, `"flask"`, or `"sanic"` to acquire
-leases eagerly whenever a verified tenant is resolved:
+leases eagerly whenever a verified tenant is resolved. The extractor argument
+depends on the framework: Starlette and FastAPI pass the ASGI scope, Flask passes
+the Flask request (or nothing for a zero-argument extractor), and Sanic passes the
+Sanic request. This Starlette example reads `scope["user"]`; a Flask extractor
+reads `g.user` and a Sanic extractor reads `request.ctx.user` instead:
 
 ```python
 from typing import Any

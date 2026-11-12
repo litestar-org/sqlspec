@@ -107,7 +107,7 @@ Enable `driver_features={"tenant_strategy": "rls"}` on supported database adapte
 
 - Mark public or login routes under guarded controllers with `opt={"tenant_bypass": True}`, and query user credentials before a tenant exists with `config.provide_session(bypass_tenant=True)` (database RLS policies remain enforced unless linked to an explicit restricted auth lookup policy or separate auth bind).
 - In custom authorization guards or dependencies, verify membership and bind the selected organization via `set_connection_tenant(connection, org_id)`.
-- Applications using `litestar-security` resolve principals and tenant selections directly from `scope["state"]["security_context"]` (including `Principal.tenant_id`, `tenant_roles`, and `CredentialRestrictions.allowed_tenants`) without extra wiring. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete JWT, server-side session, and `litestar-security` guides.
+- Applications using `litestar-security` resolve tenants directly from the authenticated `scope["user"]` and `scope["auth"]` values (including `AuthorizationSnapshot.tenant_ids`, `tenant_roles`, and `CredentialRestrictions(tenant_ids=...)`) without extra wiring. See [Tenant Framework Integration](../learn/recipes/multi-tenancy-frameworks.md) for complete JWT, server-side session, and `litestar-security` guides.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 
