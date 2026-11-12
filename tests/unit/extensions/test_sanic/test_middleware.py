@@ -2,6 +2,7 @@
 
 from contextlib import AbstractContextManager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -21,6 +22,13 @@ from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 pytestmark = pytest.mark.anyio
 
 
+async def _touch_connections(plugin: Any, request: Any) -> None:
+    """Check out every request connection, as a handler's first database access does."""
+    for state in plugin._config_states:
+        if not state.disable_di:
+            await plugin.get_connection_async(request, state.session_key)
+
+
 async def test_request_middleware_acquires_pooled_connection() -> None:
     """Request middleware should expose pooled connections on request.ctx."""
     connection = _make_connection()
@@ -30,6 +38,8 @@ async def test_request_middleware_acquires_pooled_connection() -> None:
     request = _make_request(pool=pool)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
 
     assert request.ctx.db_connection is connection
     config.provide_connection.assert_called_once_with(pool)
@@ -43,6 +53,8 @@ async def test_manual_response_middleware_cleans_connection_without_transaction(
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
@@ -59,6 +71,8 @@ async def test_autocommit_response_commits_success_status() -> None:
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=201))  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
@@ -73,6 +87,8 @@ async def test_autocommit_response_rolls_back_error_status() -> None:
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=500))  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
@@ -87,6 +103,8 @@ async def test_autocommit_include_redirect_commits_redirect_status() -> None:
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=302))  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
@@ -101,6 +119,8 @@ async def test_non_pooled_response_closes_connection() -> None:
     request = _make_request(pool=None)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
 
     config.create_connection.assert_awaited_once_with()
@@ -118,6 +138,8 @@ async def test_request_middleware_wraps_sync_connection_manager() -> None:
     request = _make_request(pool=object())
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+
+    await _touch_connections(plugin, request)
     await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
 
     assert manager.entered == 1
@@ -376,3 +398,58 @@ async def test_sanic_sync_get_connection_raises_when_tenant_connection_is_deferr
     with pytest.raises(ImproperConfigurationError, match="get_session_async"):
         plugin.get_connection(request)
     await plugin._on_response(request, SimpleNamespace(status=401))  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sanic_request_connection_is_checked_out_on_first_access_only(tmp_path: Any) -> None:
+    import sqlite3
+
+    from sanic import response
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    database = str(tmp_path / "lazy.db")
+    setup = sqlite3.connect(database)
+    setup.execute("CREATE TABLE items (status INTEGER)")
+    setup.commit()
+    setup.close()
+    checkouts: list[int] = []
+
+    class CountingConfig(AiosqliteConfig):
+        def provide_connection(self, *args: Any, **kwargs: Any) -> Any:
+            checkouts.append(1)
+            return super().provide_connection(*args, **kwargs)
+
+    config = CountingConfig(
+        connection_config={"database": database}, extension_config={"sanic": {"commit_mode": "autocommit"}}
+    )
+    app = Sanic(f"SQLSpecLazy{uuid4().hex}")
+    app.config.USE_UVLOOP = False
+    plugin = SQLSpecPlugin(config, app)
+
+    async def nodb(request: Any) -> Any:
+        return response.json({"ok": True})
+
+    async def write(request: Any, status: int) -> Any:
+        session = await plugin.get_session_async(request)
+        await session.begin()
+        await session.execute("INSERT INTO items VALUES (:status)", {"status": status})
+        assert await plugin.get_session_async(request) is session
+        assert await plugin.get_connection_async(request) is session.connection
+        return response.json({"ok": True}, status=status)
+
+    app.add_route(nodb, "/nodb")
+    app.add_route(write, "/write/<status:int>")
+    try:
+        assert app.test_client.get("/nodb")[1].status == 200
+        assert checkouts == []
+        assert app.test_client.get("/write/201")[1].status == 201
+        assert checkouts == [1]
+        assert app.test_client.get("/write/500")[1].status == 500
+        assert checkouts == [1, 1]
+    finally:
+        Sanic.unregister_app(app)
+    reader = sqlite3.connect(database)
+    try:
+        assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
+    finally:
+        reader.close()

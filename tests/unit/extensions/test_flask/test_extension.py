@@ -434,3 +434,56 @@ def test_flask_autocommit_finishes_connection_only_requests(status: int) -> None
             assert reader.execute("SELECT COUNT(*) FROM items").fetchone()[0] == int(status == 200)
         finally:
             reader.close()
+
+
+def test_flask_request_connection_is_checked_out_on_first_access_only() -> None:
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as directory:
+        database = f"{directory}/lazy.db"
+        setup = sqlite3.connect(database)
+        setup.execute("CREATE TABLE items (status INTEGER)")
+        setup.commit()
+        setup.close()
+        checkouts: list[int] = []
+
+        class CountingConfig(SqliteConfig):
+            def provide_connection(self, *args: Any, **kwargs: Any) -> Any:
+                checkouts.append(1)
+                return super().provide_connection(*args, **kwargs)
+
+        config = CountingConfig(
+            connection_config={"database": database}, extension_config={"flask": {"commit_mode": "autocommit"}}
+        )
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+
+        @app.get("/nodb")
+        def nodb() -> str:
+            return "ok"
+
+        @app.get("/write/<int:status>")
+        def write(status: int) -> tuple[str, int]:
+            session = plugin.get_session()
+            session.begin()
+            session.execute("INSERT INTO items VALUES (:status)", {"status": status})
+            assert plugin.get_session() is session
+            assert plugin.get_connection() is session.connection
+            return "", status
+
+        try:
+            client = app.test_client()
+            assert client.get("/nodb").status_code == 200
+            assert checkouts == []
+            assert client.get("/write/201").status_code == 201
+            assert checkouts == [1]
+            assert client.get("/write/500").status_code == 500
+            assert checkouts == [1, 1]
+        finally:
+            plugin.shutdown()
+            config.close_pool()
+        reader = sqlite3.connect(database)
+        try:
+            assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
+        finally:
+            reader.close()

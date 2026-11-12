@@ -374,16 +374,15 @@ class SQLSpecPlugin:
         self._cleanup_registered = True
 
     def _before_request_handler(self) -> None:
-        """Acquire connection before request.
+        """Prepare request-scoped state before the view runs.
 
-        Stores connection in Flask g object for each configured database.
-        Also stores context managers for proper cleanup.
-        Extracts correlation ID if correlation middleware is enabled.
+        Binds the lazy tenant resolver and the correlation and SQLCommenter contexts. Database
+        connections are checked out on first session or connection access, not here.
 
         Note:
             Imports flask components dynamically at runtime to avoid hard dependency.
         """
-        from flask import current_app, g, request
+        from flask import g, request
 
         if self._enable_correlation and self._extractor is not None:
             correlation_id = self._extractor.extract(lambda h: request.headers.get(h))
@@ -407,11 +406,6 @@ class SQLSpecPlugin:
             )
             set_context_value(g, _TENANT_BINDING_KEY, binding)
             set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.bind_request(binding))
-
-        for config_state in self._config_states:
-            if config_state.disable_di or _has_tenant_strategy(config_state.config):
-                continue
-            self._acquire_config_connection(current_app, g, config_state, None, bind_payload=False)
 
     def _after_request_handler(self, response: "Response") -> "Response":
         """Handle transaction after request based on response status.
@@ -592,10 +586,10 @@ class SQLSpecPlugin:
     def _ensure_request_connection(self, config_state: FlaskConfigState) -> Any:
         from flask import current_app, g
 
-        if has_context_value(g, config_state.connection_key):
-            return get_context_value(g, config_state.connection_key)
+        if has_context_value(g, config_state.connection_key) or config_state.disable_di:
+            return get_context_value(g, config_state.connection_key, None)
         if not _has_tenant_strategy(config_state.config):
-            return get_context_value(g, config_state.connection_key)
+            return self._acquire_config_connection(current_app, g, config_state, None, bind_payload=False)
         payload = TenantContext.require(config_state.config)
         return self._acquire_config_connection(current_app, g, config_state, payload, bind_payload=True)
 

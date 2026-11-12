@@ -243,15 +243,16 @@ class SQLSpecPlugin:
         return get_context_value(request.ctx, config_state.connection_key)
 
     async def get_connection_async(self, request: Any, key: Any = None) -> Any:
-        """Get database connection asynchronously, acquiring deferred tenant leases on demand."""
+        """Get the request connection asynchronously, checking it out on first access."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_context_value(request.ctx, config_state.connection_key):
             lock = get_context_value(request.ctx, self._deferred_key(config_state), None)
             if isinstance(lock, asyncio.Lock):
                 async with lock:
                     if not has_context_value(request.ctx, config_state.connection_key):
-                        payload = await TenantContext.arequire(config_state.config)
-                        await self._acquire_request_connection(request, config_state, payload, bind_payload=True)
+                        tenant = _has_tenant_strategy(config_state.config)
+                        payload = await TenantContext.arequire(config_state.config) if tenant else None
+                        await self._acquire_request_connection(request, config_state, payload, bind_payload=tenant)
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
 
@@ -347,15 +348,17 @@ class SQLSpecPlugin:
         config = config_state.config
         if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
             msg = (
-                "Async tenant-scoped Sanic connections are acquired on first use; call "
+                "Async Sanic request connections are acquired on first use; call "
                 "await plugin.get_session_async(request) or await plugin.get_connection_async(request)."
             )
             raise ImproperConfigurationError(msg)
-        payload = TenantContext.require(config)
+        tenant = _has_tenant_strategy(config)
+        payload = TenantContext.require(config) if tenant else None
         payload_key = self._tenant_payload_key(config_state)
-        set_context_value(request.ctx, payload_key, payload)
+        if tenant:
+            set_context_value(request.ctx, payload_key, payload)
         try:
-            with TenantContext.bind(payload):
+            with TenantContext.bind(payload) if tenant else contextlib.nullcontext():
                 if config.supports_connection_pooling:
                     pool = get_context_value(request.app.ctx, config_state.pool_key)
                     cm = cast("AbstractContextManager[Any]", config.provide_connection(pool))
@@ -522,14 +525,13 @@ class SQLSpecPlugin:
                 self._reset_tenant(target_request)
 
     async def _on_request(self, request: Any) -> None:
-        """Acquire request-scoped connections.
+        """Prepare request-scoped state; connections are checked out on first access.
 
         Args:
             request: Sanic request instance.
         """
         self._bind_active_request(request)
         self._set_observability_contexts(request)
-        acquired_states: list[SanicConfigState] = []
         try:
             tenant_keys = tuple(state.config for state in self._config_states if _has_tenant_strategy(state.config))
             if tenant_keys and not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
@@ -541,27 +543,12 @@ class SQLSpecPlugin:
                 )
                 set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.bind_request(binding))
             for config_state in self._config_states:
-                if config_state.disable_di:
-                    continue
-                if _has_tenant_strategy(config_state.config):
+                if not config_state.disable_di:
                     set_context_value(request.ctx, self._deferred_key(config_state), asyncio.Lock())
-                    continue
-                await self._acquire_request_connection(request, config_state)
-                acquired_states.append(config_state)
         except BaseException as exc:
             try:
                 if request is not None and hasattr(request, "ctx"):
                     set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exc)
-                primary_exc: BaseException | None = None
-                for config_state in acquired_states[::-1]:
-                    try:
-                        await self._release_request_connection(request, config_state)
-                    except BaseException as release_exc:
-                        primary_exc = _select_teardown_exception(primary_exc, release_exc)
-                if primary_exc is not None:
-                    if not isinstance(exc, Exception) and isinstance(primary_exc, Exception):
-                        raise
-                    raise primary_exc
                 raise
             finally:
                 try:

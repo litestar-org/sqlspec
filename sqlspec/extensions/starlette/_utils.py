@@ -55,7 +55,7 @@ def has_state_value(state: Any, key: str) -> bool:
 
 
 def get_connection_from_request(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Get database connection from request state.
+    """Get the request connection, checking it out on first access.
 
     Args:
         request: Starlette request instance.
@@ -63,8 +63,16 @@ def get_connection_from_request(request: "Request", config_state: "SQLSpecConfig
 
     Returns:
         Database connection object.
+
+    Raises:
+        ImproperConfigurationError: The configuration is asynchronous and its connection has not
+            been checked out; use the plugin's async accessors.
     """
-    return get_state_value(request.state, config_state.connection_key)
+    if has_state_value(request.state, config_state.connection_key):
+        return get_state_value(request.state, config_state.connection_key)
+    from sqlspec.extensions.starlette.middleware import acquire_pending_connection_sync
+
+    return acquire_pending_connection_sync(request, config_state)
 
 
 def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:

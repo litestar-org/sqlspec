@@ -18,6 +18,13 @@ from sqlspec.extensions.sanic._utils import has_context_value
 pytestmark = pytest.mark.anyio
 
 
+async def _touch_connections(plugin: Any, request: Any) -> None:
+    """Check out every request connection, as a handler's first database access does."""
+    for state in plugin._config_states:
+        if not state.disable_di:
+            await plugin.get_connection_async(request, state.session_key)
+
+
 async def test_startup_creates_pool_on_app_context() -> None:
     """before_server_start should create configured pools on app.ctx."""
     pool = object()
@@ -193,37 +200,6 @@ async def test_release_request_connection_clean_exit_without_exception() -> None
     assert cm.exit_args == (None, None, None)
 
 
-async def test_on_request_acquisition_failure_records_exception_and_releases() -> None:
-    """_on_request should record acquisition exception and forward it when releasing earlier connections."""
-    from sqlspec.extensions.sanic._utils import get_context_value
-
-    conn1 = MagicMock()
-    cm1 = _AsyncConnectionManagerFake(conn1)
-
-    config1 = _make_config(pool=object())
-    config1.provide_connection = MagicMock(return_value=cm1)
-    config1.extension_config = {"sanic": {"connection_key": "conn1", "session_key": "sess1", "pool_key": "pool1"}}
-
-    config2 = _make_config(pool=object())
-    config2.provide_connection = MagicMock(side_effect=RuntimeError("pool 2 acquire failed"))
-    config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
-
-    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
-
-    request = SimpleNamespace(
-        ctx=SimpleNamespace(), app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object())), headers={}
-    )
-
-    with pytest.raises(RuntimeError) as exc_info:
-        await plugin._on_request(request)
-
-    assert "pool 2 acquire failed" in str(exc_info.value)
-    assert get_context_value(request.ctx, "sqlspec_request_exception") is exc_info.value
-    assert cm1.exit_args is not None
-    assert cm1.exit_args[0] is RuntimeError
-    assert cm1.exit_args[1] is exc_info.value
-
-
 def test_init_app_registers_lifecycle_complete_signal() -> None:
     """init_app should register http.lifecycle.complete signal listener."""
     app = Sanic(f"SQLSpecLifecycleCompleteSignal{uuid4().hex}")
@@ -233,62 +209,6 @@ def test_init_app_registers_lifecycle_complete_signal() -> None:
     plugin.init_app(app)
 
     assert "http.lifecycle.complete" in app.signal_router.name_index
-
-
-async def test_on_request_cancelled_error_mid_acquisition_releases_and_restores() -> None:
-    """_on_request must catch CancelledError, release already-acquired connections, and restore contexts."""
-    import asyncio
-
-    from sqlspec.core.sqlcommenter import SQLCommenterContext
-    from sqlspec.extensions.sanic._utils import get_context_value
-    from sqlspec.utils.correlation import CorrelationContext
-
-    conn1 = MagicMock()
-    cm1 = _AsyncConnectionManagerFake(conn1)
-
-    config1 = _make_config(pool=object())
-    config1.provide_connection = MagicMock(return_value=cm1)
-    config1.statement_config = SimpleNamespace(enable_sqlcommenter=True)
-    config1.extension_config = {
-        "sanic": {
-            "connection_key": "conn1",
-            "session_key": "sess1",
-            "pool_key": "pool1",
-            "enable_correlation_middleware": True,
-            "enable_sqlcommenter_middleware": True,
-        }
-    }
-
-    config2 = _make_config(pool=object())
-    config2.provide_connection = MagicMock(side_effect=asyncio.CancelledError("cancelled mid acquire"))
-    config2.statement_config = SimpleNamespace(enable_sqlcommenter=False)
-    config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
-
-    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
-    CorrelationContext.set("outer-cid")
-    SQLCommenterContext.set({"framework": "outer"})
-    try:
-        conn_info = SimpleNamespace(ctx=SimpleNamespace())
-        request = SimpleNamespace(
-            ctx=SimpleNamespace(),
-            conn_info=conn_info,
-            app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object())),
-            headers={"x-request-id": "req-cid"},
-            path="/items",
-        )
-
-        with pytest.raises(asyncio.CancelledError):
-            await plugin._on_request(request)
-
-        assert cm1.exit_args is not None
-        assert cm1.exit_args[0] is asyncio.CancelledError
-        assert isinstance(get_context_value(request.ctx, "sqlspec_request_exception"), asyncio.CancelledError)
-        assert not has_context_value(request.ctx, "conn1")
-        assert CorrelationContext.get() == "outer-cid"
-        assert SQLCommenterContext.get() == {"framework": "outer"}
-    finally:
-        CorrelationContext.set(None)
-        SQLCommenterContext.set(None)
 
 
 async def test_on_request_complete_releases_residual_connection_on_cancellation_and_is_idempotent() -> None:
@@ -319,6 +239,8 @@ async def test_on_request_complete_releases_residual_connection_on_cancellation_
         )
 
         await plugin._on_request(request)
+
+        await _touch_connections(plugin, request)
         assert CorrelationContext.get() == "aborted-cid"
 
         await plugin._on_request_complete(conn_info=conn_info)
@@ -342,6 +264,8 @@ async def test_on_request_complete_releases_residual_connection_on_cancellation_
         response2 = SimpleNamespace(status=200, headers={})
 
         await plugin._on_request(request2)
+
+        await _touch_connections(plugin, request2)
         await plugin._on_response(request2, response2)
         assert cm2.exit_args == (None, None, None)
 
@@ -501,6 +425,8 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
         response = SimpleNamespace(status=200, headers={})
 
         await plugin._on_request(request)
+
+        await _touch_connections(plugin, request)
         with pytest.raises(RuntimeError, match="db2 commit boom"):
             await plugin._on_response(request, response)
 
@@ -531,73 +457,11 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
             path="/multi-cancel",
         )
         await plugin._on_request(request_b)
+        await _touch_connections(plugin, request_b)
         with pytest.raises(asyncio.CancelledError):
             await plugin._on_response(request_b, SimpleNamespace(status=200, headers={}))
         assert cm1_b.exit_args is not None
         assert cm1_b.exit_args[0] is asyncio.CancelledError
-    finally:
-        CorrelationContext.set(None)
-        SQLCommenterContext.set(None)
-
-
-async def test_on_request_multi_db_release_failure_still_releases_sibling_and_restores_contexts() -> None:
-    """_on_request error cleanup releases remaining acquired connections and restores contexts when one fails."""
-    from sqlspec.core.sqlcommenter import SQLCommenterContext
-    from sqlspec.utils.correlation import CorrelationContext
-
-    conn1 = MagicMock()
-    cm1 = _AsyncConnectionManagerFake(conn1)
-    conn2 = MagicMock()
-    cm2 = _AsyncConnectionManagerFake(conn2, raise_on_exit=RuntimeError("db2 release boom"))
-
-    config1 = _make_config(pool=object())
-    config1.provide_connection = MagicMock(return_value=cm1)
-    config1.statement_config = SimpleNamespace(enable_sqlcommenter=True)
-    config1.extension_config = {
-        "sanic": {
-            "connection_key": "conn1",
-            "session_key": "sess1",
-            "pool_key": "pool1",
-            "enable_correlation_middleware": True,
-            "enable_sqlcommenter_middleware": True,
-        }
-    }
-
-    config2 = _make_config(pool=object())
-    config2.provide_connection = MagicMock(return_value=cm2)
-    config2.statement_config = SimpleNamespace(enable_sqlcommenter=False)
-    config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
-
-    config3 = _make_config(pool=object())
-    config3.provide_connection = MagicMock(side_effect=ValueError("db3 acquire boom"))
-    config3.statement_config = SimpleNamespace(enable_sqlcommenter=False)
-    config3.extension_config = {"sanic": {"connection_key": "conn3", "session_key": "sess3", "pool_key": "pool3"}}
-
-    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2, "db3": config3}))
-    CorrelationContext.set("outer-cid")
-    SQLCommenterContext.set({"framework": "outer"})
-    try:
-        conn_info = SimpleNamespace(ctx=SimpleNamespace())
-        request = SimpleNamespace(
-            ctx=SimpleNamespace(),
-            conn_info=conn_info,
-            app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object(), pool3=object())),
-            headers={"x-request-id": "req-cid"},
-            path="/acquire-fail",
-        )
-
-        with pytest.raises(RuntimeError, match="db2 release boom"):
-            await plugin._on_request(request)
-
-        assert cm2.exit_args is not None
-        assert cm2.exit_args[0] is ValueError
-        assert cm1.exit_args is not None
-        assert cm1.exit_args[0] is ValueError
-        assert not has_context_value(request.ctx, "conn1")
-        assert not has_context_value(request.ctx, "conn2")
-        assert CorrelationContext.get() == "outer-cid"
-        assert SQLCommenterContext.get() == {"framework": "outer"}
-        assert not has_context_value(conn_info.ctx, "_sqlspec_active_request")
     finally:
         CorrelationContext.set(None)
         SQLCommenterContext.set(None)
@@ -647,6 +511,8 @@ async def test_on_request_complete_multi_db_isolates_release_failure_and_restore
         )
 
         await plugin._on_request(request)
+
+        await _touch_connections(plugin, request)
         with pytest.raises(RuntimeError, match="db2 abort exit boom"):
             await plugin._on_request_complete(conn_info=conn_info)
 
@@ -688,6 +554,7 @@ async def test_on_request_complete_prefers_task_contextvar_over_shared_conn_info
 
     async def run_stream_1() -> None:
         await plugin._on_request(req1)
+        await _touch_connections(plugin, req1)
         stream1_acquired.set()
         await stream2_acquired.wait()
         await plugin._on_request_complete(conn_info=shared_conn_info)
@@ -695,6 +562,7 @@ async def test_on_request_complete_prefers_task_contextvar_over_shared_conn_info
     async def run_stream_2() -> None:
         await stream1_acquired.wait()
         await plugin._on_request(req2)
+        await _touch_connections(plugin, req2)
         stream2_acquired.set()
 
     await asyncio.gather(run_stream_1(), run_stream_2())
@@ -742,6 +610,8 @@ async def test_on_request_complete_rollback_cancellation_still_releases_target_a
     )
 
     await plugin._on_request(request)
+
+    await _touch_connections(plugin, request)
     await plugin._on_lifecycle_exception(request, ValueError("handler failed"))
 
     with pytest.raises(asyncio.CancelledError, match="rollback cancelled"):
@@ -755,3 +625,30 @@ async def test_on_request_complete_rollback_cancellation_still_releases_target_a
     assert cm1.exit_args[0] is ValueError
     assert not has_context_value(request.ctx, "conn1")
     assert not has_context_value(request.ctx, "conn2")
+
+
+async def test_failed_lazy_acquisition_publishes_nothing_and_finalization_releases_siblings() -> None:
+    """A failed first access publishes no connection; finalization still releases acquired siblings."""
+    from sqlspec.extensions.sanic._utils import has_context_value
+
+    conn1 = MagicMock()
+    cm1 = _AsyncConnectionManagerFake(conn1)
+    config1 = _make_config(pool=object())
+    config1.provide_connection = MagicMock(return_value=cm1)
+    config1.extension_config = {"sanic": {"connection_key": "conn1", "session_key": "sess1", "pool_key": "pool1"}}
+    config2 = _make_config(pool=object())
+    config2.provide_connection = MagicMock(side_effect=RuntimeError("pool 2 acquire failed"))
+    config2.extension_config = {"sanic": {"connection_key": "conn2", "session_key": "sess2", "pool_key": "pool2"}}
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"db1": config1, "db2": config2}))
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(), app=SimpleNamespace(ctx=SimpleNamespace(pool1=object(), pool2=object())), headers={}
+    )
+
+    await plugin._on_request(request)
+    assert await plugin.get_connection_async(request, "sess1") is conn1
+    with pytest.raises(RuntimeError, match="pool 2 acquire failed"):
+        await plugin.get_connection_async(request, "sess2")
+    assert not has_context_value(request.ctx, "conn2")
+    await plugin._on_lifecycle_response(request=request, response=SimpleNamespace(status=500))
+    assert cm1.exit_args is not None
+    assert not has_context_value(request.ctx, "conn1")
