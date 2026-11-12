@@ -22,6 +22,16 @@ def test_teradata_transaction_restores_autocommit(finish: str, baseline: bool) -
     getattr(connection, finish).assert_called_once_with()
 
 
+@pytest.mark.parametrize("finish", ["commit", "rollback"])
+def test_teradata_manual_mode_finish_without_begin_keeps_manual_mode(finish: str) -> None:
+    connection = MagicMock()
+    connection.autocommit = False
+    driver = TeradataDriver(connection)
+    getattr(driver, finish)()
+    getattr(connection, finish).assert_called_once_with()
+    assert connection.autocommit is False
+
+
 @pytest.mark.parametrize("operation", ["create_savepoint", "release_savepoint", "rollback_to_savepoint"])
 def test_teradata_savepoint_refusal(operation: str) -> None:
     connection = MagicMock()

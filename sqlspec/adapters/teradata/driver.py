@@ -367,12 +367,12 @@ class TeradataDriver(SyncDriverAdapterBase):
             raise TransactionError(msg) from exc
 
     def commit(self) -> None:
+        """Commit manual-mode work and restore the autocommit state captured by ``begin()``."""
         try:
             if getattr(self.connection, "autocommit", True) is False:
                 self.connection.commit()
-                self.connection.autocommit = (
-                    self._previous_autocommit if self._previous_autocommit is not None else True
-                )
+                if self._previous_autocommit is not None:
+                    self.connection.autocommit = self._previous_autocommit
             self._transaction_active = False
             self._previous_autocommit = None
         except Exception as exc:
@@ -380,12 +380,12 @@ class TeradataDriver(SyncDriverAdapterBase):
             raise TransactionError(msg) from exc
 
     def rollback(self) -> None:
+        """Roll back manual-mode work and restore the autocommit state captured by ``begin()``."""
         try:
             if getattr(self.connection, "autocommit", True) is False:
                 self.connection.rollback()
-                self.connection.autocommit = (
-                    self._previous_autocommit if self._previous_autocommit is not None else True
-                )
+                if self._previous_autocommit is not None:
+                    self.connection.autocommit = self._previous_autocommit
             self._transaction_active = False
             self._previous_autocommit = None
         except Exception as exc:
