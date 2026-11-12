@@ -1401,7 +1401,7 @@ def test_adbc_snowflake_observability_observes_hooks_registered_after_attach() -
 
 
 def test_adbc_backend_identity_does_not_leak_across_shared_runtime() -> None:
-    """One live runtime keeps distinct Snowflake and SQLite ADBC statement identities."""
+    """One live runtime attributes Snowflake sessions without leaking that identity to other ADBC backends."""
     from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 
     events: list[Any] = []
@@ -1423,7 +1423,7 @@ def test_adbc_backend_identity_does_not_leak_across_shared_runtime() -> None:
     runtime.register_lifecycle_hook("on_query_start", started.append)
     for driver in (snowflake, sqlite, snowflake):
         assert driver.select_value("SELECT 1 AS value") == 1
-    assert [event.db_system for event in events] == ["snowflake", "sqlite", "snowflake"]
+    assert [event.db_system for event in events] == ["snowflake", "adbc", "snowflake"]
     assert [event.driver for event in events] == ["AdbcDriver", "AdbcDriver", "AdbcDriver"]
     assert len(started) == 3
 
