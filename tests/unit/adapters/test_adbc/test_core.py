@@ -1202,3 +1202,16 @@ def test_teradata_statement_config_uses_vantage_sqlglot_dialect(detected: str) -
 
     assert get_statement_config(detected).dialect == "vantage"
     assert Dialect.get("vantage") is not None
+
+
+def test_teradata_driver_reports_teradata_for_vantage_statement_config() -> None:
+    from sqlspec.adapters.adbc.core import get_statement_config
+
+    def _marker(expression: Any, context: Any) -> Any:
+        return expression
+
+    statement_config = get_statement_config("teradata").replace(statement_transformers=(_marker,))
+    driver = AdbcDriver(Mock(adbc_connection=None), statement_config=statement_config)
+    assert driver.statement_config.statement_transformers == (_marker,)
+    assert driver.dialect == "vantage"
+    assert driver._dialect_name == "teradata"

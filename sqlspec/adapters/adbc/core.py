@@ -920,16 +920,18 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
 
 def resolve_dialect_name(dialect: Any) -> str:
-    """Return the normalized dialect name string."""
+    """Return the normalized dialect name string, reporting the ``vantage`` dialect as ``teradata``."""
     if dialect is None:
         return ""
     if isinstance(dialect, str):
-        return dialect.lower()
-    if isinstance(dialect, type) and issubclass(dialect, sqlglot.Dialect):
-        return dialect.__name__.lower()
-    if isinstance(dialect, sqlglot.Dialect):
-        return type(dialect).__name__.lower()
-    return str(dialect)
+        name = dialect.lower()
+    elif isinstance(dialect, type) and issubclass(dialect, sqlglot.Dialect):
+        name = dialect.__name__.lower()
+    elif isinstance(dialect, sqlglot.Dialect):
+        name = type(dialect).__name__.lower()
+    else:
+        return str(dialect)
+    return "teradata" if name == "vantage" else name
 
 
 def is_postgres_dialect(dialect_name: str) -> bool:
