@@ -199,8 +199,9 @@ Key behaviors:
 Tenant source precedence: `opt={"tenant_bypass": True}` ->
 `set_connection_tenant(connection, tenant_id)` -> custom `tenant_extractor` ->
 verified path parameter, server session key, or configured header validated
-against `org_ids` (falling back to verified `default_org` or a sole membership).
-A disallowed selector always fails closed with `403`.
+against `org_ids` (falling back to verified `default_org` or a sole membership)
+-> an ambient `TenantContext` scope bound by outer middleware. A disallowed
+selector always fails closed with `403`.
 
 ## Separate Auth and Tenant Databases
 

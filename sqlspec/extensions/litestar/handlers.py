@@ -33,7 +33,7 @@ from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Coroutine
+    from collections.abc import Awaitable, Coroutine, Generator
 
     from litestar import Litestar
     from litestar.datastructures.state import State
@@ -394,17 +394,46 @@ def has_tenant_strategy(config: Any) -> bool:
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
+class _AmbientFallback:
+    """Await a deferred tenant resolution and fall back to the captured ambient payload."""
+
+    __slots__ = ("_ambient", "_resolved")
+
+    def __init__(
+        self, resolved: "Awaitable[TenantContextPayload | None]", ambient: TenantContextPayload | None
+    ) -> None:
+        self._resolved = resolved
+        self._ambient = ambient
+
+    def __await__(self) -> "Generator[Any, None, TenantContextPayload | None]":
+        return self._resolve().__await__()
+
+    async def _resolve(self) -> TenantContextPayload | None:
+        payload = await self._resolved
+        return payload if payload is not None else self._ambient
+
+    def close(self) -> None:
+        """Close the pending resolution without running it."""
+        close = getattr(self._resolved, "close", None)
+        if callable(close):
+            close()
+
+
 def _resolve_connection_tenant(
     config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
 ) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
-    if has_tenant_strategy(config):
-        ambient = TenantContext.get()
-        return (
-            ambient
-            if ambient is not None
-            else resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
-        )
-    return None
+    """Resolve the request tenant, falling back to an ambient scope only when resolution yields none.
+
+    Route bypass, connection receipts, the configured extractor, and verified auth resolution
+    take precedence over an ambient scope bound by outer middleware.
+    """
+    if not has_tenant_strategy(config):
+        return None
+    ambient = TenantContext.get()
+    resolved = resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
+    if inspect.isawaitable(resolved):
+        return _AmbientFallback(resolved, ambient)
+    return resolved if resolved is not None else ambient
 
 
 async def _capture_connection_tenant(

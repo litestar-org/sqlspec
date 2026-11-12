@@ -77,8 +77,6 @@ def resolve_litestar_tenant(
     if scope_value(getattr(route, "opt", None), "tenant_bypass") is True:
         return TenantContextPayload.bypass()
     receipt = get_sqlspec_scope_state(cast("Scope", scope), _TENANT_SCOPE_KEY)
-    if receipt is None:
-        receipt = scope_value(scope.get("state"), "tenant_context")
     if receipt is not None:
         return coerce_tenant_payload(receipt)
     if settings.tenant_extractor is not None:

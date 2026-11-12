@@ -1061,25 +1061,32 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
     assert get_sqlspec_scope_state(scope, "tenant_conn_tenant_payload") is None
 
 
-async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
+@pytest.mark.parametrize("source", ["none", "receipt", "bypass_route", "extractor"])
+async def test_tenant_provider_prefers_request_resolution_over_ambient_scope(source: str) -> None:
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
-    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
+    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, set_connection_tenant
     from sqlspec.utils.tenant import TenantContext
+
+    seen: list[tuple[str | None, bool]] = []
 
     @asynccontextmanager
     async def connection(pool: object) -> "AsyncGenerator[object, None]":
-        assert TenantContext.get_tenant_id() == "outer"
+        seen.append((TenantContext.get_tenant_id(), TenantContext.is_bypassed()))
         yield object()
 
-    def extractor(scope: object) -> None:
-        raise AssertionError("ambient scope must skip resolution")
+    def extractor(scope: object) -> str | None:
+        return "extracted" if source == "extractor" else None
 
     config = SimpleNamespace(
         supports_tenant_strategy=True, driver_features={"tenant_strategy": object()}, provide_connection=connection
     )
-    scope = cast("Scope", {"type": "http"})
+    scope: dict[str, Any] = {"type": "http"}
+    if source == "receipt":
+        set_connection_tenant(scope, "authorized")
+    if source == "bypass_route":
+        scope["route_handler"] = SimpleNamespace(opt={"tenant_bypass": True})
     provider = connection_provider_maker(
         cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         "pool",
@@ -1087,10 +1094,17 @@ async def test_tenant_provider_preserves_existing_ambient_scope() -> None:
         tenant_settings=TenantResolutionSettings(tenant_extractor=extractor),
     )
     with TenantContext.scope("outer"):
-        iterator = provider(State({"pool": object()}), scope)
+        iterator = provider(State({"pool": object()}), cast("Scope", scope))
         await anext(iterator)
         await iterator.aclose()
         assert TenantContext.get_tenant_id() == "outer"
+    expected = {
+        "none": ("outer", False),
+        "receipt": ("authorized", False),
+        "bypass_route": (None, True),
+        "extractor": ("extracted", False),
+    }
+    assert seen == [expected[source]]
 
 
 @pytest.mark.parametrize("is_async", [False, True])
