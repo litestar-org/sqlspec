@@ -64,8 +64,6 @@ if TYPE_CHECKING:
 
 __all__ = (
     "RECONCILE_ADBC_DIALECTS",
-    "_TERADATA_INDEX_EXISTS_SQL",
-    "_TERADATA_TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
