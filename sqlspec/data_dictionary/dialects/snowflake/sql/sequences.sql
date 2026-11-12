@@ -18,7 +18,7 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.sequences
-WHERE sequence_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(sequence_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY sequence_schema, sequence_name;
 
 -- name: by_name
@@ -41,5 +41,5 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.sequences
-WHERE sequence_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
-  AND sequence_name = :sequence_name;
+WHERE UPPER(sequence_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
+  AND UPPER(sequence_name) = UPPER(:sequence_name);

@@ -20,7 +20,7 @@ SELECT
     t.table_owner AS "owner_name",
     t.comment AS "comment"
 FROM information_schema.tables t
-JOIN target_schema ts ON t.table_schema = ts.schema_name
+JOIN target_schema ts ON UPPER(t.table_schema) = UPPER(ts.schema_name)
 UNION ALL
 SELECT
     s.sequence_catalog AS "catalog_name",
@@ -30,5 +30,5 @@ SELECT
     s.sequence_owner AS "owner_name",
     s.comment AS "comment"
 FROM information_schema.sequences s
-JOIN target_schema ts ON s.sequence_schema = ts.schema_name
+JOIN target_schema ts ON UPPER(s.sequence_schema) = UPPER(ts.schema_name)
 ORDER BY 2, 4, 3;

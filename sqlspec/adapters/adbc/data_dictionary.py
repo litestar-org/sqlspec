@@ -44,8 +44,10 @@ from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
 from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.snowflake import (
+    match_snowflake_catalog_rows,
     parse_snowflake_imported_keys,
     qualify_snowflake_information_schema,
+    snowflake_scope_exactness,
 )
 from sqlspec.data_dictionary.dialects.sqlite import format_sqlite_schema_prefix, resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
@@ -253,7 +255,9 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, schema_name=schema_name, schema_type=TableMetadata)
 
         if dialect == "snowflake":
-            return self._snowflake_get_tables(driver, schema_name, database_name=database_name)
+            return self._snowflake_get_tables(
+                driver, schema_name, database_name=database_name, exactness=snowflake_scope_exactness(schema, None)
+            )
 
         rows = driver.select(self._get_query(dialect, "tables", "by_schema"), schema_name=schema_name, table_name=None)
         return cast("list[TableMetadata]", _lowercase_dict_rows(rows, dialect))
@@ -300,7 +304,13 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(query_text, table_name=table, schema_name=schema_name, schema_type=ColumnMetadata)
 
         if dialect == "snowflake":
-            return self._snowflake_get_columns(driver, resolved_table, schema_name, database_name=database_name)
+            return self._snowflake_get_columns(
+                driver,
+                resolved_table,
+                schema_name,
+                database_name=database_name,
+                exactness=snowflake_scope_exactness(schema, table),
+            )
 
         if table is None:
             rows = driver.select(
@@ -492,13 +502,18 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             rows = driver.select(query, schema_name=schema_name)
         else:
             rows = driver.select(query)
+        items = _lowercase_dict_rows(rows)
+        if dialect == "snowflake" and domain != "schemas":
+            items = match_snowflake_catalog_rows(
+                items, schema_name=schema_name, schema_exact=snowflake_scope_exactness(schema, None)[0]
+            )
         capability = MetadataCapability(
             domain=domain,
             support=MetadataSupport.SUPPORTED,
             fidelity=MetadataFidelity.NATIVE,
             source=MetadataSource.CATALOG,
         )
-        return MetadataResult(domain=domain, capability=capability, items=tuple(_lowercase_dict_rows(rows)))
+        return MetadataResult(domain=domain, capability=capability, items=tuple(items))
 
     def get_constraints(
         self, driver: "AdbcDriver", table: "str | None" = None, schema: "str | None" = None
@@ -979,15 +994,29 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         return _normalize_native_foreign_keys(rows, table_name_exact=table_name)
 
     def _snowflake_get_tables(
-        self, driver: "AdbcDriver", schema_name: str | None, *, database_name: str | None = None
+        self,
+        driver: "AdbcDriver",
+        schema_name: str | None,
+        *,
+        database_name: str | None = None,
+        exactness: "tuple[bool, bool]" = (True, True),
     ) -> "list[TableMetadata]":
         query = self._get_query("snowflake", "tables", "by_schema")
         query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
-        rows = driver.select(query, schema_name=schema_name)
-        return cast("list[TableMetadata]", _lowercase_dict_rows(rows, "snowflake"))
+        rows = _lowercase_dict_rows(driver.select(query, schema_name=schema_name), "snowflake")
+        return cast(
+            "list[TableMetadata]",
+            match_snowflake_catalog_rows(rows, schema_name=schema_name, schema_exact=exactness[0]),
+        )
 
     def _snowflake_get_columns(
-        self, driver: "AdbcDriver", table_name: str | None, schema_name: str | None, *, database_name: str | None = None
+        self,
+        driver: "AdbcDriver",
+        table_name: str | None,
+        schema_name: str | None,
+        *,
+        database_name: str | None = None,
+        exactness: "tuple[bool, bool]" = (True, True),
     ) -> "list[ColumnMetadata]":
         parameters: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
@@ -996,8 +1025,17 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             operation = "by_table"
         query = self._get_query("snowflake", "columns", operation)
         query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
-        rows = driver.select(query, **parameters)
-        return cast("list[ColumnMetadata]", _lowercase_dict_rows(rows, "snowflake"))
+        rows = _lowercase_dict_rows(driver.select(query, **parameters), "snowflake")
+        return cast(
+            "list[ColumnMetadata]",
+            match_snowflake_catalog_rows(
+                rows,
+                schema_name=schema_name,
+                schema_exact=exactness[0],
+                table_name=table_name,
+                table_exact=exactness[1],
+            ),
+        )
 
 
 def _optional_filter_names(query_text: str) -> "set[str]":

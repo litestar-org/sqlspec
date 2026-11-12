@@ -672,3 +672,61 @@ def test_ensure_schema_strict_rejects_json_and_unrelated_struct_types(unrelated_
                 ensure_schema_sync(driver, [target], manage_schema=True, commit=False, strict=True)
     finally:
         config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("catalog_tables", "catalog_columns"),
+    [
+        ([{"table_name": "widgets"}, {"table_name": "WIDGETS"}], [{"column_name": "id"}]),
+        ([{"table_name": "WIDGETS"}], [{"column_name": "id"}, {"column_name": "ID"}]),
+    ],
+    ids=["exact-table-among-case-variants", "exact-column-among-case-variants"],
+)
+def test_ensure_exact_match_wins_over_case_variants(
+    catalog_tables: list[dict[str, str]], catalog_columns: list[dict[str, str]]
+) -> None:
+    """An exact table or column name is reconciled even when case variants also exist."""
+    target = SchemaTarget("widgets", sql.create_table("widgets").column("id", "INTEGER"))
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = catalog_tables
+    driver.data_dictionary.get_columns.return_value = catalog_columns
+
+    result = ensure_schema_sync(driver, [target], manage_schema=True)
+
+    assert result.created_tables == []
+    assert result.added_columns == {}
+
+
+def test_ensure_unique_case_insensitive_table_and_column_match() -> None:
+    """A single case-insensitive catalog match counts as the existing table and column."""
+    target = SchemaTarget("widgets", sql.create_table("widgets").column("id", "INTEGER"))
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = [{"table_name": "WIDGETS"}]
+    driver.data_dictionary.get_columns.return_value = [{"column_name": "ID"}]
+
+    result = ensure_schema_sync(driver, [target], manage_schema=True)
+
+    assert result.created_tables == []
+    assert result.added_columns == {}
+    driver.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("catalog_tables", "catalog_columns", "kind"),
+    [
+        ([{"table_name": "WIDGETS"}, {"table_name": "Widgets"}], [], "table"),
+        ([{"table_name": "widgets"}], [{"column_name": "ID"}, {"column_name": "Id"}], "column"),
+    ],
+)
+def test_ensure_rejects_ambiguous_case_insensitive_matches(
+    catalog_tables: list[dict[str, str]], catalog_columns: list[dict[str, str]], kind: str
+) -> None:
+    """Several case-insensitive matches without an exact one stop reconciliation."""
+    target = SchemaTarget("widgets", sql.create_table("widgets").column("id", "INTEGER"))
+    driver = MagicMock()
+    driver.data_dictionary.get_tables.return_value = catalog_tables
+    driver.data_dictionary.get_columns.return_value = catalog_columns
+
+    with pytest.raises(MigrationError, match=f"Cannot reconcile {kind}"):
+        ensure_schema_sync(driver, [target], manage_schema=True)
+    driver.execute.assert_not_called()

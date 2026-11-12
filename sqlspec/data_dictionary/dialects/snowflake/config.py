@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata, register_dialect
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import quote_identifier, resolve_catalog_identifier
 
 __all__ = (
     "SNOWFLAKE_CONFIG",
@@ -13,11 +13,15 @@ __all__ = (
     "SNOWFLAKE_FEATURE_VERSIONS",
     "SNOWFLAKE_TYPE_MAPPINGS",
     "SNOWFLAKE_VERSION_PATTERN",
+    "match_snowflake_catalog_rows",
     "parse_snowflake_imported_keys",
     "parse_snowflake_primary_or_unique_keys",
     "qualify_snowflake_information_schema",
+    "snowflake_identifier_quoting",
+    "snowflake_scope_exactness",
 )
 
+_IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(r'\s*("(?:[^"]|"")*"|[^."\s]+)\s*(?:\.|$)')
 SNOWFLAKE_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
 SNOWFLAKE_FEATURE_VERSIONS: Final[FeatureVersions] = {}
 
@@ -194,3 +198,85 @@ def qualify_snowflake_information_schema(sql: str, database_name: str | None) ->
     if database_name is None:
         return sql
     return sql.replace("information_schema.", f"{quote_identifier(database_name)}.information_schema.")
+
+
+def snowflake_identifier_quoting(identifier: str) -> tuple[bool, ...]:
+    """Report whether each dot-separated part of a Snowflake identifier is double-quoted.
+
+    Args:
+        identifier: Bare or quoted identifier, optionally qualified.
+
+    Returns:
+        One flag per identifier part, ``True`` for a double-quoted part.
+    """
+    flags: list[bool] = []
+    position = 0
+    while position < len(identifier):
+        matched = _IDENTIFIER_PART.match(identifier, position)
+        if matched is None or matched.end() == position:
+            break
+        flags.append(matched.group(1).startswith('"'))
+        position = matched.end()
+    return tuple(flags)
+
+
+def snowflake_scope_exactness(schema: str | None, table: str | None) -> tuple[bool, bool]:
+    """Report whether the schema and table of a catalog lookup must match exactly.
+
+    Quoted parts match exactly. A schema taken from the session scope, because neither ``schema`` nor a qualified
+    ``table`` names one, is exact as well.
+
+    Args:
+        schema: Requested schema identifier, optionally database-qualified.
+        table: Requested table identifier, optionally schema- or database-qualified.
+
+    Returns:
+        Exactness flags for the schema and the table.
+    """
+    table_quoting = snowflake_identifier_quoting(table) if table is not None else ()
+    schema_quoting = snowflake_identifier_quoting(schema) if schema is not None else ()
+    table_exact = bool(table_quoting) and table_quoting[-1]
+    if len(table_quoting) > 1:
+        return table_quoting[-2], table_exact
+    if schema_quoting:
+        return schema_quoting[-1], table_exact
+    return True, table_exact
+
+
+def match_snowflake_catalog_rows(
+    rows: "Sequence[Mapping[str, Any]]",
+    *,
+    schema_name: str | None,
+    schema_exact: bool,
+    table_name: str | None = None,
+    table_exact: bool = False,
+) -> list[dict[str, Any]]:
+    """Keep catalog rows for one schema and optional table under Snowflake identifier matching.
+
+    Exact names win. Names from unquoted identifiers also accept a single case-insensitive catalog match, which
+    covers endpoints that fold unquoted identifiers to lowercase. Quoted identifiers match exactly.
+
+    Args:
+        rows: Catalog rows carrying ``schema_name`` and, for table lookups, ``table_name`` keys.
+        schema_name: Requested schema, or ``None`` to keep every schema.
+        schema_exact: Whether the schema came from a quoted identifier or the session scope.
+        table_name: Requested table, or ``None`` to keep every table.
+        table_exact: Whether the table came from a quoted identifier.
+
+    Returns:
+        Rows belonging to the resolved schema and table.
+
+    Raises:
+        AmbiguousIdentifierError: If an unquoted name matches several catalog names and none exactly.
+    """
+    selected = [dict(row) for row in rows]
+    for key, requested, exact in (("schema_name", schema_name, schema_exact), ("table_name", table_name, table_exact)):
+        if requested is None:
+            continue
+        candidates = [str(row[key]) for row in selected if row.get(key) is not None]
+        if exact:
+            resolved = requested if requested in candidates else None
+        else:
+            resolved = resolve_catalog_identifier(requested, candidates)
+        selected = [row for row in selected if resolved is not None and row.get(key) == resolved]
+    return selected

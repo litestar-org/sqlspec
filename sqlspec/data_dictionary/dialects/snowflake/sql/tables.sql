@@ -10,7 +10,7 @@ SELECT
     0 AS "level"
 FROM information_schema.tables
 WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE', 'EVENT TABLE', 'DYNAMIC TABLE', 'EXTERNAL TABLE', 'HYBRID TABLE', 'ICEBERG TABLE')
-  AND table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+  AND UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY table_schema, table_name;
 
 -- name: by_table
@@ -25,5 +25,5 @@ SELECT
     0 AS "level"
 FROM information_schema.tables
 WHERE UPPER(table_type) IN ('BASE TABLE', 'TABLE', 'EVENT TABLE', 'DYNAMIC TABLE', 'EXTERNAL TABLE', 'HYBRID TABLE', 'ICEBERG TABLE')
-  AND table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
-  AND table_name = :table_name;
+  AND UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
+  AND UPPER(table_name) = UPPER(:table_name);

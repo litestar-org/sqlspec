@@ -19,7 +19,7 @@ LEFT JOIN information_schema.referential_constraints rc
     ON tc.constraint_catalog = rc.constraint_catalog
    AND tc.constraint_schema = rc.constraint_schema
    AND tc.constraint_name = rc.constraint_name
-WHERE tc.table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(tc.table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY tc.table_name, tc.constraint_name;
 
 -- name: by_table
@@ -43,8 +43,8 @@ LEFT JOIN information_schema.referential_constraints rc
     ON tc.constraint_catalog = rc.constraint_catalog
    AND tc.constraint_schema = rc.constraint_schema
    AND tc.constraint_name = rc.constraint_name
-WHERE tc.table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
-  AND tc.table_name = :table_name
+WHERE UPPER(tc.table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
+  AND UPPER(tc.table_name) = UPPER(:table_name)
 ORDER BY tc.constraint_name;
 
 -- name: primary_keys_by_schema

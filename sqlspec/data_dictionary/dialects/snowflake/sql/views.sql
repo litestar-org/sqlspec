@@ -14,7 +14,7 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.views
-WHERE table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY table_schema, table_name;
 
 -- name: by_name
@@ -33,5 +33,5 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.views
-WHERE table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
-  AND table_name = :view_name;
+WHERE UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
+  AND UPPER(table_name) = UPPER(:view_name);

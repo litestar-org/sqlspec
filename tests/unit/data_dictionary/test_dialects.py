@@ -174,3 +174,59 @@ def test_snowflake_key_parsers_handle_incomplete_catalog_rows() -> None:
         {"table_name": "ORDERS", "column_name": "ID", "key_sequence": None},
     ]
     assert parse_snowflake_primary_or_unique_keys(rows)[0]["column_names"] == ["ID"]
+
+
+_SNOWFLAKE_ROWS = [
+    {"schema_name": "PUBLIC", "table_name": "ORDERS", "column_name": "ID"},
+    {"schema_name": "public", "table_name": "orders", "column_name": "id"},
+    {"schema_name": "app", "table_name": "items", "column_name": "id"},
+]
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "schema_exact", "table_name", "table_exact", "expected"),
+    [
+        ("PUBLIC", False, "ORDERS", False, ["ID"]),
+        ("APP", False, "ITEMS", False, ["id"]),
+        ("public", True, "orders", True, ["id"]),
+        ("APP", True, None, False, []),
+        ("app", True, "ITEMS", True, []),
+    ],
+    ids=["exact-wins", "unique-case-insensitive", "quoted-exact", "quoted-schema-no-fold", "quoted-table-no-fold"],
+)
+def test_snowflake_catalog_rows_match_exact_then_unique_insensitive(
+    schema_name: str, schema_exact: bool, table_name: str | None, table_exact: bool, expected: list[str]
+) -> None:
+    from sqlspec.data_dictionary.dialects.snowflake import match_snowflake_catalog_rows
+
+    rows = match_snowflake_catalog_rows(
+        _SNOWFLAKE_ROWS,
+        schema_name=schema_name,
+        schema_exact=schema_exact,
+        table_name=table_name,
+        table_exact=table_exact,
+    )
+
+    assert [row["column_name"] for row in rows] == expected
+
+
+def test_snowflake_catalog_rows_reject_ambiguous_unquoted_names() -> None:
+    from sqlspec.data_dictionary.dialects.snowflake import match_snowflake_catalog_rows
+    from sqlspec.exceptions import AmbiguousIdentifierError
+
+    with pytest.raises(AmbiguousIdentifierError):
+        match_snowflake_catalog_rows(_SNOWFLAKE_ROWS, schema_name="Public", schema_exact=False)
+
+
+@pytest.mark.parametrize(
+    ("schema", "table", "expected"),
+    [(None, None, (True, False)), ("app", "orders", (False, False)), ('"app"', '"Orders"', (True, True))],
+)
+def test_snowflake_scope_exactness_follows_quoting(
+    schema: str | None, table: str | None, expected: tuple[bool, bool]
+) -> None:
+    from sqlspec.data_dictionary.dialects.snowflake import snowflake_scope_exactness
+
+    assert snowflake_scope_exactness(schema, table) == expected
+    if table is not None:
+        assert snowflake_scope_exactness(None, f"{schema}.{table}") == expected

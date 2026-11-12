@@ -680,7 +680,7 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
     driver.select_one_or_none.return_value = {"DATABASE_NAME": "app_db", "SCHEMA_NAME": "app"}
     driver.select.side_effect = [
-        [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
+        [{"SCHEMA_NAME": "app", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
         [
             {
                 "SCHEMA_NAME": "PUBLIC",
@@ -697,7 +697,7 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     tables = dictionary.get_tables(driver)
     columns = dictionary.get_columns(driver, table="ls_sess", schema="PUBLIC")
 
-    assert tables == [{"schema_name": "PUBLIC", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
+    assert tables == [{"schema_name": "app", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
     tables_call = driver.select.call_args_list[0]
     assert tables_call.kwargs == {"schema_name": "app"}
     assert '"app_db".information_schema.tables' in tables_call.args[0].raw_sql
@@ -760,7 +760,7 @@ def test_snowflake_tables_and_columns_filter_permutations() -> None:
     driver = Mock()
     driver.dialect = "snowflake"
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
-    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "APP"}
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "PUBLIC"}
     driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "SESS", "COLUMN_NAME": "ID"}]
 
     schema_tables = dictionary.get_tables(driver, schema="PUBLIC")
@@ -905,11 +905,11 @@ def test_snowflake_catalog_domain_results(domain: str) -> None:
     dictionary = AdbcDataDictionary()
     driver = Mock()
     driver.dialect = "snowflake"
-    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "APP"}
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "PUBLIC"}
     driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "OBJECT_NAME": "ORDERS"}]
     result = getattr(dictionary, f"get_{domain}")(driver)
     if domain != "schemas":
-        assert driver.select.call_args.kwargs == {"schema_name": "APP"}
+        assert driver.select.call_args.kwargs == {"schema_name": "PUBLIC"}
     assert result.items == ({"schema_name": "PUBLIC", "object_name": "ORDERS"},)
     assert result.capability.support == MetadataSupport.SUPPORTED
     assert result.capability.source == MetadataSource.CATALOG
@@ -953,6 +953,8 @@ def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
     assert '"OTHER_DB".information_schema.' in first_query
     assert driver.select.call_args.kwargs == {"schema_name": "SALES", "table_name": "ORDERS"}
 
+    assert dictionary.get_columns(driver, table='"sales"."Orders"') == []
+    driver.select.return_value = [{"SCHEMA_NAME": "sales", "TABLE_NAME": "Orders", "COLUMN_NAME": "ID"}]
     quoted_cols = dictionary.get_columns(driver, table='"sales"."Orders"')
     assert quoted_cols[0]["column_name"] == "ID"
     assert driver.select.call_args.kwargs == {"schema_name": "sales", "table_name": "Orders"}
@@ -1017,3 +1019,26 @@ def test_mysql_schema_listing_binds_declared_schema_parameter() -> None:
 
     assert result.items == ({"schema_name": "app"},)
     assert driver.select.call_args.kwargs == {"schema_name": None}
+
+
+def test_snowflake_columns_resolve_lowercase_folding_catalog_and_reject_ambiguity() -> None:
+    """ADBC Snowflake column lookups accept one case-insensitive table match and refuse several."""
+    from sqlspec.exceptions import AmbiguousIdentifierError
+
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "db", "SCHEMA_NAME": "public"}
+    driver.select.return_value = [{"SCHEMA_NAME": "public", "TABLE_NAME": "ls_sess", "COLUMN_NAME": "session_id"}]
+
+    columns = AdbcDataDictionary().get_columns(driver, table="ls_sess")
+
+    assert [column["column_name"] for column in columns] == ["session_id"]
+    assert driver.select.call_args.kwargs == {"schema_name": "public", "table_name": "LS_SESS"}
+
+    driver.select.return_value = [
+        {"SCHEMA_NAME": "public", "TABLE_NAME": "ls_sess", "COLUMN_NAME": "session_id"},
+        {"SCHEMA_NAME": "public", "TABLE_NAME": "Ls_Sess", "COLUMN_NAME": "session_id"},
+    ]
+    with pytest.raises(AmbiguousIdentifierError):
+        AdbcDataDictionary().get_columns(driver, table="ls_sess")

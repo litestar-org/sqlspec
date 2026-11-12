@@ -7,6 +7,12 @@ slugification, and SQL identifier quoting and normalization.
 import re
 import unicodedata
 from functools import lru_cache
+from typing import TYPE_CHECKING
+
+from sqlspec.exceptions import AmbiguousIdentifierError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = (
     "camelize",
@@ -15,6 +21,7 @@ __all__ = (
     "pascalize",
     "quote_backtick_identifier",
     "quote_identifier",
+    "resolve_catalog_identifier",
     "slugify",
     "snake_case",
     "split_qualified_identifier",
@@ -251,3 +258,34 @@ def quote_backtick_identifier(identifier: str) -> str:
         Backtick-quoted, escape-safe identifier.
     """
     return "`" + identifier.replace("`", "``") + "`"
+
+
+def resolve_catalog_identifier(requested: str, candidates: "Iterable[str]") -> "str | None":
+    """Resolve a requested identifier against catalog names.
+
+    An exact match wins. Otherwise a single case-insensitive match is returned.
+
+    Args:
+        requested: Identifier to look up.
+        candidates: Names reported by the catalog.
+
+    Returns:
+        The matching catalog name, or ``None`` when nothing matches.
+
+    Raises:
+        AmbiguousIdentifierError: If there is no exact match and several names match case-insensitively.
+    """
+    names = list(dict.fromkeys(candidates))
+    if requested in names:
+        return requested
+    folded = requested.casefold()
+    matches = [name for name in names if name.casefold() == folded]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    msg = (
+        f"Identifier {requested!r} has no exact catalog match and matches {sorted(matches)!r} case-insensitively; "
+        "use the exact quoted name"
+    )
+    raise AmbiguousIdentifierError(msg)

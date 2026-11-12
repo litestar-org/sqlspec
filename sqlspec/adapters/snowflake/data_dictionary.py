@@ -1,7 +1,7 @@
 """Snowflake native catalog reflection over shared dialect query packs."""
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, Final, cast
+from typing import Any, ClassVar, Final, NamedTuple, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -23,9 +23,11 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.data_dictionary.dialects.snowflake import (
     SNOWFLAKE_CONFIG,
+    match_snowflake_catalog_rows,
     parse_snowflake_imported_keys,
     parse_snowflake_primary_or_unique_keys,
     qualify_snowflake_information_schema,
+    snowflake_scope_exactness,
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -86,6 +88,15 @@ def _resolve_snowflake_catalog_scope(
     return database_name, schema_name, table_name, scope
 
 
+class _CatalogScope(NamedTuple):
+    database_name: str | None
+    schema_name: str | None
+    table_name: str | None
+    scope: str
+    schema_exact: bool
+    table_exact: bool
+
+
 def _capability(domain: str) -> MetadataCapability:
     if domain in _SUPPORTED:
         return MetadataCapability(
@@ -141,18 +152,27 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         """List advertised Snowflake feature names."""
         return list(SNOWFLAKE_CONFIG.feature_flags)
 
-    def _catalog_scope(
-        self, driver: Any, schema: str | None, table: str | None, *, operation: str
-    ) -> tuple[str | None, str | None, str | None, str]:
-        """Resolve exact catalog names, reading the session database and schema when unqualified."""
+    def _catalog_scope(self, driver: Any, schema: str | None, table: str | None, *, operation: str) -> _CatalogScope:
+        """Resolve catalog names, reading the session database and schema when unqualified."""
         database_name, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        schema_exact, table_exact = snowflake_scope_exactness(schema, table)
         if schema_name is None:
             session = driver.select_one_or_none(self.get_query("schemas", "current"))
             if session is not None:
                 database_name = session.get("database_name")
                 schema_name = session.get("schema_name")
         self._log_catalog_read(driver, schema_name, table_name, operation)
-        return database_name, schema_name, table_name, scope
+        return _CatalogScope(database_name, schema_name, table_name, scope, schema_exact, table_exact)
+
+    @staticmethod
+    def _matching_rows(rows: Sequence[Any], scope: _CatalogScope, *, by_table: bool) -> list[dict[str, Any]]:
+        return match_snowflake_catalog_rows(
+            rows,
+            schema_name=scope.schema_name,
+            schema_exact=scope.schema_exact,
+            table_name=scope.table_name if by_table else None,
+            table_exact=scope.table_exact,
+        )
 
     def _log_catalog_read(self, driver: Any, schema_name: str | None, table_name: str | None, operation: str) -> None:
         if table_name is None:
@@ -164,10 +184,10 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         if domain == "schemas":
             rows = driver.select(self.get_query("schemas", "list"))
         else:
-            database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None, operation=domain)
+            scope = self._catalog_scope(driver, schema, None, operation=domain)
             query = self.get_query(domain, "by_schema")
-            query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
-            rows = driver.select(query, schema_name=schema_name)
+            query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+            rows = self._matching_rows(driver.select(query, schema_name=scope.schema_name), scope, by_table=False)
         return MetadataResult(domain, capability=_capability(domain), items=tuple(rows))
 
     def get_schemas(self, driver: Any) -> MetadataResult:
@@ -180,22 +200,24 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
 
     def get_tables(self, driver: Any, schema: str | None = None) -> list[TableMetadata]:
         """List tables from INFORMATION_SCHEMA.TABLES."""
-        database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None, operation="tables")
+        scope = self._catalog_scope(driver, schema, None, operation="tables")
         query = self.get_query("tables", "by_schema")
-        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
-        return cast("list[TableMetadata]", driver.select(query, schema_name=schema_name, schema_type=TableMetadata))
+        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+        rows = driver.select(query, schema_name=scope.schema_name, schema_type=TableMetadata)
+        return cast("list[TableMetadata]", self._matching_rows(rows, scope, by_table=False))
 
     def get_columns(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[ColumnMetadata]:
         """List columns, preserving exact quoted table and schema names."""
-        database_name, schema_name, table_name, _ = self._catalog_scope(driver, schema, table, operation="columns")
-        params: dict[str, Any] = {"schema_name": schema_name}
+        scope = self._catalog_scope(driver, schema, table, operation="columns")
+        params: dict[str, Any] = {"schema_name": scope.schema_name}
         operation = "by_schema"
-        if table_name is not None:
+        if scope.table_name is not None:
             operation = "by_table"
-            params["table_name"] = table_name
+            params["table_name"] = scope.table_name
         query = self.get_query("columns", operation)
-        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
-        return cast("list[ColumnMetadata]", driver.select(query, schema_type=ColumnMetadata, **params))
+        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+        rows = driver.select(query, schema_type=ColumnMetadata, **params)
+        return cast("list[ColumnMetadata]", self._matching_rows(rows, scope, by_table=True))
 
     def get_indexes(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[IndexMetadata]:
         """Return no secondary indexes for standard Snowflake tables."""
@@ -212,22 +234,23 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
 
     def get_constraints(self, driver: Any, table: str | None = None, schema: str | None = None) -> MetadataResult:
         """Combine catalog constraints with column-ordered SHOW key metadata."""
-        database_name, schema_name, table_name, scope = self._catalog_scope(
-            driver, schema, table, operation="constraints"
-        )
-        params: dict[str, Any] = {"schema_name": schema_name}
+        catalog_scope = self._catalog_scope(driver, schema, table, operation="constraints")
+        table_name = catalog_scope.table_name
+        params: dict[str, Any] = {"schema_name": catalog_scope.schema_name}
         operation = "by_schema"
         if table_name is not None:
             params["table_name"] = table_name
             operation = "by_table"
         catalog_query = self.get_query("constraints", operation)
-        catalog_query = catalog_query.copy(qualify_snowflake_information_schema(catalog_query.raw_sql, database_name))
-        rows = list(driver.select(catalog_query, **params))
+        catalog_query = catalog_query.copy(
+            qualify_snowflake_information_schema(catalog_query.raw_sql, catalog_scope.database_name)
+        )
+        rows = self._matching_rows(driver.select(catalog_query, **params), catalog_scope, by_table=True)
         keys = parse_snowflake_primary_or_unique_keys(
-            driver.select(f"SHOW PRIMARY KEYS {scope}"), table_name=table_name
+            driver.select(f"SHOW PRIMARY KEYS {catalog_scope.scope}"), table_name=table_name
         )
         keys += parse_snowflake_primary_or_unique_keys(
-            driver.select(f"SHOW UNIQUE KEYS {scope}"), unique=True, table_name=table_name
+            driver.select(f"SHOW UNIQUE KEYS {catalog_scope.scope}"), unique=True, table_name=table_name
         )
         keyed = {(str(row.get("constraint_name")), str(row.get("table_name"))) for row in keys}
         combined = [row for row in rows if (str(row.get("constraint_name")), str(row.get("table_name"))) not in keyed]

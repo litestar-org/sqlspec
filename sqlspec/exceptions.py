@@ -4,6 +4,7 @@ from typing import Any, Final
 
 __all__ = (
     "SQLSTATE_EXCEPTION_MAP",
+    "AmbiguousIdentifierError",
     "CheckViolationError",
     "ConfigResolverError",
     "ConnectionTimeoutError",
@@ -424,6 +425,10 @@ class SQLSlotError(SQLSpecError):
 
 class MigrationError(SQLSpecError):
     """Base exception for migration-related errors."""
+
+
+class AmbiguousIdentifierError(SQLSpecError):
+    """An identifier has no exact catalog match and matches several names case-insensitively."""
 
 
 class OutOfOrderMigrationError(MigrationError):

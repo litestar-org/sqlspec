@@ -31,8 +31,8 @@ def test_snowflake_dictionary_types_capabilities_and_version(snowflake_connectio
 
 def test_snowflake_dictionary_columns_bind_exact_case(snowflake_connection: Any) -> None:
     snowflake_connection.default_result = _result(
-        ["table_name", "column_name", "data_type", "is_nullable", "ordinal_position"],
-        [("Orders", "PAYLOAD", "VARIANT", True, 1)],
+        ["schema_name", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position"],
+        [("SALES", "Orders", "PAYLOAD", "VARIANT", True, 1)],
     )
     driver = SnowflakeDriver(snowflake_connection)
     columns = driver.data_dictionary.get_columns(driver, '"Orders"', schema="sales")
@@ -103,8 +103,8 @@ def test_snowflake_catalog_tables_schema_columns_and_feature_flags(snowflake_con
 @pytest.mark.parametrize("table", [None, '"Orders"'])
 def test_constraints_merge_catalog_and_ordered_show_key_columns(snowflake_connection: Any, table: str | None) -> None:
     snowflake_connection.default_result = _result(
-        ["table_name", "constraint_name", "constraint_type"],
-        [("Orders", "PK_ORDERS", "PRIMARY KEY"), ("Orders", "CK_AMOUNT", "CHECK")],
+        ["schema_name", "table_name", "constraint_name", "constraint_type"],
+        [("SALES", "Orders", "PK_ORDERS", "PRIMARY KEY"), ("SALES", "Orders", "CK_AMOUNT", "CHECK")],
     )
     scope = 'IN TABLE "SALES"."Orders"' if table else 'IN SCHEMA "SALES"'
     snowflake_connection.results[f"SHOW PRIMARY KEYS {scope}"] = _result(
@@ -357,3 +357,31 @@ def test_native_ddl_unsupported_object_type_returns_unsupported(snowflake_connec
     driver = SnowflakeDriver(snowflake_connection)
     result = driver.data_dictionary.get_ddl(driver, "trg_orders", object_type="trigger", include_dependencies=False)
     assert result.status == MetadataSupport.UNSUPPORTED
+
+
+def test_unquoted_columns_match_lowercase_folding_catalogs(snowflake_connection: Any) -> None:
+    """Unquoted names resolve to a single lowercase catalog table, as on lowercase-folding endpoints."""
+    snowflake_connection.results[_SESSION_SCOPE_SQL] = _result(["database_name", "schema_name"], [("db", "public")])
+    snowflake_connection.default_result = _result(
+        ["schema_name", "table_name", "column_name", "data_type"], [("public", "orders", "id", "NUMBER")]
+    )
+    driver = SnowflakeDriver(snowflake_connection)
+
+    columns = driver.data_dictionary.get_columns(driver, "orders")
+
+    assert [column["column_name"] for column in columns] == ["id"]
+    assert list(snowflake_connection.calls[-1][1]) == ["public", "ORDERS"]
+
+
+def test_unquoted_columns_reject_ambiguous_case_variants(snowflake_connection: Any) -> None:
+    from sqlspec.exceptions import AmbiguousIdentifierError
+
+    snowflake_connection.results[_SESSION_SCOPE_SQL] = _result(["database_name", "schema_name"], [("db", "public")])
+    snowflake_connection.default_result = _result(
+        ["schema_name", "table_name", "column_name", "data_type"],
+        [("public", "orders", "id", "NUMBER"), ("public", "Orders", "id", "NUMBER")],
+    )
+    driver = SnowflakeDriver(snowflake_connection)
+
+    with pytest.raises(AmbiguousIdentifierError, match="ORDERS"):
+        driver.data_dictionary.get_columns(driver, "orders")

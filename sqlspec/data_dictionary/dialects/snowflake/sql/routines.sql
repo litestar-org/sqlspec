@@ -18,7 +18,7 @@ SELECT
     f.last_altered AS "last_altered",
     f.comment AS "comment"
 FROM information_schema.functions f
-JOIN target_schema ts ON f.function_schema = ts.schema_name
+JOIN target_schema ts ON UPPER(f.function_schema) = UPPER(ts.schema_name)
 UNION ALL
 SELECT
     p.procedure_catalog AS "catalog_name",
@@ -35,7 +35,7 @@ SELECT
     p.last_altered AS "last_altered",
     p.comment AS "comment"
 FROM information_schema.procedures p
-JOIN target_schema ts ON p.procedure_schema = ts.schema_name
+JOIN target_schema ts ON UPPER(p.procedure_schema) = UPPER(ts.schema_name)
 ORDER BY 2, 4, 3;
 
 -- name: functions_by_schema
@@ -55,7 +55,7 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.functions
-WHERE function_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(function_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY function_schema, function_name;
 
 -- name: procedures_by_schema
@@ -75,5 +75,5 @@ SELECT
     last_altered AS "last_altered",
     comment AS "comment"
 FROM information_schema.procedures
-WHERE procedure_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(procedure_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY procedure_schema, procedure_name;

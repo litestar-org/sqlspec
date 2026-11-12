@@ -19,7 +19,7 @@ SELECT
     identity_increment AS "identity_increment",
     comment AS "column_comment"
 FROM information_schema.columns
-WHERE table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
+WHERE UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
 ORDER BY table_name, ordinal_position;
 
 -- name: by_table
@@ -43,6 +43,6 @@ SELECT
     identity_increment AS "identity_increment",
     comment AS "column_comment"
 FROM information_schema.columns
-WHERE table_schema = COALESCE(:schema_name, CURRENT_SCHEMA())
-  AND table_name = :table_name
+WHERE UPPER(table_schema) = UPPER(COALESCE(:schema_name, CURRENT_SCHEMA()))
+  AND UPPER(table_name) = UPPER(:table_name)
 ORDER BY ordinal_position;
