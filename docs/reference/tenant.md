@@ -18,13 +18,14 @@ async with config.provide_session(bypass_tenant=True) as lookup:
 
 Sync configs accept the same keywords with `with`, and `SQLSpec.provide_session(config, ..., tenant=..., bypass_tenant=...)` forwards both arguments. `tenant` accepts a string, UUID, or `TenantContextPayload` (use a payload to supply extra session variables); `bypass_tenant=True` binds `TenantContextPayload.bypass()` for a single pre-tenant lookup or health check and cannot be combined with `tenant`. The tenant or bypass state stays bound through session cleanup and restores the prior context on every exit. `tenant=None` with `bypass_tenant=False` inherits the ambient scope. Both keywords require a configured `tenant_strategy`; unsupported adapters reject them.
 
-All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="default"`. Adapter-specific shorthands select the same built-in strategy:
+All tenant-enabled adapters accept `tenant_strategy=True` and `tenant_strategy="default"`. Adapter-specific shorthands select the same built-in strategy. Other adapters, including ADBC and Spanner, reject `tenant_strategy`:
 
-| Database | Shorthand | Built-in behavior |
-| --- | --- | --- |
-| PostgreSQL and CockroachDB | `"rls"` | Sets session variables for database row policies. |
-| SQL Server | `"rls"` or `"session_context"` | Sets mutable `SESSION_CONTEXT` keys for database row policies. |
-| Oracle | `"identifier"` | Sets client-identifier metadata. |
+| Database | Adapters | Shorthand | Built-in behavior |
+| --- | --- | --- | --- |
+| PostgreSQL | `asyncpg`, `psycopg`, `psqlpy` | `"rls"` | Sets session variables for database row policies. |
+| CockroachDB | `cockroach_asyncpg`, `cockroach_psycopg` | `"rls"` | Sets session variables for database row policies. |
+| SQL Server | `mssql_python`, `pymssql` | `"rls"` or `"session_context"` | Sets mutable `SESSION_CONTEXT` keys for database row policies. |
+| Oracle | `oracledb` | `"identifier"` | Sets client-identifier metadata. |
 
 Oracle VPD requires an explicit `OracleSyncVPDStrategy` or `OracleAsyncVPDStrategy` with trusted setter, clearer, namespace, and attribute names. There is no parameter-free `"vpd"` shorthand. See the [Oracle reference](adapters/oracledb.md#tenant-strategies).
 

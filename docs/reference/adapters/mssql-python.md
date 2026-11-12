@@ -52,6 +52,7 @@ Missing tenant identity raises `TenantContextError` before acquisition. Failed c
 ::: sqlspec.adapters.mssql_python.MssqlPythonSessionContextStrategy
     options:
       heading_level: 3
+      inherited_members: [__init__]
       members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary

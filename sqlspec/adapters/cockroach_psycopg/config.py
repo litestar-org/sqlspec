@@ -176,7 +176,7 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB Psycopg retries, follower reads, and native storage."""
 
     tenant_strategy: NotRequired[SyncTenantStrategy | AsyncTenantStrategy | TenantStrategyShorthand | None]
-    """Strategy or shorthand for session-scoped tenant identity."""
+    """Opt-in tenant strategy, or the ``"rls"`` shorthand, applied to every session and connection lease."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """Tenant connections require session affinity."""
 

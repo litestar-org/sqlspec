@@ -144,7 +144,7 @@ class PsqlpyDriverFeatures(TypedDict):
     """Optional driver feature flags, extension detection, and pooler settings for Psqlpy."""
 
     tenant_strategy: NotRequired["AsyncTenantStrategy | TenantStrategyShorthand | None"]
-    """Opt-in tenant strategy or ``rls`` shorthand applied to pooled leases."""
+    """Opt-in tenant strategy, or the ``"rls"`` shorthand, applied to every session and connection lease."""
     enable_cast_detection: NotRequired[bool]
     """Use SQL type casts in statements to coerce JSON, UUID, and temporal bind values (defaults to ``True``)."""
     enable_pgvector: NotRequired[bool]

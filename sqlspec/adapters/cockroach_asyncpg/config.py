@@ -170,7 +170,7 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB retries, follower reads, codecs, and native storage."""
 
     tenant_strategy: NotRequired[AsyncTenantStrategy | TenantStrategyShorthand | None]
-    """Strategy or shorthand for session-scoped tenant identity."""
+    """Opt-in tenant strategy, or the ``"rls"`` shorthand, applied to every session and connection lease."""
     tenant_session_baseline: NotRequired["Mapping[str, str]"]
     """Declared session settings replayed before each tenant checkout."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]

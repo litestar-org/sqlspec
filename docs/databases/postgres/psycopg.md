@@ -131,7 +131,7 @@ Pass `PsycopgDriverFeatures` keys inside `driver_features={...}` on `PsycopgSync
 | `enable_pgvector` | `bool` | - | Register `pgvector` adapters and promote the dialect when `pgvector` is installed. |
 | `enable_paradedb` | `bool` | `True` | Detect `pg_search` and promote the SQL dialect to `paradedb` (defaults to `True`). |
 | `enable_pg_textsearch` | `bool` | `True` | Detect `pg_textsearch` and promote the dialect for BM25 `<@>` ranking (defaults to `True`). |
-| `tenant_strategy` | `SyncTenantStrategy or AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy or `rls` shorthand for every pooled lease. |
+| `tenant_strategy` | `SyncTenantStrategy or AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"rls"` shorthand, applied to every session and connection lease. |
 | `json_serializer` | `Callable[[Any], str]` | - | Custom JSON serializer applied to statement parameters and Psycopg JSON dumpers. |
 | `json_deserializer` | `Callable[[str], Any]` | - | Custom JSON deserializer applied to Psycopg JSON/JSONB loaders. |
 | `on_connection_create` | `Callable[..., Any]` | - | Sync or async callback invoked with each raw Psycopg connection after internal setup. |

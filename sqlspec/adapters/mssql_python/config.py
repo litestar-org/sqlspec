@@ -143,7 +143,7 @@ class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
     tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
-    """Opt in to verified tenant session leases."""
+    """Opt-in tenant strategy, or the ``"session_context"`` shorthand, applied to every session and connection lease."""
 
     enable_pooling: NotRequired[bool]
     """Enable SQLSpec connection pooling around ``mssql-python`` connections (defaults to ``True``)."""

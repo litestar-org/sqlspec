@@ -120,7 +120,7 @@ Pass `PsqlpyDriverFeatures` keys inside `driver_features={...}` on `PsqlpyConfig
 <!-- GENERATED:START config-table:sqlspec.adapters.psqlpy.config.PsqlpyDriverFeatures -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy or `rls` shorthand applied to pooled leases. |
+| `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"rls"` shorthand, applied to every session and connection lease. |
 | `enable_cast_detection` | `bool` | `True` | Use SQL type casts in statements to coerce JSON, UUID, and temporal bind values (defaults to `True`). |
 | `enable_pgvector` | `bool` | - | Detect the PostgreSQL `vector` extension and promote the dialect to `pgvector`. |
 | `enable_paradedb` | `bool` | `True` | Detect `pg_search` and promote the dialect to `paradedb` (defaults to `True`). |

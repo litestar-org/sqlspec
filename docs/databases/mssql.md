@@ -152,7 +152,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
     <!-- GENERATED:START config-table:sqlspec.adapters.mssql_python.config.MssqlPythonDriverFeatures -->
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
-    | `tenant_strategy` | `SyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt in to verified tenant session leases. |
+    | `tenant_strategy` | `SyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"session_context"` shorthand, applied to every session and connection lease. |
     | `enable_pooling` | `bool` | `True` | Enable SQLSpec connection pooling around `mssql-python` connections (defaults to `True`). |
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
@@ -200,7 +200,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
     <!-- GENERATED:START config-table:sqlspec.adapters.pymssql.config.PymssqlDriverFeatures -->
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
-    | `tenant_strategy` | `SyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt in to verified tenant session leases. |
+    | `tenant_strategy` | `SyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"session_context"` shorthand, applied to every session and connection lease. |
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to bound JSON parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer applied to JSON result columns (defaults to `from_json`). |
     | `on_connection_create` | `Callable[[PymssqlConnection], None]` | - | Synchronous hook invoked with each raw `pymssql.Connection` upon creation. |

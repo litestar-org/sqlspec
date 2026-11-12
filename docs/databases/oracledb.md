@@ -237,7 +237,7 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 | `enable_events` | `bool` | - | Enable SQLSpec event channels (separate from `connection_config['events']` FAN/CQN notifications). |
 | `events_backend` | `OracleEventsBackend` | - | Event queue backend (`'poll_queue'` default, `'aq'`, or `'txeventq'`). |
 | `enable_direct_path_load` | `bool` | `True` | Route `load_from_arrow` through Thin-mode `Connection.direct_path_load` with `executemany` fallback (defaults to `True`). |
-| `tenant_strategy` | `TenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant identifier or explicit trusted-context strategy. |
+| `tenant_strategy` | `TenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"identifier"` shorthand, applied to every session and connection lease. |
 | `session_context_hook` | `OracleSessionContextConfig or dict[str, Any]` | - | Declarative `DBMS_SESSION` / `CLIENT_IDENTIFIER` context applied on checkout and cleared on release. |
 | `enable_session_tracing` | `bool` | - | Piggyback active correlation and trace identifiers onto `module`, `action`, `client_identifier`, and `econtext_id` in zero extra RTTs. |
 | `dbms_cloud_credential` | `str or None` | - | Default `DBMS_CLOUD` credential name used for server-side `DBMS_CLOUD.COPY_DATA` object-store loads. |

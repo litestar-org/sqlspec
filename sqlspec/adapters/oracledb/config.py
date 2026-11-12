@@ -303,7 +303,7 @@ class OracleDriverFeatures(TypedDict):
     enable_direct_path_load: NotRequired[bool]
     """Route ``load_from_arrow`` through Thin-mode ``Connection.direct_path_load`` with ``executemany`` fallback (defaults to ``True``)."""
     tenant_strategy: NotRequired[TenantStrategy | TenantStrategyShorthand | None]
-    """Opt-in tenant identifier or explicit trusted-context strategy."""
+    """Opt-in tenant strategy, or the ``"identifier"`` shorthand, applied to every session and connection lease."""
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
     """Declarative ``DBMS_SESSION`` / ``CLIENT_IDENTIFIER`` context applied on checkout and cleared on release."""
     enable_session_tracing: NotRequired[bool]

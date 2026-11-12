@@ -212,7 +212,7 @@ class PsycopgDriverFeatures(TypedDict):
     enable_pg_textsearch: NotRequired[bool]
     """Detect ``pg_textsearch`` and promote the dialect for BM25 ``<@>`` ranking (defaults to ``True``)."""
     tenant_strategy: NotRequired["SyncTenantStrategy | AsyncTenantStrategy | TenantStrategyShorthand | None"]
-    """Opt-in tenant strategy or ``rls`` shorthand for every pooled lease."""
+    """Opt-in tenant strategy, or the ``"rls"`` shorthand, applied to every session and connection lease."""
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Custom JSON serializer applied to statement parameters and Psycopg JSON dumpers."""
     json_deserializer: NotRequired["Callable[[str], Any]"]

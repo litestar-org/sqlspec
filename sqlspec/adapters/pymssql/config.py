@@ -82,7 +82,7 @@ class PymssqlDriverFeatures(TypedDict):
     """Optional pymssql driver feature flags for JSON serialization, connection hooks, and events."""
 
     tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
-    """Opt in to verified tenant session leases."""
+    """Opt-in tenant strategy, or the ``"session_context"`` shorthand, applied to every session and connection lease."""
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Custom JSON serializer applied to bound JSON parameters (defaults to ``to_json``)."""

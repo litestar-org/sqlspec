@@ -217,7 +217,7 @@ class AsyncpgDriverFeatures(TypedDict):
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     """Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and ``LISTEN/NOTIFY``."""
     tenant_strategy: NotRequired["AsyncTenantStrategy | TenantStrategyShorthand | None"]
-    """Opt-in tenant strategy or ``rls`` shorthand applied to every session lease."""
+    """Opt-in tenant strategy, or the ``"rls"`` shorthand, applied to every session and connection lease."""
     tenant_session_baseline: NotRequired["Mapping[str, str]"]
     """Declared session settings replayed before each tenant checkout."""
     type_codecs: NotRequired["list[dict[str, Any]]"]
