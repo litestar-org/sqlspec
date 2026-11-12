@@ -43,17 +43,6 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    async def drop_table(self) -> None:
-        """Drop the session table when it exists."""
-        await async_(self._drop_table)()
-
-    def _drop_table(self) -> None:
-        schema, table = split_schema_and_table(self._table_name)
-        with self._config.provide_session() as driver:
-            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is not None:
-                driver.execute(self._drop_table_sql()[0])
-                driver.commit()
-
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
         return await async_(self._get)(key, renew_for)

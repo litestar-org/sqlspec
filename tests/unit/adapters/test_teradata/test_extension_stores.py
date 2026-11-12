@@ -460,9 +460,8 @@ async def test_teradata_litestar_catalog_lifecycle(monkeypatch) -> None:
     await store.create_table()
     assert statements[0].startswith('CREATE MULTISET TABLE "LITESTAR_SESSION"')
     assert "CREATE INDEX" in statements[1]
-    await store.drop_table()
-    await store.drop_table()
-    assert statements[-1] == 'DROP TABLE "LITESTAR_SESSION"'
+    assert len(statements) == 2
+    assert store._drop_table_sql() == ['DROP TABLE "LITESTAR_SESSION"']
 
 
 @pytest.mark.anyio
