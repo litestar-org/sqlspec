@@ -254,6 +254,42 @@ async def test_tenant_identifier_reuse_clear_hooks_and_tracing(mode: str, oracle
         await _invoke(config.close_pool)
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_tenant_bypass_applies_session_context_hook(mode: str, oracle_23ai_service: OracleService) -> None:
+    hook = OracleSessionContextConfig(nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD"})
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = config_cls(
+        connection_config={
+            "host": oracle_23ai_service.host,
+            "port": oracle_23ai_service.port,
+            "service_name": oracle_23ai_service.service_name,
+            "user": oracle_23ai_service.user,
+            "password": oracle_23ai_service.password,
+            "min": 1,
+            "max": 1,
+        },
+        driver_features={"tenant_strategy": "identifier", "session_context_hook": hook},
+    )
+    try:
+        with TenantContext.bypass():
+            async with _tenant_oracle_session(config) as session:
+                assert (
+                    await _invoke(
+                        _method(session, "select_value"),
+                        "SELECT VALUE FROM NLS_SESSION_PARAMETERS WHERE PARAMETER = 'NLS_DATE_FORMAT'",
+                    )
+                    == "YYYY-MM-DD"
+                )
+                assert (
+                    await _invoke(
+                        _method(session, "select_value"), "SELECT SYS_CONTEXT('USERENV', 'CLIENT_IDENTIFIER') FROM DUAL"
+                    )
+                    is None
+                )
+    finally:
+        await _invoke(config.close_pool)
+
+
 class _OracleSyncResetFailureStrategy(OracleSyncIdentifierStrategy):
     __slots__ = ()
 

@@ -477,3 +477,54 @@ async def test_oracle_config_auto_attaches_session_context_hook_to_tenant_strate
     )
     with pytest.raises(ImproperConfigurationError, match="session_context_hook"):
         cfg_cls(driver_features={"tenant_strategy": explicit, "session_context_hook": {"module": "other"}})
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("hook_fails", [False, True])
+async def test_bypass_lease_applies_and_releases_session_context_hook(mode: str, hook_fails: bool) -> None:
+    connection = _connection(mode)
+    events: list[str] = []
+
+    class HookConnection(SimpleNamespace):
+        def __setattr__(self, name: str, value: Any) -> None:
+            if name == "module":
+                if hook_fails and value == "billing":
+                    raise RuntimeError("module rejected")
+                events.append(f"module={value}")
+            super().__setattr__(name, value)
+
+    connection = HookConnection(**vars(connection))
+
+    def record(name: str) -> Any:
+        def call(conn: Any) -> None:
+            assert conn is connection
+            events.append(name)
+
+        return AsyncMock(side_effect=call) if mode == "async" else MagicMock(side_effect=call)
+
+    pool = SimpleNamespace(
+        acquire=(AsyncMock if mode == "async" else MagicMock)(return_value=connection),
+        release=record("release"),
+        drop=record("drop"),
+    )
+    cfg_cls: Any = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cfg_cls(driver_features={"tenant_strategy": "identifier", "session_context_hook": {"module": "billing"}})
+    config.connection_instance = pool
+    connection.rollback = (AsyncMock if mode == "async" else MagicMock)()
+
+    async def use_connection() -> None:
+        if mode == "sync":
+            with config.provide_connection():
+                events.append("body")
+        else:
+            async with config.provide_connection():
+                events.append("body")
+
+    with TenantContext.bypass():
+        if hook_fails:
+            with pytest.raises(RuntimeError, match="module rejected"):
+                await use_connection()
+        else:
+            await use_connection()
+
+    assert events == (["drop"] if hook_fails else ["module=billing", "body", "module=", "release"])

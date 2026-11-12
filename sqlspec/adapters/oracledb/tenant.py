@@ -14,7 +14,7 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
 )
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
-from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
+from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease, await_owned_release
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext
 
@@ -225,21 +225,42 @@ def bind_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | Ma
     return strategy
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleSyncTenantLease(SyncTenantLease):
-    """Wrap Oracle pool hooks with verified tenant cleanup and physical drop."""
+    """Wrap Oracle pool hooks with verified tenant cleanup and physical drop.
 
-    __slots__ = ("_config", "_pool")
+    Bypass leases skip the tenant strategy but still apply and release the
+    configured ``session_context_hook``, matching non-tenant sessions.
+    """
+
+    __slots__ = ("_bypass_hook", "_config", "_pool")
 
     def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
         super().__init__(strategy)
         self._config = config
         self._pool: Any = None
+        self._bypass_hook: Any = None
 
     def _acquire(self) -> Any:
         self._pool = self._config.provide_pool()
-        return self._pool.acquire()
+        connection = self._pool.acquire()
+        hook = self._config.driver_features.get("session_context_hook") if TenantContext.is_bypassed() else None
+        if hook is not None:
+            try:
+                execute_session_checkout_sync(connection, hook)
+            except BaseException as exc:
+                try:
+                    self._invalidate(connection)
+                except BaseException as disposal_error:
+                    exc.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
+                raise
+        self._bypass_hook = hook
+        return connection
 
     def _release(self, connection: Any) -> None:
+        hook, self._bypass_hook = self._bypass_hook, None
+        if hook is not None:
+            execute_session_release_sync(connection, hook)
         self._pool.release(connection)
 
     def _invalidate(self, connection: Any) -> None:
@@ -249,21 +270,45 @@ class OracleSyncTenantLease(SyncTenantLease):
         connection.rollback()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class OracleAsyncTenantLease(AsyncTenantLease):
-    """Wrap asynchronous Oracle pool hooks and dispose unverified sessions."""
+    """Wrap asynchronous Oracle pool hooks and dispose unverified sessions.
 
-    __slots__ = ("_config", "_pool")
+    Bypass leases skip the tenant strategy but still apply and release the
+    configured ``session_context_hook``, matching non-tenant sessions.
+    """
+
+    __slots__ = ("_bypass_hook", "_config", "_pool")
 
     def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
         super().__init__(strategy)
         self._config = config
         self._pool: Any = None
+        self._bypass_hook: Any = None
 
     async def _acquire(self) -> Any:
         self._pool = await self._config.provide_pool()
-        return await self._pool.acquire()
+        connection = await self._pool.acquire()
+        hook = self._config.driver_features.get("session_context_hook") if TenantContext.is_bypassed() else None
+        if hook is not None:
+            setup_error: BaseException | None = None
+            try:
+                await execute_session_checkout_async(connection, hook)
+            except BaseException as exc:
+                setup_error = exc
+            if setup_error is not None:
+                try:
+                    await await_owned_release(self._invalidate(connection))
+                except BaseException as disposal_error:
+                    setup_error.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
+                raise setup_error
+        self._bypass_hook = hook
+        return connection
 
     async def _release(self, connection: Any) -> None:
+        hook, self._bypass_hook = self._bypass_hook, None
+        if hook is not None:
+            await execute_session_release_async(connection, hook)
         await self._pool.release(connection)
 
     async def _invalidate(self, connection: Any) -> None:
