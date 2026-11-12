@@ -481,7 +481,7 @@ class TeradataDriver(SyncDriverAdapterBase):
         if isinstance(size, bool) or size < 1:
             msg = "batch_size must be >= 1"
             raise ImproperConfigurationError(msg)
-        fast = bool(kwargs.pop("enable_fastexport", self.driver_features.get("enable_fastexport", False)))
+        fast = bool(self.driver_features.get("enable_fastexport", False))
         prepared = self.prepare_statement(
             statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
         )

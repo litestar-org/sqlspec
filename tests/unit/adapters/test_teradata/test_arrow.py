@@ -182,6 +182,17 @@ def test_fastexport_disabled_by_default() -> None:
     assert connection.cursor.return_value.execute.call_args.args == ("SELECT id, total FROM orders",)
 
 
+def test_select_to_arrow_binds_enable_fastexport_named_parameter() -> None:
+    connection = _connection([[]])
+    TeradataDriver(connection).select_to_arrow(
+        "SELECT id, total FROM orders WHERE id = :enable_fastexport", enable_fastexport=7
+    )
+    assert connection.cursor.return_value.execute.call_args.args == (
+        "SELECT id, total FROM orders WHERE id = ?",
+        (7,),
+    )
+
+
 def test_fastload_keeps_caller_transaction_open() -> None:
     connection = _connection([])
     connection.autocommit = False
