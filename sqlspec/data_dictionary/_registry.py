@@ -7,8 +7,10 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary._types import DialectConfig
 
 __all__ = (
+    "ADAPTER_DIALECT_ALIASES",
     "get_dialect_config",
     "list_registered_dialects",
+    "normalize_adapter_dialect_name",
     "normalize_dialect_mode",
     "normalize_dialect_name",
     "register_dialect",
@@ -27,6 +29,21 @@ DIALECT_ALIASES: dict[str, str] = {
     "ase": "sybase",
     "sa": "sqlanywhere",
     "vantage": "teradata",
+}
+
+ADAPTER_DIALECT_ALIASES: dict[str, str] = {
+    "aiomysql": "mysql",
+    "aiosqlite": "sqlite",
+    "asyncmy": "mysql",
+    "asyncpg": "postgres",
+    "cloudspanner": "spanner",
+    "mssql_python": "mssql",
+    "mysqlconnector": "mysql",
+    "oracledb": "oracle",
+    "psqlpy": "postgres",
+    "psycopg": "postgres",
+    "pymssql": "mssql",
+    "pymysql": "mysql",
 }
 
 DIALECT_MODE_ALIASES: dict[tuple[str, str], str] = {
@@ -52,6 +69,21 @@ def normalize_dialect_name(dialect: str) -> str:
     """
     normalized = dialect.lower()
     return DIALECT_ALIASES.get(normalized, normalized)
+
+
+def normalize_adapter_dialect_name(dialect: str | None) -> str:
+    """Normalize an adapter package name or dialect name to a canonical registry key.
+
+    Args:
+        dialect: Adapter or dialect name; ``None`` or blank yields ``""``.
+
+    Returns:
+        Canonical dialect key.
+    """
+    raw = (dialect or "").strip().lower()
+    if not raw:
+        return ""
+    return normalize_dialect_name(ADAPTER_DIALECT_ALIASES.get(raw, raw))
 
 
 def normalize_dialect_mode(dialect: str, mode: str | None) -> str | None:

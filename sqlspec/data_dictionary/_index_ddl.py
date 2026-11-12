@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Self, final
 
-from sqlspec.data_dictionary._registry import normalize_dialect_name
+from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
@@ -19,20 +19,6 @@ __all__ = (
     "filter_droppable_table_indexes",
 )
 
-_ADAPTER_DIALECT_ALIASES: Final[dict[str, str]] = {
-    "aiomysql": "mysql",
-    "aiosqlite": "sqlite",
-    "asyncmy": "mysql",
-    "asyncpg": "postgres",
-    "cloudspanner": "spanner",
-    "mssql_python": "mssql",
-    "mysqlconnector": "mysql",
-    "oracledb": "oracle",
-    "psqlpy": "postgres",
-    "psycopg": "postgres",
-    "pymssql": "mssql",
-    "pymysql": "mysql",
-}
 _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
 _SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
 _CREATE_UNIQUE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
@@ -41,11 +27,7 @@ _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)",
 
 def _canonical_index_dialect(dialect: str | None) -> str:
     """Normalize an adapter or dialect string for index DDL generation."""
-    raw = (dialect or "").strip().lower()
-    if not raw:
-        return ""
-    mapped = _ADAPTER_DIALECT_ALIASES.get(raw, raw)
-    return normalize_dialect_name(mapped)
+    return normalize_adapter_dialect_name(dialect)
 
 
 def _teradata_index_column_list(index_meta: Mapping[str, Any]) -> str:

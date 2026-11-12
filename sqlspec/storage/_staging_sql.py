@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
-from sqlspec.data_dictionary._registry import normalize_dialect_name
+from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.uuids import uuid4
@@ -24,22 +24,7 @@ __all__ = (
     "resolve_stage_table_name",
 )
 
-_ADAPTER_DIALECT_ALIASES: Final[dict[str, str]] = {
-    "aiomysql": "mysql",
-    "aiosqlite": "sqlite",
-    "asyncmy": "mysql",
-    "asyncpg": "postgres",
-    "cloudspanner": "spanner",
-    "mssql_python": "mssql",
-    "mysqlconnector": "mysql",
-    "oracledb": "oracle",
-    "psqlpy": "postgres",
-    "psycopg": "postgres",
-    "pymssql": "mssql",
-    "pymysql": "mysql",
-    "spangres": "postgres",
-}
-_PG_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"postgres", "cockroachdb"})
+_PG_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"postgres", "cockroachdb", "spangres"})
 _ON_CONFLICT_DIALECTS: Final[frozenset[str]] = _PG_FAMILY_DIALECTS | frozenset({"duckdb", "sqlite"})
 _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
 SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
@@ -62,11 +47,7 @@ def normalize_storage_dialect(dialect: str | None) -> str:
     Returns:
         Canonical lowercase dialect key.
     """
-    raw = (dialect or "").strip().lower()
-    if not raw:
-        return ""
-    mapped = _ADAPTER_DIALECT_ALIASES.get(raw, raw)
-    return normalize_dialect_name(mapped)
+    return normalize_adapter_dialect_name(dialect)
 
 
 def compute_worker_thread_budget(
