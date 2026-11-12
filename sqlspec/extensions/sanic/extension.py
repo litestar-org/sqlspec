@@ -9,10 +9,10 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast, overload
 
 from sqlspec.base import SQLSpec, coerce_sqlspec
-from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -35,7 +35,15 @@ if TYPE_CHECKING:
 
     from sanic import Sanic
 
-    from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, NoPoolSyncConfig, SyncConfigT, SyncDatabaseConfig
+    from sqlspec.config import (
+        AsyncConfigT,
+        AsyncDatabaseConfig,
+        DatabaseConfigProtocol,
+        NoPoolAsyncConfig,
+        NoPoolSyncConfig,
+        SyncConfigT,
+        SyncDatabaseConfig,
+    )
     from sqlspec.loader import SQLFileLoader
 
 __all__ = ("SQLSpecPlugin",)
@@ -205,6 +213,12 @@ class SQLSpecPlugin:
     def get_session(self, request: Any, key: Any = None) -> Any:
         """Get or create database session for request.
 
+        A synchronous configuration checks out the request connection on this call. An
+        asynchronous configuration whose connection is not open yet returns a session that
+        opens it on the first awaited call, so ``await session.select(...)``,
+        ``async for row in session.select_stream(...)``, and
+        ``async with session.transaction():`` work unchanged.
+
         Args:
             request: Sanic request instance.
             key: Optional session key, bind key, config type, or config instance.
@@ -216,8 +230,25 @@ class SQLSpecPlugin:
         if not has_context_value(request.ctx, config_state.connection_key) and has_context_value(
             request.ctx, self._deferred_key(config_state)
         ):
+            if config_state.config.is_async:
+                return self._deferred_session(request, key, config_state)
             self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
+
+    def _deferred_session(self, request: Any, key: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+        """Return a session that opens the asynchronous request connection on its first awaited call."""
+
+        def current_session() -> Any:
+            if has_context_value(request.ctx, config_state.connection_key):
+                return get_or_create_session(request, config_state)
+            return None
+
+        return DeferredAsyncSession(
+            config_state.config,
+            lambda: self.get_session_async(request, key),
+            current_session,
+            "await plugin.get_session_async(request)",
+        )
 
     async def get_session_async(self, request: Any, key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
@@ -226,7 +257,7 @@ class SQLSpecPlugin:
         return get_or_create_session(request, config_state)
 
     def get_connection(self, request: Any, key: Any = None) -> Any:
-        """Get database connection from request context.
+        """Get database connection from request context, checking it out on first access.
 
         Args:
             request: Sanic request instance.
@@ -234,6 +265,10 @@ class SQLSpecPlugin:
 
         Returns:
             Database connection object.
+
+        Raises:
+            ImproperConfigurationError: The configuration is asynchronous and its connection is
+                not open yet; use ``await plugin.get_connection_async(request)``.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_context_value(request.ctx, config_state.connection_key) and has_context_value(
@@ -346,12 +381,8 @@ class SQLSpecPlugin:
 
     def _acquire_deferred_connection_sync(self, request: Any, config_state: SanicConfigState) -> Any:
         config = config_state.config
-        if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
-            msg = (
-                "Async Sanic request connections are acquired on first use; call "
-                "await plugin.get_session_async(request) or await plugin.get_connection_async(request)."
-            )
-            raise ImproperConfigurationError(msg)
+        if config.is_async:
+            raise_async_connection_required("await plugin.get_connection_async(request)")
         tenant = _has_tenant_strategy(config)
         payload = TenantContext.require(config) if tenant else None
         payload_key = self._tenant_payload_key(config_state)

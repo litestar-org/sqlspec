@@ -682,22 +682,3 @@ def test_request_connection_is_checked_out_on_first_access_only(framework: str, 
         assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
     finally:
         reader.close()
-
-
-def test_sync_accessor_on_async_configuration_requires_async_access() -> None:
-    config = AiosqliteConfig(connection_config={"database": ":memory:"})
-    errors: list[str] = []
-
-    async def route(request: Request) -> JSONResponse:
-        try:
-            plugin.get_session(request)
-        except ImproperConfigurationError as exc:
-            errors.append(str(exc))
-        return JSONResponse({"ok": True})
-
-    app = Starlette(routes=[Route("/", route)])
-    plugin = SQLSpecPlugin(config, app)
-    with TestClient(app) as client:
-        assert client.get("/").status_code == 200
-    assert len(errors) == 1
-    assert "get_session_async" in errors[0]

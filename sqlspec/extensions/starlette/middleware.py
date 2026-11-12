@@ -9,11 +9,11 @@ from anyio import CancelScope
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.starlette._utils import (
+    get_or_create_session,
     get_scope_tenant,
     get_state_value,
     has_state_value,
@@ -41,6 +41,7 @@ __all__ = (
     "SQLSpecTenantRequestMiddleware",
     "acquire_pending_connection_async",
     "acquire_pending_connection_sync",
+    "deferred_request_session",
     "has_tenant_strategy",
 )
 
@@ -361,7 +362,7 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     """Acquire the deferred request connection synchronously on first access.
 
     Raises:
-        ImproperConfigurationError: The configuration is asynchronous.
+        ImproperConfigurationError: The configuration is asynchronous and its connection is not open.
     """
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
@@ -371,12 +372,8 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
         return get_state_value(request.state, config_state.connection_key)
 
     config = config_state.config
-    if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
-        msg = (
-            "Async request connections are acquired on first use; call await plugin.get_session_async(request), "
-            "await plugin.get_connection_async(request), or use Depends(plugin.provide_session())."
-        )
-        raise ImproperConfigurationError(msg)
+    if config.is_async:
+        raise_async_connection_required("await plugin.get_connection_async(request)")
 
     provided: Any = None
     if config.supports_connection_pooling:
@@ -406,6 +403,33 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
 
     pop_state_value(request.state, pending_key)
     return connection
+
+
+def deferred_request_session(request: "Request", config_state: "SQLSpecConfigState") -> DeferredAsyncSession:
+    """Return a session that opens the asynchronous request connection on its first awaited call.
+
+    Args:
+        request: Starlette request instance.
+        config_state: Configuration state for an asynchronous configuration.
+
+    Returns:
+        A deferred session bound to the request's pending connection.
+    """
+    if get_state_value(request.state, _pending_connection_key(config_state.connection_key), None) is None:
+        get_state_value(request.state, config_state.connection_key)
+
+    async def open_session() -> Any:
+        await acquire_pending_connection_async(request, config_state)
+        return get_or_create_session(request, config_state)
+
+    def current_session() -> Any:
+        if has_state_value(request.state, config_state.connection_key):
+            return get_or_create_session(request, config_state)
+        return None
+
+    return DeferredAsyncSession(
+        config_state.config, open_session, current_session, "await plugin.get_session_async(request)"
+    )
 
 
 class _PendingConnection:

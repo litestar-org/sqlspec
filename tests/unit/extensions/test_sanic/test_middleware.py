@@ -395,7 +395,7 @@ async def test_sanic_sync_get_connection_raises_when_tenant_connection_is_deferr
         app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())), ctx=SimpleNamespace(), headers={}
     )
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(ImproperConfigurationError, match="get_session_async"):
+    with pytest.raises(ImproperConfigurationError, match="get_connection_async"):
         plugin.get_connection(request)
     await plugin._on_response(request, SimpleNamespace(status=401))  # pyright: ignore[reportPrivateUsage]
 

@@ -248,8 +248,10 @@ class SQLSpecPlugin:
     def get_session(self, key: Any = None) -> Any:
         """Get or create database session for current request.
 
-        Sessions are cached per request for consistency, and tenant-enforced
-        connections are acquired lazily on first access.
+        Sessions are cached per request for consistency, and the request connection
+        is checked out on first access. An asynchronous configuration returns a
+        blocking session whose calls run on the plugin's portal event loop, so a
+        synchronous view calls ``session.select(...)`` without ``await``.
 
         Args:
             key: Optional session key, bind key, config type, or config instance.

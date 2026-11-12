@@ -31,6 +31,7 @@ from sqlspec.config import (
 from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
+from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
@@ -821,9 +822,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Provide a database session for the specified configuration key from request scope.
 
-        This method requires the connection to already exist in scope.
-        For on-demand connection creation, use ``provide_request_session_sync`` or
-        ``provide_request_session_async`` instead.
+        For a synchronous configuration the connection must already exist in scope; use
+        ``provide_request_session_sync`` to check one out on demand. For an asynchronous
+        configuration whose connection is not open yet, the session opens it on the first
+        awaited call, with the same tenant resolution and commit or rollback handling as
+        ``provide_request_session_async``.
 
         Args:
             key: The configuration identifier (same as get_config).
@@ -836,6 +839,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         plugin_state = self._get_plugin_state(key)
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
+            if plugin_state.config.is_async:
+                return cast("AsyncDriverAdapterBase", self._deferred_session(plugin_state, state, scope))
             self._raise_missing_connection(plugin_state.connection_key)
         return self._create_session(plugin_state, connection, scope)
 
@@ -865,8 +870,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         If no connection exists in scope, one will be created from the pool and stored
         in scope for reuse. The connection will be cleaned up by the before_send handler.
-
-        For async configurations, use ``provide_request_session_async`` instead.
+        An asynchronous configuration returns the same deferred session as
+        ``provide_request_session``.
 
         Args:
             key: The configuration identifier (same as get_config).
@@ -877,6 +882,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             A sync driver session instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
+        if plugin_state.config.is_async:
+            return self.provide_request_session(plugin_state.session_key, state, scope)
         connection = self._ensure_connection_sync(plugin_state, state, scope)
         return cast("SyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
 
@@ -953,12 +960,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             state: The Litestar application State object.
             scope: The ASGI scope containing the request context.
 
+        Raises:
+            ImproperConfigurationError: The connection is not open yet.
+
         Returns:
             A database connection instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
+            if plugin_state.config.is_async:
+                raise_async_connection_required("await plugin.provide_request_connection_async(key, state, scope)")
             self._raise_missing_connection(plugin_state.connection_key)
         return connection
 
@@ -996,10 +1008,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             state: The Litestar application State object.
             scope: The ASGI scope containing the request context.
 
+        Raises:
+            ImproperConfigurationError: The configuration is asynchronous and its connection is not open yet.
+
         Returns:
             A database connection instance for the specified database configuration.
         """
         plugin_state = self._get_plugin_state(key)
+        if plugin_state.config.is_async:
+            return self.provide_request_connection(plugin_state.connection_key, state, scope)
         return self._ensure_connection_sync(plugin_state, state, scope)
 
     @overload
@@ -1167,6 +1184,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
         set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
         return connection
+
+    def _deferred_session(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Return a session that opens the asynchronous request connection on its first awaited call."""
+
+        def current_session() -> Any:
+            connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
+            return None if connection is None else self._create_session(plugin_state, connection, scope)
+
+        return DeferredAsyncSession(
+            plugin_state.config,
+            lambda: self.provide_request_session_async(plugin_state.session_key, state, scope),
+            current_session,
+            "await plugin.provide_request_session_async(key, state, scope)",
+        )
 
     def _create_session(
         self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"

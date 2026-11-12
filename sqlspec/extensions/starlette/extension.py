@@ -264,7 +264,12 @@ class SQLSpecPlugin:
     def get_session(self, request: "Request", key: Any = None) -> Any:
         """Get or create database session for request.
 
-        Sessions are cached per request to ensure consistency.
+        Sessions are cached per request to ensure consistency. A synchronous
+        configuration checks out the request connection on this call. An asynchronous
+        configuration whose connection is not open yet returns a session that opens it
+        on the first awaited call, so ``await session.select(...)``,
+        ``async for row in session.select_stream(...)``, and
+        ``async with session.transaction():`` work unchanged.
 
         Args:
             request: Starlette request instance.
@@ -274,8 +279,6 @@ class SQLSpecPlugin:
             Database session (driver instance).
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-        if not has_state_value(request.state, config_state.connection_key):
-            acquire_pending_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
     async def get_session_async(self, request: "Request", key: Any = None) -> Any:
@@ -298,7 +301,7 @@ class SQLSpecPlugin:
         return cast("Any", get_or_create_session(request, config_state))
 
     def get_connection(self, request: "Request", key: Any = None) -> Any:
-        """Get database connection from request state.
+        """Get database connection from request state, checking it out on first access.
 
         Args:
             request: Starlette request instance.
@@ -306,6 +309,10 @@ class SQLSpecPlugin:
 
         Returns:
             Database connection object.
+
+        Raises:
+            ImproperConfigurationError: The configuration is asynchronous and its connection is
+                not open yet; use ``await plugin.get_connection_async(request)``.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_state_value(request.state, config_state.connection_key):

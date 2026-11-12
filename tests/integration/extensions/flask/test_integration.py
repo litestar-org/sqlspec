@@ -272,9 +272,6 @@ def test_flask_default_session_key() -> None:
         assert response.json == {"same_session": True}
 
 
-@pytest.mark.skip(
-    reason="Async adapters in sync Flask routes require wrapping every driver call - experimental feature"
-)
 def test_flask_async_adapter_via_portal() -> None:
     """Test Flask extension with async adapter via portal."""
     pytest.importorskip("aiosqlite")

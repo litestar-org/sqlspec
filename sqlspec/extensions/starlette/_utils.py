@@ -65,8 +65,8 @@ def get_connection_from_request(request: "Request", config_state: "SQLSpecConfig
         Database connection object.
 
     Raises:
-        ImproperConfigurationError: The configuration is asynchronous and its connection has not
-            been checked out; use the plugin's async accessors.
+        ImproperConfigurationError: The configuration is asynchronous and its connection is not
+            open; use the plugin's asynchronous connection accessor.
     """
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
@@ -79,7 +79,9 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     """Get or create database session for request.
 
     Sessions are cached per request to ensure the same session instance
-    is returned for multiple calls within the same request.
+    is returned for multiple calls within the same request. For an asynchronous
+    configuration whose request connection is not open yet, the result is a
+    deferred session that opens the connection on its first awaited call.
 
     Args:
         request: Starlette request instance.
@@ -93,6 +95,10 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     existing_session = get_state_value(request.state, session_instance_key, None)
     if existing_session is not None:
         return existing_session
+    if config_state.config.is_async and not has_state_value(request.state, config_state.connection_key):
+        from sqlspec.extensions.starlette.middleware import deferred_request_session
+
+        return deferred_request_session(request, config_state)
     session = config_state.config.driver_type(
         connection=get_connection_from_request(request, config_state),
         statement_config=config_state.config.statement_config,
