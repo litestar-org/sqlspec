@@ -126,15 +126,14 @@ def _quarantine_error(close_error: BaseException, quarantine_error: BaseExceptio
 class PsycopgSyncTenantLease(SyncTenantLease):
     """Adapt the native pool context to a synchronous fail-closed lease.
 
-    Session leases always roll back; connection leases commit clean exits.
+    Like the native pool context, a clean exit commits and an exception rolls back.
     """
 
-    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
+    __slots__ = ("_config", "_context", "_pool")
 
-    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
-        self._rollback_on_exit = session
         self._context: Any = None
         self._pool: Any = None
 
@@ -160,7 +159,7 @@ class PsycopgSyncTenantLease(SyncTenantLease):
         self._release(connection)
 
     def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not self._rollback_on_exit:
+        if exc_type is None:
             connection.commit()
         else:
             connection.rollback()
@@ -170,15 +169,14 @@ class PsycopgSyncTenantLease(SyncTenantLease):
 class PsycopgAsyncTenantLease(AsyncTenantLease):
     """Adapt the native pool context to an asynchronous fail-closed lease.
 
-    Session leases always roll back; connection leases commit clean exits.
+    Like the native pool context, a clean exit commits and an exception rolls back.
     """
 
-    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
+    __slots__ = ("_config", "_context", "_pool")
 
-    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
-        self._rollback_on_exit = session
         self._context: Any = None
         self._pool: Any = None
 
@@ -204,7 +202,7 @@ class PsycopgAsyncTenantLease(AsyncTenantLease):
         await self._release(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not self._rollback_on_exit:
+        if exc_type is None:
             await connection.commit()
         else:
             await connection.rollback()

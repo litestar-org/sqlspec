@@ -532,13 +532,14 @@ async def test_bypass_lease_applies_and_releases_session_context_hook(mode: str,
 
 def test_sync_session_builds_one_session_lease(monkeypatch: pytest.MonkeyPatch) -> None:
     config = OracleSyncConfig(driver_features={"tenant_strategy": "identifier"})
-    created: list[bool] = []
+    created: list[Any] = []
     build = OracleSyncConfig._create_tenant_lease
 
-    def record(self: OracleSyncConfig, *, session: bool = False) -> Any:
-        created.append(session)
-        return build(self, session=session)
+    def record(self: OracleSyncConfig) -> Any:
+        lease = build(self)
+        created.append(lease)
+        return lease
 
     monkeypatch.setattr(OracleSyncConfig, "_create_tenant_lease", record)
     config.provide_session()
-    assert created == [True]
+    assert len(created) == 1

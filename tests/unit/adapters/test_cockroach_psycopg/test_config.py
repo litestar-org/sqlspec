@@ -1361,7 +1361,7 @@ async def test_tenant_providers_apply_structural_strategy_and_dispose(
         await invoke()
     assert calls == [
         "checkout:a",
-        "rollback" if provider == "provide_session" else "commit",
+        "commit",
         "checkin:a",
         *(["close"] if cleanup_failure else []),
         "release",

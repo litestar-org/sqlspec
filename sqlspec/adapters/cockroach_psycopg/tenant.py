@@ -121,12 +121,11 @@ def validate_cockroach_psycopg_tenant_config(
 class CockroachPsycopgSyncTenantLease(SyncTenantLease):
     """Adapt the native CockroachDB psycopg pool context to a synchronous fail-closed lease."""
 
-    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
+    __slots__ = ("_config", "_context", "_pool")
 
-    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
-        self._rollback_on_exit = session
         self._context: Any = None
         self._pool: Any = None
 
@@ -152,7 +151,7 @@ class CockroachPsycopgSyncTenantLease(SyncTenantLease):
         self._release(connection)
 
     def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not self._rollback_on_exit:
+        if exc_type is None:
             connection.commit()
         else:
             connection.rollback()
@@ -162,12 +161,11 @@ class CockroachPsycopgSyncTenantLease(SyncTenantLease):
 class CockroachPsycopgAsyncTenantLease(AsyncTenantLease):
     """Adapt the native CockroachDB psycopg pool context to an asynchronous fail-closed lease."""
 
-    __slots__ = ("_config", "_context", "_pool", "_rollback_on_exit")
+    __slots__ = ("_config", "_context", "_pool")
 
-    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
-        self._rollback_on_exit = session
         self._context: Any = None
         self._pool: Any = None
 
@@ -193,7 +191,7 @@ class CockroachPsycopgAsyncTenantLease(AsyncTenantLease):
         await self._release(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
-        if exc_type is None and not self._rollback_on_exit:
+        if exc_type is None:
             await connection.commit()
         else:
             await connection.rollback()

@@ -56,7 +56,7 @@ class MssqlPythonTenantLease(SyncTenantLease):
 
     __slots__ = ("_config",)
 
-    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
 

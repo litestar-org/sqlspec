@@ -1559,11 +1559,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         msg = f"{type(self).__name__} received an invalid tenant_strategy: {strategy!r}"
         raise ImproperConfigurationError(msg)
 
-    def _create_tenant_lease(self, *, session: bool = False) -> Any:
+    def _create_tenant_lease(self) -> Any:
         """Build one fail-closed lease for a connection or session acquisition.
-
-        Args:
-            session: The lease serves a driver session instead of a raw connection.
 
         Returns:
             The adapter lease, or None when no tenant strategy is configured.
@@ -1578,7 +1575,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if lease_type is None:
             msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
             raise ImproperConfigurationError(msg)
-        return lease_type(self, strategy, session=session)
+        return lease_type(self, strategy)
 
     def _require_leased_tenant_connection(self) -> None:
         """Reject standalone connections that would bypass tenant leases.

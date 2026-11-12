@@ -92,7 +92,7 @@ class AsyncpgTenantLease(AsyncTenantLease):
 
     __slots__ = ("_cleanup_deadline", "_config", "_pool")
 
-    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy") -> None:
         super().__init__(strategy, cleanup_timeout=DEFAULT_TENANT_CLEANUP_TIMEOUT)
         self._config = config
         self._pool: Any = None

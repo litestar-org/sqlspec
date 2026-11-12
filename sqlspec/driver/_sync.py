@@ -144,7 +144,7 @@ class SyncPoolSessionFactory:
     def __init__(self, config: Any) -> None:
         self._config = config
         self._ctx: Any = None
-        self._tenant_lease: Any = config._create_tenant_lease(session=True)
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     def acquire_connection(self) -> Any:
         if self._tenant_lease is not None:

@@ -155,7 +155,7 @@ class AsyncPoolSessionFactory:
         self._config = config
         self._connection: Any = None
         self._pool: Any = None
-        self._tenant_lease: Any = config._create_tenant_lease(session=True)
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     async def acquire_connection(self) -> Any:
         if self._tenant_lease is not None:

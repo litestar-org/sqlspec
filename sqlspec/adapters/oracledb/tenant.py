@@ -234,7 +234,7 @@ class OracleSyncTenantLease(SyncTenantLease):
 
     __slots__ = ("_bypass_hook", "_config", "_pool")
 
-    def __init__(self, config: Any, strategy: "SyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "SyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
         self._pool: Any = None
@@ -280,7 +280,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
 
     __slots__ = ("_bypass_hook", "_config", "_pool")
 
-    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
         self._pool: Any = None

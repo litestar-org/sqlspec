@@ -94,7 +94,7 @@ Choose a tenant only after the app has checked the user's right to access it. Do
 
 Sync configs use `with config.provide_session(tenant="acme") as session`. The `tenant` argument accepts a string, UUID, or `TenantContextPayload` with session variables. It binds the tenant through acquisition, application work, and cleanup, then restores the caller's context, including on failure or cancellation. It requires a configured `tenant_strategy`.
 
-Use `TenantContext.scope("acme")` (supports both `with` and `async with`) around several sessions when they share one tenant, or pass `bypass_tenant=True` to `provide_session(bypass_tenant=True)` for a pre-tenant login lookup or health probe. Calling `provide_session()` or passing `tenant=None` inherits the ambient scope. The lease takes one snapshot of the tenant; a later scope change does not alter an open session. Call `session.commit()` to save writes. The lease rolls back any open transaction before cleanup.
+Use `TenantContext.scope("acme")` (supports both `with` and `async with`) around several sessions when they share one tenant, or pass `bypass_tenant=True` to `provide_session(bypass_tenant=True)` for a pre-tenant login lookup or health probe. Calling `provide_session()` or passing `tenant=None` inherits the ambient scope. The lease takes one snapshot of the tenant; a later scope change does not alter an open session. Enabling a tenant strategy does not change commit behavior: each adapter's sessions and connections commit or discard unfinished work exactly as they do without one. Call `session.commit()` to save writes portably.
 
 ## Preserve Pool Settings
 
