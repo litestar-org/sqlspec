@@ -3217,9 +3217,16 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
                 ("ordinal_position", 0, None, None, 18, 0, False),
             ]
             self.rowcount = 1
+            self.session_scope = False
 
         def execute(self, sql: str, parameters: Any = None, **kwargs: Any) -> None:
             self.connection.calls.append((sql, parameters))
+            self.session_scope = "CURRENT_DATABASE()" in sql
+            if self.session_scope:
+                self.description = [
+                    ("database_name", 2, None, None, None, None, True),
+                    ("schema_name", 2, None, None, None, None, True),
+                ]
             if sql.startswith("INSERT"):
                 identifier, payload, items, object_value = parameters
                 self.connection.rows.append({
@@ -3230,6 +3237,8 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
                 })
 
         def fetchall(self) -> list[tuple[Any, ...]]:
+            if self.session_scope:
+                return [("APP_DB", "PUBLIC")]
             return [("id", "NUMBER", 1), ("payload", "VARIANT", 2), ("items", "ARRAY", 3), ("object", "OBJECT", 4)]
 
         def executemany(self, sql: str, parameters: Any) -> None:
