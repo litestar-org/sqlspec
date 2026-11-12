@@ -26,7 +26,7 @@ from sqlspec.adapters.adbc.core import (
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.config import ADKConfig
-from sqlspec.core.parameters._validator import PARAMETER_REGEX
+from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import ImproperConfigurationError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 __all__ = ("AdbcADKConfig", "AdbcADKMemoryStore", "AdbcADKStore", "decode_adbc_pgvector", "format_pgvector_literal")
 
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
+_STORE_PARAMETER_VALIDATOR: Final[ParameterValidator] = ParameterValidator()
 
 
 class AdbcADKConfig(ADKConfig):
@@ -355,16 +356,20 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return to_json(state)
 
     def _deserialize_state(self, data: Any) -> "dict[str, Any]":
-        """Deserialize state data from JSON string.
+        """Deserialize state data from JSON string, bytes, or native mapping.
 
         Args:
-            data: JSON string from database.
+            data: JSON string, bytes, or mapping from database.
 
         Returns:
             Deserialized state dictionary.
         """
         if data is None:
             return {}
+        if isinstance(data, Mapping):
+            return dict(data)
+        if isinstance(data, (bytes, bytearray)):
+            return cast("dict[str, Any]", from_json(bytes(data)))
         return cast("dict[str, Any]", from_json(str(data)))
 
     def _serialize_json_field(self, value: Any) -> "str | None":
@@ -418,13 +423,17 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Deserialize optional JSON field from database.
 
         Args:
-            data: JSON string from database or None.
+            data: JSON string, bytes, mapping, or None from database.
 
         Returns:
             Deserialized dictionary or None.
         """
         if data is None:
             return None
+        if isinstance(data, Mapping):
+            return dict(data)
+        if isinstance(data, (bytes, bytearray)):
+            return cast("dict[str, Any]", from_json(bytes(data)))
         return cast("dict[str, Any]", from_json(str(data)))
 
     def _sessions_table_ddl(self) -> str:
@@ -1149,7 +1158,21 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Return a JSON parameter placeholder for the current dialect."""
         if self._dialect == DIALECT_POSTGRESQL:
             return "?::jsonb"
+        if self._dialect == DIALECT_SNOWFLAKE:
+            return "PARSE_JSON(?)"
         return "?"
+
+    def _snowflake_state_merge_sql(self, table: str, key_columns: tuple[str, ...]) -> str:
+        """Build a Snowflake MERGE upsert statement for app or user state tables."""
+        source_cols = [*(f"? AS {col}" for col in key_columns), "PARSE_JSON(?) AS state", "? AS update_time"]
+        join_predicate = " AND ".join(f"t.{col} = s.{col}" for col in key_columns)
+        insert_cols = (*key_columns, "state", "update_time")
+        insert_vals = ", ".join(f"s.{col}" for col in insert_cols)
+        return (
+            f"MERGE INTO {table} t USING (SELECT {', '.join(source_cols)}) s ON {join_predicate} "
+            "WHEN MATCHED THEN UPDATE SET state = s.state, update_time = s.update_time "
+            f"WHEN NOT MATCHED THEN INSERT ({', '.join(insert_cols)}) VALUES ({insert_vals})"
+        )
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1172,17 +1195,30 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table}
-            (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-            VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
-            """
+            if self._dialect == DIALECT_SNOWFLAKE:
+                sql = (
+                    f"INSERT INTO {self._session_table} "
+                    f"(id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time) "
+                    f"SELECT ?, ?, ?, ?, {state_placeholder}, ?, ?"
+                )
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table}
+                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+                VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
+                """
             params = (session_id, app_name, user_id, owner_id, state_json, now_val, now_val)
         else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (?, ?, ?, {state_placeholder}, ?, ?)
-            """
+            if self._dialect == DIALECT_SNOWFLAKE:
+                sql = (
+                    f"INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time) "
+                    f"SELECT ?, ?, ?, {state_placeholder}, ?, ?"
+                )
+            else:
+                sql = f"""
+                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+                VALUES (?, ?, ?, {state_placeholder}, ?, ?)
+                """
             params = (session_id, app_name, user_id, state_json, now_val, now_val)
 
         with self._config.provide_connection() as conn:
@@ -1378,11 +1414,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             event_record: Event record to store.
         """
         event_data = self._serialize_json_field(event_record["event_data"])
-        sql = f"""
-        INSERT INTO {self._events_table} (
-            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
-        """
+        if self._dialect == DIALECT_SNOWFLAKE:
+            sql = (
+                f"INSERT INTO {self._events_table} "
+                "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+            )
+        else:
+            sql = f"""
+            INSERT INTO {self._events_table} (
+                id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+            ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
+            """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -1433,11 +1476,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_state: Optional app-scoped state snapshot.
             user_state: Optional user-scoped state snapshot.
         """
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
-            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
-        """
+        if self._dialect == DIALECT_SNOWFLAKE:
+            insert_sql = (
+                f"INSERT INTO {self._events_table} "
+                "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+                f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+            )
+        else:
+            insert_sql = f"""
+            INSERT INTO {self._events_table} (
+                id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+            ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
+            """
         update_sql = f"""
         UPDATE {self._session_table}
         SET state = {self._json_placeholder()}, update_time = ?
@@ -1483,17 +1533,29 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         ),
                     )
                     if app_state is not None:
-                        self._execute(cursor, delete_app_state_sql, (app_name,))
-                        self._execute(
-                            cursor, insert_app_state_sql, (app_name, self._serialize_state(app_state), now_val)
-                        )
+                        serialized_app_state = self._serialize_state(app_state)
+                        if self._dialect == DIALECT_SNOWFLAKE:
+                            self._execute(
+                                cursor,
+                                self._snowflake_state_merge_sql(self._app_state_table, ("app_name",)),
+                                (app_name, serialized_app_state, now_val),
+                            )
+                        else:
+                            self._execute(cursor, delete_app_state_sql, (app_name,))
+                            self._execute(cursor, insert_app_state_sql, (app_name, serialized_app_state, now_val))
                     if user_state is not None:
-                        self._execute(cursor, delete_user_state_sql, (app_name, user_id))
-                        self._execute(
-                            cursor,
-                            insert_user_state_sql,
-                            (app_name, user_id, self._serialize_state(user_state), now_val),
-                        )
+                        serialized_user_state = self._serialize_state(user_state)
+                        if self._dialect == DIALECT_SNOWFLAKE:
+                            self._execute(
+                                cursor,
+                                self._snowflake_state_merge_sql(self._user_state_table, ("app_name", "user_id")),
+                                (app_name, user_id, serialized_user_state, now_val),
+                            )
+                        else:
+                            self._execute(cursor, delete_user_state_sql, (app_name, user_id))
+                            self._execute(
+                                cursor, insert_user_state_sql, (app_name, user_id, serialized_user_state, now_val)
+                            )
                     conn.commit()
                 else:
                     with contextlib.suppress(Exception):
@@ -1721,30 +1783,52 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+        now_val = self._encode_timestamp(datetime.now(UTC))
+        serialized = self._serialize_state(state)
+        if self._dialect == DIALECT_SNOWFLAKE:
+            merge_sql = self._snowflake_state_merge_sql(self._app_state_table, ("app_name",))
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, merge_sql, (app_name, serialized, now_val))
+                    conn.commit()
+                finally:
+                    cursor.close()
+            return
         delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
         insert_sql = f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (?, {self._json_placeholder()}, ?)"
-        now_val = self._encode_timestamp(datetime.now(UTC))
         with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name,))
-                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), now_val))
+                self._execute(cursor, insert_sql, (app_name, serialized, now_val))
                 conn.commit()
             finally:
                 cursor.close()
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+        now_val = self._encode_timestamp(datetime.now(UTC))
+        serialized = self._serialize_state(state)
+        if self._dialect == DIALECT_SNOWFLAKE:
+            merge_sql = self._snowflake_state_merge_sql(self._user_state_table, ("app_name", "user_id"))
+            with _adbc_atomic_connection(self._config, self._dialect) as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, merge_sql, (app_name, user_id, serialized, now_val))
+                    conn.commit()
+                finally:
+                    cursor.close()
+            return
         delete_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
         insert_sql = f"""
         INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (?, ?, {self._json_placeholder()}, ?)
         """
-        now_val = self._encode_timestamp(datetime.now(UTC))
         with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name, user_id))
-                self._execute(cursor, insert_sql, (app_name, user_id, self._serialize_state(state), now_val))
+                self._execute(cursor, insert_sql, (app_name, user_id, serialized, now_val))
                 conn.commit()
             finally:
                 cursor.close()
@@ -2387,6 +2471,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def _postgres_memory_extra_index_sql(self) -> "list[str]":
         return [sql for _, sql in self._postgres_memory_extra_index_specs()]
 
+    def _snowflake_memory_merge_sql(self) -> str:
+        merge_columns = ["id", "session_id", "app_name", "user_id", "scope", "event_id", "author"]
+        if self._owner_id_column_name:
+            merge_columns.append(self._owner_id_column_name)
+        merge_columns.extend(("timestamp", "content_json", "content_text", "metadata_json", "inserted_at"))
+        merge_source = ", ".join(
+            f"PARSE_JSON(?) AS {col}" if col in {"content_json", "metadata_json"} else f"? AS {col}"
+            for col in merge_columns
+        )
+        return (
+            f"MERGE INTO {self._memory_table} t USING (SELECT {merge_source}) s ON t.event_id = s.event_id "
+            f"WHEN NOT MATCHED THEN INSERT ({', '.join(merge_columns)}) "
+            f"VALUES ({', '.join(f's.{col}' for col in merge_columns)})"
+        )
+
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2424,6 +2523,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            sql = self._snowflake_memory_merge_sql()
         elif self._owner_id_column_name:
             if use_returning:
                 sql = f"""
@@ -2464,7 +2565,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 )
                 """
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 entries_to_insert = entries
@@ -2558,6 +2659,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         self._execute(cursor, sql, params)
                         if cursor.fetchone():
                             inserted_count += 1
+                    elif self._dialect == DIALECT_SNOWFLAKE:
+                        self._execute(cursor, sql, params)
+                        rowcount = getattr(cursor, "rowcount", None)
+                        inserted_count += rowcount if isinstance(rowcount, int) and rowcount >= 0 else 1
                     else:
                         try:
                             self._execute(cursor, sql, params)
@@ -2658,6 +2763,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         elif self._dialect == DIALECT_DB2:
             match_clause = "POSSTR(LOWER(content_text), LOWER(?)) > 0"
             search_param = query
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            match_clause = "content_text ILIKE ?"
+            search_param = f"%{query.strip()}%"
         else:
             match_clause = "content_text LIKE ?"
             search_param = f"%{query}%"
@@ -2889,19 +2997,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 content_text = row[9]
                 inserted_at_raw = row[11]
 
-            if isinstance(content_json, dict):
-                content_value = content_json
+            if isinstance(content_json, Mapping):
+                content_value = dict(content_json)
+            elif isinstance(content_json, (bytes, bytearray)):
+                content_value = from_json(bytes(content_json))
             else:
-                content_value = from_json(content_json if isinstance(content_json, (str, bytes)) else str(content_json))
+                content_value = from_json(content_json if isinstance(content_json, str) else str(content_json))
 
             if metadata_json is None:
                 metadata_value = None
-            elif isinstance(metadata_json, dict):
-                metadata_value = metadata_json
+            elif isinstance(metadata_json, Mapping):
+                metadata_value = dict(metadata_json)
+            elif isinstance(metadata_json, (bytes, bytearray)):
+                metadata_value = from_json(bytes(metadata_json))
             else:
-                metadata_value = from_json(
-                    metadata_json if isinstance(metadata_json, (str, bytes)) else str(metadata_json)
-                )
+                metadata_value = from_json(metadata_json if isinstance(metadata_json, str) else str(metadata_json))
 
             records.append({
                 "id": row_id,
@@ -2976,11 +3086,11 @@ def _postgresql_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="postgres"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f"${index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f"${index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -2991,11 +3101,11 @@ def _oracle_store_sql(sql: str) -> str:
     segments: list[str] = []
     last_end = 0
     index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
+    for param in _STORE_PARAMETER_VALIDATOR.extract_parameters(sql, dialect="oracle"):
+        if param.style == ParameterStyle.QMARK:
             index += 1
-            segments.extend((sql[last_end : match.start()], f":{index}"))
-            last_end = match.end()
+            segments.extend((sql[last_end : param.position], f":{index}"))
+            last_end = param.position + len(param.placeholder_text)
     segments.append(sql[last_end:])
     return "".join(segments)
 
@@ -3048,7 +3158,7 @@ def _split_adbc_table_name(dialect: str, table_name: str) -> tuple[str | None, s
 
 
 def _detect_adbc_adk_dialect(config: "AdbcConfig", *, unknown_warning: str) -> str:
-    driver_name = config.connection_config.get("driver_name", "")
+    driver_name = config.connection_config.get("driver_name") or config.connection_config.get("driver") or ""
     if (
         isinstance(driver_name, str)
         and driver_name

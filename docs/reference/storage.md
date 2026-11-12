@@ -132,6 +132,8 @@ Multi-backend object storage registry (`local`, `fsspec`, `obstore`) and Apache 
     options:
       heading_level: 4
       separate_signature: false
+      show_docstring_parameters: false
+      show_docstring_returns: false
 
 ::: sqlspec.protocols.DirectStreamWriteProtocol
     options:

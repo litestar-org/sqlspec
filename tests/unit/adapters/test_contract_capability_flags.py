@@ -2,7 +2,12 @@
 
 import pytest
 
-from tests.integration.adapters._shared._cases import DriverCase
+from tests.integration.adapters._shared._cases import (
+    DriverCase,
+    get_driver_case,
+    sync_driver_params_with,
+    sync_driver_params_without,
+)
 
 NEW_CAPABILITY_FLAGS = (
     "supports_lob",
@@ -61,3 +66,26 @@ def test_new_capability_flags_opt_in_independently() -> None:
     )
     for flag in NEW_CAPABILITY_FLAGS:
         assert getattr(case, flag) is True
+
+
+def test_snowflake_capabilities_route_storage_and_savepoint_contracts() -> None:
+    """Registered capabilities select native Arrow contracts and exclude savepoint contracts."""
+    pytest.importorskip("snowflake.connector")
+    pytest.importorskip("pyarrow")
+    from sqlspec.adapters.snowflake import SnowflakeConfig
+
+    case = get_driver_case("snowflake-sync")
+    arrow_cases = [parameter.values[0] for parameter in sync_driver_params_with("supports_native_arrow")]
+    savepoint_cases = [parameter.values[0] for parameter in sync_driver_params_with("supports_savepoints")]
+    no_savepoint_cases = [parameter.values[0] for parameter in sync_driver_params_without("supports_savepoints")]
+    assert case in arrow_cases
+    assert case not in savepoint_cases
+    assert case in no_savepoint_cases
+    config = SnowflakeConfig(connection_config={"account": "org-account", "user": "service"})
+    capabilities = config.storage_capabilities()
+    assert capabilities["arrow_export_enabled"] is True
+    assert capabilities["arrow_import_enabled"] is True
+    assert capabilities["parquet_export_enabled"] is True
+    assert capabilities["parquet_import_enabled"] is True
+    capabilities["arrow_export_enabled"] = False
+    assert config.storage_capabilities()["arrow_export_enabled"] is True

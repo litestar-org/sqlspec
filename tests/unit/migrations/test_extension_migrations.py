@@ -352,6 +352,7 @@ def test_validate_builtin_reconcile_adapter_supported_matrix() -> None:
         "pymssql",
         "oracledb",
         "spanner",
+        "snowflake",
         "bigquery",
         "sqlanywhere",
         "sybase",

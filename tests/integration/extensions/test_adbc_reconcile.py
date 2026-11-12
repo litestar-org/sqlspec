@@ -93,17 +93,18 @@ def _resolve_backend_base_config(
     return conn_cfg, stmt_cfg
 
 
-def _full_error_text(exc: BaseException) -> str:
+def _raised_error_text(exc: BaseException) -> str:
+    """Return the raised error and its explicit causes, ignoring errors left on the handling context."""
     parts = [str(exc)]
-    current = exc.__cause__ or exc.__context__
+    current = exc.__cause__
     while current is not None:
         parts.append(str(current))
-        current = current.__cause__ or current.__context__
+        current = current.__cause__
     return " | ".join(parts)
 
 
 def _skip_if_driver_or_emulator_unsupported(backend: str, exc: BaseException) -> None:
-    lowered = _full_error_text(exc).lower()
+    lowered = _raised_error_text(exc).lower()
     if any(
         marker in lowered
         for marker in (
@@ -182,7 +183,7 @@ def test_adbc_reconcile_converges_across_backends(
         except (ImproperConfigurationError, SQLSpecError, MigrationError, OSError) as exc:
             if (
                 backend == "snowflake"
-                and "foreign key constraints are not currently supported" in _full_error_text(exc).lower()
+                and "foreign key constraints are not currently supported" in _raised_error_text(exc).lower()
             ):
                 config.close_pool()
                 no_fk_ext = {"litestar": ext["litestar"], "events": ext["events"]}

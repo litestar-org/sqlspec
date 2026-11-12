@@ -172,6 +172,17 @@ DIALECT_SPECS: tuple[DialectDocSpec, ...] = (
         adapter_classes=("sqlspec.adapters.sqlanywhere.data_dictionary.SqlanywhereSyncDataDictionary",),
     ),
     DialectDocSpec(
+        dialect="snowflake",
+        title="Snowflake",
+        ddl_strategy="Native GET_DDL and SHOW KEYS metadata",
+        guide_link="../../../databases/snowflake.md",
+        summary="Queries Snowflake INFORMATION_SCHEMA, GET_DDL, and SHOW PRIMARY, UNIQUE, and IMPORTED KEYS through the native connector and ADBC adapters.",
+        adapter_classes=(
+            "sqlspec.adapters.snowflake.data_dictionary.SnowflakeSyncDataDictionary",
+            "sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary",
+        ),
+    ),
+    DialectDocSpec(
         dialect="db2",
         title="IBM Db2",
         ddl_strategy="AST synthesis + `SYSCAT` catalog text definitions",

@@ -358,3 +358,35 @@ def test_adbc_litestar_store_rejects_qualified_session_table_outside_teradata(ur
     )
     with pytest.raises(ValueError, match=r"app\.sessions"):
         AdbcStore(config)
+
+
+@pytest.mark.parametrize("expires_in", [None, 60])
+def test_adbc_litestar_store_snowflake_set_uses_atomic_hex_merge(expires_in: int | None) -> None:
+    """Snowflake AdbcStore._set executes a single atomic MERGE with TO_BINARY(..., 'HEX')."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _DriverStub:
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append((" ".join(sql.split()), params))
+
+        def commit(self) -> None:
+            executed.append(("COMMIT", ()))
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "snowflake"
+    store._set("sess_sf", b"\xde\xad", expires_in=expires_in)
+
+    assert len(executed) == 2
+    merge_sql, merge_params = executed[0]
+    assert merge_sql.startswith(
+        "MERGE INTO litestar_session t USING (SELECT ? AS session_id, TO_BINARY(?, 'HEX') AS data"
+    )
+    assert merge_params[:2] == ("sess_sf", "dead")
+    if expires_in is None:
+        assert "NULL AS expires_at" in merge_sql
+        assert len(merge_params) == 2
+    else:
+        assert "? AS expires_at" in merge_sql
+        assert len(merge_params) == 3
+    assert executed[1] == ("COMMIT", ())

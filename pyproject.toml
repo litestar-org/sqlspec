@@ -72,6 +72,7 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 sanic = ["sanic"]
+snowflake = ["snowflake-connector-python>=4.0.0", "pyarrow"]
 spanner = ["google-cloud-spanner>=3.64.0"]
 sqlanywhere = ["sqlanydb>=1.0.14"]
 starlette = ["starlette"]
@@ -475,6 +476,7 @@ markers = [
   "oracle: marks tests specific to Oracle",
   "spanner: marks tests specific to Google Cloud Spanner",
   "snowflake: marks tests specific to Snowflake",
+  "snowflake_connector: marks tests using snowflake-connector-python",
   "mssql: marks tests specific to Microsoft SQL Server",
   # Driver markers
   "adbc: marks tests using ADBC drivers",
@@ -554,6 +556,8 @@ module = [
   "ibm_db_dbi.*",
   "sqlanydb",
   "sqlanydb.*",
+  "snowflake",
+  "snowflake.*",
   "teradatasql",
   "teradatasql.*",
   "sqlglot",

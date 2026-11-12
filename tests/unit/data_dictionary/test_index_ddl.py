@@ -152,9 +152,11 @@ def test_index_ddl_edge_cases_and_constraint_matching() -> None:
     assert [row["index_name"] for row in droppable] == ["idx_users_status"]
 
     assert build_drop_index_sql("bigquery", {"index_name": "idx_x"}, "users") is None
+    assert build_drop_index_sql("snowflake", {"index_name": "idx_x"}, "users") is None
     assert build_drop_index_sql("postgres", {"index_name": ""}, "users") is None
     assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX idx_x"
     assert build_create_index_sql("bigquery", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
+    assert build_create_index_sql("snowflake", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
     assert build_create_index_sql("postgres", {"index_name": "idx_x", "columns": []}, "users") is None
     unique_concurrent = build_create_index_sql(
         "postgres", {"index_name": "idx_u", "columns": "email, tenant_id", "is_unique": True}, "users", concurrent=True
@@ -333,3 +335,11 @@ async def test_without_indexes_restores_dropped_indexes_when_a_later_drop_fails(
         async with AsyncWithoutIndexesContext(_AsyncDriver(), "orders"):
             pass
     assert executed_async == executed_sync
+
+    class _SnowflakeNoopDriver:
+        dialect = "snowflake"
+
+    with SyncWithoutIndexesContext(_SnowflakeNoopDriver(), "ANALYTICS.ORDERS"):
+        pass
+    async with AsyncWithoutIndexesContext(_SnowflakeNoopDriver(), "ANALYTICS.ORDERS"):
+        pass

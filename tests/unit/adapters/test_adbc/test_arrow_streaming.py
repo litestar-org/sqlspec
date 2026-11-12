@@ -460,3 +460,66 @@ def test_adbc_driver_commit_and_rollback_map_errors_and_reset_transaction_state(
     with pytest.raises(SQLSpecError):
         driver.rollback()
     assert driver._transaction_active is False  # pyright: ignore[reportPrivateUsage]
+
+
+class _SnowflakeIngestConnection(_AdbcStreamingConnection):
+    def adbc_get_info(self) -> dict[str, str]:
+        return {"vendor_name": "Snowflake", "driver_name": "ADBC Snowflake Driver"}
+
+
+def _snowflake_load_driver(monkeypatch: pytest.MonkeyPatch, catalog_columns: list[str]) -> tuple[AdbcDriver, Any]:
+    from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+
+    monkeypatch.setattr(
+        AdbcDataDictionary,
+        "get_columns",
+        lambda self, driver, table=None, schema=None: [{"column_name": name} for name in catalog_columns],
+    )
+    connection = _SnowflakeIngestConnection()
+    driver = AdbcDriver(
+        cast("AdbcConnection", connection),
+        dialect="snowflake",
+        driver_features={"storage_capabilities": _STORAGE_CAPABILITIES},
+    )
+    return driver, connection
+
+
+@pytest.mark.parametrize("as_reader", [False, True])
+def test_snowflake_load_renames_arrow_columns_to_catalog_columns(
+    monkeypatch: pytest.MonkeyPatch, as_reader: bool
+) -> None:
+    """Raw Arrow names resolve to catalog columns: exact names win, otherwise one case-insensitive match."""
+    driver, connection = _snowflake_load_driver(monkeypatch, ["ID", "MixedName", "mixedname", "NOTE"])
+    table = pa.table({"id": [1], "MixedName": ["a"], "extra": [True]})
+    source: Any = pa.RecordBatchReader.from_batches(table.schema, table.to_batches()) if as_reader else table
+
+    driver.load_from_arrow("orders", source)
+
+    ingested = connection.cursor_obj.ingest_calls[0][1]
+    ingested_table = ingested.read_all() if as_reader else ingested
+    assert ingested_table.column_names == ["ID", "MixedName", "extra"]
+    assert ingested_table.to_pylist() == [{"ID": 1, "MixedName": "a", "extra": True}]
+
+
+def test_snowflake_staged_merge_uses_catalog_column_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Staged MERGE SQL quotes the catalog column names resolved from raw Arrow names and conflict keys."""
+    driver, connection = _snowflake_load_driver(monkeypatch, ["ID", "PAYLOAD"])
+    executed: list[str] = []
+    monkeypatch.setattr(AdbcDriver, "execute", lambda self, statement, *args, **kwargs: executed.append(str(statement)))
+
+    driver.load_from_arrow("orders", pa.table({"id": [1], "payload": ["x"]}), conflict_keys=["id"])
+
+    merge = next(statement for statement in executed if statement.startswith("MERGE"))
+    assert 'tgt."ID" = stg."ID"' in merge
+    assert 'tgt."PAYLOAD" = stg."PAYLOAD"' in merge
+    assert connection.cursor_obj.ingest_calls[0][1].column_names == ["ID", "PAYLOAD"]
+
+
+def test_snowflake_load_rejects_ambiguous_case_insensitive_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.exceptions import AmbiguousIdentifierError
+
+    driver, connection = _snowflake_load_driver(monkeypatch, ["Note", "NOTE"])
+
+    with pytest.raises(AmbiguousIdentifierError, match="note"):
+        driver.load_from_arrow("orders", pa.table({"note": ["x"]}))
+    assert connection.cursor_obj.ingest_calls == []

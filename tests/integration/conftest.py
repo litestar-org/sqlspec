@@ -46,6 +46,7 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "oracle": (("oracledb",),),
     "oracle_events": (("oracledb",),),
     "postgres": (("adbc_driver_manager", "pyarrow"), ("asyncpg",), ("psqlpy",), ("psycopg", "psycopg_pool")),
+    "snowflake": (("snowflake.connector",),),
     "spanner": (("google.cloud.spanner",),),
     "spanner_adk": (("google.cloud.spanner",),),
     "spanner_events": (("google.cloud.spanner",),),

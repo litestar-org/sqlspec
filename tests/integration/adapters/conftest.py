@@ -16,6 +16,7 @@ _FAMILY_ADAPTERS = {
     "mysql": frozenset({"aiomysql", "asyncmy", "mysqlconnector", "pymysql"}),
     "oracle": frozenset({"oracledb"}),
     "postgres": frozenset({"asyncpg", "psqlpy", "psycopg"}),
+    "snowflake": frozenset({"snowflake"}),
     "spanner": frozenset({"spanner"}),
     "sqlanywhere": frozenset({"sqlanywhere"}),
     "sqlite": frozenset({"aiosqlite", "sqlite"}),

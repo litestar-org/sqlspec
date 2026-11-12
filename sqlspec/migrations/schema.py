@@ -8,8 +8,9 @@ from sqlglot import Dialect, TokenType, exp, parse, parse_one
 from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._ddl import AlterTable, ColumnDefinition, CreateTable, _parse_ddl_identifier, _parse_ddl_table
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import AmbiguousIdentifierError, MigrationError
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.text import resolve_catalog_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -153,7 +154,7 @@ _TYPE_FAMILIES: Final[dict[str, str]] = {
     "sparsevec": "vector",
     "array": "vector",
     "struct": "struct",
-    "variant": "struct",
+    "variant": "json",
     "object": "struct",
     "tokenlist": "struct",
     "tsvector": "struct",
@@ -478,6 +479,7 @@ def ensure_schema_sync(
         return result
 
     tables_by_schema: dict[str | None, set[str]] = {}
+    catalog_tables_by_schema: dict[str | None, list[str]] = {}
     plans: list[_TargetPlan] = []
     for target in targets:
         if assume_existing:
@@ -490,8 +492,10 @@ def ensure_schema_sync(
                     if target.schema
                     else driver.data_dictionary.get_tables(driver)
                 )
+                catalog_tables_by_schema[target.schema] = _catalog_names(table_data, "table_name")
                 cached_tables = _metadata_names(table_data, "table_name")
                 tables_by_schema[target.schema] = cached_tables
+            _require_unambiguous_names(target, "table", (target.table_name,), catalog_tables_by_schema[target.schema])
             existing_tables = cached_tables
 
         if target.table_name.casefold() not in existing_tables:
@@ -512,6 +516,12 @@ def ensure_schema_sync(
             driver.data_dictionary.get_columns(driver, target.table_name, schema=target.schema)
             if target.schema
             else driver.data_dictionary.get_columns(driver, target.table_name)
+        )
+        _require_unambiguous_names(
+            target,
+            "column",
+            [column.name for column in target.create_table.columns],
+            _catalog_names(columns_data, "column_name"),
         )
         existing_names = _metadata_names(columns_data, "column_name")
         if strict:
@@ -588,6 +598,7 @@ async def ensure_schema_async(
         return result
 
     tables_by_schema: dict[str | None, set[str]] = {}
+    catalog_tables_by_schema: dict[str | None, list[str]] = {}
     plans: list[_TargetPlan] = []
     for target in targets:
         if assume_existing:
@@ -600,8 +611,10 @@ async def ensure_schema_async(
                     if target.schema
                     else await driver.data_dictionary.get_tables(driver)
                 )
+                catalog_tables_by_schema[target.schema] = _catalog_names(table_data, "table_name")
                 cached_tables = _metadata_names(table_data, "table_name")
                 tables_by_schema[target.schema] = cached_tables
+            _require_unambiguous_names(target, "table", (target.table_name,), catalog_tables_by_schema[target.schema])
             existing_tables = cached_tables
 
         if target.table_name.casefold() not in existing_tables:
@@ -622,6 +635,12 @@ async def ensure_schema_async(
             await driver.data_dictionary.get_columns(driver, target.table_name, schema=target.schema)
             if target.schema
             else await driver.data_dictionary.get_columns(driver, target.table_name)
+        )
+        _require_unambiguous_names(
+            target,
+            "column",
+            [column.name for column in target.create_table.columns],
+            _catalog_names(columns_data, "column_name"),
         )
         existing_names = _metadata_names(columns_data, "column_name")
         if strict:
@@ -1009,6 +1028,28 @@ def _metadata_value(row: Any, keys: tuple[str, ...]) -> Any:
             if value is not None:
                 return value
     return None
+
+
+def _catalog_names(metadata_rows: Sequence[Any], key: str) -> list[str]:
+    """Extract catalog names exactly as reported by mapping or attribute metadata rows."""
+    names: list[str] = []
+    for row in metadata_rows:
+        value = _metadata_value(row, (key,))
+        if value is not None:
+            names.append(str(value))
+    return names
+
+
+def _require_unambiguous_names(
+    target: SchemaTarget, kind: str, requested: Sequence[str], catalog_names: Sequence[str]
+) -> None:
+    """Refuse names with no exact catalog match that match several catalog names case-insensitively."""
+    for name in requested:
+        try:
+            resolve_catalog_identifier(name, catalog_names)
+        except AmbiguousIdentifierError as exc:
+            msg = f"Cannot reconcile {kind} {name!r} for {target.identity!r}: {exc}"
+            raise MigrationError(msg) from exc
 
 
 def _metadata_names(metadata_rows: Sequence[Any], key: str) -> set[str]:

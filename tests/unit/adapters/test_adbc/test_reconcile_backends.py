@@ -535,10 +535,12 @@ def test_adbc_litestar_store_snowflake_hex_binary_and_uppercase_rows() -> None:
 
     insert_call = fake_driver.execute.call_args_list[0]
     update_call = fake_driver.execute.call_args_list[1]
+    assert "MERGE INTO" in str(insert_call.args[0])
     assert "TO_BINARY(?, 'HEX')" in str(insert_call.args[0])
-    assert insert_call.args[2] == b"hello".hex()
+    assert insert_call.args[1:] == ("k1", b"hello".hex())
+    assert "MERGE INTO" in str(update_call.args[0])
     assert "TO_BINARY(?, 'HEX')" in str(update_call.args[0])
-    assert update_call.args[1] == b"world".hex()
+    assert update_call.args[1:] == ("k1", b"world".hex())
     assert fetched_hex == b"hello"
     assert fetched_plain == b"plain-text"
     assert ttl is None

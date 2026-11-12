@@ -26,6 +26,8 @@ def test_data_dictionary_loader_lists_known_dialects() -> None:
     dialects = loader.list_dialects()
     assert "postgres" in dialects
     assert "sqlite" in dialects
+    assert "snowflake" in dialects
+    assert get_dialect_config("sf") is get_dialect_config("snowflake")
 
 
 def test_data_dictionary_loader_get_domain_query_text() -> None:
@@ -96,6 +98,8 @@ def test_registry_normalizes_aliases() -> None:
     assert normalize_dialect_name("PostgreSQL") == "postgres"
     assert normalize_dialect_name("mysql") == "mysql"
     assert normalize_dialect_name("mariadb") == "mariadb"
+    assert normalize_dialect_name("SF") == "snowflake"
+    assert normalize_dialect_name("Snowflake") == "snowflake"
 
 
 def test_registry_lists_registered_dialects() -> None:
@@ -103,6 +107,8 @@ def test_registry_lists_registered_dialects() -> None:
     dialects = list_registered_dialects()
     assert "postgres" in dialects
     assert "sqlite" in dialects
+    assert "snowflake" in dialects
+    assert get_dialect_config("sf") is get_dialect_config("snowflake")
 
 
 def test_get_dialect_config_unknown_raises() -> None:
@@ -129,6 +135,7 @@ def test_row_locking_capability_flags_are_introspectable() -> None:
         "mysql": True,
         "oracle": True,
         "postgres": True,
+        "snowflake": False,
         "spanner": False,
         "sqlite": False,
     }
@@ -138,6 +145,7 @@ def test_row_locking_capability_flags_are_introspectable() -> None:
         "duckdb": False,
         "mssql": False,
         "oracle": True,
+        "snowflake": False,
         "spanner": False,
         "sqlite": False,
     }
@@ -180,6 +188,10 @@ import sys
 from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 
 assert "sqlspec.data_dictionary.dialects" not in sys.modules
+snowflake = get_dialect_config("sf")
+assert snowflake.name == "snowflake"
+assert snowflake.default_schema is None
+assert get_dialect_config("Snowflake") is snowflake
 config = get_dialect_config("PostgreSQL")
 assert isinstance(config, DialectConfig)
 assert config.name == "postgres"

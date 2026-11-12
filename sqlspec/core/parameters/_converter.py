@@ -30,6 +30,7 @@ _BINARY_LITERAL_TEMPLATES: Final[dict[str | None, str]] = {
     None: "X'{}'",
     "mysql": "X'{}'",
     "sqlite": "X'{}'",
+    "snowflake": "X'{}'",
     "postgres": "decode('{}', 'hex')",
     "pgvector": "decode('{}', 'hex')",
     "paradedb": "decode('{}', 'hex')",
@@ -86,7 +87,9 @@ class ParameterConverter:
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
     ) -> "tuple[str, ConvertedParameters]":
-        extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
+        extracted_param_info = (
+            param_info if param_info is not None else self.validator.extract_parameters(sql, dialect=dialect)
+        )
 
         if target_style == ParameterStyle.STATIC:
             return self._embed_static_parameters(sql, parameters, extracted_param_info, dialect), None
@@ -233,9 +236,12 @@ class ParameterConverter:
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
         preserve_original_batch: bool = False,
+        dialect: str | None = None,
     ) -> "tuple[str, ConvertedParameters, list[ParameterInfo]]":
         """Convert placeholder style and return SQL, parameters, and metadata together."""
-        extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
+        extracted_param_info = (
+            param_info if param_info is not None else self.validator.extract_parameters(sql, dialect=dialect)
+        )
 
         if self._overrides_public_conversion:
             converted_sql, converted_parameters = self.convert_placeholder_style(
@@ -243,6 +249,7 @@ class ParameterConverter:
                 parameters,
                 target_style,
                 is_many,
+                dialect=dialect,
                 strict_named_parameters=strict_named_parameters,
                 param_info=extracted_param_info,
                 precomputed_plan=precomputed_plan,

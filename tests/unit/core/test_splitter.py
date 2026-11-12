@@ -18,6 +18,7 @@ PUBLIC_DIALECT_CONFIGS = (
     splitter_module.SQLiteDialectConfig,
     splitter_module.DuckDBDialectConfig,
     splitter_module.BigQueryDialectConfig,
+    splitter_module.SnowflakeDialectConfig,
 )
 
 DIALECT_DEFAULTS: dict[type[Any], tuple[str, set[str], set[str], set[str], set[str], set[str]]] = {
@@ -29,6 +30,7 @@ DIALECT_DEFAULTS: dict[type[Any], tuple[str, set[str], set[str], set[str], set[s
     splitter_module.SQLiteDialectConfig: ("sqlite", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
     splitter_module.DuckDBDialectConfig: ("duckdb", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
     splitter_module.BigQueryDialectConfig: ("bigquery", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
+    splitter_module.SnowflakeDialectConfig: ("snowflake", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), set()),
 }
 
 
@@ -54,6 +56,7 @@ def test_dialect_class_map_contains_expected_aliases() -> None:
         "spanner": splitter_module.BigQueryDialectConfig,
         "spangres": splitter_module.PostgreSQLDialectConfig,
         "db2": splitter_module.Db2DialectConfig,
+        "snowflake": splitter_module.SnowflakeDialectConfig,
     }
 
 
@@ -289,3 +292,93 @@ def test_oracle_create_or_replace_procedure_strips_slash_keep_end_semicolon() ->
     assert len(statements) == 2
     assert statements[0].endswith("END;")
     assert statements[1] == "SELECT 1 FROM DUAL"
+
+
+def test_snowflake_splitter_preserves_cloud_uris_and_escaped_literals() -> None:
+    script = (
+        "COPY INTO t FROM 's3://bucket/p;1' // ignored ;\nFILE_FORMAT=(TYPE=CSV);\n"
+        "COPY INTO t2 FROM 'gcs://bucket/p;2';\n"
+        "COPY INTO t3 FROM 'azure://host/c;3';\n"
+        "SELECT 'https://host/a;b', 'it''s;ok', 'esc\\';ok', \"a\"\";b\";"
+    )
+    assert split_sql_script(script, dialect="snowflake", strip_trailing_terminator=True) == [
+        "COPY INTO t FROM 's3://bucket/p;1' // ignored ;\nFILE_FORMAT=(TYPE=CSV)",
+        "COPY INTO t2 FROM 'gcs://bucket/p;2'",
+        "COPY INTO t3 FROM 'azure://host/c;3'",
+        "SELECT 'https://host/a;b', 'it''s;ok', 'esc\\';ok', \"a\"\";b\"",
+    ]
+
+
+def test_snowflake_splitter_retains_dollar_quoted_procedure_body() -> None:
+    procedure = "CREATE PROCEDURE p() RETURNS INT LANGUAGE SQL AS $$\nBEGIN\n// inner ;\nRETURN 1;\nEND;\n$$"
+    assert split_sql_script(procedure + "; CALL p();", dialect="snowflake", strip_trailing_terminator=True) == [
+        procedure,
+        "CALL p()",
+    ]
+
+
+@pytest.mark.parametrize("begin", ["BEGIN", "BEGIN TRANSACTION", "BEGIN WORK", "BEGIN NAME tx1"])
+def test_snowflake_splitter_distinguishes_transaction_begin(begin: str) -> None:
+    assert split_sql_script(
+        begin + "; INSERT INTO t VALUES (1); COMMIT;", dialect="snowflake", strip_trailing_terminator=True
+    ) == [begin, "INSERT INTO t VALUES (1)", "COMMIT"]
+
+
+@pytest.mark.parametrize("control", ["IF", "FOR", "WHILE", "LOOP", "REPEAT"])
+def test_snowflake_splitter_keeps_scripting_control_enders_inside_block(control: str) -> None:
+    block = f"DECLARE x INT DEFAULT 1; BEGIN {control} x INSERT INTO t VALUES (1); END {control}; RETURN x; END;"
+    assert split_sql_script(block + " SELECT 3;", dialect="snowflake", strip_trailing_terminator=True) == [
+        block,
+        "SELECT 3",
+    ]
+
+
+def test_snowflake_splitter_tracks_nested_blocks_and_case_expressions() -> None:
+    block = "DECLARE x INT DEFAULT 1; BEGIN DECLARE y INT DEFAULT 2; BEGIN SELECT CASE WHEN y = 2 THEN 'x;y' ELSE 'z' END; END; CASE x WHEN 1 THEN SELECT 1; END CASE; END;"
+    assert split_sql_script(block + " SELECT 3;", dialect="snowflake", strip_trailing_terminator=True) == [
+        block,
+        "SELECT 3",
+    ]
+
+
+def test_snowflake_splitter_drops_comments_and_recognizes_mixed_case_dialect(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="sqlspec.core.splitter"):
+        assert split_sql_script("// first ;\n-- second ;\n/* block ; */", dialect="Snowflake") == []
+        assert split_sql_script("SELECT 1; SELECT 2;", dialect="Snowflake", strip_trailing_terminator=True) == [
+            "SELECT 1",
+            "SELECT 2",
+        ]
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize("separator", [" /* boundary */ ", " -- boundary\n ", " // boundary\n ", "/**/"])
+@pytest.mark.parametrize("transaction", ["TRANSACTION", "WORK", "NAME tx1"])
+def test_snowflake_splitter_transaction_keywords_allow_comments(separator: str, transaction: str) -> None:
+    begin = "BEGIN" + separator + transaction
+    assert split_sql_script(begin + "; SELECT 1; COMMIT;", dialect="snowflake", strip_trailing_terminator=True) == [
+        begin,
+        "SELECT 1",
+        "COMMIT",
+    ]
+
+
+@pytest.mark.parametrize("separator", [" /* boundary */ ", " -- boundary\n ", " // boundary\n ", "/**/"])
+@pytest.mark.parametrize(
+    "control,opener,condition",
+    [
+        ("IF", "IF (1 = 1) THEN", ""),
+        ("FOR", "FOR i IN 1 TO 1 DO", ""),
+        ("WHILE", "WHILE (1 = 1) DO", ""),
+        ("LOOP", "LOOP", ""),
+        ("REPEAT", "REPEAT", " UNTIL (1 = 1)"),
+        ("CASE", "CASE WHEN 1 = 1 THEN", ""),
+    ],
+)
+def test_snowflake_splitter_control_enders_allow_comments(
+    separator: str, control: str, opener: str, condition: str
+) -> None:
+    block = "BEGIN " + opener + " SELECT 1;" + condition + " END" + separator + control + "; SELECT 2; END;"
+    assert split_sql_script(block + " SELECT 3;", dialect="snowflake", strip_trailing_terminator=True) == [
+        block,
+        "SELECT 3",
+    ]

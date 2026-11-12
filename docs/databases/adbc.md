@@ -89,6 +89,106 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 | `AdbcConfig` (`duckdb`, `sqlite`, `snowflake`, `bigquery`, `oracle`, `db2`, `teradata`, `flightsql`) | Respective ADBC C/Go/C++ driver | C Data Interface (`__arrow_c_stream__` + `adbc_ingest`) | Per-session connection (or caller-managed `connection_instance`); supports dynamic `auth_token_provider` in `connection_config`. |
 | [`ArrowOdbcConfig`](arrow-odbc.md) | Rust `arrow-odbc` over unixODBC / Windows ODBC | Pre-allocated Rust ODBC columnar batch buffers | Process-wide ODBC Driver Manager connection pooling (`driver_features={"enable_pooling": True}`). |
 
+### Snowflake Authentication and Stage SQL
+
+Install `sqlspec[adbc]` and `adbc-driver-snowflake` to use Snowflake through the Arrow driver.
+Snowflake opens a connection for each session; close sessions with `config.provide_session()`.
+For the native connector, pooling, and staged Parquet uploads, see the [Snowflake guide](snowflake.md).
+
+=== "Access token"
+
+    ```python
+    import os
+
+    from sqlspec.adapters.adbc import AdbcConfig
+
+
+    def load_token() -> str:
+        return os.environ["SNOWFLAKE_TOKEN"]
+
+
+    config = AdbcConfig(
+        connection_config={
+            "driver": "snowflake",
+            "account": os.environ["SNOWFLAKE_ACCOUNT"],
+            "warehouse": "COMPUTE_WH",
+            "auth_type": "pat",
+            "auth_token_provider": load_token,
+            "login_timeout": 30,
+            "query_tag": "orders-etl",
+        }
+    )
+    with config.provide_session() as session:
+        rows = session.select("SELECT :status AS status", status="ready")
+    ```
+
+    Use `auth_type="oauth"` with the same token provider for OAuth.
+    The provider runs for each new connection.
+    Token modes refresh the authentication token without replacing a configured password.
+
+=== "Workload identity"
+
+    ```python
+    import os
+
+    from sqlspec.adapters.adbc import AdbcConfig
+
+    config = AdbcConfig(
+        connection_config={
+            "driver": "snowflake",
+            "account": os.environ["SNOWFLAKE_ACCOUNT"],
+            "username": "SVC_ORDERS",
+            "auth_type": "workload_identity",
+            "identity_provider": "AWS",
+        }
+    )
+    ```
+
+    Choose the identity provider configured for your Snowflake account.
+    `auth_token_provider` can supply a refreshed token when your identity setup requires one.
+
+=== "Key pair"
+
+    ```python
+    import os
+    from pathlib import Path
+
+    from sqlspec.adapters.adbc import AdbcConfig
+
+    config = AdbcConfig(
+        connection_config={
+            "driver": "snowflake",
+            "account": os.environ["SNOWFLAKE_ACCOUNT"],
+            "username": "SVC_ORDERS",
+            "private_key": Path(os.environ["SNOWFLAKE_KEY_FILE"]),
+            "private_key_passphrase": os.environ["SNOWFLAKE_KEY_PASSPHRASE"],
+        }
+    )
+    ```
+
+    `private_key` accepts PEM text, a path, DER bytes, or a `cryptography` RSA private key.
+    Supplying a key selects JWT authentication unless you explicitly choose another mode.
+
+Numeric timeouts use seconds: `login_timeout=30` becomes `"30s"`, and `request_timeout=0.5` becomes `"500ms"`.
+You can also pass Go duration strings such as `"2m"`.
+A `snowflake://` URI prefix is removed before the driver reads its connection string.
+Explicit `db_kwargs` entries take precedence over convenience fields.
+`use_high_precision` keeps the upstream default unless you set it; set it to `False` to request lower-precision integer results.
+
+Snowflake uses `?` wire parameters. SQLSpec rewrites named placeholders while preserving stage references, session variables, and pipe result ordinals:
+
+```sql
+SELECT t.$1 FROM @orders_stage/events t WHERE t.$2 = :status;
+SHOW WAREHOUSES ->> SELECT "name" FROM $1 WHERE "state" = :state;
+SELECT * FROM IDENTIFIER($orders_table) WHERE order_id = :order_id;
+```
+
+Only `:status`, `:state`, and `:order_id` are bind parameters in these examples.
+Literal URLs, `//` comments, and `$$...$$` scripting blocks retain their contents.
+Set `query_tag` for a connection tag; SQLSpec also passes the tag through the ADBC statement option `adbc.snowflake.statement.query_tag`.
+Active correlation context augments the statement tag.
+Snowflake telemetry uses `db.system="snowflake"`.
+
 ### Connection and Pool Parameters
 
 Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `connection_config={...}` and `AdbcPoolConfig` keys inside `pool_config={...}` on `AdbcConfig`:
@@ -96,9 +196,9 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 <!-- GENERATED:START config-table:sqlspec.adapters.adbc.config.AdbcConnectionParams,sqlspec.adapters.adbc.config.AdbcPoolConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `host` | `str` | - | Teradata server hostname or IP address. |
-| `port` | `int` | - | Teradata server port, defaulting to 1025. |
-| `user` | `str` | - | Alias for the Teradata connection username. |
+| `host` | `str` | - | Database server or proxy endpoint hostname (for example Teradata or Snowflake). |
+| `port` | `int or str` | - | Database server endpoint port (for example Teradata `1025` or Snowflake `443`). |
+| `user` | `str` | - | Alias for the connection username on Teradata and Snowflake. |
 | `adbc_dialect` | `str` | - | Explicit database dialect for generic FlightSQL transports. |
 | `uri` | `str` | - | Backend connection URI (such as `postgresql://`, `sqlite://`, `duckdb://`, `grpc+tls://`, `oracle://`, `db2://`, or `quack://`). |
 | `dsn` | `str` | - | Connection string alias normalized to `uri` when `uri` is unset. |
@@ -106,7 +206,7 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 | `connection_string` | `str` | - | Connection string alias normalized to `uri` when `uri` is unset. |
 | `db` | `str` | - | Database path or identifier alias normalized for file-backed and embedded ADBC drivers. |
 | `path` | `str` | - | Filesystem database path for `adbc-driver-sqlite` or `adbc-driver-duckdb`. |
-| `driver` | `str` | - | Short driver alias (such as `'postgresql'`, `'sqlite'`, `'duckdb'`, `'flightsql'`, `'gizmosql'`, `'snowflake'`, `'bigquery'`, `'oracle'`, `'db2'`, or `'quack'`) or shared library path. |
+| `driver` | `str` | - | Short driver alias (such as `'postgresql'`, `'sqlite'`, `'duckdb'`, `'flightsql'`, `'gizmosql'`, `'snowflake'`, `'teradata'`, `'bigquery'`, `'oracle'`, `'db2'`, or `'quack'`) or shared library path. |
 | `driver_name` | `str` | - | Explicit ADBC Python module connect path or shared library name overriding URI inference. |
 | `db_kwargs` | `dict[str, Any]` | - | Driver-specific `adbc_driver_manager.AdbcDatabase` options passed to `dbapi.connect`. |
 | `conn_kwargs` | `dict[str, Any]` | - | Driver-specific `adbc_driver_manager.AdbcConnection` options passed to `dbapi.connect`. |
@@ -146,6 +246,26 @@ Pass `AdbcConnectionParams` keys (including `auth_token_provider`) inside `conne
 | `with_cookie_middleware` | `bool` | - | Enable stateful session cookie middleware on FlightSQL/GizmoSQL connections. |
 | `headers` | `dict[str, str]` | - | Custom gRPC metadata headers attached to FlightSQL or GizmoSQL requests. |
 | `extra` | `dict[str, Any]` | - | Additional driver options merged into `db_kwargs`. |
+| `region` | `str` | - | Snowflake cloud region identifier. |
+| `protocol` | `str` | - | Snowflake endpoint transport protocol. |
+| `application` | `str` | - | Client application identifier. |
+| `keep_session_alive` | `bool` | - | Keep the Snowflake session active during idle intervals. |
+| `login_timeout` | `int or float or str` | - | Authentication timeout in seconds or a Go duration string. |
+| `request_timeout` | `int or float or str` | - | HTTP request timeout in seconds or a Go duration string. |
+| `client_timeout` | `int or float or str` | - | Overall client timeout in seconds or a Go duration string. |
+| `ocsp_fail_open_mode` | `bool` | - | Allow connections when the certificate status responder is unreachable. |
+| `use_high_precision` | `bool` | - | Return fixed-point Snowflake numbers as lossless Arrow decimal values by default. |
+| `okta_url` | `str` | - | Okta authentication endpoint URL. |
+| `identity_provider` | `str` | - | Workload identity provider name. |
+| `workload_identity_provider` | `str` | - | Alias for identity_provider. |
+| `private_key` | `str or bytes or Path or Any` | - | JWT private key as PEM text, DER bytes, a path, or a private key object. |
+| `private_key_passphrase` | `str or bytes` | - | Passphrase for an encrypted private key. |
+| `jwt_private_key` | `str or Path` | - | Filesystem path to a private key. |
+| `jwt_private_key_pkcs8_value` | `str` | - | In-memory PKCS8 private key text. |
+| `jwt_private_key_pkcs8_password` | `str` | - | Passphrase for the in-memory private key. |
+| `jwt_expire_timeout` | `int or float or str` | - | JWT lifetime in seconds or a Go duration string. |
+| `query_tag` | `str` | - | Default Snowflake query tag for session and statement correlation. |
+| `session_parameters` | `Mapping[str, Any]` | - | Additional Snowflake session parameters. |
 | `max_size` | `int` | - | Maximum simultaneous clone leases, excluding the original seed (default 4). |
 | `timeout` | `float` | - | Maximum seconds to wait for a lease (default 30.0). |
 <!-- GENERATED:END config-table:sqlspec.adapters.adbc.config.AdbcConnectionParams,sqlspec.adapters.adbc.config.AdbcPoolConfig -->
@@ -164,10 +284,11 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 | `enable_pgvector` | `bool` | `True` | Probe `pg_extension` for `vector` on PostgreSQL ADBC connections (defaults to `True` when `pgvector` is installed). |
 | `enable_paradedb` | `bool` | `True` | Probe `pg_extension` for ParadeDB `pg_search` on PostgreSQL ADBC connections (defaults to `True`). |
 | `enable_pg_textsearch` | `bool` | `True` | Probe `pg_extension` for `pg_textsearch` BM25 support on PostgreSQL ADBC connections (defaults to `True`). |
-| `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase column names to lowercase (defaults to `True` on Oracle, Db2, and Snowflake ADBC backends). |
+| `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase column names to lowercase (defaults to `True` on Oracle, Db2, Teradata, and Snowflake ADBC backends). |
 | `enable_events` | `bool` | - | Enable SQLSpec table-backed event channel support. |
 | `on_connection_create` | `Callable[[AdbcConnection], None]` | - | Callback invoked with the raw ADBC connection immediately after `connect()`. |
 | `events_backend` | `Literal['poll_queue']` | - | Event queue backend name (`'poll_queue'`). |
+| `query_tag` | `str` | - | Default Snowflake statement tag combined with the current correlation ID. |
 | `enable_statement_profiling` | `bool` | `False` | Capture per-statement DuckDB JSON operator profiles on `StatementEvent.profile` when using DuckDB ADBC (defaults to `False`). |
 <!-- GENERATED:END config-table:sqlspec.adapters.adbc.config.AdbcDriverFeatures -->
 
@@ -183,9 +304,9 @@ Pass `AdbcDriverFeatures` keys inside `driver_features={...}` on `AdbcConfig`:
 | `TIMESTAMP` / `DATE` | `datetime.datetime` / `datetime.date` | Arrow timestamp arrays with timezone metadata preserved. |
 
 - **Zero-Copy adbc_ingest**: `session.load_from_arrow(table, arrow_table_or_reader)` passes `pyarrow.Table` and `pyarrow.RecordBatchReader` objects straight to `cursor.adbc_ingest` over `__arrow_c_stream__` without materializing intermediate rows.
-- **Cross-Engine Placeholder Rewriting**: Although `adbc_driver_manager` binds parameters as positional Arrow `RecordBatch` columns, SQLSpec translates `:named` parameters to `$1` (`postgres`), `:1` (`oracle`), or `?` `qmark` (`sqlite`, `duckdb`, `db2`, `teradata`) automatically.
+- **Cross-Engine Placeholder Rewriting**: Although `adbc_driver_manager` binds parameters as positional Arrow `RecordBatch` columns, SQLSpec translates `:named` parameters to `$1` (`postgres`), `:1` (`oracle`), or `?` `qmark` (`sqlite`, `duckdb`, `db2`, `snowflake`, `teradata`) automatically. Snowflake stage references and session variables retain their native meaning.
 - **DuckDB ADBC COPY TO Parameters**: DuckDB over ADBC only inlines a bound parameter in `COPY (...) TO :output_path` when `:output_path` is the statement's sole parameter. When combining `COPY` with filter parameters, set filter values via `SET VARIABLE cutoff = :val` beforehand and reference `getvariable('cutoff')` inside the query.
-- **Enterprise Error and Savepoint Parity**: `AdbcDriver` translates Oracle `ORA-xxxxx`, Db2 `SQLCODE`, and Teradata `[Error NNNN]` errors into SQLSpec exceptions and emits dialect-native savepoints (`ON ROLLBACK RETAIN CURSORS` on Db2).
+- **Enterprise Error and Savepoint Parity**: `AdbcDriver` translates Oracle `ORA-xxxxx`, Db2 `SQLCODE`, six-digit Snowflake error codes, and Teradata `[Error NNNN]` errors into SQLSpec exceptions and emits dialect-native savepoints (`ON ROLLBACK RETAIN CURSORS` on Db2; Snowflake and Teradata savepoints raise `NotImplementedError`).
 
 ## Teradata
 
@@ -224,4 +345,5 @@ Live ADBC tests use `SQLSPEC_TERADATA_ADBC_URI`; Flight SQL tests use `SQLSPEC_T
 - [BigQuery Dialect Reference](/reference/data-dictionary/dialects/bigquery/)
 - [Oracle Dialect Reference](/reference/data-dictionary/dialects/oracle/)
 - [IBM Db2 Dialect Reference](/reference/data-dictionary/dialects/db2/)
+- [Snowflake Dialect Reference](/reference/data-dictionary/dialects/snowflake/)
 - [Teradata Data Dictionary Catalog](../reference/data-dictionary/dialects/teradata.md)

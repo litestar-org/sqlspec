@@ -876,3 +876,16 @@ async def test_arrow_batches_explicit_schema_and_struct_field_loss_guards() -> N
     assert explicit_null_reader is not None
     assert seen == []
     assert explicit_null_reader.schema.field("a").type == pa.string()
+
+
+@pytest.mark.parametrize("dialect", ["snowflake", "sf"])
+def test_sql_type_from_arrow_type_snowflake(dialect: str) -> None:
+    """Snowflake Arrow import maps nested and timezone-aware values natively."""
+    import pyarrow as pa
+
+    assert sql_type_from_arrow_type(pa.binary(), dialect) == "BINARY"
+    assert sql_type_from_arrow_type(pa.struct([("k", pa.int64())]), dialect) == "VARIANT"
+    assert sql_type_from_arrow_type(pa.uuid(), dialect) == "VARCHAR(36)"
+    assert sql_type_from_arrow_type(pa.timestamp("us", tz="UTC"), dialect) == "TIMESTAMP_TZ"
+    with pytest.raises(SQLBuilderError, match="precision"):
+        sql_type_for_category("decimal", dialect, precision=39, scale=0)

@@ -140,7 +140,9 @@ def test_resolve_postgres_extension_state_promotes_paradedb() -> None:
 
 def test_adbc_config_resolve_dialect_for_extensions_pgvector() -> None:
     """Dialect switches to pgvector when pgvector is available."""
-    config = AdbcConfig(connection_config={"uri": "postgresql://localhost/test"})
+    config = AdbcConfig(
+        connection_config={"uri": "postgresql://localhost/test"}, driver_features={"enable_pgvector": True}
+    )
     statement_config, pgvector, paradedb = resolve_postgres_extension_state(
         config.statement_config, config.driver_features, {"vector"}
     )

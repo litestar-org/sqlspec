@@ -959,11 +959,13 @@ def test_register_lifecycle_hook_updates_is_idle() -> None:
     [
         ("SQLSpecConfig", "AsyncpgDriver", None, "postgresql"),
         ("AdbcConfig", "AdbcDriver", "teradata", "teradata"),
+        ("AdbcConfig", "AdbcDriver", "snowflake", "snowflake"),
         ("AdbcConfig", "AdbcDriver", "postgresql", "postgresql"),
         ("AdbcConfig", "AdbcDriver", None, "adbc"),
         ("AdbcConfig", "UnmappedCustomDriver", None, "adbc"),
         ("TeradataConfig", "TeradataDriver", None, "teradata"),
         ("VantageConfig", "AdbcDriver", None, "teradata"),
+        ("SnowflakeConfig", "SnowflakeDriver", None, "snowflake"),
         ("SybaseConfig", "PymssqlDriver", None, "sybase"),
         ("SqlanywhereConfig", "SqlanywhereDriver", None, "sqlanywhere"),
         ("SQLSpecConfig", "SybaseDriver", None, "sybase"),
@@ -1321,3 +1323,18 @@ def test_statement_event_profile_and_script_index_fields(caplog: Any) -> None:
     assert last_record.__dict__.get("db.statement.profile") == sample_profile
     assert last_record.__dict__.get("sqlspec.script.statement_index") == 0
     assert last_record.__dict__.get("sqlspec.script.statement_count") == 2
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("snowflake", "snowflake"),
+        ("SnowflakeConfig", "snowflake"),
+        ("adbc_driver_snowflake.dbapi.connect", "snowflake"),
+        ("AdbcConfig[snowflake]", "snowflake"),
+        ("AdbcConfig", "adbc"),
+    ],
+)
+def test_resolve_db_system_snowflake(name: str, expected: str) -> None:
+    """Snowflake identity takes precedence over the ADBC transport name."""
+    assert resolve_db_system(name) == expected

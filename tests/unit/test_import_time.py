@@ -221,6 +221,7 @@ ADAPTER_DRIVERS: dict[str, tuple[str, ...]] = {
     "psycopg": ("psycopg",),
     "pymssql": ("pymssql",),
     "pymysql": ("pymysql",),
+    "snowflake": ("snowflake.connector",),
     "spanner": ("google.cloud.spanner_v1",),
     "sqlanywhere": ("sqlanydb",),
     "sqlite": (),
@@ -228,6 +229,9 @@ ADAPTER_DRIVERS: dict[str, tuple[str, ...]] = {
     "teradata": (),
 }
 """Driver module(s) each adapter imports; every package under ``sqlspec/adapters/`` must be registered."""
+
+LAZY_ADAPTER_CONFIGS: dict[str, tuple[str, str]] = {"snowflake": ("SnowflakeConfig", "snowflake-connector-python")}
+"""Adapters that report optional SDK availability when opening a physical connection."""
 
 DRIVER_PACKAGE_DEPENDENCIES: dict[str, tuple[str, ...]] = {"aiomysql": ("pymysql",)}
 """Other registered driver modules that a driver package itself depends on (aiomysql requires PyMySQL)."""
@@ -269,7 +273,9 @@ def test_every_adapter_package_is_registered() -> None:
     assert packages == set(ADAPTER_DRIVERS)
 
 
-@pytest.mark.parametrize("adapter", sorted(name for name, drivers in ADAPTER_DRIVERS.items() if drivers))
+@pytest.mark.parametrize(
+    "adapter", sorted(name for name, drivers in ADAPTER_DRIVERS.items() if drivers and name not in LAZY_ADAPTER_CONFIGS)
+)
 def test_adapter_import_raises_driver_module_not_found(adapter: str) -> None:
     """Importing an adapter without its driver raises the driver's own ModuleNotFoundError."""
     drivers = ADAPTER_DRIVERS[adapter]
@@ -292,6 +298,39 @@ except ModuleNotFoundError as exc:
     assert exc.name and any(exc.name == name or exc.name.startswith(name + ".") or name.startswith(exc.name + ".") for name in blocked), exc.name
 else:
     raise AssertionError("adapter imported without its driver")
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("adapter", sorted(LAZY_ADAPTER_CONFIGS))
+def test_lazy_adapter_reports_missing_driver_on_connection(adapter: str) -> None:
+    """Lazy adapters expose configuration without an SDK and fail before connection I/O when it is missing."""
+    drivers = ADAPTER_DRIVERS[adapter]
+    config_name, install_package = LAZY_ADAPTER_CONFIGS[adapter]
+    script = f"""
+import importlib
+import importlib.abc
+import sys
+
+blocked = {drivers!r}
+
+class BlockDriver(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise ModuleNotFoundError(f"No module named {{fullname!r}}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockDriver())
+package = importlib.import_module("sqlspec.adapters.{adapter}")
+config = getattr(package, {config_name!r})()
+from sqlspec.exceptions import MissingDependencyError
+try:
+    config.create_connection()
+except MissingDependencyError as exc:
+    assert {install_package!r} in str(exc)
+else:
+    raise AssertionError("physical connection opened without its driver SDK")
 """
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

@@ -105,8 +105,16 @@ class _BaseTableEventQueue:
 
     def _insert_sql(self) -> str:
         columns = "event_id, channel, payload_json, metadata_json, status, available_at, lease_expires_at, attempts, created_at"
+        if self._dialect == "snowflake":
+            values = ":event_id, :channel, PARSE_JSON(:payload_json), PARSE_JSON(:metadata_json), :status, :available_at, :lease_expires_at, :attempts, :created_at"
+            return f"INSERT INTO {self._table_name} ({columns}) SELECT {values}"
         values = ":event_id, :channel, :payload_json, :metadata_json, :status, :available_at, :lease_expires_at, :attempts, :created_at"
         return f"INSERT INTO {self._table_name} ({columns}) VALUES ({values})"
+
+    def _normalize_queue_row(self, row: "dict[str, Any] | None") -> "dict[str, Any] | None":
+        if row is None or self._dialect != "snowflake":
+            return row
+        return {key.lower(): value for key, value in row.items()}
 
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = select_limit_prefix(self._dialect, 1)
@@ -300,7 +308,10 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             else self._config.provide_session(transaction=True)
         )
         with cast("AbstractContextManager[SyncDriverAdapterBase]", session_ctx) as driver:
-            if self._use_run_in_transaction:
+            if self._dialect == "snowflake":
+                with driver.transaction():
+                    self._execute_many_with_driver(driver, records)
+            elif self._use_run_in_transaction:
                 run_in_tx = getattr(driver, "run_in_transaction", None)
                 if callable(run_in_tx):
                     run_in_tx(partial(self._execute_many_with_driver, records=records))
@@ -399,21 +410,23 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             "AbstractContextManager[SyncDriverAdapterBase]",
             _provide_session(self._config, read_only=not self._select_for_update),
         ) as driver:
-            return driver.select_one_or_none(
+            row = driver.select_one_or_none(
                 SQL(
                     self._select_statement,
                     self._candidate_parameters(channel, current_time),
                     statement_config=self._statement_config,
                 )
             )
+            return self._normalize_queue_row(row)
 
     def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
         with cast(
             "AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
         ) as driver:
-            return driver.select_one_or_none(
+            row = driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
+            return self._normalize_queue_row(row)
 
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         session_ctx = (
@@ -453,6 +466,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                             statement_config=self._statement_config,
                         )
                     )
+                    verify_row = self._normalize_queue_row(verify_row)
                     claimed = self._claim_verified(verify_row, leased_until)
                 if not claimed:
                     driver.rollback()
@@ -474,7 +488,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         )
         if self._uses_oracle_locking_select():
             return self._fetch_oracle_candidate_with_driver(driver, statement)
-        return driver.select_one_or_none(statement)
+        return self._normalize_queue_row(driver.select_one_or_none(statement))
 
     def _fetch_oracle_candidate_with_driver(
         self, driver: "SyncDriverAdapterBase", statement: "SQL"
@@ -640,21 +654,23 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]",
             _provide_session(self._config, read_only=not self._select_for_update),
         ) as driver:
-            return await driver.select_one_or_none(
+            row = await driver.select_one_or_none(
                 SQL(
                     self._select_statement,
                     self._candidate_parameters(channel, current_time),
                     statement_config=self._statement_config,
                 )
             )
+            return self._normalize_queue_row(row)
 
     async def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
         async with cast(
             "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
         ) as driver:
-            return await driver.select_one_or_none(
+            row = await driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
+            return self._normalize_queue_row(row)
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
         session_ctx = (
@@ -699,6 +715,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                             statement_config=self._statement_config,
                         )
                     )
+                    verify_row = self._normalize_queue_row(verify_row)
                     claimed = self._claim_verified(verify_row, leased_until)
                 if not claimed:
                     await driver.rollback()
@@ -720,7 +737,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         )
         if self._uses_oracle_locking_select():
             return await self._fetch_oracle_candidate_with_driver(driver, statement)
-        return await driver.select_one_or_none(statement)
+        return self._normalize_queue_row(await driver.select_one_or_none(statement))
 
     async def _fetch_oracle_candidate_with_driver(
         self, driver: "AsyncDriverAdapterBase", statement: "SQL"

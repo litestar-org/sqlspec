@@ -37,6 +37,7 @@ _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("oracle", "oracle"),
     ("oracledb", "oracle"),
     ("db2", "db2"),
+    ("snowflake", "snowflake"),
     ("teradata", "teradata"),
     ("vantage", "teradata"),
     ("adbc", "adbc"),

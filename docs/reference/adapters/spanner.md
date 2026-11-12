@@ -65,6 +65,8 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
     options:
       heading_level: 3
       show_bases: false
+      separate_signature: false
+      show_docstring_parameters: false
       members:
         - run_in_transaction
         - execute_partitioned_dml

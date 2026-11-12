@@ -151,6 +151,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "SQL Anywhere data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
     },
+    "sqlspec/data_dictionary/dialects/snowflake/config.py": {
+        "classification": "compile_now",
+        "reason": "Shared native and ADBC Snowflake catalog configuration and SHOW KEYS parsers.",
+    },
     "sqlspec/data_dictionary/dialects/sybase/config.py": {
         "classification": "compile_now",
         "reason": "Sybase ASE data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
@@ -306,6 +310,34 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/adapters/sqlanywhere/core.py": {
         "classification": "compile_now",
         "reason": "SQL Anywhere parameter normalization, row collection, and exception mapping helpers compile with the adapter core surface.",
+    },
+    "sqlspec/adapters/snowflake/core.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake connection normalization and parameter helpers compile with the adapter core surface.",
+    },
+    "sqlspec/adapters/snowflake/pool.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake bounded synchronous connection pool runtime.",
+    },
+    "sqlspec/adapters/snowflake/type_converter.py": {
+        "classification": "compile_now",
+        "reason": "Snowflake parameter and result conversion helpers.",
+    },
+    "sqlspec/adapters/snowflake/driver.py": {
+        "classification": "prove_separately",
+        "reason": "Optional Snowflake driver subclasses and deferred exception handler stay interpreted.",
+    },
+    "sqlspec/adapters/snowflake/config.py": {
+        "classification": "helper_split_first",
+        "reason": "Snowflake configuration retains interpreted lifecycle and factory methods.",
+    },
+    "sqlspec/adapters/snowflake/data_dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data dictionary inheritance stays interpreted.",
+    },
+    "sqlspec/adapters/snowflake/migrations.py": {
+        "classification": "keep_interpreted",
+        "reason": "Snowflake migration tracker extends the interpreted migration tracker facade.",
     },
     "sqlspec/adapters/sqlanywhere/pool.py": {
         "classification": "compile_now",

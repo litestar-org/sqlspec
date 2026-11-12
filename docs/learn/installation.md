@@ -69,6 +69,7 @@ Install only the driver extras needed by your deployment target. See [Databases]
 | **SQL Server** | `mssql-python`, `pymssql` | `mssql-python>=1.13` or `pymssql` |
 | **Sybase ASE** | `sybase` | `pymssql>=2.4.4` (FreeTDS TDS 5.0 wire protocol) |
 | **SAP SQL Anywhere** | `sqlanywhere` | `sqlanydb>=1.0.14` (`dbcapi` native client wrapper) |
+| **Snowflake** | `snowflake` | `snowflake-connector-python>=4.0.0`, `pyarrow` |
 | **Teradata Vantage** | `teradata` | `teradatasql>=20.0.0` |
 | **IBM Db2** | `db2` | `ibm_db>=3.3.0` |
 | **DuckDB** | `duckdb` | `duckdb`, `pyarrow`, `pytz` |

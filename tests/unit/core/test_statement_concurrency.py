@@ -32,7 +32,7 @@ def test_concurrent_compile_reset_vs_current_expression() -> None:
         start.wait()
         for _ in range(iterations):
             try:
-                sql._current_expression()
+                sql.limit(1)
                 sql.returns_rows()
                 _ = sql.operation_type
             except SQLSpecError:

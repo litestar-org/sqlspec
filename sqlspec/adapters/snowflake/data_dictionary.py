@@ -1,0 +1,355 @@
+"""Snowflake native catalog reflection over shared dialect query packs."""
+
+from collections.abc import Sequence
+from typing import Any, ClassVar, Final, NamedTuple, cast
+
+from mypy_extensions import mypyc_attr
+
+from sqlspec.adapters.snowflake.core import format_snowflake_identifier
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    DDLResult,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    MetadataCapability,
+    MetadataCapabilityProfile,
+    MetadataFidelity,
+    MetadataResult,
+    MetadataSource,
+    MetadataSupport,
+    ObjectIdentity,
+    TableMetadata,
+    VersionInfo,
+)
+from sqlspec.data_dictionary.dialects.snowflake import (
+    SNOWFLAKE_CONFIG,
+    format_snowflake_show_scope,
+    match_snowflake_catalog_rows,
+    parse_snowflake_imported_keys,
+    parse_snowflake_primary_or_unique_keys,
+    qualify_snowflake_information_schema,
+    snowflake_scope_exactness,
+)
+from sqlspec.driver import SyncDataDictionaryBase
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
+
+__all__ = ("SnowflakeSyncDataDictionary",)
+
+_SUPPORTED: Final[frozenset[str]] = frozenset({
+    "schemas",
+    "objects",
+    "tables",
+    "columns",
+    "constraints",
+    "views",
+    "routines",
+    "sequences",
+    "ddl",
+})
+_DATABASE_QUALIFIED_PARTS: Final = 3
+_DDL_TYPES: Final[dict[str, str]] = {
+    "table": "TABLE",
+    "base table": "TABLE",
+    "view": "VIEW",
+    "sequence": "SEQUENCE",
+    "function": "FUNCTION",
+    "procedure": "PROCEDURE",
+    "schema": "SCHEMA",
+}
+
+
+def _resolve_snowflake_catalog_scope(
+    schema: str | None, table: str | None
+) -> tuple[str | None, str | None, str | None, str]:
+    """Resolve exact catalog identity and SHOW scope from the same quoted identifiers."""
+    database_name = None
+    schema_name = None
+    if schema is not None:
+        schema_parts = split_qualified_identifier(format_snowflake_identifier(schema))
+        schema_name = schema_parts[-1]
+        if len(schema_parts) > 1:
+            database_name = schema_parts[-2]
+    table_name = None
+    if table is not None:
+        table_parts = split_qualified_identifier(format_snowflake_identifier(table))
+        table_name = table_parts[-1]
+        if len(table_parts) > 1:
+            schema_name = table_parts[-2]
+            database_name = table_parts[-3] if len(table_parts) >= _DATABASE_QUALIFIED_PARTS else None
+    scope = format_snowflake_show_scope(schema_name, table_name, database_name=database_name)
+    return database_name, schema_name, table_name, scope
+
+
+class _CatalogScope(NamedTuple):
+    database_name: str | None
+    schema_name: str | None
+    table_name: str | None
+    scope: str
+    schema_exact: bool
+    table_exact: bool
+
+
+def _capability(domain: str) -> MetadataCapability:
+    if domain in _SUPPORTED:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
+    """Reflect tables, typed columns, SHOW keys and native GET_DDL definitions."""
+
+    dialect: ClassVar[str] = "snowflake"
+
+    def get_metadata_capabilities(self, driver: Any, domains: Sequence[str] | None = None) -> MetadataCapabilityProfile:
+        """Report implemented catalog domains and unsupported secondary indexes."""
+        requested = (
+            tuple(domains)
+            if domains is not None
+            else tuple(sorted(_SUPPORTED | {"indexes", "privileges", "dependencies"}))
+        )
+        return MetadataCapabilityProfile(
+            self.dialect, adapter=type(self).__name__, capabilities=tuple(_capability(domain) for domain in requested)
+        )
+
+    def get_version(self, driver: Any) -> VersionInfo | None:
+        """Read and cache CURRENT_VERSION for the connection."""
+        key = id(driver)
+        if key in self._version_fetch_attempted:
+            return self._version_cache.get(key)
+        value = driver.select_value_or_none(self.get_query("version", "current"))
+        version = self.parse_version_with_pattern(SNOWFLAKE_CONFIG.version_pattern, str(value)) if value else None
+        self.cache_version(key, version)
+        return version
+
+    def get_feature_flag(self, driver: Any, feature: str) -> bool:
+        """Resolve static features locally and probe versions only for gated features."""
+        static_flag = SNOWFLAKE_CONFIG.get_feature_flag(feature)
+        if static_flag is not None:
+            return static_flag
+        if SNOWFLAKE_CONFIG.get_feature_version(feature) is None:
+            return False
+        return self.resolve_feature_flag(feature, self.get_version(driver))
+
+    def get_optimal_type(self, driver: Any, type_category: str) -> str:
+        """Choose the Snowflake SQL type for a logical category."""
+        return SNOWFLAKE_CONFIG.get_optimal_type(type_category)
+
+    def list_available_features(self) -> list[str]:
+        """List advertised Snowflake feature names."""
+        return list(SNOWFLAKE_CONFIG.feature_flags)
+
+    def _catalog_scope(self, driver: Any, schema: str | None, table: str | None, *, operation: str) -> _CatalogScope:
+        """Resolve catalog names, reading the session database and schema when unqualified."""
+        database_name, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        schema_exact, table_exact = snowflake_scope_exactness(schema, table)
+        if schema_name is None:
+            session = driver.select_one_or_none(self.get_query("schemas", "current"))
+            if session is not None:
+                database_name = session.get("database_name")
+                schema_name = session.get("schema_name")
+        self._log_catalog_read(driver, schema_name, table_name, operation)
+        return _CatalogScope(database_name, schema_name, table_name, scope, schema_exact, table_exact)
+
+    @staticmethod
+    def _matching_rows(rows: Sequence[Any], scope: _CatalogScope, *, by_table: bool) -> list[dict[str, Any]]:
+        return match_snowflake_catalog_rows(
+            rows,
+            schema_name=scope.schema_name,
+            schema_exact=scope.schema_exact,
+            table_name=scope.table_name if by_table else None,
+            table_exact=scope.table_exact,
+        )
+
+    def _log_catalog_read(self, driver: Any, schema_name: str | None, table_name: str | None, operation: str) -> None:
+        if table_name is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation=operation)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation=operation)
+
+    def _metadata(self, driver: Any, domain: str, schema: str | None = None) -> MetadataResult:
+        if domain == "schemas":
+            rows = driver.select(self.get_query("schemas", "list"))
+        else:
+            scope = self._catalog_scope(driver, schema, None, operation=domain)
+            query = self.get_query(domain, "by_schema")
+            query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+            rows = self._matching_rows(driver.select(query, schema_name=scope.schema_name), scope, by_table=False)
+        return MetadataResult(domain, capability=_capability(domain), items=tuple(rows))
+
+    def get_schemas(self, driver: Any) -> MetadataResult:
+        """List schemas in the active database."""
+        return self._metadata(driver, "schemas")
+
+    def get_objects(self, driver: Any, schema: str | None = None) -> MetadataResult:
+        """List database objects in a schema."""
+        return self._metadata(driver, "objects", schema)
+
+    def get_tables(self, driver: Any, schema: str | None = None) -> list[TableMetadata]:
+        """List tables from INFORMATION_SCHEMA.TABLES."""
+        scope = self._catalog_scope(driver, schema, None, operation="tables")
+        query = self.get_query("tables", "by_schema")
+        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+        rows = driver.select(query, schema_name=scope.schema_name, schema_type=TableMetadata)
+        return cast("list[TableMetadata]", self._matching_rows(rows, scope, by_table=False))
+
+    def get_columns(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[ColumnMetadata]:
+        """List columns, preserving exact quoted table and schema names."""
+        scope = self._catalog_scope(driver, schema, table, operation="columns")
+        params: dict[str, Any] = {"schema_name": scope.schema_name}
+        operation = "by_schema"
+        if scope.table_name is not None:
+            operation = "by_table"
+            params["table_name"] = scope.table_name
+        query = self.get_query("columns", operation)
+        query = query.copy(qualify_snowflake_information_schema(query.raw_sql, scope.database_name))
+        rows = driver.select(query, schema_type=ColumnMetadata, **params)
+        return cast("list[ColumnMetadata]", self._matching_rows(rows, scope, by_table=True))
+
+    def get_indexes(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[IndexMetadata]:
+        """Return no secondary indexes for standard Snowflake tables."""
+        return []
+
+    def get_foreign_keys(
+        self, driver: Any, table: str | None = None, schema: str | None = None
+    ) -> list[ForeignKeyMetadata]:
+        """Read ordered imported-key metadata without KEY_COLUMN_USAGE."""
+        _, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        self._log_catalog_read(driver, schema_name, table_name, "foreign_keys")
+        rows = driver.select(f"SHOW IMPORTED KEYS {scope}")
+        return parse_snowflake_imported_keys(rows, table_name=table_name)
+
+    def get_constraints(self, driver: Any, table: str | None = None, schema: str | None = None) -> MetadataResult:
+        """Combine catalog constraints with column-ordered SHOW key metadata."""
+        catalog_scope = self._catalog_scope(driver, schema, table, operation="constraints")
+        table_name = catalog_scope.table_name
+        params: dict[str, Any] = {"schema_name": catalog_scope.schema_name}
+        operation = "by_schema"
+        if table_name is not None:
+            params["table_name"] = table_name
+            operation = "by_table"
+        catalog_query = self.get_query("constraints", operation)
+        catalog_query = catalog_query.copy(
+            qualify_snowflake_information_schema(catalog_query.raw_sql, catalog_scope.database_name)
+        )
+        rows = self._matching_rows(driver.select(catalog_query, **params), catalog_scope, by_table=True)
+        keys = parse_snowflake_primary_or_unique_keys(
+            driver.select(f"SHOW PRIMARY KEYS {catalog_scope.scope}"), table_name=table_name
+        )
+        keys += parse_snowflake_primary_or_unique_keys(
+            driver.select(f"SHOW UNIQUE KEYS {catalog_scope.scope}"), unique=True, table_name=table_name
+        )
+        keyed = {(str(row.get("constraint_name")), str(row.get("table_name"))) for row in keys}
+        combined = [row for row in rows if (str(row.get("constraint_name")), str(row.get("table_name"))) not in keyed]
+        combined.extend(keys)
+        return MetadataResult("constraints", capability=_capability("constraints"), items=tuple(combined))
+
+    def get_views(self, driver: Any, schema: str | None = None) -> MetadataResult:
+        """List view definitions in a schema."""
+        return self._metadata(driver, "views", schema)
+
+    def get_sequences(self, driver: Any, schema: str | None = None) -> MetadataResult:
+        """List sequence definitions in a schema."""
+        return self._metadata(driver, "sequences", schema)
+
+    def get_routines(self, driver: Any, schema: str | None = None) -> MetadataResult:
+        """List functions and procedures in a schema."""
+        return self._metadata(driver, "routines", schema)
+
+    def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: str | None) -> tuple[str, str | None]:
+        """Resolve qualified or quoted Snowflake object and schema identifiers into exact catalog names."""
+        _ = driver
+        object_parts = split_qualified_identifier(format_snowflake_identifier(object_name))
+        resolved_name = object_parts[-1]
+        if len(object_parts) >= _DATABASE_QUALIFIED_PARTS:
+            return resolved_name, f"{quote_identifier(object_parts[-3])}.{quote_identifier(object_parts[-2])}"
+        if len(object_parts) > 1:
+            return resolved_name, object_parts[-2]
+        if schema is not None:
+            schema_parts = split_qualified_identifier(format_snowflake_identifier(schema))
+            if len(schema_parts) > 1:
+                return resolved_name, f"{quote_identifier(schema_parts[-2])}.{quote_identifier(schema_parts[-1])}"
+            return resolved_name, (schema_parts[0] if schema_parts else self.resolve_schema(None))
+        return resolved_name, self.resolve_schema(None)
+
+    def exact_catalog_identifier(self, driver: Any, name: str) -> str:
+        """Return ``name`` in the form Snowflake metadata getters resolve back to the exact catalog name."""
+        if name.startswith('"') and name.endswith('"') and len(split_qualified_identifier(name)) > 1:
+            return name
+        return super().exact_catalog_identifier(driver, name)
+
+    def get_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: str | None = None,
+        object_type: str = "table",
+        include_dependencies: bool = True,
+        prefer_native: bool = True,
+        redact: bool = True,
+        target_dialect: str | None = None,
+    ) -> DDLResult:
+        """Resolve one Snowflake object's DDL while avoiding default schema qualification for schemas."""
+        if object_type.lower() == "schema" and schema is None:
+            object_parts = split_qualified_identifier(format_snowflake_identifier(object_name))
+            resolved_name = object_parts[-1]
+            resolved_schema = object_parts[-2] if len(object_parts) > 1 else None
+            return self._get_exact_object_ddl(
+                driver,
+                resolved_name,
+                schema=resolved_schema,
+                object_type=object_type,
+                include_dependencies=include_dependencies,
+                prefer_native=prefer_native,
+                redact=redact,
+                target_dialect=target_dialect,
+            )
+        return super().get_object_ddl(
+            driver,
+            object_name,
+            schema=schema,
+            object_type=object_type,
+            include_dependencies=include_dependencies,
+            prefer_native=prefer_native,
+            redact=redact,
+            target_dialect=target_dialect,
+        )
+
+    def _get_native_object_ddl(
+        self,
+        driver: Any,
+        object_name: str,
+        *,
+        schema: str | None,
+        object_type: str,
+        include_dependencies: bool,
+        redact: bool,
+    ) -> DDLResult | None:
+        _ = include_dependencies, redact
+        kind = _DDL_TYPES.get(object_type.lower())
+        if kind is None:
+            return None
+        name = quote_identifier(object_name)
+        if schema is not None:
+            if schema.startswith('"') and schema.endswith('"') and len(split_qualified_identifier(schema)) > 1:
+                qualifier = schema
+            else:
+                qualifier = quote_identifier(schema)
+            name = f"{qualifier}.{name}"
+        ddl = driver.select_value_or_none(self.get_query("ddl", "by_object"), object_type=kind, object_name=name)
+        identity = ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect)
+        if not ddl:
+            return DDLResult(identity, MetadataSupport.UNSUPPORTED, warnings=("GET_DDL returned no definition",))
+        return DDLResult(
+            identity,
+            MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+            ddl=str(ddl),
+        )

@@ -678,8 +678,9 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     driver = Mock()
     driver.dialect = "snowflake"
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "app_db", "SCHEMA_NAME": "app"}
     driver.select.side_effect = [
-        [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
+        [{"SCHEMA_NAME": "app", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
         [
             {
                 "SCHEMA_NAME": "PUBLIC",
@@ -696,7 +697,11 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     tables = dictionary.get_tables(driver)
     columns = dictionary.get_columns(driver, table="ls_sess", schema="PUBLIC")
 
-    assert tables == [{"schema_name": "PUBLIC", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
+    assert tables == [{"schema_name": "app", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
+    tables_call = driver.select.call_args_list[0]
+    assert tables_call.kwargs == {"schema_name": "app"}
+    assert '"app_db".information_schema.tables' in tables_call.args[0].raw_sql
+    assert driver.select.call_args_list[1].kwargs == {"schema_name": "PUBLIC", "table_name": "LS_SESS"}
     assert columns[0]["column_name"] == "SESSION_ID"
     assert columns[0]["data_type"] == "TEXT"
 
@@ -755,6 +760,7 @@ def test_snowflake_tables_and_columns_filter_permutations() -> None:
     driver = Mock()
     driver.dialect = "snowflake"
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "PUBLIC"}
     driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "SESS", "COLUMN_NAME": "ID"}]
 
     schema_tables = dictionary.get_tables(driver, schema="PUBLIC")
@@ -834,3 +840,205 @@ def test_teradata_vantage_dialect_normalization_in_data_dictionary(raw_dialect: 
     driver.dialect = raw_dialect
     assert dictionary._normalize_dialect(driver) == "teradata"
     assert dictionary.resolve_ddl_dialect(driver) == "teradata"
+
+
+def test_snowflake_version_feature_flags_and_optimal_types() -> None:
+    """Static Snowflake JSON support does not require a version query."""
+    from sqlspec.data_dictionary import VersionInfo
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.select_value_or_none.return_value = "8.43.1"
+    for category, expected in {
+        "json": "VARIANT",
+        "datetime": "TIMESTAMP_TZ",
+        "blob": "BINARY",
+        "boolean": "BOOLEAN",
+        "uuid": "VARCHAR(36)",
+    }.items():
+        assert dictionary.get_optimal_type(driver, category) == expected
+    driver.select_value_or_none.assert_not_called()
+    assert dictionary.get_version(driver) == VersionInfo(8, 43, 1)
+    assert dictionary.get_feature_flag(driver, "supports_transactions") is True
+    assert dictionary.get_feature_flag(driver, "supports_transactional_ddl") is False
+
+
+@pytest.mark.parametrize(
+    ("table", "expected_scope"),
+    [
+        ("orders", 'IN TABLE "PUBLIC"."ORDERS"'),
+        (None, 'IN SCHEMA "PUBLIC"'),
+        ('"Mixed.Table"', 'IN TABLE "PUBLIC"."Mixed.Table"'),
+    ],
+)
+def test_snowflake_foreign_key_catalog_fallback(table: str | None, expected_scope: str) -> None:
+    """Unsupported GetObjects falls back to SHOW with exact quoted identifiers."""
+    from sqlspec.data_dictionary import ForeignKeyMetadata
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    actual_table = "Mixed.Table" if table == '"Mixed.Table"' else "ORDERS"
+    driver.select.return_value = [
+        {
+            "fk_name": "FK_ORD_USR",
+            "pk_name": "PK_USR",
+            "fk_schema_name": "PUBLIC",
+            "fk_table_name": actual_table,
+            "fk_column_name": "USER_ID",
+            "pk_schema_name": "PUBLIC",
+            "pk_table_name": "USERS",
+            "pk_column_name": "ID",
+        }
+    ]
+    assert dictionary.get_foreign_keys(driver, table=table, schema="public") == [
+        ForeignKeyMetadata(actual_table, "USER_ID", "USERS", "ID", "FK_ORD_USR", "PUBLIC", "PUBLIC")
+    ]
+    assert driver.select.call_args.args[0].strip() == f"SHOW IMPORTED KEYS {expected_scope};"
+
+
+@pytest.mark.parametrize("domain", ["schemas", "objects", "views", "sequences", "routines"])
+def test_snowflake_catalog_domain_results(domain: str) -> None:
+    """Catalog methods expose native capability and normalize result column labels."""
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "PUBLIC"}
+    driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "OBJECT_NAME": "ORDERS"}]
+    result = getattr(dictionary, f"get_{domain}")(driver)
+    if domain != "schemas":
+        assert driver.select.call_args.kwargs == {"schema_name": "PUBLIC"}
+    assert result.items == ({"schema_name": "PUBLIC", "object_name": "ORDERS"},)
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.capability.source == MetadataSource.CATALOG
+    assert result.capability.fidelity == MetadataFidelity.NATIVE
+
+
+def test_snowflake_foreign_keys_reject_nul_identifier() -> None:
+    """Invalid catalog identifiers fail before SHOW SQL is sent to the driver."""
+    from sqlspec.exceptions import SQLSpecError
+
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    with pytest.raises(SQLSpecError, match="NUL"):
+        AdbcDataDictionary().get_foreign_keys(driver, table="orders\x00", schema="public")
+    driver.select.assert_not_called()
+
+
+def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
+    """Qualified 2-part and 3-part Snowflake table names resolve schema and database scopes across catalog methods."""
+    from sqlspec.exceptions import SQLSpecError
+
+    dictionary = AdbcDataDictionary()
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select.return_value = [
+        {
+            "SCHEMA_NAME": "SALES",
+            "TABLE_NAME": "ORDERS",
+            "COLUMN_NAME": "ID",
+            "DATA_TYPE": "NUMBER",
+            "ORDINAL_POSITION": 1,
+            "IS_NULLABLE": "NO",
+        }
+    ]
+
+    cols = dictionary.get_columns(driver, table="other_db.sales.orders")
+    assert cols[0]["column_name"] == "ID"
+    first_query = driver.select.call_args.args[0].raw_sql
+    assert '"OTHER_DB".information_schema.' in first_query
+    assert driver.select.call_args.kwargs == {"schema_name": "SALES", "table_name": "ORDERS"}
+
+    assert dictionary.get_columns(driver, table='"sales"."Orders"') == []
+    driver.select.return_value = [{"SCHEMA_NAME": "sales", "TABLE_NAME": "Orders", "COLUMN_NAME": "ID"}]
+    quoted_cols = dictionary.get_columns(driver, table='"sales"."Orders"')
+    assert quoted_cols[0]["column_name"] == "ID"
+    assert driver.select.call_args.kwargs == {"schema_name": "sales", "table_name": "Orders"}
+
+    driver.select.return_value = []
+    dictionary.get_foreign_keys(driver, table="other_db.sales.orders")
+    assert driver.select.call_args.args[0].strip() == 'SHOW IMPORTED KEYS IN TABLE "OTHER_DB"."SALES"."ORDERS";'
+
+    dictionary.get_tables(driver, schema="other_db.sales")
+    tables_query = driver.select.call_args.args[0].raw_sql
+    assert '"OTHER_DB".information_schema.' in tables_query
+    assert driver.select.call_args.kwargs == {"schema_name": "SALES"}
+
+    constraints = dictionary.get_constraints(driver, table="other_db.sales.orders")
+    assert constraints.capability.support == MetadataSupport.UNSUPPORTED
+    assert driver.connection.adbc_get_objects.call_args.kwargs == {
+        "depth": "all",
+        "catalog_filter": "OTHER_DB",
+        "db_schema_filter": "SALES",
+        "table_name_filter": "ORDERS",
+    }
+
+    assert dictionary.resolve_ddl_object_name(driver, "sales.orders", None) == ("ORDERS", "SALES")
+    assert dictionary.resolve_ddl_object_name(driver, "other_db.sales.orders", None) == ("ORDERS", '"OTHER_DB"."SALES"')
+    assert dictionary.exact_catalog_identifier(driver, '"OTHER_DB"."SALES"') == '"OTHER_DB"."SALES"'
+
+    sqlite_driver = Mock()
+    sqlite_driver.dialect = "sqlite"
+    unsupported_views = dictionary.get_views(sqlite_driver)
+    assert unsupported_views.capability.support == MetadataSupport.UNSUPPORTED
+
+    for bad_identifier in ("", "sales.", "sales..orders", '""'):
+        with pytest.raises(SQLSpecError):
+            dictionary.get_columns(driver, table=bad_identifier)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "schema", "bound_schema"), [("oracle", "app", "APP"), ("db2", "app", "APP"), ("teradata", "app", "app")]
+)
+def test_enterprise_get_objects_lists_schema_without_name_filter(dialect: str, schema: str, bound_schema: str) -> None:
+    """Optional object-name filters render as NULL so Oracle, Db2, and Teradata list every schema object."""
+    driver = Mock()
+    driver.dialect = dialect
+    driver.select.return_value = [{"OBJECT_NAME": "ORDERS", "SCHEMA_NAME": "APP"}]
+
+    result = AdbcDataDictionary().get_objects(driver, schema=schema)
+
+    assert result.capability.support == MetadataSupport.SUPPORTED
+    assert result.items == ({"object_name": "ORDERS", "schema_name": "APP"},)
+    query = driver.select.call_args.args[0]
+    assert ":object_name" not in query.raw_sql
+    assert driver.select.call_args.kwargs == {"schema_name": bound_schema}
+
+
+def test_mysql_schema_listing_binds_declared_schema_parameter() -> None:
+    """Catalog queries declaring ``schema_name`` receive it as a named bind."""
+    driver = Mock()
+    driver.dialect = "mysql"
+    driver.select.return_value = [{"SCHEMA_NAME": "app"}]
+
+    result = AdbcDataDictionary().get_schemas(driver)
+
+    assert result.items == ({"schema_name": "app"},)
+    assert driver.select.call_args.kwargs == {"schema_name": None}
+
+
+def test_snowflake_columns_resolve_lowercase_folding_catalog_and_reject_ambiguity() -> None:
+    """ADBC Snowflake column lookups accept one case-insensitive table match and refuse several."""
+    from sqlspec.exceptions import AmbiguousIdentifierError
+
+    driver = Mock()
+    driver.dialect = "snowflake"
+    driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "db", "SCHEMA_NAME": "public"}
+    driver.select.return_value = [{"SCHEMA_NAME": "public", "TABLE_NAME": "ls_sess", "COLUMN_NAME": "session_id"}]
+
+    columns = AdbcDataDictionary().get_columns(driver, table="ls_sess")
+
+    assert [column["column_name"] for column in columns] == ["session_id"]
+    assert driver.select.call_args.kwargs == {"schema_name": "public", "table_name": "LS_SESS"}
+
+    driver.select.return_value = [
+        {"SCHEMA_NAME": "public", "TABLE_NAME": "ls_sess", "COLUMN_NAME": "session_id"},
+        {"SCHEMA_NAME": "public", "TABLE_NAME": "Ls_Sess", "COLUMN_NAME": "session_id"},
+    ]
+    with pytest.raises(AmbiguousIdentifierError):
+        AdbcDataDictionary().get_columns(driver, table="ls_sess")

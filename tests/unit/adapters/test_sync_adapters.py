@@ -2,6 +2,7 @@
 """Tests for synchronous database adapters."""
 
 import sqlite3
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
 from sqlspec.driver import CommonDriverAttributesMixin, ExecutionResult
-from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError, SQLSpecError
+from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError, PermissionDeniedError, SQLSpecError
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import Empty
 
@@ -506,3 +507,24 @@ def test_sync_driver_build_statement_result(sqlite_sync_driver: SqliteDriver) ->
         assert sql_result.operation_type == "SELECT"
         assert sql_result.get_data() == [{"id": 1}]
         assert sql_result.column_names == ["id"]
+
+
+def test_snowflake_sync_driver_contracts() -> None:
+    """Snowflake preserves deferred errors and rejects unsupported savepoint operations."""
+    pytest.importorskip("snowflake.connector")
+    from snowflake.connector.errors import Error as SnowflakeError
+
+    from sqlspec.adapters.snowflake import SnowflakeDriver
+
+    class ForbiddenError(SnowflakeError):
+        """Snowflake SDK error stub matching legacy ForbiddenError name without SDK deprecation warning."""
+
+    driver = SnowflakeDriver(SimpleNamespace())
+    handler = driver.handle_database_exceptions()
+    with handler:
+        raise ForbiddenError(msg="403 Forbidden", errno=250001)
+    assert isinstance(handler.pending_exception, PermissionDeniedError)
+    assert "403 Forbidden" in str(handler.pending_exception)
+    for operation in (driver.create_savepoint, driver.release_savepoint, driver.rollback_to_savepoint):
+        with pytest.raises(NotImplementedError, match="savepoint"):
+            operation("sp_1")
