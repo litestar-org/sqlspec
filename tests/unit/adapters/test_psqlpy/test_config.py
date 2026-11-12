@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyConnectionPool, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.config import (
     PsqlpyConfig,
     PsqlpyConnectionContext,
@@ -520,3 +520,132 @@ async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean
     failing_conn.execute.assert_awaited_once_with("ROLLBACK")
     assert err_ctx.recorded_exit_args == (None, None, None)
     assert factory._ctx is None
+
+
+@pytest.mark.parametrize("strategy", ["default", "rls", True])
+def test_tenant_shorthand_defaults_to_session(strategy: Any) -> None:
+    from sqlspec.adapters.psqlpy import PsqlpyRLSStrategy
+
+    config = PsqlpyConfig(driver_features={"tenant_strategy": strategy})
+    assert isinstance(config.driver_features["tenant_strategy"], PsqlpyRLSStrategy)
+    assert config.driver_features["pooler_mode"] == "session"
+
+
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
+def test_tenant_rejects_non_session_pooler(mode: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="session"):
+        PsqlpyConfig(driver_features={"tenant_strategy": "rls", "pooler_mode": mode})
+
+
+@pytest.mark.parametrize("disabled", [None, False])
+async def test_tenant_disabled_retains_native_provider(disabled: Any) -> None:
+    from types import SimpleNamespace
+
+    connection = AsyncMock()
+    connection.fetch.return_value = SimpleNamespace(result=lambda: [])
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = SimpleNamespace(acquire=lambda: context)
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", pool),
+        driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"},
+    )
+    assert config.driver_features["tenant_strategy"] is None
+    assert config.driver_features["pooler_mode"] == "transaction"
+    async with config.provide_connection() as acquired:
+        assert acquired is connection
+    connection.execute.assert_not_awaited()
+    context.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.parametrize("provider", ["provide_session", "provide_connection"])
+async def test_tenant_public_provider_applies_captured_strategy(provider: str) -> None:
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    events: list[str] = []
+
+    @dataclass
+    class Strategy:
+        label: str
+
+        async def checkout(self, _connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            events.append(f"checkout:{payload.tenant_id}")
+            return TenantLeaseState(payload)
+
+        async def checkin(self, _connection: Any, state: TenantLeaseState) -> None:
+            events.append(f"checkin:{state.payload.tenant_id}")
+
+    connection = AsyncMock()
+    connection.fetch.return_value = SimpleNamespace(result=lambda: [])
+    connection.execute.side_effect = lambda _: events.append("rollback")
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = SimpleNamespace(acquire=lambda: context)
+    strategy = Strategy("custom")
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": strategy}
+    )
+    assert config.driver_features["tenant_strategy"] is strategy
+    with TenantContext.scope("a"):
+        async with getattr(config, provider)() as acquired:
+            assert (acquired.connection if provider == "provide_session" else acquired) is connection
+            assert events == ["checkout:a"]
+    assert events == ["checkout:a", "rollback", "checkin:a"]
+    context.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.parametrize("provider", ["provide_session", "provide_connection"])
+async def test_tenant_missing_scope_prevents_acquire(provider: str) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.exceptions import TenantContextError
+
+    pool = SimpleNamespace(acquire=Mock())
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", pool), driver_features={"tenant_strategy": "rls"}
+    )
+    with pytest.raises(TenantContextError):
+        async with getattr(config, provider)():
+            pass
+    pool.acquire.assert_not_called()
+
+
+async def test_tenant_standalone_connection_rejected() -> None:
+    config = PsqlpyConfig(driver_features={"tenant_strategy": "rls"})
+    with pytest.raises(ImproperConfigurationError, match="lease"):
+        await config.create_connection()
+
+
+async def test_tenant_preparation_failure_releases_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    strategy = AsyncMock()
+    strategy.checkout.return_value = TenantLeaseState(TenantContextPayload("a"))
+    connection = AsyncMock()
+    connection.fetch.return_value = SimpleNamespace(result=lambda: [])
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    config = PsqlpyConfig(
+        connection_instance=cast("PsqlpyConnectionPool", SimpleNamespace(acquire=lambda: context)),
+        driver_features={"tenant_strategy": strategy},
+    )
+    error = RuntimeError("prepare failure")
+
+    def fail_prepare(_driver: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+    with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
+        async with config.provide_session():
+            pass
+    assert caught.value is error
+    context.__aexit__.assert_awaited_once()
+    strategy.checkin.assert_awaited_once()

@@ -182,7 +182,12 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
             or "sqlspec"
         )
         default_action = ctx.get("action") or ctx.get("route") or attrs.get("action") or attrs.get("route")
-        apply_oracle_session_trace_attributes(target_conn, module=default_module, action=default_action)
+        apply_oracle_session_trace_attributes(
+            target_conn,
+            module=default_module,
+            action=default_action,
+            preserve_client_identifier=driver.driver_features.get("tenant_strategy") is not None,
+        )
 
     def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
         driver = cast("OraclePipelineDriver", self)

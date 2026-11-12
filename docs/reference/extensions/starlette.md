@@ -8,6 +8,8 @@ from sqlspec.extensions.starlette import (
     SQLSpecPlugin,
     get_connection_from_request,
     get_or_create_session,
+    set_request_tenant,
+    tenant_bypass,
 )
 ```
 
@@ -40,5 +42,13 @@ Starlette lifespan management, autocommit and manual transaction ASGI middleware
       heading_level: 3
 
 ::: sqlspec.extensions.starlette._utils.get_connection_from_request
+    options:
+      heading_level: 3
+
+::: sqlspec.extensions.starlette._utils.set_request_tenant
+    options:
+      heading_level: 3
+
+::: sqlspec.utils.tenant.tenant_bypass
     options:
       heading_level: 3

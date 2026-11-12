@@ -1059,3 +1059,237 @@ def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123", *, is_ca: bool 
         cas=None,
         encryption_algorithm=serialization.BestAvailableEncryption(password),
     )
+
+
+def _tenant_oracle_pool(mode: str) -> tuple[Any, Any]:
+    conn = MagicMock()
+    conn.client_identifier = None
+    conn.transaction_in_progress = False
+    conn.version = "23.5.0.0.0"
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.description = [("VAL", "NUMBER")]
+    cursor.rowcount = 1
+
+    def execute(statement: str, _params: Any = None, **_kwargs: Any) -> None:
+        if "CLEAR_IDENTIFIER" in statement:
+            conn.client_identifier = None
+        cursor.fetchone.return_value = (conn.client_identifier or None,)
+
+    if mode == "async":
+        cursor.execute = AsyncMock(side_effect=execute)
+        cursor.fetchone = AsyncMock()
+        cursor.fetchall = AsyncMock(return_value=[(1,)])
+        conn.rollback = AsyncMock()
+    else:
+        cursor.execute.side_effect = execute
+        cursor.fetchall.return_value = [(1,)]
+    conn.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn) if mode == "async" else Mock(return_value=conn)
+    pool.release = AsyncMock() if mode == "async" else Mock()
+    pool.drop = AsyncMock() if mode == "async" else Mock()
+    return pool, conn
+
+
+async def _tenant_context_enter(context: Any, mode: str) -> Any:
+    return await context.__aenter__() if mode == "async" else context.__enter__()
+
+
+async def _tenant_context_exit(context: Any, mode: str, error: BaseException | None = None) -> None:
+    args = (type(error) if error is not None else None, error, error.__traceback__ if error is not None else None)
+    if mode == "async":
+        await context.__aexit__(*args)
+    else:
+        context.__exit__(*args)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("boundary", ["session", "connection"])
+async def test_oracle_tenant_public_boundaries_apply_and_clear(mode: str, boundary: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+    from sqlspec.utils.tenant import TenantContext
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    pool, conn = _tenant_oracle_pool(mode)
+    config = config_cls(connection_instance=pool, driver_features={"tenant_strategy": strategy_cls()})
+    context = config.provide_session() if boundary == "session" else config.provide_connection()
+    with TenantContext.scope("a"):
+        await _tenant_context_enter(context, mode)
+        assert conn.client_identifier == "a"
+        await _tenant_context_exit(context, mode)
+    assert conn.client_identifier is None
+    assert pool.release.call_count == 1
+    assert pool.drop.call_count == 0
+    assert conn.rollback.call_count == 1
+    assert sum("SET_IDENTIFIER" in call.args[0] for call in conn.cursor.return_value.execute.call_args_list) == 1
+    assert sum("CLEAR_IDENTIFIER" in call.args[0] for call in conn.cursor.return_value.execute.call_args_list) == 1
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_oracle_tenant_missing_scope_fails_before_pool_acquire(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+    from sqlspec.exceptions import TenantContextError
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    pool, _conn = _tenant_oracle_pool(mode)
+    config = config_cls(connection_instance=pool, driver_features={"tenant_strategy": strategy_cls()})
+    with pytest.raises(TenantContextError):
+        await _tenant_context_enter(config.provide_session(), mode)
+    assert pool.acquire.call_count == 0
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("failure", ["checkout", "checkin", "finish", "prepare"])
+async def test_oracle_tenant_failure_discards_or_releases_cleanly(
+    mode: str, failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+    from sqlspec.exceptions import TenantCleanupError, TenantContextError
+    from sqlspec.utils.tenant import TenantContext
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    pool, conn = _tenant_oracle_pool(mode)
+    config = config_cls(connection_instance=pool, driver_features={"tenant_strategy": strategy_cls()})
+    context = config.provide_session()
+    cursor = conn.cursor.return_value
+    if failure == "checkout":
+        cursor.fetchone.return_value = ("wrong",)
+        cursor.execute.side_effect = None
+    elif failure == "prepare":
+
+        def fail_prepare(_self: Any, _driver: Any) -> Any:
+            raise RuntimeError("prepare failed")
+
+        monkeypatch.setattr(config_cls, "_prepare_driver", fail_prepare)
+        context = config.provide_session()
+    with TenantContext.scope("a"):
+        if failure in {"checkout", "prepare"}:
+            expected = TenantContextError if failure == "checkout" else RuntimeError
+            with pytest.raises(expected):
+                await _tenant_context_enter(context, mode)
+        else:
+            await _tenant_context_enter(context, mode)
+            if failure == "finish":
+                conn.rollback.side_effect = RuntimeError("rollback failed")
+            else:
+                cursor.execute.side_effect = RuntimeError("clear failed")
+            with pytest.raises(TenantCleanupError):
+                await _tenant_context_exit(context, mode)
+    assert pool.drop.call_count == (0 if failure == "prepare" else 1)
+    assert pool.release.call_count == (1 if failure == "prepare" else 0)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_oracle_tenant_standalone_connection_is_rejected(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    config = config_cls(driver_features={"tenant_strategy": strategy_cls()})
+    with pytest.raises(ImproperConfigurationError, match="provide_"):
+        await _create_standalone_oracle_connection(config)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_oracle_tenant_hook_configuration_must_match_strategy(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    hook = {"module": "billing"}
+    unattached = strategy_cls()
+    auto_bound = config_cls(driver_features={"tenant_strategy": unattached, "session_context_hook": hook})
+    assert unattached.source_hook is None
+    assert auto_bound.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(
+        module=hook["module"]
+    )
+    with pytest.raises(ImproperConfigurationError, match="session_context_hook"):
+        config_cls(driver_features={"tenant_strategy": strategy_cls({"module": "other"}), "session_context_hook": hook})
+    config = config_cls(driver_features={"tenant_strategy": strategy_cls(hook), "session_context_hook": hook})
+    assert config.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(module=hook["module"])
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("value", [True, "default", "identifier"])
+def test_oracle_tenant_shorthands_compose_configured_hook(mode: str, value: Any) -> None:
+    from sqlspec.adapters.oracledb import OracleAsyncIdentifierStrategy, OracleSyncIdentifierStrategy
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
+    config = config_cls(driver_features={"tenant_strategy": value, "session_context_hook": {"module": "billing"}})
+    assert isinstance(config.driver_features["tenant_strategy"], strategy_cls)
+    assert config.driver_features["tenant_strategy"].source_hook == OracleSessionContextConfig(module="billing")
+
+
+@pytest.mark.parametrize("config_cls", [OracleSyncConfig, OracleAsyncConfig])
+@pytest.mark.parametrize("value", ["rls", "session_context"])
+def test_oracle_tenant_unsupported_shorthands_fail_before_io(config_cls: Any, value: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="shorthand"):
+        config_cls(driver_features={"tenant_strategy": value})
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("value", [False, None])
+async def test_oracle_tenant_disabled_selection_keeps_correlation_tracing(mode: str, value: Any) -> None:
+    from sqlspec.utils.correlation import CorrelationContext
+
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    pool, conn = _tenant_oracle_pool(mode)
+    config = config_cls(
+        connection_instance=pool, driver_features={"tenant_strategy": value, "enable_session_tracing": True}
+    )
+    context = config.provide_session()
+    with CorrelationContext.context("hdr"):
+        driver = await _tenant_context_enter(context, mode)
+        result = driver.execute("SELECT 1 FROM DUAL")
+        if isawaitable(result):
+            await result
+        assert conn.client_identifier == "hdr"
+        await _tenant_context_exit(context, mode)
+    assert config.driver_features["tenant_strategy"] is None
+    assert pool.release.call_count == 1
+    assert pool.drop.call_count == 0
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_oracle_tenant_accepts_unhashable_structural_strategy(mode: str) -> None:
+    from sqlspec.core.tenant import TenantLeaseState
+
+    def checkout(_connection: Any, payload: Any) -> TenantLeaseState:
+        return TenantLeaseState(payload)
+
+    def checkin(_connection: Any, _state: Any) -> None:
+        return None
+
+    async def async_checkout(_connection: Any, payload: Any) -> TenantLeaseState:
+        return TenantLeaseState(payload)
+
+    async def async_checkin(_connection: Any, _state: Any) -> None:
+        return None
+
+    strategy = SimpleNamespace(
+        checkout=async_checkout if mode == "async" else checkout, checkin=async_checkin if mode == "async" else checkin
+    )
+    config_cls = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    assert config_cls(driver_features={"tenant_strategy": strategy}).driver_features["tenant_strategy"] is strategy
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "OracleSyncIdentifierStrategy",
+        "OracleAsyncIdentifierStrategy",
+        "OracleSyncVPDStrategy",
+        "OracleAsyncVPDStrategy",
+    ],
+)
+def test_oracle_tenant_strategy_public_exports(name: str) -> None:
+    import sqlspec.adapters.oracledb as adapter
+    import sqlspec.adapters.oracledb.tenant as tenant
+
+    assert getattr(adapter, name) is getattr(tenant, name)
+    assert name in adapter.__all__

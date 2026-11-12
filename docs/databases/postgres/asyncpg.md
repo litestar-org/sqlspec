@@ -119,6 +119,8 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 | `on_connection_create` | `Callable[[AsyncpgConnection], Awaitable[None]]` | - | Async hook invoked with each raw `asyncpg` connection after internal codec setup. |
 | `pooler_mode` | `Literal['session', 'transaction', 'statement', 'auto'] or None` | - | External pooler compatibility mode; sets `statement_cache_size=0` in `transaction` or `statement` mode. |
 | `direct_dsn` | `str or Mapping[str, Any] or None` | - | Direct PostgreSQL DSN or connection mapping bypassing the pooler for migrations and `LISTEN/NOTIFY`. |
+| `tenant_strategy` | `AsyncTenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"rls"` shorthand, applied to every session and connection lease. |
+| `tenant_session_baseline` | `Mapping[str, str]` | - | Declared session settings replayed before each tenant checkout. |
 | `type_codecs` | `list[dict[str, Any]]` | - | Custom `asyncpg` type codec specifications registered on connection initialization. |
 <!-- GENERATED:END config-table:sqlspec.adapters.asyncpg.config.AsyncpgDriverFeatures -->
 

@@ -103,13 +103,23 @@ class SyncPoolConnectionContext:
     Subclass per adapter for type-safe ``provide_connection()`` return annotations.
     """
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_config", "_ctx", "_tenant_lease")
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, tenant_lease: Any = None) -> None:
+        """Bind the configuration and the tenant lease for this context.
+
+        Args:
+            config: Database configuration that provides the pool.
+            tenant_lease: Lease owned by an enclosing session handler; a new connection lease is
+                created when omitted and the configuration has a tenant strategy.
+        """
         self._config = config
         self._ctx: Any = None
+        self._tenant_lease: Any = tenant_lease if tenant_lease is not None else config._create_tenant_lease()
 
     def __enter__(self) -> Any:
+        if self._tenant_lease is not None:
+            return self._tenant_lease.acquire()
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
         return self._ctx.__enter__()
@@ -117,6 +127,9 @@ class SyncPoolConnectionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         if self._ctx:
             return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
         return None
@@ -129,18 +142,24 @@ class SyncPoolSessionFactory:
     Subclass per adapter for type-safe ``acquire_connection()`` return annotations.
     """
 
-    __slots__ = ("_config", "_ctx")
+    __slots__ = ("_config", "_ctx", "_tenant_lease")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._ctx: Any = None
+        self._tenant_lease: Any = config._create_tenant_lease()
 
     def acquire_connection(self) -> Any:
+        if self._tenant_lease is not None:
+            return self._tenant_lease.acquire()
         pool = self._config.provide_pool()
         self._ctx = pool.get_connection()
         return self._ctx.__enter__()
 
     def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
+            return
         if self._ctx is None:
             return
         self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))

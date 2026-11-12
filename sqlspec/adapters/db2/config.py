@@ -23,6 +23,12 @@ from sqlspec.adapters.db2.core import (
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2AsyncExceptionHandler, Db2SyncDriver, Db2SyncExceptionHandler
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
+from sqlspec.adapters.db2.tenant import (
+    Db2AsyncGlobalVariableStrategy,
+    Db2AsyncTenantLease,
+    Db2SyncGlobalVariableStrategy,
+    Db2SyncTenantLease,
+)
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import (
@@ -37,6 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from sqlspec.core import StatementConfig
+    from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy, TenantStrategyShorthand
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = (
@@ -108,6 +115,9 @@ class Db2AsyncPoolParams(Db2PoolParams):
 class Db2DriverFeatures(TypedDict):
     """IBM Db2 driver feature flags controlling JSON codecs, column casing, and event queues."""
 
+    tenant_strategy: NotRequired["SyncTenantStrategy | AsyncTenantStrategy | TenantStrategyShorthand | None"]
+    """Opt-in tenant strategy, or the ``"rcac"`` shorthand, applied to every session and connection lease."""
+
     json_serializer: NotRequired["Callable[[Any], str]"]
     """Serializer converting dict/list parameters to JSON text (defaults to ``sqlspec.utils.serializers.to_json``)."""
     json_deserializer: NotRequired["Callable[[str], Any]"]
@@ -139,6 +149,10 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
     driver_type: "ClassVar[type[Db2SyncDriver]]" = Db2SyncDriver
     connection_type: "ClassVar[type[Db2SyncConnection]]" = cast("type[Db2SyncConnection]", Db2SyncConnection)
     migration_tracker_type: "ClassVar[type[Db2SyncMigrationTracker]]" = Db2SyncMigrationTracker
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rcac", "global_variable"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = Db2SyncGlobalVariableStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = Db2SyncTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -204,6 +218,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         Returns:
             Db2SyncConnection: A newly opened physical connection.
         """
+        self._require_leased_tenant_connection()
         return self.provide_pool().new_connection()
 
     def get_connection_string(self) -> str:
@@ -295,6 +310,10 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
     driver_type: "ClassVar[type[Db2AsyncDriver]]" = Db2AsyncDriver
     connection_type: "ClassVar[type[Db2AsyncConnection]]" = cast("type[Db2AsyncConnection]", Db2AsyncConnection)
     migration_tracker_type: "ClassVar[type[Db2AsyncMigrationTracker]]" = Db2AsyncMigrationTracker
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rcac", "global_variable"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = Db2AsyncGlobalVariableStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = Db2AsyncTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -371,6 +390,7 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
         Returns:
             Db2AsyncConnection: A newly opened ``ibm_db_dbi.AsyncConnection``.
         """
+        self._require_leased_tenant_connection()
         pool = await self.provide_pool()
         return cast("Db2AsyncConnection", await pool.new_connection())
 

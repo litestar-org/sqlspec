@@ -10,6 +10,7 @@ from sqlspec.adapters.pymssql.config import (
 from sqlspec.adapters.pymssql.core import build_connection_config, default_statement_config, driver_profile
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy
 
 __all__ = (
     "PymssqlConfig",
@@ -21,6 +22,7 @@ __all__ = (
     "PymssqlDriverFeatures",
     "PymssqlExceptionHandler",
     "PymssqlPoolParams",
+    "PymssqlSessionContextStrategy",
     "build_connection_config",
     "default_statement_config",
     "driver_profile",

@@ -7,6 +7,8 @@ important operational fixes.
 
 ## Recent Updates
 
+* Added database session tenant isolation (`TenantContext`, `TenantContextPayload`, `TenantStrategyProtocol`, `AsyncTenantStrategyProtocol`, `SQLSpecTenantMiddleware`, `TenantContextError`, `TenantCleanupError`) across PostgreSQL (`asyncpg`, `psycopg`, `psqlpy`), CockroachDB (`cockroach_asyncpg`, `cockroach_psycopg`), Oracle (`oracledb` client identifier and VPD), and SQL Server (`mssql_python`, `pymssql` `sp_set_session_context`, accepting `"rls"` alongside `"session_context"` and auto-disabling `mssql_python` pooling when omitted). Pass `provide_session(tenant=..., bypass_tenant=True)` or `provide_connection(tenant=..., bypass_tenant=True)` for one-call scoped or pre-tenant authentication queries, construct `SQLSpecPlugin(config)` or `SQLSpecPlugin([auth_config, app_config])` directly without a separate `SQLSpec()` registry, inherit `LitestarConfig` tenant settings automatically in `require_tenant()` with built-in `litestar-security` `SecurityContext`/`Principal` resolution, and defer tenant leases across FastAPI, Starlette, Flask, and Sanic with `set_request_tenant(...)` alongside optional per-bind `tenant_extractor` hooks. Failed cleanup discards the connection before pool return, and migrations require an un-tenanted configuration and pool. See [Multi-Tenancy](learn/recipes/multi-tenancy.md) and [Tenant Request Contract](learn/recipes/multi-tenancy-frameworks.md). ([#912](https://github.com/litestar-org/sqlspec/pull/912))
+
 ### v0.72.0
 
 **Added:**

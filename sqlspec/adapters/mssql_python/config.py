@@ -8,9 +8,12 @@ from sqlspec.adapters.mssql_python.core import apply_driver_features, build_conn
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
+from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy, MssqlPythonTenantLease
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -139,6 +142,9 @@ class MssqlPythonPoolParams(MssqlPythonConnectionParams):
 class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
+    tenant_strategy: NotRequired[SyncTenantStrategy | TenantStrategyShorthand | None]
+    """Opt-in tenant strategy, or the ``"session_context"`` shorthand, applied to every session and connection lease."""
+
     enable_pooling: NotRequired[bool]
     """Enable SQLSpec connection pooling around ``mssql-python`` connections (defaults to ``True``)."""
     json_serializer: "NotRequired[Callable[[Any], str]]"
@@ -163,6 +169,8 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
         self._conn: MssqlPythonConnection | None = None
 
     def __enter__(self) -> "MssqlPythonConnection":
+        if self._tenant_lease is not None:
+            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
@@ -171,6 +179,9 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+            return None
         if self._conn is not None:
             if exc_type is not None:
                 with contextlib.suppress(Exception):
@@ -188,12 +199,17 @@ class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._conn: MssqlPythonConnection | None = None
 
     def acquire_connection(self) -> "MssqlPythonConnection":
+        if self._tenant_lease is not None:
+            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
     def release_connection(self, _conn: "MssqlPythonConnection", **kwargs: Any) -> None:
+        if self._tenant_lease is not None:
+            self._tenant_lease.release(_conn, **kwargs)
+            return
         if self._conn is None:
             return
         self._config.provide_pool().release(self._conn)
@@ -208,6 +224,10 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     driver_type: "ClassVar[type[MssqlPythonDriver]]" = MssqlPythonDriver
     connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
     migration_tracker_type: "ClassVar[type[MssqlPythonSyncMigrationTracker]]" = MssqlPythonSyncMigrationTracker
+    supports_tenant_strategy: "ClassVar[bool]" = True
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "rls", "session_context"})
+    tenant_strategy_type: "ClassVar[type[Any] | None]" = MssqlPythonSessionContextStrategy
+    tenant_lease_type: "ClassVar[type[Any] | None]" = MssqlPythonTenantLease
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
@@ -255,8 +275,19 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
             observability_config=observability_config,
             **kwargs,
         )
+        if self.driver_features.get("tenant_strategy") is not None:
+            if (
+                self.connection_config.get("pool_enabled") is True
+                or (driver_features or {}).get("enable_pooling") is True
+            ):
+                msg = "Tenant mode requires pool_enabled=False and enable_pooling=False"
+                raise ImproperConfigurationError(msg)
+            if connection_instance is not None and not connection_instance.require_unpooled:
+                msg = "Tenant connection_instance must require verified unpooled operation"
+                raise ImproperConfigurationError(msg)
 
     def create_connection(self) -> "MssqlPythonConnection":
+        self._require_leased_tenant_connection()
         pool = self.provide_pool()
         return pool.acquire()
 
@@ -295,7 +326,12 @@ def _create_mssql_python_pool(
 ) -> "MssqlPythonConnectionPool":
     pool_size = int(connection_config.get("pool_size", 100))
     pool_idle_timeout = int(connection_config.get("pool_idle_timeout", 600))
-    pool_enabled = bool(connection_config.get("pool_enabled", driver_features.get("enable_pooling", True)))
+    tenant_mode = driver_features.get("tenant_strategy") is not None
+    pool_enabled = (
+        False
+        if tenant_mode
+        else bool(connection_config.get("pool_enabled", driver_features.get("enable_pooling", True)))
+    )
     connection_string, connect_kwargs = build_connection_config(connection_config)
     return MssqlPythonConnectionPool(
         connection_string=connection_string,
@@ -303,6 +339,7 @@ def _create_mssql_python_pool(
         max_size=pool_size,
         idle_timeout=pool_idle_timeout,
         enabled=pool_enabled,
+        require_unpooled=tenant_mode,
         on_connection_create=on_connection_create,
     )
 

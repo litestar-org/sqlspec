@@ -12,6 +12,8 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncConfig,
     CockroachPsycopgSyncDriver,
     CockroachPsycopgSyncExceptionHandler,
+    CockroachPsycopgSyncRLSStrategy,
+    CockroachPsycopgAsyncRLSStrategy,
 )
 ```
 
@@ -51,6 +53,26 @@ Synchronous and asynchronous CockroachDB adapters built on `psycopg` v3 with `SQ
     options:
       heading_level: 3
       members: false
+
+## Tenant Strategies
+
+Set `driver_features={"tenant_strategy": "rls"}`; `"default"` and `True` select the mode-specific CockroachDB strategy. Omitted or `None` pooler mode becomes `"session"`; transaction, statement, and auto modes are rejected. `close_returns=True` is rejected because invalidation must physically close a connection.
+
+Both providers run tenant leases. Capture/apply and restore/verify each use one management query, with transaction completion as a separate operation. Unset owned keys restore to an empty string; NULL does not reset them. Existing retry and follower-read behavior remains available. Cleanup failure physically closes the connection. Tenant leases keep the native commit behavior: a clean exit commits and an exception rolls back.
+
+Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
+
+::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgSyncRLSStrategy
+    options:
+      heading_level: 3
+      inherited_members: [__init__]
+      members: [__init__, checkout, checkin]
+
+::: sqlspec.adapters.cockroach_psycopg.CockroachPsycopgAsyncRLSStrategy
+    options:
+      heading_level: 3
+      inherited_members: [__init__]
+      members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary
 

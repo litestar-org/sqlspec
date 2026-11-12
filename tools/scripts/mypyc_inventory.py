@@ -357,15 +357,50 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/adapters/sqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Native compiled driver construction segfaulted in installed-wheel SqliteConfig session smoke; keep interpreted pending driver layout work.",
+        "reason": "Native Arrow ingestion bypasses interpreted parameter-conversion overrides and breaks rollback on rejected batches.",
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
         "classification": "prove_separately",
-        "reason": "Async SQLite driver shares the same native adapter-driver layout risk as the sync driver and stays out of the compiled baseline.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
     },
     "sqlspec/adapters/asyncpg/driver.py": {
         "classification": "prove_separately",
-        "reason": "Optional async adapter drivers remain outside baseline smoke until vendor dependencies and exception-handler paths are proven.",
+        "reason": "Grouped code generation cannot resolve the inherited pending_exception slot through the interpreted driver facade.",
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/tenant.py": {
+            "classification": "compile_now",
+            "reason": "Tenant strategies and lease subclasses with native SDK and interpreted-subclass coverage.",
+        }
+        for adapter in (
+            "asyncpg",
+            "cockroach_asyncpg",
+            "db2",
+            "cockroach_psycopg",
+            "mssql_python",
+            "oracledb",
+            "psqlpy",
+            "psycopg",
+            "pymssql",
+        )
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/_hub.py": {
+            "classification": "compile_now",
+            "reason": "Native listener routing and queueing with SDK and shutdown-order coverage.",
+        }
+        for adapter in ("asyncpg", "oracledb", "psqlpy", "psycopg")
+    },
+    "sqlspec/adapters/oracledb/events/backend.py": {
+        "classification": "keep_interpreted",
+        "reason": "Compiled AQ and TxEventQ backends reject interpreted subclasses or their structural listener overrides.",
+    },
+    **{
+        f"sqlspec/adapters/{adapter}/events/backend.py": {
+            "classification": "keep_interpreted",
+            "reason": "Native backend fields enforce concrete listener hub types and reject structural listeners.",
+        }
+        for adapter in ("asyncpg", "psqlpy", "psycopg")
     },
     "sqlspec/utils/adapters.py": {
         "classification": "compile_now",
@@ -398,6 +433,22 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     "sqlspec/utils/type_converters.py": {
         "classification": "compile_now",
         "reason": "Compiled adapter coercion helpers are on the hot path.",
+    },
+    "sqlspec/extensions/litestar/_tenant_resolution.py": {
+        "classification": "compile_now",
+        "reason": "Per-request tenant resolution is pure scope and mapping traversal with no Litestar runtime imports.",
+    },
+    "sqlspec/utils/tenant/_context.py": {
+        "classification": "compile_now",
+        "reason": "Tenant payload validation, context scopes, and ASGI binding run on every tenant acquisition.",
+    },
+    "sqlspec/utils/tenant/_mssql.py": {
+        "classification": "compile_now",
+        "reason": "Typed SQL Server batch generation and result validation are shared by both tenant strategies.",
+    },
+    "sqlspec/utils/tenant/_postgres.py": {
+        "classification": "compile_now",
+        "reason": "Shared PostgreSQL-family batch construction and validation with interpreted subclass support.",
     },
     "sqlspec/storage/backends/base.py": {
         "classification": "compile_now",
@@ -555,7 +606,7 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "modules": adapter_drivers,
             "status": "blocked",
             "classification": "prove_separately",
-            "reason": "SQLite sync/async driver admission compiled but failed installed-wheel session construction; driver.py files stay interpreted pending layout work.",
+            "reason": "Driver shells need separate layout and dispatch verification: grouped builds lose inherited fields, and compiled SQLite bypasses an interpreted Arrow conversion override.",
         },
         "adapter_pool_runtimes": {
             "count": len(adapter_pools),

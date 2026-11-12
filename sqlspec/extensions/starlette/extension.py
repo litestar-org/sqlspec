@@ -2,26 +2,43 @@
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast, overload
 
-from sqlspec.base import SQLSpec
+from starlette.middleware import Middleware
+
+from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
-from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value
+from sqlspec.extensions.starlette._utils import get_or_create_session, get_state_value, has_state_value
 from sqlspec.extensions.starlette.middleware import (
     CorrelationMiddleware,
     SQLCommenterMiddleware,
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
+    SQLSpecTenantRequestMiddleware,
+    acquire_pending_connection_async,
+    acquire_pending_connection_sync,
+    has_tenant_strategy,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
 
     from starlette.applications import Starlette
     from starlette.requests import Request
+
+    from sqlspec.config import (
+        AsyncConfigT,
+        AsyncDatabaseConfig,
+        DatabaseConfigProtocol,
+        NoPoolAsyncConfig,
+        NoPoolSyncConfig,
+        SyncConfigT,
+        SyncDatabaseConfig,
+    )
+    from sqlspec.loader import SQLFileLoader
 
 __all__ = ("SQLSpecPlugin",)
 
@@ -42,14 +59,22 @@ class SQLSpecPlugin:
 
     __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlcommenter_middleware_added", "_sqlspec")
 
-    def __init__(self, sqlspec: SQLSpec, app: "Starlette | None" = None) -> None:
+    def __init__(
+        self,
+        sqlspec: "SQLSpec | DatabaseConfigProtocol[Any, Any, Any] | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
+        app: "Starlette | None" = None,
+        *,
+        loader: "SQLFileLoader | None" = None,
+    ) -> None:
         """Initialize SQLSpec Starlette extension.
 
         Args:
-            sqlspec: Pre-configured SQLSpec instance with registered configs.
+            sqlspec: Pre-configured SQLSpec registry, a single database
+                configuration, or a sequence of database configurations.
             app: Optional Starlette application to initialize immediately.
+            loader: Optional SQL file loader attached to the registry.
         """
-        self._sqlspec = sqlspec
+        self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[SQLSpecConfigState] = []
         self._correlation_middleware_added = False
         self._sqlcommenter_middleware_added = False
@@ -69,6 +94,16 @@ class SQLSpecPlugin:
             stage="init",
             config_count=len(self._config_states),
         )
+
+    @property
+    def sqlspec(self) -> SQLSpec:
+        """Return the underlying SQLSpec registry."""
+        return self._sqlspec
+
+    @property
+    def config(self) -> "list[DatabaseConfigProtocol[Any, Any, Any]]":
+        """Return the registered database configurations."""
+        return [state.config for state in self._config_states]
 
     def init_app(self, app: "Starlette") -> None:
         """Initialize Starlette application with SQLSpec.
@@ -96,6 +131,8 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if not config_state.disable_di:
                 self._add_middleware(app, config_state)
+        if any(has_tenant_strategy(state.config) for state in self._config_states):
+            app.user_middleware.append(Middleware(SQLSpecTenantRequestMiddleware, config_states=self._config_states))
 
         self._add_correlation_middleware(app)
         self._add_sqlcommenter_middleware(app)
@@ -160,34 +197,134 @@ class SQLSpecPlugin:
                             pool_key=config_state.pool_key,
                         )
 
-    def get_session(self, request: "Request", key: "str | None" = None) -> Any:
+    @overload
+    def get_config(self, name: None = None) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
+    ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
+    @overload
+    def get_config(
+        self, name: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
+    ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
+    @overload
+    def get_config(self, name: "SyncConfigT") -> "SyncConfigT": ...
+    @overload
+    def get_config(self, name: "AsyncConfigT") -> "AsyncConfigT": ...
+    @overload
+    def get_config(self, name: str) -> "DatabaseConfigProtocol[Any, Any, Any]": ...
+    def get_config(
+        self,
+        name: "str | type[DatabaseConfigProtocol[Any, Any, Any]] | DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+    ) -> "DatabaseConfigProtocol[Any, Any, Any]":
+        """Return a registered database configuration by identifier, or the sole configuration when omitted.
+
+        Args:
+            name: Optional ``bind_key``, ``session_key``, ``connection_key``,
+                ``pool_key``, unique config class, or config instance.
+
+        Returns:
+            Matching database configuration.
+
+        Raises:
+            KeyError: No matching configuration exists, or ``name`` is ambiguous.
+        """
+        if name is None:
+            if len(self._config_states) == 1:
+                return self._config_states[0].config
+            if not self._config_states:
+                msg = "No database configurations are registered on SQLSpecPlugin."
+                raise KeyError(msg)
+            msg = "Multiple database configurations are registered on SQLSpecPlugin; specify a key, type, or instance."
+            raise KeyError(msg)
+        if isinstance(name, str):
+            for state in self._config_states:
+                if getattr(state.config, "bind_key", None) == name:
+                    return state.config
+            for state in self._config_states:
+                if name in {state.session_key, state.connection_key, state.pool_key}:
+                    return state.config
+            msg = f"No configuration found for key '{name}'."
+            raise KeyError(msg)
+        if isinstance(name, type):
+            matches = [state.config for state in self._config_states if type(state.config) is name]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{name.__name__}'; look up by session_key or bind_key."
+                raise KeyError(msg)
+            msg = f"No configuration found for type '{name.__name__}'."
+            raise KeyError(msg)
+        for state in self._config_states:
+            if state.config is name:
+                return state.config
+        msg = f"No configuration found for '{name!r}'."
+        raise KeyError(msg)
+
+    def get_session(self, request: "Request", key: Any = None) -> Any:
         """Get or create database session for request.
 
         Sessions are cached per request to ensure consistency.
 
         Args:
             request: Starlette request instance.
-            key: Optional session key to retrieve specific database session.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Database session (driver instance).
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
+        if not has_state_value(request.state, config_state.connection_key):
+            acquire_pending_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def get_connection(self, request: "Request", key: "str | None" = None) -> Any:
+    async def get_session_async(self, request: "Request", key: Any = None) -> Any:
+        """Get or create database session asynchronously, acquiring deferred tenant leases on demand.
+
+        Args:
+            request: Starlette request instance.
+            key: Optional session key, bind key, config type, or config instance.
+
+        Returns:
+            Database session (driver instance).
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_state_value(request.state, config_state.connection_key):
+            await acquire_pending_connection_async(request, config_state)
+        session_instance_key = f"{config_state.session_key}_instance"
+        existing = get_state_value(request.state, session_instance_key, None)
+        if existing is not None:
+            return existing
+        return cast("Any", get_or_create_session(request, config_state))
+
+    def get_connection(self, request: "Request", key: Any = None) -> Any:
         """Get database connection from request state.
 
         Args:
             request: Starlette request instance.
-            key: Optional session key to retrieve specific database connection.
+            key: Optional session key, bind key, config type, or config instance.
 
         Returns:
             Database connection object.
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_state_value(request.state, config_state.connection_key):
+            return acquire_pending_connection_sync(request, config_state)
+        return get_state_value(request.state, config_state.connection_key)
 
+    async def get_connection_async(self, request: "Request", key: Any = None) -> Any:
+        """Get database connection asynchronously, acquiring deferred tenant leases on demand.
+
+        Args:
+            request: Starlette request instance.
+            key: Optional session key, bind key, config type, or config instance.
+
+        Returns:
+            Database connection object.
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        if not has_state_value(request.state, config_state.connection_key):
+            return await acquire_pending_connection_async(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
@@ -217,6 +354,7 @@ class SQLSpecPlugin:
             "correlation_headers": tuple(correlation_headers) if correlation_headers is not None else None,
             "auto_trace_headers": framework_config.get("auto_trace_headers", True),
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
+            "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "starlette"),
         }
 
@@ -229,7 +367,13 @@ class SQLSpecPlugin:
 
         Returns:
             Configuration state instance.
+
+        Raises:
+            ImproperConfigurationError: A tenant extractor is configured without a tenant strategy.
         """
+        if settings.get("tenant_extractor") is not None and not has_tenant_strategy(config):
+            msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
+            raise ImproperConfigurationError(msg)
         return SQLSpecConfigState(
             config=config,
             connection_key=settings["connection_key"],
@@ -245,6 +389,7 @@ class SQLSpecPlugin:
             auto_trace_headers=settings["auto_trace_headers"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
+            tenant_extractor=settings.get("tenant_extractor"),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -326,20 +471,38 @@ class SQLSpecPlugin:
                 )
                 break
 
-    def _config_state_by_key(self, key: str) -> SQLSpecConfigState:
-        """Get configuration state by session key.
+    def _config_state_by_key(self, key: Any) -> SQLSpecConfigState:
+        """Get configuration state by session/connection/pool/bind key, unique type, or instance.
 
         Args:
-            key: Session key to search for.
+            key: Configuration identifier to search for.
 
         Returns:
-            Configuration state matching the key.
+            Configuration state matching the identifier.
 
         Raises:
-            ValueError: If no configuration found with the specified key.
+            ValueError: If no unique configuration matches the identifier.
         """
+        if isinstance(key, str):
+            for state in self._config_states:
+                if state.session_key == key:
+                    return state
+            for state in self._config_states:
+                if key in {state.connection_key, state.pool_key, getattr(state.config, "bind_key", None)}:
+                    return state
+            msg = f"No configuration found with session_key: {key}"
+            raise ValueError(msg)
+        if isinstance(key, type):
+            matches = [state for state in self._config_states if type(state.config) is key]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                msg = f"Multiple configurations share type '{key.__name__}'; specify a session_key or bind_key."
+                raise ValueError(msg)
+            msg = f"No configuration found with type: {key.__name__}"
+            raise ValueError(msg)
         for state in self._config_states:
-            if state.session_key == key:
+            if state.config is key:
                 return state
-        msg = f"No configuration found with session_key: {key}"
+        msg = f"No configuration found for: {key!r}"
         raise ValueError(msg)

@@ -159,6 +159,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_local_infile_bulk_load",
     ),
     "asyncpg": (
+        "tenant_strategy",
+        "tenant_session_baseline",
         "enable_pgcopy_binary",
         "json_serializer",
         "json_deserializer",
@@ -203,6 +205,9 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "native_export_connection",
     ),
     "cockroach_asyncpg": (
+        "tenant_strategy",
+        "tenant_session_baseline",
+        "pooler_mode",
         "enable_native_storage",
         "native_storage_csv_options",
         "enable_auto_retry",
@@ -221,6 +226,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
     ),
     "cockroach_psycopg": (
+        "tenant_strategy",
+        "pooler_mode",
         "enable_native_storage",
         "native_storage_csv_options",
         "enable_auto_retry",
@@ -256,6 +263,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_statement_profiling",
     ),
     "mssql_python": (
+        "tenant_strategy",
         "enable_pooling",
         "json_serializer",
         "json_deserializer",
@@ -273,6 +281,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_local_infile_bulk_load",
     ),
     "oracledb": (
+        "tenant_strategy",
         "enable_numpy_vectors",
         "enable_lowercase_column_names",
         "enable_uuid_binary",
@@ -292,6 +301,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "dbms_cloud_credential",
     ),
     "psqlpy": (
+        "tenant_strategy",
         "enable_pgcopy_binary",
         "enable_cast_detection",
         "enable_pgvector",
@@ -307,6 +317,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "direct_dsn",
     ),
     "psycopg": (
+        "tenant_strategy",
         "enable_pgcopy_binary",
         "enable_pgvector",
         "enable_paradedb",
@@ -326,6 +337,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_pooling",
     ),
     "pymssql": (
+        "tenant_strategy",
         "enable_pooling",
         "enable_uuid_conversion",
         "json_serializer",

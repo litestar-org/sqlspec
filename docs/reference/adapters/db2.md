@@ -5,6 +5,7 @@ from sqlspec.adapters.db2 import (
     Db2AsyncConfig,
     Db2AsyncDriver,
     Db2AsyncExceptionHandler,
+    Db2AsyncGlobalVariableStrategy,
     Db2AsyncPoolParams,
     Db2ConnectionParams,
     Db2DriverFeatures,
@@ -12,6 +13,7 @@ from sqlspec.adapters.db2 import (
     Db2SyncConfig,
     Db2SyncDriver,
     Db2SyncExceptionHandler,
+    Db2SyncGlobalVariableStrategy,
 )
 ```
 
@@ -52,6 +54,36 @@ Synchronous and asynchronous IBM Db2 LUW adapters built on `ibm_db`. Inherited e
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+## Tenant Strategies
+
+Set `driver_features={"tenant_strategy": "rcac"}`; `"global_variable"`, `"default"`, and `True` select the same mode-specific strategy. The strategy writes the tenant identity into a session global variable that row and column access control (RCAC) permissions and masks read. The default variable is `APP.CURRENT_TENANT_ID`; pass `tenant_variable=` and `variable_keys=` to an explicit strategy to use other schema-qualified variables. Names are validated as ordinary identifiers and folded to upper case; values are always bound.
+
+A DBA provisions the variable and the policy, and grants the application `READ` and `WRITE` on the variable:
+
+```sql
+CREATE VARIABLE APP.CURRENT_TENANT_ID VARCHAR(256) DEFAULT NULL;
+CREATE PERMISSION APP.PROJECTS_TENANT ON APP.PROJECTS
+    FOR ROWS WHERE TENANT_ID = APP.CURRENT_TENANT_ID
+    ENFORCED FOR ALL ACCESS ENABLE;
+ALTER TABLE APP.PROJECTS ACTIVATE ROW ACCESS CONTROL;
+```
+
+Session global variable values are not affected by `COMMIT` or `ROLLBACK`. Checkout reads the previous values, assigns the payload with one `SET`, and reads the values back; checkin assigns the captured values and verifies them again. A failed verification disposes of the connection: the synchronous adapter uses one standalone connection per lease and closes it, and the asynchronous pool discards the connection instead of returning it. Standalone `create_connection()` is rejected in tenant mode. Tenant leases keep the native commit behavior: sessions roll back unfinished work before release, as they do without a tenant strategy.
+
+Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
+
+::: sqlspec.adapters.db2.Db2SyncGlobalVariableStrategy
+    options:
+      heading_level: 3
+      inherited_members: [__init__]
+      members: [__init__, checkout, checkin]
+
+::: sqlspec.adapters.db2.Db2AsyncGlobalVariableStrategy
+    options:
+      heading_level: 3
+      inherited_members: [__init__]
+      members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary
 

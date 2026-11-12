@@ -1,29 +1,28 @@
 """Register distinct Litestar dependency injection keys for multiple database configurations."""
 
 # --8<-- [start:example]
-from sqlspec import SQLSpec
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.extensions.litestar import SQLSpecPlugin
 
-spec = SQLSpec()
-spec.add_config(
-    SqliteConfig(
-        bind_key="analytics",
-        connection_config={"database": ":memory:"},
-        extension_config={"litestar": {"session_key": "analytics"}},
-    )
-)
-spec.add_config(
+plugin = SQLSpecPlugin([
     SqliteConfig(
         bind_key="primary",
         connection_config={"database": ":memory:"},
-        extension_config={"litestar": {"session_key": "primary"}},
-    )
-)
-plugin = SQLSpecPlugin(sqlspec=spec)
+        extension_config={
+            "litestar": {"session_key": "primary", "connection_key": "primary_conn", "pool_key": "primary_pool"}
+        },
+    ),
+    SqliteConfig(
+        bind_key="analytics",
+        connection_config={"database": ":memory:"},
+        extension_config={
+            "litestar": {"session_key": "analytics", "connection_key": "analytics_conn", "pool_key": "analytics_pool"}
+        },
+    ),
+])
 # --8<-- [end:example]
 
-__all__ = ("main", "plugin", "spec")
+__all__ = ("main", "plugin")
 
 
 def main() -> SQLSpecPlugin:

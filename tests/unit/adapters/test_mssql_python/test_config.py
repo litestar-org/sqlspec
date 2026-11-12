@@ -3,6 +3,7 @@
 import gc
 import warnings
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any, cast, get_type_hints
 
 import pytest
@@ -17,6 +18,10 @@ from sqlspec.adapters.mssql_python.config import (
 )
 from sqlspec.adapters.mssql_python.core import build_connection_config
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
+from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy
+from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 
 @pytest.fixture(autouse=True)
@@ -698,3 +703,203 @@ def test_config_event_runtime_hints_and_exports() -> None:
     assert hints.select_for_update is False
     assert hints.skip_locked is False
     assert "MssqlPythonConnectionPool" not in config_mod.__all__
+
+
+@pytest.fixture
+def tenant_pool_manager(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    state = {"initialized": False, "enabled": False}
+
+    class Manager:
+        @staticmethod
+        def is_initialized() -> bool:
+            return state["initialized"]
+
+        @staticmethod
+        def is_enabled() -> bool:
+            return state["enabled"]
+
+    def pooling(**kwargs: Any) -> None:
+        calls.append(kwargs)
+        state.update(initialized=True, enabled=kwargs["enabled"])
+
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(_mssql_pool, "MssqlPythonPoolingManager", Manager, raising=False)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", pooling)
+    return calls
+
+
+@pytest.mark.parametrize("tenant_first", [False, True])
+def test_tenant_pool_disables_sdk_and_accepts_unpooled_admin(
+    tenant_pool_manager: list[dict[str, Any]], tenant_first: bool
+) -> None:
+    pools = [
+        MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False, require_unpooled=tenant)
+        for tenant in (tenant_first, not tenant_first)
+    ]
+    assert tenant_pool_manager == [{"enabled": False}]
+    for pool in pools:
+        pool.close()
+
+
+@pytest.mark.parametrize("tenant_first", [False, True])
+def test_tenant_pool_rejects_pooled_admin(tenant_pool_manager: list[dict[str, Any]], tenant_first: bool) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    first = MssqlPythonConnectionPool(
+        connection_string="Server=localhost;", enabled=not tenant_first, require_unpooled=tenant_first
+    )
+    with pytest.raises(ImproperConfigurationError, match="pool_enabled=False"):
+        MssqlPythonConnectionPool(
+            connection_string="Server=localhost;", enabled=tenant_first, require_unpooled=not tenant_first
+        )
+    first.close()
+
+
+def test_tenant_pool_reuses_verified_disabled_mode(tenant_pool_manager: list[dict[str, Any]]) -> None:
+    for _ in range(2):
+        pool = MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False, require_unpooled=True)
+        assert pool.require_unpooled is True
+    assert tenant_pool_manager == [{"enabled": False}]
+
+
+@dataclass
+class RecordingTenantStrategy:
+    label: str
+    calls: list[str]
+    fail_cleanup: bool = False
+
+    def checkout(self, connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+        self.calls.append("checkout:" + payload.tenant_id)
+        return TenantLeaseState(payload)
+
+    def checkin(self, connection: Any, state: TenantLeaseState) -> None:
+        self.calls.append("checkin:" + state.payload.tenant_id)
+        if self.fail_cleanup:
+            raise ValueError("injected reset failure")
+
+
+class TenantConnection:
+    autocommit = False
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def cursor(self) -> Any:
+        return None
+
+    def close(self) -> None:
+        self.calls.append("close")
+
+    def rollback(self) -> None:
+        self.calls.append("rollback")
+
+
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("failure", ["", "body", "cleanup", "prepare"])
+def test_tenant_config_providers_capture_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tenant_pool_manager: list[dict[str, Any]], provider: str, failure: str
+) -> None:
+    calls: list[str] = []
+    strategy = RecordingTenantStrategy("custom", calls, fail_cleanup=failure == "cleanup")
+
+    def connect(*args: Any, **kwargs: Any) -> TenantConnection:
+        calls.append("connect")
+        return TenantConnection(calls)
+
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", connect)
+    config = MssqlPythonConfig(connection_config={"server": "localhost"}, driver_features={"tenant_strategy": strategy})
+    assert config.driver_features["tenant_strategy"] is strategy
+    if failure == "prepare" and provider == "provide_session":
+
+        def fail_prepare(self: Any, driver: Any) -> Any:
+            raise RuntimeError("prepare")
+
+        monkeypatch.setattr(MssqlPythonConfig, "_prepare_driver", fail_prepare)
+    expected = TenantCleanupError if failure == "cleanup" else RuntimeError
+
+    def invoke() -> None:
+        with TenantContext.scope("a"), getattr(config, provider)():
+            if failure == "body":
+                raise RuntimeError("body")
+
+    if failure in {"body", "cleanup"} or (failure == "prepare" and provider == "provide_session"):
+        with pytest.raises(expected):
+            invoke()
+    else:
+        invoke()
+    assert calls == ["connect", "checkout:a", "rollback", "checkin:a", "close"]
+
+
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+def test_tenant_config_rejects_missing_context_before_connect(
+    monkeypatch: pytest.MonkeyPatch, tenant_pool_manager: list[dict[str, Any]], provider: str
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *args, **kwargs: calls.append("connect"))
+    config = MssqlPythonConfig(driver_features={"tenant_strategy": RecordingTenantStrategy("custom", calls)})
+    with pytest.raises(TenantContextError), getattr(config, provider)():
+        pass
+    assert calls == []
+    with pytest.raises(ImproperConfigurationError):
+        config.create_connection()
+
+
+@pytest.mark.parametrize("shorthand", [True, "default", "rls", "session_context"])
+def test_tenant_config_shorthand(shorthand: Any) -> None:
+    config = MssqlPythonConfig(driver_features={"tenant_strategy": shorthand})
+    assert isinstance(config.driver_features["tenant_strategy"], MssqlPythonSessionContextStrategy)
+
+
+@pytest.mark.parametrize("shorthand", ["vpd", "identifier"])
+def test_tenant_config_invalid_shorthand(shorthand: str) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        MssqlPythonConfig(driver_features={"tenant_strategy": shorthand})
+
+
+@pytest.mark.parametrize("disabled", [None, False])
+def test_tenant_config_disabled_strategy(disabled: Any) -> None:
+    config = MssqlPythonConfig(driver_features={"tenant_strategy": disabled})
+    assert config.driver_features["tenant_strategy"] is None
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"connection_config": {"pool_enabled": True}}, {"driver_features": {"enable_pooling": True}}]
+)
+def test_tenant_config_rejects_explicit_pooling(kwargs: dict[str, Any]) -> None:
+    features = {"tenant_strategy": True, **kwargs.get("driver_features", {})}
+    with pytest.raises(ImproperConfigurationError, match="pool_enabled=False"):
+        MssqlPythonConfig(connection_config=kwargs.get("connection_config"), driver_features=features)
+
+
+def test_tenant_config_rejects_foreign_pool(tenant_pool_manager: list[dict[str, Any]]) -> None:
+    foreign = MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False)
+    with pytest.raises(ImproperConfigurationError, match="verified unpooled"):
+        MssqlPythonConfig(connection_instance=foreign, driver_features={"tenant_strategy": True})
+
+
+def test_tenant_pool_rejects_external_sdk_pooling(
+    monkeypatch: pytest.MonkeyPatch, tenant_pool_manager: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setattr(_mssql_pool.MssqlPythonPoolingManager, "is_enabled", lambda: True)
+    with pytest.raises(ImproperConfigurationError, match="pool_enabled=False"):
+        MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False, require_unpooled=True)
+    assert tenant_pool_manager == []
+
+
+def test_tenant_connection_hook_failure_closes_acquired_connection(
+    monkeypatch: pytest.MonkeyPatch, tenant_pool_manager: list[dict[str, Any]]
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *args, **kwargs: TenantConnection(calls))
+
+    def fail_hook(connection: Any) -> None:
+        raise RuntimeError("hook")
+
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost"},
+        driver_features={"tenant_strategy": True, "on_connection_create": fail_hook},
+    )
+    with TenantContext.scope("a"), pytest.raises(RuntimeError, match="hook"), config.provide_connection():
+        pass
+    assert calls == ["close"]

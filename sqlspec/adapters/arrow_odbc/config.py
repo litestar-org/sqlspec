@@ -30,9 +30,11 @@ from sqlspec.utils.type_guards import supports_close
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from types import TracebackType
+    from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
+    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = ("ArrowOdbcConfig", "ArrowOdbcConnectionParams", "ArrowOdbcDriverFeatures")
 
@@ -259,9 +261,17 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         return ArrowOdbcConnectionContext(self)
 
     def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
     ) -> "ArrowOdbcSessionContext":
         """Provide a driver session context manager."""
+        if tenant is not None or bypass_tenant:
+            msg = "This adapter does not support tenant_strategy or explicit tenant sessions"
+            raise ImproperConfigurationError(msg)
         handler = _ArrowOdbcSessionConnectionHandler(self)
         return ArrowOdbcSessionContext(
             acquire_connection=handler.acquire_connection,

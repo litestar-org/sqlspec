@@ -500,3 +500,133 @@ async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
     await driver.begin()
     tx_handle.start.assert_awaited_once()
     conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enable_columnar_scan = 'on'")
+
+
+@pytest.mark.parametrize("strategy", ["default", "rls", True])
+def test_tenant_shorthand_defaults_to_session_pooler(strategy: Any) -> None:
+    from sqlspec.adapters.asyncpg import AsyncpgRLSStrategy
+
+    config = AsyncpgConfig(driver_features={"tenant_strategy": strategy})
+    assert isinstance(config.driver_features["tenant_strategy"], AsyncpgRLSStrategy)
+    assert config.driver_features["pooler_mode"] == "session"
+
+
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
+def test_tenant_rejects_non_session_poolers(mode: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="session"):
+        AsyncpgConfig(driver_features={"tenant_strategy": "rls", "pooler_mode": mode})
+
+
+@pytest.mark.parametrize("disabled", [False, None])
+def test_tenant_disabled_preserves_native_configuration(disabled: Any) -> None:
+    config = AsyncpgConfig(driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"})
+    assert config.driver_features["tenant_strategy"] is None
+    assert config.driver_features["pooler_mode"] == "transaction"
+
+
+async def test_tenant_standalone_connections_are_rejected() -> None:
+    config = AsyncpgConfig(driver_features={"tenant_strategy": "rls"})
+    with pytest.raises(ImproperConfigurationError, match="lease"):
+        await config.create_connection()
+
+
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+async def test_tenant_public_providers_apply_and_restore(provider: str) -> None:
+    from dataclasses import dataclass
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    calls: list[str] = []
+
+    @dataclass
+    class RecordingStrategy:
+        label: str
+
+        async def checkout(self, _connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            calls.append(f"checkout:{payload.tenant_id}")
+            return TenantLeaseState(payload)
+
+        async def checkin(self, _connection: Any, state: TenantLeaseState) -> None:
+            calls.append(f"checkin:{state.payload.tenant_id}")
+
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    strategy = RecordingStrategy("custom")
+    config = AsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    assert config.driver_features["tenant_strategy"] is strategy
+    with TenantContext.scope("a"):
+        async with getattr(config, provider)() as value:
+            assert calls == ["checkout:a"]
+            assert (value if provider == "provide_connection" else value.connection) is connection
+    assert calls == ["checkout:a", "checkin:a"]
+    pool.release.assert_awaited_once()
+    assert pool.release.call_args.args == (connection,)
+    assert pool.release.call_args.kwargs["timeout"] > 0
+
+
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+async def test_tenant_missing_scope_prevents_pool_access(provider: str) -> None:
+    from sqlspec.exceptions import TenantContextError
+
+    pool = AsyncMock()
+    config = AsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": "rls"})
+    with pytest.raises(TenantContextError):
+        async with getattr(config, provider)():
+            pass
+    pool.acquire.assert_not_awaited()
+
+
+async def test_tenant_prepare_failure_releases_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    config = AsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    error = RuntimeError("prepare failed")
+
+    def fail_prepare(_driver: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+    with TenantContext.scope(payload), pytest.raises(RuntimeError) as caught:
+        async with config.provide_session():
+            pass
+    assert caught.value is error
+    strategy.checkin.assert_awaited_once()
+    pool.release.assert_awaited_once()
+    assert pool.release.call_args.args == (connection,)
+    assert pool.release.call_args.kwargs["timeout"] > 0
+
+
+async def test_tenant_failed_restore_terminates_before_release() -> None:
+    from unittest.mock import Mock
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.exceptions import TenantCleanupError
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    strategy.checkin.side_effect = RuntimeError("failed readback")
+    events: list[str] = []
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    connection.terminate = Mock(side_effect=lambda: events.append("terminate"))
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    pool.release.side_effect = lambda _, **_kwargs: events.append("release")
+    config = AsyncpgConfig(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    with TenantContext.scope(payload), pytest.raises(TenantCleanupError):
+        async with config.provide_connection():
+            pass
+    assert events == ["terminate", "release"]

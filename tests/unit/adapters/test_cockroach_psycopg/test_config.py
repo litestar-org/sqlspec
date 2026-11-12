@@ -295,7 +295,8 @@ def test_cockroach_psycopg_sync_session_context_resolves_callable_statement_conf
         prepare_driver=lambda driver: driver,
     )
 
-    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgSyncDriver") as driver_type:
+    with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_sync_driver") as resolver:
+        driver_type = resolver.return_value
         with ctx:
             pass
 
@@ -392,7 +393,8 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
         prepare_driver=lambda driver: driver,
     )
 
-    with patch("sqlspec.adapters.cockroach_psycopg.driver.CockroachPsycopgAsyncDriver") as driver_type:
+    with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_async_driver") as resolver:
+        driver_type = resolver.return_value
         async with ctx:
             pass
 
@@ -1244,3 +1246,181 @@ async def test_cockroach_psycopg_async_execute_native_storage_under_active_excep
     except ValueError:
         rows = await driver._execute_native_storage("SELECT 1", [])
         assert rows == [{"rows": 1}]
+
+
+@pytest.mark.parametrize("shorthand", [True, "default", "rls"])
+def test_tenant_shorthand_and_facade(shorthand: Any) -> None:
+    from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgSyncRLSStrategy
+    from sqlspec.adapters.cockroach_psycopg.tenant import CockroachPsycopgSyncRLSStrategy as Implementation
+
+    config = CockroachPsycopgSyncConfig(driver_features={"tenant_strategy": shorthand})
+    assert isinstance(config.driver_features["tenant_strategy"], CockroachPsycopgSyncRLSStrategy)
+    assert config.driver_features["pooler_mode"] == "session"
+    assert CockroachPsycopgSyncRLSStrategy is Implementation
+
+
+@pytest.mark.parametrize("disabled", [False, None])
+def test_tenant_disabled_preserves_pooler_mode(disabled: Any) -> None:
+    config = CockroachPsycopgSyncConfig(driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"})
+    assert config.driver_features["tenant_strategy"] is None
+    assert config.driver_features["pooler_mode"] == "transaction"
+
+
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
+def test_tenant_rejects_non_session_pooler(mode: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="session"):
+        CockroachPsycopgSyncConfig(driver_features={"tenant_strategy": True, "pooler_mode": mode})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"variable_keys": {"region": "APP.CURRENT_TENANT_ID"}},
+        {"variable_keys": {"region": "app.scope", "role": "APP.SCOPE"}},
+        {"variable_keys": {"schema": "search_path"}, "schema_resolver": lambda _: "tenant_a"},
+    ],
+)
+def test_tenant_constructor_rejects_owned_target_collision(kwargs: dict[str, Any]) -> None:
+    from sqlspec.adapters.cockroach_psycopg.tenant import CockroachPsycopgSyncRLSStrategy
+
+    with pytest.raises(ImproperConfigurationError):
+        CockroachPsycopgSyncRLSStrategy(**kwargs)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("provider", ["provide_session", "provide_connection"])
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+async def test_tenant_providers_apply_structural_strategy_and_dispose(
+    asynchronous: bool, provider: str, cleanup_failure: bool
+) -> None:
+    from dataclasses import dataclass
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.exceptions import TenantCleanupError
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    calls: list[str] = []
+
+    @dataclass
+    class Strategy:
+        label: str
+
+        def checkout(self, connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            calls.append("checkout:" + payload.tenant_id)
+            return TenantLeaseState(payload)
+
+        def checkin(self, connection: Any, state: TenantLeaseState) -> None:
+            calls.append("checkin:" + state.payload.tenant_id)
+            if cleanup_failure:
+                raise RuntimeError("reset")
+
+    @dataclass
+    class AsyncStrategy:
+        label: str
+
+        async def checkout(self, connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            calls.append("checkout:" + payload.tenant_id)
+            return TenantLeaseState(payload)
+
+        async def checkin(self, connection: Any, state: TenantLeaseState) -> None:
+            calls.append("checkin:" + state.payload.tenant_id)
+            if cleanup_failure:
+                raise RuntimeError("reset")
+
+    connection = MagicMock()
+    method = AsyncMock if asynchronous else MagicMock
+    connection.commit = method(side_effect=lambda: calls.append("commit"))
+    connection.rollback = method(side_effect=lambda: calls.append("rollback"))
+    connection.close = method(side_effect=lambda: calls.append("close"))
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    context.__aenter__ = AsyncMock(return_value=connection)
+    context.__exit__.side_effect = lambda *args: calls.append("release")
+    context.__aexit__ = AsyncMock(side_effect=lambda *args: calls.append("release"))
+    pool = MagicMock()
+    pool.close_returns = False
+    pool.connection.return_value = context
+    strategy = AsyncStrategy("custom") if asynchronous else Strategy("custom")
+    config_type = CockroachPsycopgAsyncConfig if asynchronous else CockroachPsycopgSyncConfig
+    config = config_type(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    assert config.driver_features["tenant_strategy"] is strategy
+
+    async def invoke() -> None:
+        with TenantContext.scope("a"):
+            if asynchronous:
+                async with getattr(config, provider)():
+                    pass
+            else:
+                with getattr(config, provider)():
+                    pass
+
+    if cleanup_failure:
+        with pytest.raises(TenantCleanupError):
+            await invoke()
+    else:
+        await invoke()
+    assert calls == ["checkout:a", "commit", "checkin:a", *(["close"] if cleanup_failure else []), "release"]
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_tenant_psycopg_pool_safety(config_type: Any) -> None:
+    with pytest.raises(ImproperConfigurationError, match="close_returns"):
+        config_type(connection_config={"close_returns": True}, driver_features={"tenant_strategy": True})
+
+
+def test_tenant_async_strategy_facade() -> None:
+    import sqlspec.adapters.cockroach_psycopg as package
+    from sqlspec.adapters.cockroach_psycopg.tenant import (
+        CockroachPsycopgAsyncRLSStrategy,
+        CockroachPsycopgAsyncTenantLease,
+        CockroachPsycopgSyncRLSStrategy,
+        CockroachPsycopgSyncTenantLease,
+    )
+
+    assert package.CockroachPsycopgAsyncRLSStrategy is CockroachPsycopgAsyncRLSStrategy
+    assert package.CockroachPsycopgSyncRLSStrategy is CockroachPsycopgSyncRLSStrategy
+    assert CockroachPsycopgAsyncRLSStrategy.__module__ == "sqlspec.adapters.cockroach_psycopg.tenant"
+    assert CockroachPsycopgSyncRLSStrategy.__module__ == "sqlspec.adapters.cockroach_psycopg.tenant"
+    assert CockroachPsycopgAsyncConfig.tenant_lease_type is CockroachPsycopgAsyncTenantLease
+    assert CockroachPsycopgSyncConfig.tenant_lease_type is CockroachPsycopgSyncTenantLease
+    assert isinstance(
+        CockroachPsycopgAsyncConfig(driver_features={"tenant_strategy": True}).driver_features["tenant_strategy"],
+        CockroachPsycopgAsyncRLSStrategy,
+    )
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stage", ["statement", "prepare"])
+async def test_tenant_session_entry_failure_releases_once(asynchronous: bool, stage: str) -> None:
+    error = RuntimeError(stage)
+    connection = MagicMock()
+    release = AsyncMock() if asynchronous else MagicMock()
+
+    def statement() -> Any:
+        if stage == "statement":
+            raise error
+        return CockroachPsycopgSyncConfig().statement_config
+
+    def prepare(driver: Any) -> Any:
+        raise error
+
+    context_type = CockroachPsycopgAsyncSessionContext if asynchronous else CockroachPsycopgSyncSessionContext
+    acquire = AsyncMock(return_value=connection) if asynchronous else MagicMock(return_value=connection)
+    context = context_type(
+        acquire_connection=acquire,
+        release_connection=release,
+        statement_config=statement,
+        driver_features={},
+        prepare_driver=prepare,
+    )
+    with pytest.raises(RuntimeError) as raised:
+        if isinstance(context, CockroachPsycopgAsyncSessionContext):
+            async with context:
+                pass
+        else:
+            with context:
+                pass
+    assert raised.value is error
+    release.assert_called_once()
+    assert release.call_args.args == (connection,)
+    assert release.call_args.kwargs["exc_val"] is error

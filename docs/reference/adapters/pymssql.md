@@ -9,6 +9,7 @@ from sqlspec.adapters.pymssql import (
     PymssqlDriverFeatures,
     PymssqlExceptionHandler,
     PymssqlPoolParams,
+    PymssqlSessionContextStrategy,
 )
 ```
 
@@ -38,6 +39,20 @@ Synchronous Microsoft SQL Server adapter built on `pymssql` (FreeTDS). Inherited
       heading_level: 3
       separate_signature: false
       show_signature_annotations: true
+
+## Tenant Strategies
+
+Set `driver_features={"tenant_strategy": "rls"}`; `"session_context"`, `"default"`, and `True` select the same strategy. Both providers use one standalone connection per lease rather than the normal thread-local connection. Cleanup or setup failure physically closes that connection. Standalone `create_connection()` is rejected in tenant mode.
+
+Each boundary uses one bound SQL batch: capture/apply/verify at checkout, restore/verify at checkin. Owned keys remain mutable (`@read_only=0`). The strategy neither commits nor rolls back nor changes autocommit. The lease rolls back unfinished work before cleanup and closes its standalone connection after release.
+
+Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
+
+::: sqlspec.adapters.pymssql.PymssqlSessionContextStrategy
+    options:
+      heading_level: 3
+      inherited_members: [__init__]
+      members: [__init__, checkout, checkin]
 
 ## Driver, Pool & Data Dictionary
 

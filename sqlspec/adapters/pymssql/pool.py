@@ -83,7 +83,12 @@ class PymssqlConnectionPool:
         connection = pymssql.connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            try:
+                self._on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
 
         return cast("PymssqlConnection", connection)
 

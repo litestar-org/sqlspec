@@ -18,6 +18,8 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 
 ## Configuration & Parameters
 
+See the full [connection and pool parameter table](../../databases/spanner.md#connection-and-pool-parameters) for pool settings, types, and defaults.
+
 ::: sqlspec.adapters.spanner.SpannerSyncConfig
     options:
       heading_level: 3
@@ -37,6 +39,7 @@ Synchronous and asynchronous Google Cloud Spanner adapters supporting both Googl
 ::: sqlspec.adapters.spanner.SpannerPoolParams
     options:
       heading_level: 3
+      members: []
       separate_signature: false
       show_signature_annotations: true
 

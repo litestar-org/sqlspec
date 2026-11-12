@@ -896,3 +896,195 @@ def test_psycopg_connection_type_aliases() -> None:
 
     assert PsycopgSyncConnection is not None
     assert PsycopgAsyncConnection is not None
+
+
+@pytest.mark.parametrize("config_type", [PsycopgSyncConfig, PsycopgAsyncConfig])
+@pytest.mark.parametrize("strategy", ["default", "rls", True])
+def test_tenant_shorthand_defaults_to_session(config_type: Any, strategy: Any) -> None:
+    from sqlspec.adapters.psycopg import PsycopgAsyncRLSStrategy, PsycopgSyncRLSStrategy
+
+    config = config_type(driver_features={"tenant_strategy": strategy})
+    expected = PsycopgSyncRLSStrategy if config_type is PsycopgSyncConfig else PsycopgAsyncRLSStrategy
+    assert isinstance(config.driver_features["tenant_strategy"], expected)
+    assert config.driver_features["pooler_mode"] == "session"
+
+
+@pytest.mark.parametrize("config_type", [PsycopgSyncConfig, PsycopgAsyncConfig])
+@pytest.mark.parametrize("mode", ["transaction", "statement", "auto"])
+def test_tenant_rejects_non_session_pooler(config_type: Any, mode: str) -> None:
+    with pytest.raises(ImproperConfigurationError, match="session"):
+        config_type(driver_features={"tenant_strategy": "rls", "pooler_mode": mode})
+
+
+@pytest.mark.parametrize("config_type", [PsycopgSyncConfig, PsycopgAsyncConfig])
+@pytest.mark.parametrize("source", ["config", "pool"])
+def test_tenant_rejects_close_returns(config_type: Any, source: str) -> None:
+    from types import SimpleNamespace
+
+    with pytest.raises(ImproperConfigurationError, match="close_returns"):
+        config_type(
+            connection_config={"close_returns": True} if source == "config" else {},
+            connection_instance=SimpleNamespace(close_returns=True) if source == "pool" else None,
+            driver_features={"tenant_strategy": "rls"},
+        )
+
+
+@pytest.mark.parametrize("config_type", [PsycopgSyncConfig, PsycopgAsyncConfig])
+@pytest.mark.parametrize("disabled", [None, False])
+def test_tenant_disabled_retains_pooler_mode(config_type: Any, disabled: Any) -> None:
+    config = config_type(driver_features={"tenant_strategy": disabled, "pooler_mode": "transaction"})
+    assert config.driver_features["tenant_strategy"] is None
+    assert config.driver_features["pooler_mode"] == "transaction"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+async def test_tenant_public_providers_capture_and_release(asynchronous: bool, provider: str) -> None:
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from psycopg import pq
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    calls: list[str] = []
+
+    @dataclass
+    class SyncStrategy:
+        label: str
+
+        def checkout(self, _connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            calls.append(f"checkout:{payload.tenant_id}")
+            return TenantLeaseState(payload)
+
+        def checkin(self, _connection: Any, state: TenantLeaseState) -> None:
+            calls.append(f"checkin:{state.payload.tenant_id}")
+
+    @dataclass
+    class AsyncStrategy:
+        label: str
+
+        async def checkout(self, _connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
+            calls.append(f"checkout:{payload.tenant_id}")
+            return TenantLeaseState(payload)
+
+        async def checkin(self, _connection: Any, state: TenantLeaseState) -> None:
+            calls.append(f"checkin:{state.payload.tenant_id}")
+
+    connection = AsyncMock() if asynchronous else MagicMock()
+    connection.info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
+    connection.closed = False
+    context = AsyncMock() if asynchronous else MagicMock()
+    if asynchronous:
+        context.__aenter__.return_value = connection
+        context.__aexit__.return_value = None
+    else:
+        context.__enter__.return_value = connection
+        context.__exit__.return_value = None
+    pool = MagicMock()
+    pool.close_returns = False
+    pool.connection.return_value = context
+    strategy = AsyncStrategy("custom") if asynchronous else SyncStrategy("custom")
+    config_type = PsycopgAsyncConfig if asynchronous else PsycopgSyncConfig
+    config = config_type(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    assert config.driver_features["tenant_strategy"] is strategy
+    with TenantContext.scope("a"):
+        if asynchronous:
+            async with getattr(config, provider)() as value:
+                assert calls == ["checkout:a"]
+                assert (value if provider == "provide_connection" else value.connection) is connection
+        else:
+            with getattr(config, provider)() as value:
+                assert calls == ["checkout:a"]
+                assert (value if provider == "provide_connection" else value.connection) is connection
+    assert calls == ["checkout:a", "checkin:a"]
+    if asynchronous:
+        context.__aexit__.assert_awaited_once()
+    else:
+        context.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+async def test_tenant_public_providers_fail_before_acquisition(asynchronous: bool, provider: str) -> None:
+    from unittest.mock import MagicMock
+
+    from sqlspec.exceptions import TenantContextError
+
+    pool = MagicMock()
+    pool.close_returns = False
+    config_type = PsycopgAsyncConfig if asynchronous else PsycopgSyncConfig
+    config = config_type(connection_instance=pool, driver_features={"tenant_strategy": "rls"})
+    with pytest.raises(TenantContextError):
+        if asynchronous:
+            async with getattr(config, provider)():
+                pass
+        else:
+            with getattr(config, provider)():
+                pass
+    pool.connection.assert_not_called()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tenant_standalone_connection_is_rejected(asynchronous: bool) -> None:
+    config_type = PsycopgAsyncConfig if asynchronous else PsycopgSyncConfig
+    config = config_type(driver_features={"tenant_strategy": "rls"})
+    with pytest.raises(ImproperConfigurationError, match="lease"):
+        if asynchronous:
+            await cast("PsycopgAsyncConfig", config).create_connection()
+        else:
+            cast("PsycopgSyncConfig", config).create_connection()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_tenant_prepare_failure_releases_native_context(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from psycopg import pq
+
+    from sqlspec.core.tenant import TenantLeaseState
+    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock() if asynchronous else MagicMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    connection = AsyncMock() if asynchronous else MagicMock()
+    connection.info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
+    connection.closed = False
+    context = AsyncMock() if asynchronous else MagicMock()
+    if asynchronous:
+        context.__aenter__.return_value = connection
+    else:
+        context.__enter__.return_value = connection
+    pool = MagicMock()
+    pool.close_returns = False
+    pool.connection.return_value = context
+    config_type = PsycopgAsyncConfig if asynchronous else PsycopgSyncConfig
+    config = config_type(connection_instance=pool, driver_features={"tenant_strategy": strategy})
+    error = RuntimeError("prepare failure")
+
+    def fail_prepare(_driver: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+    with TenantContext.scope(payload), pytest.raises(RuntimeError) as caught:
+        if asynchronous:
+            async with cast("PsycopgAsyncConfig", config).provide_session():
+                pass
+        else:
+            with cast("PsycopgSyncConfig", config).provide_session():
+                pass
+    assert caught.value is error
+    if asynchronous:
+        strategy.checkin.assert_awaited_once()
+        connection.rollback.assert_awaited_once()
+        context.__aexit__.assert_awaited_once()
+    else:
+        strategy.checkin.assert_called_once()
+        connection.rollback.assert_called_once()
+        context.__exit__.assert_called_once()

@@ -16,6 +16,7 @@ from sqlspec.adapters.mssql_python.driver import (
 )
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
+from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy
 from sqlspec.adapters.mssql_python.type_converter import MssqlPythonTypeConverter, mssql_type_to_arrow
 
 __all__ = (
@@ -30,6 +31,7 @@ __all__ = (
     "MssqlPythonExceptionHandler",
     "MssqlPythonPoolParams",
     "MssqlPythonSessionContext",
+    "MssqlPythonSessionContextStrategy",
     "MssqlPythonSyncDataDictionary",
     "MssqlPythonSyncMigrationTracker",
     "MssqlPythonTypeConverter",

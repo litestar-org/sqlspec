@@ -1,135 +1,150 @@
 # Multi-Tenancy
 
-Multi-tenant SaaS applications typically isolate customer data using one of three database models: **shared table with `tenant_id`**, **schema-per-tenant**, or **database-per-tenant**. SQLSpec supports all three cleanly without global mutable connection state.
+Keep each customer's rows in one `projects` table with PostgreSQL row-level security (RLS). SQLSpec sets the tenant when a session opens. It restores the prior settings before the pool reuses that connection. The policy decides which rows the app can read or write.
 
-## Choosing an Isolation Model
+## Choose an Isolation Model
 
-| Model | Isolation Boundary | Operational Trade-Off | SQLSpec Mechanism |
-| --- | --- | --- | --- |
-| **Row-Level (`tenant_id` + RLS)** | Shared tables, shared pool | Highest connection utilization; requires consistent `tenant_id` binding | Named `:tenant_id` parameters + PostgreSQL `SET LOCAL app.tenant_id` |
-| **Schema-per-Tenant** | Dedicated schema in one database | Clean logical separation and per-tenant migrations | `SET LOCAL search_path` (Postgres) / `ALTER SESSION SET CURRENT_SCHEMA` (Oracle) |
-| **Database-per-Tenant** | Dedicated database or cluster | Strongest blast-radius and compliance isolation | Multiple configs registered on `SQLSpec` keyed by `bind_key` |
+| Model | Boundary | SQLSpec configuration |
+| --- | --- | --- |
+| Shared tables with RLS | A database policy checks each row | `tenant_strategy="rls"` on a shared session pool |
+| Schema per tenant | Separate namespaces in one database | A trusted schema resolver or dedicated schema configs |
+| Database per tenant | Separate databases and pools | One configuration per `bind_key` |
 
-## Row-Level Isolation with Transaction-Scoped Context
+This guide uses shared tables. For request auth, see the [Tenant Request Contract](multi-tenancy-frameworks.md) and its [framework guides](multi-tenancy-frameworks.md#framework-guides). For worker tasks and server setup, see [Tenant Operations](multi-tenancy-operations.md).
 
-Combine explicit `:tenant_id` predicates with transaction-local session settings (`SET LOCAL` in PostgreSQL) so connection pool checkouts—including transaction-mode PgBouncer—never leak tenant state to subsequent requests:
+## Create the Policy and Application Role
 
-```python
-from collections.abc import Iterator
-from contextlib import contextmanager
+=== "uv"
 
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+    ```bash
+    uv add "sqlspec[asyncpg]"
+    ```
 
-spec = SQLSpec()
-config = spec.add_config(
-    SqliteConfig(connection_config={"database": ":memory:"})
-)
+=== "pip"
 
+    ```bash
+    pip install "sqlspec[asyncpg]"
+    ```
 
-@contextmanager
-def tenant_session(tenant_id: str) -> Iterator[tuple[SqliteDriver, str]]:
-    with spec.provide_session(config) as session:
-        yield session, tenant_id
+=== "pdm"
 
+    ```bash
+    pdm add "sqlspec[asyncpg]"
+    ```
 
-with spec.provide_session(config) as setup:
-    setup.execute(
-        """
-        CREATE TABLE projects (
-            id INTEGER PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            name TEXT NOT NULL
-        )
-        """
-    )
-    setup.execute(
-        """
-        INSERT INTO projects (tenant_id, name)
-        VALUES (:tenant_id, :name)
-        """,
-        tenant_id="acme",
-        name="Billing",
-    )
-    setup.execute(
-        """
-        INSERT INTO projects (tenant_id, name)
-        VALUES (:tenant_id, :name)
-        """,
-        tenant_id="globex",
-        name="Search",
-    )
+=== "poetry"
 
-with tenant_session("acme") as (session, tenant_id):
-    rows = session.select(
-        """
-        SELECT id, name
-        FROM projects
-        WHERE tenant_id = :tenant_id
-        """,
-        tenant_id=tenant_id,
-    )
-    assert rows == [{"id": 1, "name": "Billing"}]
+    ```bash
+    poetry add "sqlspec[asyncpg]"
+    ```
+
+Use an admin connection to create the role, table, and policy. Set the role's login password through your secret store.
+
+```sql
+CREATE ROLE tenant_app LOGIN NOSUPERUSER NOBYPASSRLS;
+CREATE TABLE public.projects (
+    id integer PRIMARY KEY,
+    tenant_id text NOT NULL,
+    name text NOT NULL
+);
+INSERT INTO public.projects VALUES
+    (1, 'acme', 'Billing'),
+    (2, 'globex', 'Search');
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects FORCE ROW LEVEL SECURITY;
+CREATE POLICY project_tenant ON public.projects
+    USING (tenant_id = current_setting('app.current_tenant_id', true))
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true));
+GRANT USAGE ON SCHEMA public TO tenant_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.projects TO tenant_app;
 ```
 
-On PostgreSQL (`AsyncpgConfig`, `PsycopgAsyncConfig`, `PsqlpyConfig`), enforce defense-in-depth Row-Level Security inside a transaction:
+Connect as `tenant_app`. This role must not own the table or have superuser or `BYPASSRLS` rights. `USING` filters reads; `WITH CHECK` rejects writes for the wrong tenant. A session setting alone does not hide rows.
+
+## Open a Tenant Session
+
+Set `DATABASE_URL` to the app role's DSN, then run:
+
+```python
+import asyncio
+import os
+
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+
+async def main() -> None:
+    config = AsyncpgConfig(
+        connection_config={"dsn": os.environ["DATABASE_URL"]},
+        driver_features={"tenant_strategy": "rls"},
+    )
+    try:
+        async with config.provide_session(tenant="acme") as session:
+            rows = await session.select(
+                "SELECT id, name FROM public.projects ORDER BY id"
+            )
+            assert rows == [{"id": 1, "name": "Billing"}]
+    finally:
+        await config.close_pool()
+
+
+asyncio.run(main())
+```
+
+Choose a tenant only after the app has checked the user's right to access it. Do not trust a raw header. Without an explicit tenant or an active tenant scope, SQLSpec raises `TenantContextError` before it takes a pool slot. An insert for `globex` in the `acme` session fails the write check.
+
+Sync configs use `with config.provide_session(tenant="acme") as session`. The `tenant` argument accepts a string, UUID, or `TenantContextPayload` with session variables. It binds the tenant through acquisition, application work, and cleanup, then restores the caller's context, including on failure or cancellation. It requires a configured `tenant_strategy`.
+
+Use `TenantContext.scope("acme")` (supports both `with` and `async with`) around several sessions when they share one tenant, or pass `bypass_tenant=True` to `provide_session(bypass_tenant=True)` for a pre-tenant login lookup or health probe. Calling `provide_session()` or passing `tenant=None` inherits the ambient scope. The lease takes one snapshot of the tenant; a later scope change does not alter an open session. Enabling a tenant strategy does not change commit behavior: each adapter's sessions and connections commit or discard unfinished work exactly as they do without one. Call `session.commit()` to save writes portably.
+
+## Preserve Pool Settings
+
+Tenant mode sets `pooler_mode` to `"session"` when you omit it or pass `None`. It rejects `"transaction"`, `"statement"`, and `"auto"`. The lease needs the same server connection for its whole lifetime.
+
+At checkout, one PostgreSQL query saves the old settings and sets the tenant. At checkin, one query restores those settings and checks the result. The strategy changes only keys it owns.
+
+Prefer startup `server_settings` inside `connection_config` for connection-wide PostgreSQL defaults; PostgreSQL applies them at connection startup and retains them across `asyncpg` pool resets with zero per-checkout SQL:
+
+```python
+config = AsyncpgConfig(
+    connection_config={
+        "dsn": os.environ["DATABASE_URL"],
+        "server_settings": {
+            "TimeZone": "UTC",
+            "statement_timeout": "5000",
+            "search_path": "public",
+        },
+    },
+    driver_features={"tenant_strategy": "rls"},
+)
+```
+
+Reserve `driver_features["tenant_session_baseline"]` for settings introduced dynamically inside `init` or `setup` pool hooks that `asyncpg`'s `RESET ALL` clears on release. Pure codec hooks registered via `on_connection_create` default `tenant_session_baseline` to `{}` automatically, whereas `init` and `setup` require an explicit `tenant_session_baseline` (`{}` when they set no lasting GUCs). A baseline value must agree with the same key in `server_settings`. See the [asyncpg reference](../../reference/adapters/asyncpg.md) for details.
+
+## Transaction-Mode Pooler Alternative
+
+For a transaction-mode pooler, omit `tenant_strategy`. Set the tenant inside each transaction:
 
 ```python
 async with config.provide_session() as session:
     await session.begin()
-    await session.execute(
-        "SELECT set_config('app.tenant_id', :tenant_id, true)",
-        tenant_id=tenant_id,
-    )
-    rows = await session.select(
-        """
-        SELECT id, name
-        FROM projects
-        ORDER BY id
-        """
-    )
-    await session.commit()
+    try:
+        await session.execute(
+            "SELECT set_config('app.current_tenant_id', :tenant_id, true)",
+            tenant_id="acme",
+        )
+        rows = await session.select("SELECT id, name FROM public.projects")
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        raise
 ```
 
-Passing `true` as the third argument to `set_config` scopes the setting strictly to the current transaction (`SET LOCAL`), ensuring pooled connections reset automatically on `commit()` or `rollback()`.
+The final `true` limits the setting to that transaction. A commit or rollback clears it. Set it again in the next transaction. Keep the same app role and RLS policy.
 
-## Schema-per-Tenant Routing
+## Schema and Database Alternatives
 
-Validate the resolved schema slug against a strict identifier allowlist (`^[a-z0-9_]+$`) before switching schemas inside a transaction:
+For PostgreSQL schemas, pass `AsyncpgRLSStrategy(schema_resolver=...)`. This trusted function maps the tenant payload to a schema. Names must match `[a-z_][a-z0-9_]*`. SQLSpec quotes the name and restores the old `search_path`. Never use raw request input as a schema name. For Oracle or Db2, use a dedicated pool with a fixed schema.
 
-- **PostgreSQL**: `SELECT set_config('search_path', :schema_name, true)` inside `session.begin()`.
-- **Oracle**: `OracleConnectionParams(current_schema=...)` for static pools or `ALTER SESSION SET CURRENT_SCHEMA = ...` on dedicated tenant pools.
-- **IBM Db2**: `Db2ConnectionParams(current_schema=...)` or `SET CURRENT SCHEMA`.
-- **Migrations**: Use `migration_config={"default_schema": tenant_schema, "version_table_schema": "admin"}` to upgrade each tenant schema deterministically.
+For separate databases, give each tenant a config with its own `bind_key` on `SQLSpec`. Check access before choosing the config. Each config owns its pool, so it can use its own login and maintenance schedule.
 
-## Database-per-Tenant with Bind Keys
-
-For dedicated enterprise tenants, register one adapter configuration per tenant `bind_key` on `SQLSpec`:
-
-```python
-from sqlspec import SQLSpec
-from sqlspec.adapters.sqlite import SqliteConfig
-
-spec = SQLSpec()
-tenant_configs = {
-    "acme": spec.add_config(
-        SqliteConfig(
-            bind_key="acme", connection_config={"database": ":memory:"}
-        )
-    ),
-    "globex": spec.add_config(
-        SqliteConfig(
-            bind_key="globex", connection_config={"database": ":memory:"}
-        )
-    ),
-}
-
-with spec.provide_session(tenant_configs["acme"]) as session:
-    value = session.select_value("SELECT 1", value_type=int)
-```
-
-## Recap
-
-- Never store active tenant IDs on global config singletons; bind tenant context per request or transaction.
-- Prefer `set_config(..., true)` (`SET LOCAL`) over session-level `SET` whenever sharing connection pools across tenants.
-- Validate schema or table identifiers against a strict regex allowlist before any DDL or schema-switch statement.
+Run [migrations](../migrations.md) with a separate admin config and pool. Omit `tenant_strategy` on that config. See [Tenant Operations](multi-tenancy-operations.md) for bypass scopes, cleanup errors, Oracle VPD, and SQL Server setup.
