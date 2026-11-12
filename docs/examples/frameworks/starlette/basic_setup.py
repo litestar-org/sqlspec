@@ -13,7 +13,7 @@ db_plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memor
 
 
 async def health(request: Request) -> JSONResponse:
-    db: AiosqliteDriver = db_plugin.get_session(request)
+    db: AiosqliteDriver = await db_plugin.get_session_async(request)
     return JSONResponse(await db.select_one("SELECT 1 AS ok"))
 
 

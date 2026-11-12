@@ -26,7 +26,7 @@ def create_app() -> Sanic:
 
     @app.post("/users")
     async def create_user(request: Request) -> HTTPResponse:
-        db = db_plugin.get_session(request, "db")
+        db = await db_plugin.get_session_async(request, "db")
         await db.execute("INSERT INTO users (name) VALUES (:name)", name=request.json["name"])
         return response.json({"created": True}, status=201)
 

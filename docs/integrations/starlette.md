@@ -30,11 +30,13 @@
 
 ## Basic Setup
 
-Pass a single database config, a sequence of configs, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), and retrieve the session in route handlers via `db_plugin.get_session(request)`:
+Pass a single database config, a sequence of configs, or a `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or call `db_plugin.init_app(app)`), and retrieve the session in route handlers via `await db_plugin.get_session_async(request)`:
 
 ```{ .python title="docs/examples/frameworks/starlette/basic_setup.py" }
 --8<-- "docs/examples/frameworks/starlette/basic_setup.py:example"
 ```
+
+Request connections are checked out on first access, so routes that never touch the database open none. Async configurations use `await db_plugin.get_session_async(request)` or `await db_plugin.get_connection_async(request)`; the synchronous `get_session(request)` and `get_connection(request)` accessors work for synchronous configurations and raise `ImproperConfigurationError` for asynchronous ones. Autocommit modes commit or roll back by response status only when the request used a connection.
 
 ## Multi-Database Setup
 
@@ -54,7 +56,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starle
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[[Any], Any]` | - | Trusted scope extractor returning a tenant payload, string, UUID, None (no tenant from this source), or an awaitable. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. |
-| `connection_key` | `str` | `'db_connection'` | Key for storing connection in request.state. Default: 'db_connection' |
+| `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
@@ -73,6 +75,6 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Recap
 
-- Pass a config, config list, or `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or `db_plugin.init_app(app)`) and retrieve sessions with `db_plugin.get_session(request)` or `await db_plugin.get_session_async(request)`.
+- Pass a config, config list, or `SQLSpec` registry to `SQLSpecPlugin(config, app)` (or `db_plugin.init_app(app)`) and retrieve sessions with `await db_plugin.get_session_async(request)` (async configurations) or `db_plugin.get_session(request)` (sync configurations); connections are checked out on first access.
 - Use `set_request_tenant(request, tenant_id)` for deferred tenant leases, or configure `commit_mode`, `tenant_extractor`, multi-database keys, and `sqlcommenter` middleware in `extension_config["starlette"]`.
 - See the [Starlette Extension Reference](/reference/extensions/starlette/) for `SQLSpecPlugin`, `set_request_tenant`, and `StarletteConfig` details.

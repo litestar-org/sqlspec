@@ -1,6 +1,6 @@
 # Flask Integration
 
-`sqlspec.extensions.flask` provides `SQLSpecPlugin` for Flask applications, managing synchronous (and portal-bridged asynchronous) connection pools across Flask's application factory lifecycle (`init_app`), caching request-scoped sessions on `flask.g`, and finalizing transactions in `teardown_appcontext`.
+`sqlspec.extensions.flask` provides `SQLSpecPlugin` for Flask applications, managing synchronous (and portal-bridged asynchronous) connection pools across Flask's application factory lifecycle (`init_app`), caching request-scoped sessions on `flask.g`, and finalizing transactions in `teardown_appcontext`. A request connection is checked out the first time `plugin.get_session()` or `plugin.get_connection()` asks for it, so views that never touch the database open none.
 
 ## Installation
 
@@ -56,7 +56,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
-| `connection_key` | `str` | - | Key for storing connection in Flask g object. Default: auto-generated from session_key. |
+| `connection_key` | `str` | - | Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
 | `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |
