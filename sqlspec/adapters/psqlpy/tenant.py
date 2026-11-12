@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
-from sqlspec.driver._tenant import AsyncTenantLease, await_owned_release
+from sqlspec.driver._tenant import AsyncTenantLease, await_owned_disposal
 from sqlspec.exceptions import TenantCleanupError
 from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
@@ -79,9 +79,8 @@ class PsqlpyTenantLease(AsyncTenantLease):
         except BaseException as exc:
             setup_error = exc
         if setup_error is not None:
-            try:
-                await await_owned_release(self._invalidate(connection))
-            except BaseException as disposal_error:
+            disposal_error = await await_owned_disposal(self._invalidate(connection))
+            if disposal_error is not None:
                 setup_error.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
             raise setup_error
         return connection

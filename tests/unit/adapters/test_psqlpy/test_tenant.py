@@ -191,5 +191,5 @@ async def test_tenant_failed_pool_disposal_never_returns_dirty_context() -> None
     with TenantContext.scope("a"), pytest.raises(RuntimeError) as caught:
         await lease.acquire()
     assert caught.value is failure
-    assert any("disposal failed" in note for note in caught.value.__notes__)
+    assert any("invalidation failed" in note for note in caught.value.__notes__)
     context.__aexit__.assert_not_awaited()

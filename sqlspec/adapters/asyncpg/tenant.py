@@ -13,7 +13,12 @@ from sqlspec.core.tenant.base import (
     validate_tenant_session_baseline,
     with_cause,
 )
-from sqlspec.driver._tenant import DEFAULT_TENANT_CLEANUP_TIMEOUT, AsyncTenantLease, await_owned_release
+from sqlspec.driver._tenant import (
+    DEFAULT_TENANT_CLEANUP_TIMEOUT,
+    AsyncTenantLease,
+    await_owned_disposal,
+    await_owned_release,
+)
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
@@ -102,10 +107,9 @@ class AsyncpgTenantLease(AsyncTenantLease):
         except BaseException as exc:
             setup_error = exc
         if setup_error is not None:
-            try:
-                await self._invalidate(connection)
-            except BaseException as cleanup:
-                setup_error.add_note(f"Tenant connection disposal failed: {type(cleanup).__name__}")
+            disposal_error = await await_owned_disposal(self._invalidate(connection))
+            if disposal_error is not None:
+                setup_error.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
             raise setup_error
         return connection
 

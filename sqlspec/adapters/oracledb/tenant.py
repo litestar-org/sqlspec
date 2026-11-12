@@ -14,7 +14,7 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
 )
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
-from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease, await_owned_release
+from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease, await_owned_disposal
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -297,9 +297,8 @@ class OracleAsyncTenantLease(AsyncTenantLease):
             except BaseException as exc:
                 setup_error = exc
             if setup_error is not None:
-                try:
-                    await await_owned_release(self._invalidate(connection))
-                except BaseException as disposal_error:
+                disposal_error = await await_owned_disposal(self._invalidate(connection))
+                if disposal_error is not None:
                     setup_error.add_note(f"Tenant connection invalidation failed: {disposal_error!r}")
                 raise setup_error
         self._bypass_hook = hook

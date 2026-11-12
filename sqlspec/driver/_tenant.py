@@ -12,7 +12,13 @@ from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, T
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.tenant._context import TenantContext, TenantContextPayload
 
-__all__ = ("DEFAULT_TENANT_CLEANUP_TIMEOUT", "AsyncTenantLease", "SyncTenantLease", "await_owned_release")
+__all__ = (
+    "DEFAULT_TENANT_CLEANUP_TIMEOUT",
+    "AsyncTenantLease",
+    "SyncTenantLease",
+    "await_owned_disposal",
+    "await_owned_release",
+)
 
 logger = get_logger("sqlspec.driver")
 DEFAULT_TENANT_CLEANUP_TIMEOUT: Final = 5.0
@@ -155,6 +161,20 @@ async def await_owned_release(operation: Awaitable[Any]) -> None:
         raise cancellation
 
 
+async def await_owned_disposal(operation: Awaitable[Any]) -> BaseException | None:
+    """Join adapter-owned disposal on a failure path and return its error.
+
+    Cancellation of the caller never abandons the disposal. The caller raises
+    its own pending failure afterwards, so an observed cancellation is not
+    re-raised.
+
+    Returns:
+        The disposal failure, or None when disposal completed.
+    """
+    error, _ = await _await_owned(asyncio.ensure_future(operation))
+    return error
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncTenantLease:
     """Capture tenant identity and shield adapter-owned disposal from cancellation.
@@ -209,8 +229,7 @@ class AsyncTenantLease:
         else:
             self._connection, self._state = connection, state
             return connection
-        disposal = asyncio.create_task(self._invalidate(connection))
-        invalidation_error, _ = await _await_owned(disposal)
+        invalidation_error = await await_owned_disposal(self._invalidate(connection))
         if invalidation_error is not None:
             checkout_error.add_note(f"Tenant connection invalidation failed: {invalidation_error!r}")
         raise checkout_error
