@@ -1250,7 +1250,12 @@ def test_teradata_flightsql_adk_compound_transaction_restores_mode(
     monkeypatch: pytest.MonkeyPatch, initial_mode: str
 ) -> None:
     modes: list[bool] = []
-    native = SimpleNamespace(get_option=lambda _: initial_mode, set_autocommit=lambda value: modes.append(value))
+    native = SimpleNamespace(
+        get_option=lambda _: initial_mode,
+        set_autocommit=lambda value: modes.append(value),
+        commit=MagicMock(),
+        rollback=MagicMock(),
+    )
     cursor = MagicMock()
     conn = SimpleNamespace(adbc_connection=native, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock())
     monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
@@ -1258,12 +1263,14 @@ def test_teradata_flightsql_adk_compound_transaction_restores_mode(
     store.upsert_app_state("app", {"value": 1})
     assert cursor.execute.call_count == 2
     assert cursor.execute.call_args_list[0].args == ("DELETE FROM adk_app_state WHERE app_name = ?", ("app",))
-    conn.commit.assert_called_once()
+    committer = native.commit if initial_mode == "true" else conn.commit
+    committer.assert_called_once()
     assert modes == ([False, True] if initial_mode == "true" else [False])
     cursor.execute.side_effect = RuntimeError("insert failed")
     with pytest.raises(RuntimeError, match="insert failed"):
         store.upsert_user_state("app", "user", {})
-    conn.rollback.assert_called_once()
+    native.rollback.assert_called_once()
+    conn.rollback.assert_not_called()
     assert modes[-1] is (initial_mode == "true")
 
 
@@ -1293,7 +1300,7 @@ def test_teradata_adk_metadata_queries_quote_reserved_key_column(monkeypatch: py
 def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_autocommit(
     monkeypatch: pytest.MonkeyPatch, failure_cls: type[BaseException]
 ) -> None:
-    """_adbc_atomic_connection enables _commit_supported and runs native.rollback before set_autocommit(True)."""
+    """_adbc_atomic_connection commits on the native connection and rolls back before set_autocommit(True)."""
     call_order: list[str] = []
 
     class _FakeConnection:
@@ -1301,7 +1308,10 @@ def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_a
             self._autocommit = True
             self._commit_supported = False
             self.adbc_connection = SimpleNamespace(
-                get_option=lambda _: "true", set_autocommit=self._set_autocommit, rollback=self._native_rollback
+                get_option=lambda _: "true",
+                set_autocommit=self._set_autocommit,
+                rollback=self._native_rollback,
+                commit=self._native_commit,
             )
 
         def _set_autocommit(self, enabled: bool) -> None:
@@ -1309,6 +1319,9 @@ def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_a
 
         def _native_rollback(self) -> None:
             call_order.append("native_rollback")
+
+        def _native_commit(self) -> None:
+            call_order.append("native_commit")
 
         def commit(self) -> None:
             if not self._commit_supported:
@@ -1324,14 +1337,12 @@ def test_adbc_atomic_connection_enables_commit_and_rolls_back_before_restoring_a
     monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(fake_conn))
 
     with _adbc_atomic_connection(config, "teradata") as conn:
-        assert conn._commit_supported is True
         conn.commit()
     assert fake_conn._commit_supported is False
-    assert call_order == ["set_autocommit:False", "commit_executed", "set_autocommit:True"]
+    assert call_order == ["set_autocommit:False", "native_commit", "set_autocommit:True"]
 
     call_order.clear()
-    with pytest.raises(failure_cls, match="aborted"), _adbc_atomic_connection(config, "teradata") as conn:
-        assert conn._commit_supported is True
+    with pytest.raises(failure_cls, match="aborted"), _adbc_atomic_connection(config, "teradata"):
         raise failure_cls("aborted")
 
     assert fake_conn._commit_supported is False

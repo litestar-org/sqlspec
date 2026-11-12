@@ -8,13 +8,14 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
-from sqlspec.adapters.adbc._typing import AdbcNotSupportedError
+from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcNotSupportedError
 from sqlspec.adapters.adbc.core import (
     _DB2_INDEX_EXISTS_SQL,
     _DB2_TABLE_EXISTS_SQL,
     _TERADATA_INDEX_EXISTS_SQL,
     _TERADATA_TABLE_EXISTS_SQL,
     RECONCILE_ADBC_DIALECTS,
+    create_mapped_exception,
     driver_kind_from_driver_name,
     is_postgres_dialect,
     is_shared_object_driver,
@@ -3242,6 +3243,35 @@ def _teradata_table_exists(cursor: Any, table_name: str) -> bool:
     return cursor.fetchone() is not None
 
 
+class _AdbcNativeTransactionConnection:
+    """DB-API connection view that commits and rolls back on the native ADBC connection.
+
+    The DB-API wrapper disables ``commit()`` when the connection opened in autocommit mode, so a
+    transaction started with ``set_autocommit(False)`` must finish on ``adbc_connection``.
+    """
+
+    __slots__ = ("_connection", "_native")
+
+    def __init__(self, connection: Any, native: Any) -> None:
+        self._connection = connection
+        self._native = native
+
+    def cursor(self) -> Any:
+        """Return a cursor from the wrapped DB-API connection."""
+        return self._connection.cursor()
+
+    def commit(self) -> None:
+        """Commit the native transaction."""
+        self._native.commit()
+
+    def rollback(self) -> None:
+        """Roll back the native transaction."""
+        self._native.rollback()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
 @contextlib.contextmanager
 def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
     """Require transaction support before compound Teradata mutations.
@@ -3262,23 +3292,25 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
         get_option = getattr(native, "get_option", None)
         mode = None
         if callable(get_option):
-            with contextlib.suppress(AdbcNotSupportedError, NotImplementedError):
+            try:
                 mode = get_option("adbc.connection.autocommit")
+            except (AdbcNotSupportedError, NotImplementedError):
+                mode = None
+            except AdbcNativeError as exc:
+                raise create_mapped_exception(exc) from exc
         previous = mode == "true" if mode in {"true", "false"} else getattr(connection, "_autocommit", None)
         if not callable(set_autocommit) or not isinstance(previous, bool):
             msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
             raise TransactionError(msg)
-        prev_commit_supported = getattr(connection, "_commit_supported", None)
         try:
             set_autocommit(False)
         except (AdbcNotSupportedError, NotImplementedError) as exc:
             msg = "ADBC Teradata supports autocommit-only operations; this compound mutation requires a transaction."
             raise TransactionError(msg) from exc
-        if previous is True and prev_commit_supported is False:
-            connection._commit_supported = True
+        transaction_connection = _AdbcNativeTransactionConnection(connection, native) if previous else connection
         failed = False
         try:
-            yield connection
+            yield transaction_connection
         except BaseException:
             failed = True
             rolled_back = False
@@ -3296,8 +3328,6 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
                         conn_rollback()
             raise
         finally:
-            if prev_commit_supported is not None:
-                connection._commit_supported = prev_commit_supported
             if previous is True:
                 if failed:
                     with contextlib.suppress(Exception):
