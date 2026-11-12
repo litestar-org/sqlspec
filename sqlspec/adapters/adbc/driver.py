@@ -58,7 +58,12 @@ from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
+from sqlspec.utils.text import (
+    normalize_identifier,
+    quote_identifier,
+    resolve_catalog_identifier,
+    split_qualified_identifier,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -894,9 +899,17 @@ class AdbcDriver(SyncDriverAdapterBase):
         concurrent_indexes: bool = False,
         type_casts: "Mapping[str, str] | None" = None,
     ) -> "StorageBridgeJob":
-        """Ingest an Arrow payload directly through the ADBC cursor."""
+        """Ingest an Arrow payload directly through the ADBC cursor.
+
+        On Snowflake, Arrow column names, conflict keys, update exclusions, and type casts are resolved to the
+        target table's catalog column names first: an exact name wins, otherwise a single case-insensitive match.
+        """
 
         self._require_capability("arrow_import_enabled")
+        if self._dialect_name == "snowflake":
+            source, conflict_keys, exclude_update_columns, type_casts = self._align_snowflake_load_columns(
+                table, source, conflict_keys, exclude_update_columns, type_casts
+            )
         if stage_table or conflict_keys or drop_indexes:
             return self._execute_staged_load_sync(
                 table,
@@ -957,6 +970,46 @@ class AdbcDriver(SyncDriverAdapterBase):
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
+
+    def _align_snowflake_load_columns(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        conflict_keys: "Sequence[str] | None",
+        exclude_update_columns: "Sequence[str] | None",
+        type_casts: "Mapping[str, str] | None",
+    ) -> "tuple[Any, Sequence[str] | None, Sequence[str] | None, Mapping[str, str] | None]":
+        """Rename load columns to the target table's catalog column names."""
+        catalog_columns = [
+            str(column["column_name"])
+            for column in self.data_dictionary.get_columns(self, table)
+            if column.get("column_name") is not None
+        ]
+        if not catalog_columns:
+            return source, conflict_keys, exclude_update_columns, type_casts
+
+        def resolve(name: str) -> str:
+            return resolve_catalog_identifier(name, catalog_columns) or name
+
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        source_data: Any = source.get_data() if hasattr(source, "get_data") else source
+        if hasattr(source_data, "read_next_batch"):
+            names = [resolve(name) for name in source_data.schema.names]
+            schema = pa.schema([field.with_name(name) for field, name in zip(source_data.schema, names, strict=True)])
+            aligned: Any = pa.RecordBatchReader.from_batches(
+                schema, (pa.RecordBatch.from_arrays(batch.columns, schema=schema) for batch in source_data)
+            )
+        else:
+            arrow_table = self._coerce_arrow_table(source_data)
+            aligned = arrow_table.rename_columns([resolve(name) for name in arrow_table.column_names])
+        return (
+            aligned,
+            [resolve(name) for name in conflict_keys] if conflict_keys else conflict_keys,
+            [resolve(name) for name in exclude_update_columns] if exclude_update_columns else exclude_update_columns,
+            {resolve(name): value for name, value in type_casts.items()} if type_casts else type_casts,
+        )
 
     def load_from_storage(
         self,
