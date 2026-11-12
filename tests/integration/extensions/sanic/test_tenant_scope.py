@@ -10,15 +10,17 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig
 from sqlspec.extensions.sanic import SQLSpecPlugin
+from sqlspec.utils.tenant import TenantContext
 from tests.integration.fixtures.tenant import tenant_policy_database as tenant_policy_database
 
 pytestmark = pytest.mark.xdist_group("postgres")
 ReusableClient = pytest.importorskip("sanic_testing.reusable").ReusableClient
 
 
+@pytest.mark.parametrize("passthrough_response_middleware", [False, True])
 @pytest.mark.parametrize("adapter", ["asyncpg", "psycopg"])
 def test_sanic_tenant_isolation_and_failed_request_cleanup(
-    tenant_policy_database: tuple[dict[str, Any], str], adapter: str
+    tenant_policy_database: tuple[dict[str, Any], str], adapter: str, passthrough_response_middleware: bool
 ) -> None:
     credentials, table = tenant_policy_database
     app = Sanic("TenantAcceptance" + uuid4().hex)
@@ -38,6 +40,16 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
     spec = SQLSpec()
     spec.add_config(config)
     plugin = SQLSpecPlugin(spec, app)
+
+    async def passthrough(request: Request, resp: Any) -> Any:
+        return resp
+
+    if passthrough_response_middleware:
+        app.register_middleware(passthrough, "response")
+
+    @app.get("/ambient")
+    async def ambient(request: Request) -> Any:
+        return response.json({"tenant": TenantContext.get_tenant_id()})
 
     @app.get("/")
     async def rows(request: Request) -> Any:
@@ -65,6 +77,9 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
                     assert current_pid == pid
                 pid = current_pid
             app.ctx.test_identity = None
+            _, result = client.get("/ambient")
+            assert result.status == 200
+            assert result.json == {"tenant": None}
             _, result = client.get("/", headers={"X-Tenant-ID": "evil"})
             assert result.status == 500
             app.ctx.test_identity = "a"

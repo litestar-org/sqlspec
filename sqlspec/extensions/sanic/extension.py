@@ -400,6 +400,7 @@ class SQLSpecPlugin:
         app.on_request(self._on_request)
         cast("Any", app).on_response(self._on_response)
         app.add_signal(self._on_lifecycle_exception, "http.lifecycle.exception")
+        app.add_signal(self._on_lifecycle_response, "http.lifecycle.response")
         app.add_signal(self._on_request_complete, "http.lifecycle.complete")
         self._request_middleware_added = True
 
@@ -439,6 +440,21 @@ class SQLSpecPlugin:
         """
         if request is not None and hasattr(request, "ctx"):
             set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exception)
+
+    async def _on_lifecycle_response(self, request: Any = None, response: Any = None, **_: Any) -> None:
+        """Finalize request state when an earlier response middleware short-circuits ``_on_response``.
+
+        Sanic stops running response middleware once one returns a response, so this per-request
+        signal repeats the idempotent finalization before the response is sent.
+
+        Args:
+            request: Sanic request instance.
+            response: Sanic response instance.
+            **_: Additional signal context arguments.
+        """
+        if request is None or not hasattr(request, "ctx"):
+            return
+        await self._on_response(request, response)
 
     async def _on_request_complete(self, conn_info: Any = None, request: Any = None, **_: Any) -> None:
         """Release any residual request connections and contexts when a request aborts or disconnects.
