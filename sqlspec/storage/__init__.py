@@ -11,8 +11,6 @@ Provides a storage system with:
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from sqlspec import _COMPILED
-
 if TYPE_CHECKING:
     from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, WritableBytesSink
     from sqlspec.storage._arrow_payload import encode_arrow_to_async_sink, encode_arrow_to_sink
@@ -88,6 +86,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "supports_direct_stream_write": ("sqlspec.utils.type_guards", "supports_direct_stream_write"),
 }
 
+_COMPILED = getattr(__spec__, "origin", "").endswith((".so", ".pyd"))
+
 
 def __getattr__(name: str) -> Any:
     """Lazily resolve package exports via PEP 562."""
@@ -108,5 +108,4 @@ def __dir__() -> list[str]:
 
 if _COMPILED:
     for _export_name in __all__:
-        if _export_name not in globals():
-            __getattr__(_export_name)
+        __getattr__(_export_name)
