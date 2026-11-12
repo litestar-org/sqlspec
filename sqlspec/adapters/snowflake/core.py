@@ -216,16 +216,13 @@ def apply_driver_features(
         msg = "Snowflake stage_parquet_threshold_rows must be a positive integer"
         raise ImproperConfigurationError(msg)
     if statement_config is None:
-        statement_config = build_statement_config(
+        return build_statement_config(
             paramstyle=paramstyle, json_serializer=serializer, json_deserializer=deserializer
-        )
-    elif serializer is not None:
-        statement_config = statement_config.replace(
-            parameter_config=statement_config.parameter_config.with_json_serializers(
-                serializer, deserializer=deserializer
-            )
-        )
-    return _with_server_tuple_bindings(statement_config, serializer or to_json), features
+        ), features
+    statement_config = statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(serializer, deserializer=deserializer)
+    )
+    return _with_server_tuple_bindings(statement_config, serializer), features
 
 
 def _normalize_authenticator(value: str) -> str:

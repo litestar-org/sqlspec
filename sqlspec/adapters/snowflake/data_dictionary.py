@@ -142,7 +142,7 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         return list(SNOWFLAKE_CONFIG.feature_flags)
 
     def _catalog_scope(
-        self, driver: Any, schema: str | None, table: str | None
+        self, driver: Any, schema: str | None, table: str | None, *, operation: str
     ) -> tuple[str | None, str | None, str | None, str]:
         """Resolve exact catalog names, reading the session database and schema when unqualified."""
         database_name, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
@@ -151,13 +151,20 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
             if session is not None:
                 database_name = session.get("database_name")
                 schema_name = session.get("schema_name")
+        self._log_catalog_read(driver, schema_name, table_name, operation)
         return database_name, schema_name, table_name, scope
+
+    def _log_catalog_read(self, driver: Any, schema_name: str | None, table_name: str | None, operation: str) -> None:
+        if table_name is None:
+            self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation=operation)
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation=operation)
 
     def _metadata(self, driver: Any, domain: str, schema: str | None = None) -> MetadataResult:
         if domain == "schemas":
             rows = driver.select(self.get_query("schemas", "list"))
         else:
-            database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None)
+            database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None, operation=domain)
             query = self.get_query(domain, "by_schema")
             query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
             rows = driver.select(query, schema_name=schema_name)
@@ -173,14 +180,14 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
 
     def get_tables(self, driver: Any, schema: str | None = None) -> list[TableMetadata]:
         """List tables from INFORMATION_SCHEMA.TABLES."""
-        database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None)
+        database_name, schema_name, _, _ = self._catalog_scope(driver, schema, None, operation="tables")
         query = self.get_query("tables", "by_schema")
         query = query.copy(qualify_snowflake_information_schema(query.raw_sql, database_name))
         return cast("list[TableMetadata]", driver.select(query, schema_name=schema_name, schema_type=TableMetadata))
 
     def get_columns(self, driver: Any, table: str | None = None, schema: str | None = None) -> list[ColumnMetadata]:
         """List columns, preserving exact quoted table and schema names."""
-        database_name, schema_name, table_name, _ = self._catalog_scope(driver, schema, table)
+        database_name, schema_name, table_name, _ = self._catalog_scope(driver, schema, table, operation="columns")
         params: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
         if table_name is not None:
@@ -198,13 +205,16 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
         self, driver: Any, table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Read ordered imported-key metadata without KEY_COLUMN_USAGE."""
-        _, _, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        _, schema_name, table_name, scope = _resolve_snowflake_catalog_scope(schema, table)
+        self._log_catalog_read(driver, schema_name, table_name, "foreign_keys")
         rows = driver.select(f"SHOW IMPORTED KEYS {scope}")
         return parse_snowflake_imported_keys(rows, table_name=table_name)
 
     def get_constraints(self, driver: Any, table: str | None = None, schema: str | None = None) -> MetadataResult:
         """Combine catalog constraints with column-ordered SHOW key metadata."""
-        database_name, schema_name, table_name, scope = self._catalog_scope(driver, schema, table)
+        database_name, schema_name, table_name, scope = self._catalog_scope(
+            driver, schema, table, operation="constraints"
+        )
         params: dict[str, Any] = {"schema_name": schema_name}
         operation = "by_schema"
         if table_name is not None:
