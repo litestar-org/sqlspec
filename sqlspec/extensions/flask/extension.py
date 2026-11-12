@@ -425,7 +425,7 @@ class SQLSpecPlugin:
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
             session = get_context_value(g, cache_key, None)
 
-            if session is None:
+            if session is None and get_context_value(g, config_state.connection_key, None) is None:
                 continue
 
             if config_state.should_commit(response.status_code):

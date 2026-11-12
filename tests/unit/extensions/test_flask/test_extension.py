@@ -452,3 +452,38 @@ def test_flask_disabled_injection_needs_no_tenant_extractor() -> None:
         assert app.test_client().get("/").status_code == 200
     finally:
         plugin.shutdown()
+
+
+@pytest.mark.parametrize("status", [200, 500])
+def test_flask_autocommit_finishes_connection_only_requests(status: int) -> None:
+    import sqlite3
+
+    with tempfile.TemporaryDirectory() as directory:
+        database = f"{directory}/autocommit.db"
+        setup = sqlite3.connect(database)
+        setup.execute("CREATE TABLE items (value INTEGER)")
+        setup.commit()
+        setup.close()
+        config = SqliteConfig(
+            connection_config={"database": database}, extension_config={"flask": {"commit_mode": "autocommit"}}
+        )
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+
+        @app.post("/items")
+        def create_item() -> tuple[str, int]:
+            connection = plugin.get_connection()
+            connection.execute("BEGIN")
+            connection.execute("INSERT INTO items VALUES (1)")
+            return "", status
+
+        try:
+            assert app.test_client().post("/items").status_code == status
+        finally:
+            plugin.shutdown()
+            config.close_pool()
+        reader = sqlite3.connect(database)
+        try:
+            assert reader.execute("SELECT COUNT(*) FROM items").fetchone()[0] == int(status == 200)
+        finally:
+            reader.close()
