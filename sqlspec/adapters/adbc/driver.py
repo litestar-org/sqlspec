@@ -547,7 +547,14 @@ class AdbcDriver(SyncDriverAdapterBase):
         if (
             native is not None
             and callable(getattr(native, "set_autocommit", None))
-            and (mode == "true" or (mode is None and getattr(self.connection, "_autocommit", None) is True))
+            and (
+                mode == "true"
+                or (
+                    mode is None
+                    and self._dialect_name == "teradata"
+                    and getattr(self.connection, "_autocommit", None) is True
+                )
+            )
         ):
             try:
                 native.set_autocommit(False)

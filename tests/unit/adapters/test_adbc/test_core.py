@@ -1142,6 +1142,15 @@ def test_teradata_autocommit_only_begin(option_supported: bool) -> None:
     assert native.set_autocommit.call_args_list == [call(False), call(False)]
 
 
+def test_begin_without_autocommit_option_is_noop_for_non_teradata_backends() -> None:
+    native = Mock()
+    native.get_option.side_effect = NotSupportedError("option unavailable")
+    connection = Mock(adbc_connection=native, _autocommit=True)
+    driver = AdbcDriver(connection, dialect="postgres")
+    driver.begin()
+    native.set_autocommit.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("raw_name", "expected"),
     [
