@@ -623,7 +623,7 @@ class SQL:
 
         try:
             config = self._statement_config
-            if config.dialect is None and self._dialect in Dialect.classes:
+            if config.dialect is None and self._dialect is not None and Dialect.get(self._dialect) is not None:
                 config = config.replace(dialect=self._dialect)
             mixed = self._resolve_mixed_parameter_inputs()
             raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
