@@ -4,7 +4,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
 
@@ -582,7 +582,7 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
             self.connection = connection
 
     class _DeferredTenantConfig(AiosqliteConfig):
-        driver_type: Any = _SessionDriver
+        driver_type: ClassVar[type[Any]] = _SessionDriver
 
         async def create_pool(self) -> Any:
             return object()

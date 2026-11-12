@@ -520,6 +520,9 @@ async def test_litestar_security_snapshot_restrictions_sessions_claims_and_predi
 def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_tenant_errors() -> None:
     seen_tenants: list[tuple[str | None, bool]] = []
 
+    def last_seen() -> tuple[str | None, bool]:
+        return seen_tenants[-1]
+
     class _TenantSqliteConfig(SqliteConfig):
         @contextmanager
         def provide_connection(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
@@ -582,19 +585,19 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
 
     with TestClient(app=app, raise_server_exceptions=False) as client:
         assert client.get("/orgs/health").json() == {"ok": 1}
-        assert seen_tenants[-1] == (None, True)
+        assert last_seen() == (None, True)
 
         assert client.get("/unguarded").status_code == 401
         assert client.get("/unguarded", headers={"x-user": "multi"}).status_code == 403
         assert client.get("/unguarded", headers={"x-user": "multi", "x-org-id": "evil"}).status_code == 403
         ok_header = client.get("/unguarded", headers={"x-user": "multi", "x-org-id": "globex"})
         assert ok_header.status_code == 200
-        assert seen_tenants[-1] == ("globex", False)
+        assert last_seen() == ("globex", False)
 
         ok_path = client.get("/orgs/acme/items", headers={"x-user": "multi"})
         assert ok_path.status_code == 200
         assert ok_path.json() == {"org": "acme", "value": 1}
-        assert seen_tenants[-1] == ("acme", False)
+        assert last_seen() == ("acme", False)
         assert client.get("/orgs/evil/items", headers={"x-user": "multi"}).status_code == 403
 
         with pytest.raises(WebSocketDisconnect) as ws_unauth, client.websocket_connect("/ws"):
@@ -610,7 +613,7 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
 
         with client.websocket_connect("/ws", headers={"x-user": "acme"}) as ws:
             assert ws.receive_json() == {"ok": 1}
-        assert seen_tenants[-1] == ("acme", False)
+        assert last_seen() == ("acme", False)
 
         with pytest.raises(NotAuthorizedException):
             plugin.provide_request_session_sync("db_connection", app.state, cast("Any", {"type": "http"}))
