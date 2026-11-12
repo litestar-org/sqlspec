@@ -193,3 +193,30 @@ async def test_tenant_failed_pool_disposal_never_returns_dirty_context() -> None
     assert caught.value is failure
     assert any("invalidation failed" in note for note in caught.value.__notes__)
     context.__aexit__.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("probe", "rolls_back"), [(True, False), (False, True), (RuntimeError("aborted"), True)])
+async def test_tenant_rolls_back_only_open_or_aborted_transactions(probe: object, rolls_back: bool) -> None:
+    payload = TenantContextPayload("a")
+    strategy = AsyncMock()
+    strategy.checkout.return_value = TenantLeaseState(payload)
+    connection = AsyncMock()
+    if isinstance(probe, BaseException):
+        connection.fetch_val.side_effect = probe
+    else:
+        connection.fetch_val.return_value = probe
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    config = SimpleNamespace(
+        provide_pool=AsyncMock(return_value=SimpleNamespace(acquire=lambda: context)),
+        _ensure_connection=AsyncMock(),
+        _close_pool=AsyncMock(),
+        driver_features={"tenant_strategy": strategy},
+    )
+    lease = PsqlpyTenantLease(config, strategy)
+    with TenantContext.scope(payload):
+        await lease.acquire()
+    await lease.release()
+    executed = [call.args[0] for call in connection.execute.await_args_list]
+    assert executed == (["ROLLBACK"] if rolls_back else [])
+    context.__aexit__.assert_awaited_once()

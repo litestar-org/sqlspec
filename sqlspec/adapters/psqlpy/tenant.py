@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from sqlspec.utils.tenant import TenantContextPayload
 
 PSQLPY_DISPOSAL_TIMEOUT_S: Final = 2.0
+_IDLE_PROBE: Final = "SELECT transaction_timestamp() = statement_timestamp()"
 
 __all__ = ("PsqlpyRLSStrategy", "PsqlpyTenantLease")
 
@@ -64,7 +65,7 @@ class PsqlpyTenantLease(AsyncTenantLease):
 
     __slots__ = ("_config", "_context")
 
-    def __init__(self, config: Any, strategy: "AsyncTenantStrategy", *, session: bool = False) -> None:
+    def __init__(self, config: Any, strategy: "AsyncTenantStrategy") -> None:
         super().__init__(strategy)
         self._config = config
         self._context: Any = None
@@ -101,4 +102,15 @@ class PsqlpyTenantLease(AsyncTenantLease):
             await self._release(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
-        await connection.execute("ROLLBACK")
+        """Roll back an open or aborted transaction block before cleanup.
+
+        Outside a transaction block the probe statement is its own transaction, so both
+        timestamps are identical; inside a block they differ, and inside an aborted block the
+        probe fails. ``ROLLBACK`` runs only in those two cases.
+        """
+        try:
+            idle = await connection.fetch_val(_IDLE_PROBE)
+        except Exception:
+            idle = False
+        if idle is not True:
+            await connection.execute("ROLLBACK")
