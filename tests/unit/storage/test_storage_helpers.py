@@ -29,7 +29,7 @@ from sqlspec.storage.pipeline import (
     ingest_telemetry_from_batches,
 )
 from sqlspec.typing import PYARROW_INSTALLED
-from sqlspec.utils.arrow_helpers import arrow_batch_to_rows, arrow_reader_with_deferred_close, coerce_arrow_batches
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 
 pytestmark = pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 
@@ -264,8 +264,6 @@ def test_driver_common_exposes_streaming_arrow_batch_helpers() -> None:
     assert cols == ["k", "v"]
     assert len(batch_list) == 2
     assert CommonDriverAttributesMixin._arrow_batch_to_rows(batch_list[0]) == [(10, "x"), (20, "y")]
-    assert coerce_arrow_batches is not None
-    assert arrow_batch_to_rows is not None
 
 
 def test_stream_exposes_source_column_types() -> None:
