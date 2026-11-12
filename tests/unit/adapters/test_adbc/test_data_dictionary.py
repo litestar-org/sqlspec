@@ -678,6 +678,7 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     driver = Mock()
     driver.dialect = "snowflake"
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "app_db", "SCHEMA_NAME": "app"}
     driver.select.side_effect = [
         [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "LS_SESS", "TABLE_TYPE": "BASE TABLE"}],
         [
@@ -697,6 +698,10 @@ def test_snowflake_tables_and_columns_fallback_uses_information_schema() -> None
     columns = dictionary.get_columns(driver, table="ls_sess", schema="PUBLIC")
 
     assert tables == [{"schema_name": "PUBLIC", "table_name": "LS_SESS", "table_type": "BASE TABLE"}]
+    tables_call = driver.select.call_args_list[0]
+    assert tables_call.kwargs == {"schema_name": "app"}
+    assert '"app_db".information_schema.tables' in tables_call.args[0].raw_sql
+    assert driver.select.call_args_list[1].kwargs == {"schema_name": "PUBLIC", "table_name": "LS_SESS"}
     assert columns[0]["column_name"] == "SESSION_ID"
     assert columns[0]["data_type"] == "TEXT"
 
@@ -755,6 +760,7 @@ def test_snowflake_tables_and_columns_filter_permutations() -> None:
     driver = Mock()
     driver.dialect = "snowflake"
     driver.connection.adbc_get_objects.side_effect = AdbcNotSupportedError("NOT_IMPLEMENTED")
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "APP"}
     driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "TABLE_NAME": "SESS", "COLUMN_NAME": "ID"}]
 
     schema_tables = dictionary.get_tables(driver, schema="PUBLIC")
@@ -899,8 +905,11 @@ def test_snowflake_catalog_domain_results(domain: str) -> None:
     dictionary = AdbcDataDictionary()
     driver = Mock()
     driver.dialect = "snowflake"
+    driver.select_one_or_none.return_value = {"DATABASE_NAME": "APP_DB", "SCHEMA_NAME": "APP"}
     driver.select.return_value = [{"SCHEMA_NAME": "PUBLIC", "OBJECT_NAME": "ORDERS"}]
     result = getattr(dictionary, f"get_{domain}")(driver)
+    if domain != "schemas":
+        assert driver.select.call_args.kwargs == {"schema_name": "APP"}
     assert result.items == ({"schema_name": "PUBLIC", "object_name": "ORDERS"},)
     assert result.capability.support == MetadataSupport.SUPPORTED
     assert result.capability.source == MetadataSource.CATALOG
@@ -978,3 +987,27 @@ def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
     for bad_identifier in ("", "sales.", "sales..orders", '""'):
         with pytest.raises(SQLSpecError):
             dictionary.get_columns(driver, table=bad_identifier)
+
+
+@pytest.mark.parametrize(("dialect", "domain"), [("oracle", "objects"), ("db2", "views"), ("teradata", "objects")])
+def test_catalog_domains_needing_extra_binds_report_unsupported(dialect: str, domain: str) -> None:
+    """Catalog queries that bind more than ``schema_name`` are reported unsupported instead of failing."""
+    driver = Mock()
+    driver.dialect = dialect
+
+    result = getattr(AdbcDataDictionary(), f"get_{domain}")(driver)
+
+    assert result.capability.support == MetadataSupport.UNSUPPORTED
+    driver.select.assert_not_called()
+
+
+def test_mysql_schema_listing_binds_declared_schema_parameter() -> None:
+    """Catalog queries declaring ``schema_name`` receive it as a named bind."""
+    driver = Mock()
+    driver.dialect = "mysql"
+    driver.select.return_value = [{"SCHEMA_NAME": "app"}]
+
+    result = AdbcDataDictionary().get_schemas(driver)
+
+    assert result.items == ({"schema_name": "app"},)
+    assert driver.select.call_args.kwargs == {"schema_name": None}

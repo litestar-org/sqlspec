@@ -8,6 +8,7 @@ from sqlspec.data_dictionary.dialects.snowflake.config import (
     SNOWFLAKE_VERSION_PATTERN,
     parse_snowflake_imported_keys,
     parse_snowflake_primary_or_unique_keys,
+    qualify_snowflake_information_schema,
 )
 
 __all__ = (
@@ -18,4 +19,5 @@ __all__ = (
     "SNOWFLAKE_VERSION_PATTERN",
     "parse_snowflake_imported_keys",
     "parse_snowflake_primary_or_unique_keys",
+    "qualify_snowflake_information_schema",
 )

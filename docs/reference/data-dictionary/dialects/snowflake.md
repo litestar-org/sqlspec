@@ -13,10 +13,10 @@ Queries Snowflake INFORMATION_SCHEMA, GET_DDL, and SHOW PRIMARY, UNIQUE, and IMP
 | Setting | Value |
 | --- | --- |
 | **Dialect Name** | `snowflake` |
-| **Default Schema** | `"PUBLIC"` |
+| **Default Schema** | `None` |
 | **Version Pattern** | `^(\d+)\.(\d+)(?:\.(\d+))?` |
 | **DDL Strategy** | Native GET_DDL and SHOW KEYS metadata |
-| **Catalog `.sql` Files** | `11` files (26 named queries) |
+| **Catalog `.sql` Files** | `11` files (24 named queries) |
 
 ### Capabilities & Type Mappings
 
@@ -54,18 +54,18 @@ Queries Snowflake INFORMATION_SCHEMA, GET_DDL, and SHOW PRIMARY, UNIQUE, and IMP
 
 ## Catalog SQL Queries
 
-The `snowflake` dialect pack defines 26 named queries across `11` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/snowflake/`):
+The `snowflake` dialect pack defines 24 named queries across `11` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/snowflake/`):
 
 | Domain Pack | Source File | Named Queries | Bind Parameters |
 | --- | --- | --- | --- |
-| `columns.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/columns.sql` | `by_schema`, `by_table`, `by_table_all_schemas`, `by_database` (4 named queries) | `:schema_name`, `:table_name` |
+| `columns.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/columns.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
 | `constraints.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/constraints.sql` | `by_schema`, `by_table`, `primary_keys_by_schema`, `primary_keys_by_table`, `unique_keys_by_schema`, `unique_keys_by_table` (6 named queries) | `:schema_name`, `:table_name` |
 | `ddl.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/ddl.sql` | `by_object` (1 named query) | `:object_name`, `:object_type` |
 | `foreign_keys.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/foreign_keys.sql` | `by_schema`, `by_table` (2 named queries) | *none* |
 | `objects.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/objects.sql` | `by_schema` (1 named query) | `:schema_name` |
 | `routines.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/routines.sql` | `by_schema`, `functions_by_schema`, `procedures_by_schema` (3 named queries) | `:schema_name` |
-| `schemas.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/schemas.sql` | `list` (1 named query) | *none* |
+| `schemas.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/schemas.sql` | `list`, `current` (2 named queries) | *none* |
 | `sequences.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/sequences.sql` | `by_schema`, `by_name` (2 named queries) | `:schema_name`, `:sequence_name` |
-| `tables.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/tables.sql` | `by_schema`, `by_database`, `by_table` (3 named queries) | `:schema_name`, `:table_name` |
+| `tables.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/tables.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
 | `version.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/version.sql` | `current` (1 named query) | *none* |
 | `views.sql` | `sqlspec/data_dictionary/dialects/snowflake/sql/views.sql` | `by_schema`, `by_name` (2 named queries) | `:schema_name`, `:view_name` |

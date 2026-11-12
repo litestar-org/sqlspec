@@ -190,7 +190,7 @@ from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 assert "sqlspec.data_dictionary.dialects" not in sys.modules
 snowflake = get_dialect_config("sf")
 assert snowflake.name == "snowflake"
-assert snowflake.default_schema == "PUBLIC"
+assert snowflake.default_schema is None
 assert get_dialect_config("Snowflake") is snowflake
 config = get_dialect_config("PostgreSQL")
 assert isinstance(config, DialectConfig)

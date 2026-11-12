@@ -70,7 +70,7 @@ def test_snowflake_dialect_types(category: str, expected: str) -> None:
     """Snowflake catalog configuration exposes lossless native logical types."""
     config = get_dialect_config("snowflake")
     assert config.get_optimal_type(category) == expected
-    assert config.default_schema == "PUBLIC"
+    assert config.default_schema is None
     assert config.parameter_style == "qmark"
     assert config.get_feature_flag("supports_time_travel") is True
     assert config.get_feature_flag("supports_returning") is False

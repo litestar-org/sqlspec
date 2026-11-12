@@ -7,6 +7,8 @@ import pytest
 from sqlspec.adapters.snowflake import SnowflakeDriver
 from sqlspec.data_dictionary import MetadataSupport, VersionInfo
 
+_SESSION_SCOPE_SQL = 'SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name";'
+
 
 def _result(columns: list[str], rows: list[tuple[Any, ...]]) -> dict[str, Any]:
     return {"description": [(name, 2, None, None, None, None, True) for name in columns], "rows": rows}
@@ -124,7 +126,7 @@ def test_constraints_merge_catalog_and_ordered_show_key_columns(snowflake_connec
 @pytest.mark.parametrize(
     ("table", "schema", "expected"),
     [
-        (None, None, 'SHOW IMPORTED KEYS IN SCHEMA "PUBLIC"'),
+        (None, None, "SHOW IMPORTED KEYS IN SCHEMA"),
         (None, "sales", 'SHOW IMPORTED KEYS IN SCHEMA "SALES"'),
         ('"sales"."Orders"', "ignored", 'SHOW IMPORTED KEYS IN TABLE "sales"."Orders"'),
     ],
@@ -182,8 +184,8 @@ def test_qualified_imported_keys_preserve_composite_columns(snowflake_connection
 @pytest.mark.parametrize(
     ("table", "schema", "expected_schema", "expected_table", "scope"),
     [
-        (None, None, "PUBLIC", None, 'IN SCHEMA "PUBLIC"'),
-        ('"Orders"', None, "PUBLIC", "Orders", 'IN TABLE "PUBLIC"."Orders"'),
+        (None, None, "APP", None, "IN SCHEMA"),
+        ('"Orders"', None, "APP", "Orders", 'IN TABLE "Orders"'),
         ('"sales"."Orders"', "ignored", "sales", "Orders", 'IN TABLE "sales"."Orders"'),
         ('"Orders"', '"sales"', "sales", "Orders", 'IN TABLE "sales"."Orders"'),
     ],
@@ -196,7 +198,8 @@ def test_constraints_share_exact_catalog_and_show_scope(
     expected_table: str | None,
     scope: str,
 ) -> None:
-    """Catalog binds and SHOW commands describe the same resolved schema and table."""
+    """Catalog binds use the session schema when unqualified and SHOW commands share the resolved scope."""
+    snowflake_connection.results[_SESSION_SCOPE_SQL] = _result(["database_name", "schema_name"], [("APP_DB", "APP")])
     snowflake_connection.default_result = _result(
         ["table_name", "constraint_name", "constraint_type"], [("Orders", "PK_ORDERS", "PRIMARY KEY")]
     )
@@ -211,13 +214,10 @@ def test_constraints_share_exact_catalog_and_show_scope(
 
     metadata = driver.data_dictionary.get_constraints(driver, table, schema)
 
-    assert tuple(snowflake_connection.calls[0][1]) == (
-        (expected_schema,) if expected_table is None else (expected_schema, expected_table)
-    )
-    assert [call[0] for call in snowflake_connection.calls[1:]] == [
-        f"SHOW PRIMARY KEYS {scope}",
-        f"SHOW UNIQUE KEYS {scope}",
-    ]
+    calls = [call for call in snowflake_connection.calls if call[0] != _SESSION_SCOPE_SQL]
+    assert tuple(calls[0][1]) == ((expected_schema,) if expected_table is None else (expected_schema, expected_table))
+    assert ('"APP_DB".information_schema.' in calls[0][0]) is (schema is None and "." not in (table or ""))
+    assert [call[0] for call in calls[1:]] == [f"SHOW PRIMARY KEYS {scope}", f"SHOW UNIQUE KEYS {scope}"]
     constraints = cast("tuple[dict[str, Any], ...]", metadata.items)
     assert len(constraints) == 1
     assert constraints[0]["schema_name"] == expected_schema
@@ -326,8 +326,8 @@ def test_cross_database_constraints_keep_catalog_and_show_identity(
 @pytest.mark.parametrize(
     ("object_name", "schema", "object_type", "expected_type", "expected_name"),
     [
-        ("users", None, "table", "TABLE", '"PUBLIC"."USERS"'),
-        ('"users"', None, "table", "TABLE", '"PUBLIC"."users"'),
+        ("users", None, "table", "TABLE", '"USERS"'),
+        ('"users"', None, "table", "TABLE", '"users"'),
         ("analytics.users", None, "table", "TABLE", '"ANALYTICS"."USERS"'),
         ('"Sales"."Orders"', "ignored", "table", "TABLE", '"Sales"."Orders"'),
         ("other_db.analytics.users", None, "table", "TABLE", '"OTHER_DB"."ANALYTICS"."USERS"'),

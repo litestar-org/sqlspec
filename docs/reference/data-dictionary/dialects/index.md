@@ -21,11 +21,11 @@ SQLSpec ships 15 dialect-specific SQL catalog packs under `sqlspec/data_dictiona
 | **Teradata Vantage** (`teradata`) | `None` | DBC.TableTextV object text and catalog-backed AST synthesis | `9` | `17` | [Teradata Vantage Catalog](teradata.md) |
 | **Sybase ASE** (`sybase`) | `dbo` | AST synthesis + `dbo.syscomments` object text reassembly | `9` | `16` | [Sybase ASE Catalog](sybase.md) |
 | **SAP SQL Anywhere** (`sqlanywhere`) | `DBA` | AST synthesis + `SYS.SYSTAB` / `SYS.SYSPROCEDURE` definitions | `9` | `16` | [SAP SQL Anywhere Catalog](sqlanywhere.md) |
-| **Snowflake** (`snowflake`) | `PUBLIC` | Native GET_DDL and SHOW KEYS metadata | `11` | `26` | [Snowflake Catalog](snowflake.md) |
+| **Snowflake** (`snowflake`) | `None` | Native GET_DDL and SHOW KEYS metadata | `11` | `24` | [Snowflake Catalog](snowflake.md) |
 | **IBM Db2** (`db2`) | `None` | AST synthesis + `SYSCAT` catalog text definitions | `9` | `14` | [IBM Db2 Catalog](db2.md) |
 | **Google BigQuery** (`bigquery`) | `None` | Native `INFORMATION_SCHEMA.TABLES.ddl` + AST fallback | `14` | `30` | [Google BigQuery Catalog](bigquery.md) |
 | **Google Cloud Spanner** (`spanner`) | `None` | AST synthesis with `INTERLEAVE IN PARENT` & `ROW DELETION POLICY` (`GoogleSQL` & `PostgreSQL` modes) | `5` | `8` | [Google Cloud Spanner Catalog](spanner.md) |
-| **Total (`15` dialects)** | - | - | **`210`** | **`339`** | - |
+| **Total (`15` dialects)** | - | - | **`210`** | **`337`** | - |
 
 ## Cross-Dialect Capability Matrix
 

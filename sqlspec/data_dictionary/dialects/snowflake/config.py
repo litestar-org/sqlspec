@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, ForeignKeyMetadata, register_dialect
+from sqlspec.utils.text import quote_identifier
 
 __all__ = (
     "SNOWFLAKE_CONFIG",
@@ -14,6 +15,7 @@ __all__ = (
     "SNOWFLAKE_VERSION_PATTERN",
     "parse_snowflake_imported_keys",
     "parse_snowflake_primary_or_unique_keys",
+    "qualify_snowflake_information_schema",
 )
 
 SNOWFLAKE_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
@@ -72,7 +74,6 @@ SNOWFLAKE_TYPE_MAPPINGS: Final[dict[str, str]] = {
 
 SNOWFLAKE_CONFIG: Final[DialectConfig] = DialectConfig(
     name="snowflake",
-    default_schema="PUBLIC",
     parameter_style="qmark",
     version_pattern=SNOWFLAKE_VERSION_PATTERN,
     feature_versions=SNOWFLAKE_FEATURE_VERSIONS,
@@ -178,3 +179,18 @@ def parse_snowflake_imported_keys(
             )
         )
     return keys
+
+
+def qualify_snowflake_information_schema(sql: str, database_name: str | None) -> str:
+    """Prefix ``information_schema`` references with an exact quoted database name.
+
+    Args:
+        sql: Catalog query text referencing the session database's ``information_schema``.
+        database_name: Exact database name, or ``None`` to keep the session database.
+
+    Returns:
+        Query text reading the named database's ``information_schema``.
+    """
+    if database_name is None:
+        return sql
+    return sql.replace("information_schema.", f"{quote_identifier(database_name)}.information_schema.")
