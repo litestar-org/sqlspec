@@ -240,3 +240,27 @@ def test_event_channel_consumes_uppercase_snowflake_rows(
     assert event.lease_expires_at == row["LEASE_EXPIRES_AT"]
     channel.ack(event_id)
     channel.shutdown()
+
+
+def test_extension_downgrade_drops_are_retry_safe() -> None:
+    """Every Snowflake extension downgrade drop tolerates tables an earlier attempt already removed."""
+    from sqlspec.adapters.snowflake.adk import SnowflakeADKMemoryStore, SnowflakeADKStore
+    from sqlspec.adapters.snowflake.litestar import SnowflakeStore
+
+    config = SnowflakeConfig(
+        connection_config={"account": "acct"},
+        extension_config={"adk": {"enable_memory": True}, "litestar": {}, "events": {}},
+    )
+    drops = [
+        drop.statement
+        for store in (
+            SnowflakeADKStore(config),
+            SnowflakeADKMemoryStore(config),
+            SnowflakeStore(config),
+            SnowflakeEventQueueStore(config),
+        )
+        for drop in store.downgrade_drops()
+    ]
+
+    assert len(drops) == 8
+    assert all(statement.startswith("DROP TABLE IF EXISTS ") for statement in drops)
