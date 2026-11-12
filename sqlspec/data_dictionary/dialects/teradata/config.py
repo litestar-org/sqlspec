@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import TableMetadata
 
 __all__ = (
+    "TERADATA_COLUMN_TYPE_CODES",
     "TERADATA_CONFIG",
     "TERADATA_FEATURE_FLAGS",
     "TERADATA_FEATURE_VERSIONS",
@@ -83,6 +84,34 @@ TERADATA_TYPE_MAPPINGS: dict[str, str] = {
     "decimal": "DECIMAL(18, 4)",
     "date": "DATE",
     "time": "TIME(6)",
+}
+
+TERADATA_COLUMN_TYPE_CODES: Final[dict[str, str]] = {
+    "CV": "VARCHAR",
+    "CF": "CHAR",
+    "I": "INTEGER",
+    "I8": "BIGINT",
+    "I2": "SMALLINT",
+    "I1": "BYTEINT",
+    "D": "DECIMAL",
+    "F": "DOUBLE PRECISION",
+    "DA": "DATE",
+    "TS": "TIMESTAMP",
+    "SZ": "TIMESTAMP WITH TIME ZONE",
+    "BV": "VARBYTE",
+    "BF": "BYTE",
+    "BO": "BLOB",
+    "CO": "CLOB",
+    "JN": "JSON",
+    "AT": "TIME",
+    "TZ": "TIME WITH TIME ZONE",
+    "XM": "XML",
+    "PD": "PERIOD(DATE)",
+    "PS": "PERIOD(TIMESTAMP)",
+    "PM": "PERIOD(TIMESTAMP WITH TIME ZONE)",
+    "PT": "PERIOD(TIME)",
+    "PZ": "PERIOD(TIME WITH TIME ZONE)",
+    "N": "NUMBER",
 }
 
 TERADATA_CONFIG = DialectConfig(

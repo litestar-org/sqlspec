@@ -115,12 +115,15 @@ def test_view_type_probe_is_scoped_and_permission_failure_keeps_columns() -> Non
     assert column.get("data_type") == "DECIMAL"
     assert column.get("numeric_scale") == 4
     assert column.get("is_nullable") is True
-    query, schema, table = driver.select.call_args.args
-    assert "FROM DBC.ColumnsQV" in query
-    assert "UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE)))" in query
-    assert "UPPER(TRIM(TableName)) = UPPER(TRIM(?))" in query
-    assert "TRIM(ColumnUDTName) AS column_udt_name" in query
-    assert (schema, table) == ("mart", "v_orders")
+    (query,) = driver.select.call_args.args
+    query_text = query.raw_sql
+    assert "FROM DBC.ColumnsQV" in query_text
+    assert (
+        "UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(:schema_name AS VARCHAR(128)), DATABASE)))" in query_text
+    )
+    assert "UPPER(TRIM(TableName)) = UPPER(TRIM(:table_name))" in query_text
+    assert "TRIM(ColumnUDTName) AS column_udt_name" in query_text
+    assert driver.select.call_args.kwargs == {"schema_name": "mart", "table_name": "v_orders"}
     driver.select.side_effect = [[row], OperationalError("[Error 3523] Permission denied")]
     assert dictionary.get_columns(driver, "v_orders", "mart")[0].get("column_name") == "amount"
     driver.select.side_effect = [[row]]

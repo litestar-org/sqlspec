@@ -1,6 +1,7 @@
 """Dialect configuration for Teradata."""
 
 from sqlspec.data_dictionary.dialects.teradata.config import (
+    TERADATA_COLUMN_TYPE_CODES,
     TERADATA_CONFIG,
     TERADATA_FEATURE_FLAGS,
     TERADATA_FEATURE_VERSIONS,
@@ -16,6 +17,7 @@ from sqlspec.data_dictionary.dialects.teradata.config import (
 )
 
 __all__ = (
+    "TERADATA_COLUMN_TYPE_CODES",
     "TERADATA_CONFIG",
     "TERADATA_FEATURE_FLAGS",
     "TERADATA_FEATURE_VERSIONS",

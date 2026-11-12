@@ -13,6 +13,7 @@ from sqlspec.data_dictionary import (
     TableMetadata,
 )
 from sqlspec.data_dictionary.dialects.teradata import (
+    TERADATA_COLUMN_TYPE_CODES,
     TERADATA_CONFIG,
     TeradataVersionInfo,
     build_teradata_metadata_capability_profile,
@@ -207,48 +208,16 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
             rows = driver.select(self.get_query("columns", "by_table"), schema_name=schema_name, table_name=table_name)
         if table is not None and rows and any(row.get("data_type") in (None, "", "UNKNOWN") for row in rows):
-            query = (
-                "LOCKING ROW FOR ACCESS SELECT TRIM(ColumnName) AS column_name, "
-                "TRIM(ColumnType) AS raw_type_code, TRIM(ColumnUDTName) AS column_udt_name, "
-                "ColumnLength AS max_length, DecimalTotalDigits AS numeric_precision, "
-                "DecimalFractionalDigits AS numeric_scale, Nullable AS is_nullable, "
-                "CharType AS char_type FROM DBC.ColumnsQV "
-                "WHERE UPPER(TRIM(DatabaseName)) = UPPER(TRIM(COALESCE(CAST(? AS VARCHAR(128)), DATABASE))) "
-                "AND UPPER(TRIM(TableName)) = UPPER(TRIM(?)) "
-                "ORDER BY ColumnId"
-            )
             try:
-                details = driver.select(query, schema_name, self.resolve_identifier(table))
-            except SQLSpecError:
+                details = driver.select(
+                    self.get_query("columns", "qv_by_table"),
+                    schema_name=schema_name,
+                    table_name=self.resolve_identifier(table),
+                )
+            except SQLSpecError as error:
+                logger.debug("Teradata DBC.ColumnsQV type enrichment unavailable: %s", error)
                 details = []
             by_name = {str(row["column_name"]).strip().upper(): row for row in details}
-            type_map = {
-                "CV": "VARCHAR",
-                "CF": "CHAR",
-                "I": "INTEGER",
-                "I8": "BIGINT",
-                "I2": "SMALLINT",
-                "I1": "BYTEINT",
-                "D": "DECIMAL",
-                "F": "DOUBLE PRECISION",
-                "DA": "DATE",
-                "TS": "TIMESTAMP",
-                "SZ": "TIMESTAMP WITH TIME ZONE",
-                "BV": "VARBYTE",
-                "BF": "BYTE",
-                "BO": "BLOB",
-                "CO": "CLOB",
-                "JN": "JSON",
-                "AT": "TIME",
-                "TZ": "TIME WITH TIME ZONE",
-                "XM": "XML",
-                "PD": "PERIOD(DATE)",
-                "PS": "PERIOD(TIMESTAMP)",
-                "PM": "PERIOD(TIMESTAMP WITH TIME ZONE)",
-                "PT": "PERIOD(TIME)",
-                "PZ": "PERIOD(TIME WITH TIME ZONE)",
-                "N": "NUMBER",
-            }
             enriched = []
             for row in rows:
                 item = dict(row)
@@ -259,7 +228,7 @@ class TeradataSyncDataDictionary(SyncDataDictionaryBase):
                     if code == "UT":
                         item["data_type"] = str(detail.get("column_udt_name") or "").strip() or "UDT"
                     else:
-                        item["data_type"] = type_map.get(code, "UNKNOWN")
+                        item["data_type"] = TERADATA_COLUMN_TYPE_CODES.get(code, "UNKNOWN")
                     item["is_nullable"] = detail.get("is_nullable") in (True, 1, "Y", "YES")
                     if (
                         item["data_type"] in {"VARCHAR", "CHAR"}

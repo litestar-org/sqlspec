@@ -16,7 +16,7 @@ Introspects modern Unicode DBC.*V views using LOCKING ROW FOR ACCESS; columns su
 | **Default Schema** | `None` |
 | **Version Pattern** | `(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?` |
 | **DDL Strategy** | DBC.TableTextV object text and catalog-backed AST synthesis |
-| **Catalog `.sql` Files** | `9` files (16 named queries) |
+| **Catalog `.sql` Files** | `9` files (17 named queries) |
 
 ### Capabilities & Type Mappings
 
@@ -54,11 +54,11 @@ Introspects modern Unicode DBC.*V views using LOCKING ROW FOR ACCESS; columns su
 
 ## Catalog SQL Queries
 
-The `teradata` dialect pack defines 16 named queries across `9` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/teradata/`):
+The `teradata` dialect pack defines 17 named queries across `9` domain `.sql` files loaded via `DataDictionaryLoader` (`sqlspec/data_dictionary/dialects/teradata/`):
 
 | Domain Pack | Source File | Named Queries | Bind Parameters |
 | --- | --- | --- | --- |
-| `columns.sql` | `sqlspec/data_dictionary/dialects/teradata/sql/columns.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
+| `columns.sql` | `sqlspec/data_dictionary/dialects/teradata/sql/columns.sql` | `by_schema`, `by_table`, `qv_by_table` (3 named queries) | `:schema_name`, `:table_name` |
 | `constraints.sql` | `sqlspec/data_dictionary/dialects/teradata/sql/constraints.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
 | `foreign_keys.sql` | `sqlspec/data_dictionary/dialects/teradata/sql/foreign_keys.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
 | `indexes.sql` | `sqlspec/data_dictionary/dialects/teradata/sql/indexes.sql` | `by_schema`, `by_table` (2 named queries) | `:schema_name`, `:table_name` |
