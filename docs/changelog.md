@@ -11,7 +11,7 @@ important operational fixes.
 
 **Added:**
 
-* Added the synchronous Teradata Vantage adapter (`sqlspec[teradata]`), custom pagination and type rendering, Unicode catalog introspection, Arrow and extension store support, plus Columnar `dbc` and Flight SQL Teradata routing through ADBC.
+* Added the synchronous Teradata Vantage adapter (`sqlspec[teradata]`), a `vantage` SQLGlot dialect with Teradata pagination and type rendering (SQLGlot's built-in `teradata` dialect is left unchanged), Unicode catalog introspection, Arrow and extension store support, plus Columnar `dbc` and Flight SQL Teradata routing through ADBC.
 * Added `sql.func(name, *args, dialect=None)` to `SQLFactory` for building scalar and table-valued SQL function expressions (`from_(sql.func("generate_series", 1, 3), alias="g")`, `sql.func("nullif", sql.c.a, 0)`), converting Python primitives to SQL literals while unwrapping builder column and expression objects.
 * Added `sql.col(name, table=None)` and `sql.c` (`ColumnNamespace` supporting `sql.c("name", table="u")`, `sql.c.name`, `sql.c["first-name"]`, and `sql.c["u.name"]`) alongside `sql.column()`, plus `sql.var(name)` for unquoted SQL keyword/variable tokens such as `sql.var("DEFAULT")` and `sql.var("CURRENT_TIMESTAMP")`.
 * Added `FileExistsInStorageError(StorageOperationFailedError)` (`sqlspec.exceptions`) and normalized `FileExistsError`, `OSError(errno.EEXIST)`, `AlreadyExistsError`, and `ObjectAlreadyExists` across storage backends in `raise_storage_error`.
