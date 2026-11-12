@@ -688,3 +688,45 @@ def test_set_connection_tenant_key_scopes_receipts_to_one_configuration() -> Non
         assert client.get("/shared").status_code == 200
     assert strategies["alpha"].checkouts == ["alpha-tenant", "shared"]
     assert strategies["beta"].checkouts == ["shared", "shared"]
+
+
+def test_route_tenant_plan_is_computed_once_per_handler() -> None:
+    from sqlspec.extensions.litestar._tenant_resolution import route_tenant_plan
+    from sqlspec.utils.tenant import tenant_bypass
+
+    calls: list[int] = []
+
+    def guard(connection: Any, handler: Any) -> None:
+        return None
+
+    guard.tenant_parameter = "org_id"  # type: ignore[attr-defined]
+
+    @get("/orgs/{org_id:str}", guards=[guard])
+    async def guarded() -> None:
+        return None
+
+    @get("/public", opt={"tenant_bypass": True})
+    async def public_opt() -> None:
+        return None
+
+    @get("/health")
+    @tenant_bypass
+    async def public_marker() -> None:
+        return None
+
+    original = type(guarded).resolve_guards
+
+    def counted(self: Any) -> Any:
+        calls.append(1)
+        return original(self)
+
+    plan = route_tenant_plan(guarded)
+    assert plan.guard_parameters == ("org_id",)
+    assert not plan.bypass
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(type(guarded), "resolve_guards", counted)
+        assert route_tenant_plan(guarded) is plan
+    assert calls == []
+    assert route_tenant_plan(public_opt).bypass
+    assert route_tenant_plan(public_marker).bypass
+    assert not route_tenant_plan(None).bypass

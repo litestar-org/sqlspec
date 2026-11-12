@@ -14,7 +14,7 @@ from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._utils import (
-    get_request_tenant,
+    get_scope_tenant,
     get_state_value,
     has_state_value,
     pop_state_value,
@@ -318,7 +318,7 @@ class SQLSpecTenantRequestMiddleware:
             return TenantContextPayload.bypass()
         if state is None:
             return None
-        receipt = get_request_tenant(Request(scope), state)
+        receipt = get_scope_tenant(scope, state)
         if receipt is not None:
             return receipt
         if state.tenant_extractor is not None:

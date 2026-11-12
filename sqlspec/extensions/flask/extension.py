@@ -75,6 +75,7 @@ class SQLSpecPlugin:
         """
         self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[FlaskConfigState] = []
+        self._tenant_states: dict[int, FlaskConfigState] | None = None
         self._portal: PortalProvider | None = None
         self._has_async_configs = False
         self._cleanup_registered = False
@@ -563,14 +564,21 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
         return coerce_tenant_payload(raw)
 
+    def _tenant_state_for(self, key: Any) -> Any:
+        """Return the tenant-enabled state for a configuration key, built once per plugin."""
+        states = self._tenant_states
+        if states is None:
+            tenant_states = [state for state in self._config_states if _has_tenant_strategy(state.config)]
+            states = {id(state.config): state for state in tenant_states}
+            states[0] = tenant_states[0]
+            self._tenant_states = states
+        return states.get(id(key), states[0])
+
     def _resolve_route_tenant(self, key: Any) -> TenantContextPayload | None:
         """Resolve the route bypass marker, request receipt, or extractor for a configuration."""
         from flask import current_app, request
 
-        config_state = next(
-            (state for state in self._config_states if state.config is key),
-            next(state for state in self._config_states if _has_tenant_strategy(state.config)),
-        )
+        config_state = self._tenant_state_for(key)
         endpoint = request.endpoint
         if endpoint is not None and is_tenant_bypass_route(current_app.view_functions.get(endpoint)):
             return TenantContextPayload.bypass()

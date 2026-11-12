@@ -1,8 +1,8 @@
 """Internal configuration state models for the Starlette SQLSpec extension."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any, Final, Literal
 
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.exceptions import ImproperConfigurationError
@@ -13,6 +13,14 @@ CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
 HTTP_200_OK = 200
 HTTP_300_MULTIPLE_CHOICES = 300
 HTTP_400_BAD_REQUEST = 400
+
+
+TENANT_RECEIPT_KEY: Final = "_sqlspec_tenant_context"
+
+
+def tenant_receipt_key(key: str | None) -> str:
+    """Return the request state key holding a tenant receipt for ``key``, or the shared receipt."""
+    return TENANT_RECEIPT_KEY if key is None else f"{TENANT_RECEIPT_KEY}_{key}"
 
 
 @dataclass
@@ -37,9 +45,16 @@ class SQLSpecConfigState:
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "starlette"
     tenant_extractor: Callable[[Any], Any] | None = None
+    tenant_receipt_keys: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Validate transaction status overrides."""
+        bind_key = getattr(self.config, "bind_key", None)
+        keys = [tenant_receipt_key(self.session_key), tenant_receipt_key(self.connection_key)]
+        if isinstance(bind_key, str) and bind_key:
+            keys.append(tenant_receipt_key(bind_key))
+        keys.append(TENANT_RECEIPT_KEY)
+        self.tenant_receipt_keys = tuple(keys)
         if self.tenant_extractor is not None and not callable(self.tenant_extractor):
             msg = "tenant_extractor must be callable"
             raise ImproperConfigurationError(msg)

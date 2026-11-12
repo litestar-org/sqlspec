@@ -1,10 +1,11 @@
 """Request context state utilities for the Sanic SQLSpec extension."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.sanic._state import tenant_receipt_key
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -22,7 +23,6 @@ __all__ = (
 )
 
 _MISSING = object()
-_TENANT_RECEIPT_KEY: Final = "_sqlspec_tenant_context"
 
 
 def get_context_value(context: Any, key: str, default: Any = _MISSING) -> Any:
@@ -157,24 +157,16 @@ def set_request_tenant(
         payload = TenantContextPayload(
             payload.tenant_id, variables={**payload.variables, **variables}, is_bypass=payload.is_bypass
         )
-    set_context_value(ctx, _tenant_receipt_key(key), payload)
+    set_context_value(ctx, tenant_receipt_key(key), payload)
     return payload
 
 
 def get_request_tenant(request: Any, config_state: "SanicConfigState") -> Any:
     """Return any explicit tenant receipt stored for ``config_state`` on ``request.ctx``."""
     ctx = getattr(request, "ctx", request)
-    candidate_keys = [_tenant_receipt_key(config_state.session_key), _tenant_receipt_key(config_state.connection_key)]
-    bind_key = getattr(config_state.config, "bind_key", None)
-    if isinstance(bind_key, str) and bind_key:
-        candidate_keys.append(_tenant_receipt_key(bind_key))
-    candidate_keys.append(_TENANT_RECEIPT_KEY)
+    candidate_keys = config_state.tenant_receipt_keys
     for receipt_key in candidate_keys:
         stored = get_context_value(ctx, receipt_key, None)
         if stored is not None:
             return stored
     return None
-
-
-def _tenant_receipt_key(key: str | None) -> str:
-    return _TENANT_RECEIPT_KEY if key is None else f"{_TENANT_RECEIPT_KEY}_{key}"

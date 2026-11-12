@@ -59,7 +59,14 @@ class SQLSpecPlugin:
     Runtime listener and middleware behavior is registered by ``init_app``.
     """
 
-    __slots__ = ("_config_states", "_extractor", "_lifecycle_listeners_added", "_request_middleware_added", "_sqlspec")
+    __slots__ = (
+        "_config_states",
+        "_extractor",
+        "_lifecycle_listeners_added",
+        "_request_middleware_added",
+        "_sqlspec",
+        "_tenant_states",
+    )
 
     def __init__(
         self,
@@ -78,6 +85,7 @@ class SQLSpecPlugin:
         """
         self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[SanicConfigState] = []
+        self._tenant_states: dict[int, SanicConfigState] | None = None
         self._lifecycle_listeners_added = False
         self._request_middleware_added = False
 
@@ -312,12 +320,19 @@ class SQLSpecPlugin:
             sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
 
+    def _tenant_state_for(self, key: Any) -> Any:
+        """Return the tenant-enabled state for a configuration key, built once per plugin."""
+        states = self._tenant_states
+        if states is None:
+            tenant_states = [state for state in self._config_states if _has_tenant_strategy(state.config)]
+            states = {id(state.config): state for state in tenant_states}
+            states[0] = tenant_states[0]
+            self._tenant_states = states
+        return states.get(id(key), states[0])
+
     def _resolve_route_tenant(self, request: Any, key: Any) -> Any:
         """Resolve the route bypass marker, request receipt, or extractor for a configuration."""
-        config_state = next(
-            (state for state in self._config_states if state.config is key),
-            next(state for state in self._config_states if _has_tenant_strategy(state.config)),
-        )
+        config_state = self._tenant_state_for(key)
         route = getattr(request, "route", None)
         if is_tenant_bypass_route(getattr(route, "handler", None)):
             return TenantContextPayload.bypass()

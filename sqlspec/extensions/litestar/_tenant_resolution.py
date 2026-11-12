@@ -1,13 +1,22 @@
 """Pure tenant resolution over verified authentication values in an ASGI scope."""
 
-from collections.abc import Callable, Iterable, Mapping, MutableMapping
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Final, cast
 from uuid import UUID
+from weakref import WeakKeyDictionary
 
-from sqlspec.utils.tenant._context import TenantContextPayload
+from sqlspec.utils.tenant._context import TenantContextPayload, is_tenant_bypass_route
 
-__all__ = ("TenantResolutionSettings", "is_scope_authenticated", "resolve_tenant_from_auth", "scope_value")
+__all__ = (
+    "RouteTenantPlan",
+    "TenantResolutionSettings",
+    "is_scope_authenticated",
+    "resolve_tenant_from_auth",
+    "route_tenant_plan",
+    "scope_value",
+)
 
 _MISSING: Final[Any] = object()
 _EXTENSION_CONFIG_FIELDS: Final[dict[str, str]] = {
@@ -41,6 +50,43 @@ class TenantResolutionSettings:
         return cls(**{field: config[key] for key, field in _EXTENSION_CONFIG_FIELDS.items() if key in config})
 
 
+@dataclass(frozen=True, slots=True)
+class RouteTenantPlan:
+    """Per-route-handler resolution inputs that never change between requests."""
+
+    bypass: bool
+    guard_parameters: tuple[str, ...]
+
+
+_NO_ROUTE_PLAN: Final = RouteTenantPlan(bypass=False, guard_parameters=())
+_ROUTE_PLANS: "WeakKeyDictionary[Any, RouteTenantPlan]" = WeakKeyDictionary()
+
+
+def route_tenant_plan(route_handler: Any) -> RouteTenantPlan:
+    """Return the bypass marker and guard selector names of a route handler, computed once.
+
+    Plans are cached per handler object and released with it.
+    """
+    if route_handler is None:
+        return _NO_ROUTE_PLAN
+    try:
+        cached = _ROUTE_PLANS.get(route_handler)
+    except TypeError:
+        cached = None
+    if cached is not None:
+        return cached
+    plan = RouteTenantPlan(
+        bypass=scope_value(getattr(route_handler, "opt", None), "tenant_bypass") is True
+        or is_tenant_bypass_route(route_handler),
+        guard_parameters=tuple(_guard_parameters(route_handler)),
+    )
+    try:
+        _ROUTE_PLANS[route_handler] = plan
+    except TypeError:
+        return plan
+    return plan
+
+
 def scope_value(source: Any, key: str) -> Any:
     """Read a mapping key or attribute, returning None when absent."""
     return source.get(key) if isinstance(source, Mapping) else getattr(source, key, None)
@@ -60,13 +106,25 @@ def is_scope_authenticated(scope: Mapping[str, Any]) -> bool:
 
 
 def resolve_tenant_from_auth(
-    scope: MutableMapping[str, Any], settings: TenantResolutionSettings
+    scope: MutableMapping[str, Any],
+    settings: TenantResolutionSettings,
+    *,
+    guard_parameters: Sequence[str] | None = None,
 ) -> TenantContextPayload | None:
     """Select a tenant the authenticated identity is authorized to use.
 
     A requested selector must name a verified membership after credential
     restrictions are applied. Without a selector the direct tenant applies when
     it remains authorized, then a sole membership.
+
+    Args:
+        scope: The ASGI connection scope.
+        settings: Tenant resolution settings.
+        guard_parameters: Path selector names declared by the route's guards; read from the
+            route handler when omitted.
+
+    Returns:
+        The authorized payload, or None.
     """
     if not is_scope_authenticated(scope):
         return None
@@ -115,7 +173,7 @@ def resolve_tenant_from_auth(
     if direct is not None and direct not in allowed:
         direct = None
 
-    requested, value = _requested_tenant(scope, settings, auth)
+    requested, value = _requested_tenant(scope, settings, auth, guard_parameters)
     if requested and value not in allowed:
         return None
     selected = value or direct or (next(iter(allowed)) if len(allowed) == 1 else None)
@@ -208,14 +266,22 @@ def _guard_parameters(route_handler: Any) -> list[str]:
     return parameters
 
 
+@lru_cache(maxsize=64)
+def _header_key(header: str) -> bytes:
+    return header.lower().encode("latin-1")
+
+
 def _requested_tenant(
-    scope: MutableMapping[str, Any], settings: TenantResolutionSettings, auth: Any
+    scope: MutableMapping[str, Any],
+    settings: TenantResolutionSettings,
+    auth: Any,
+    guard_parameters: Sequence[str] | None,
 ) -> tuple[bool, str | None]:
     """Return whether the request names a tenant selector, and the value it names.
 
     Path parameters precede the session key, which precedes the optional header.
     """
-    parameters = _guard_parameters(scope.get("route_handler"))
+    parameters = _guard_parameters(scope.get("route_handler")) if guard_parameters is None else list(guard_parameters)
     if settings.path_parameter is not None and settings.path_parameter not in parameters:
         parameters.append(settings.path_parameter)
     path = scope.get("path_params") or {}
@@ -227,7 +293,7 @@ def _requested_tenant(
         if session_found:
             return True, session_value
     if settings.header is not None:
-        header = settings.header.lower().encode("latin-1")
+        header = _header_key(settings.header)
         for header_name, header_value in scope.get("headers", ()):
             if header_name.lower() == header:
                 return True, _identity(header_value.decode("latin-1"))

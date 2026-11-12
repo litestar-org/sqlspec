@@ -65,6 +65,7 @@ def test_starlette_config_state_field_order() -> None:
         *_COMMON_FIELDS,
         "sqlcommenter_framework",
         "tenant_extractor",
+        "tenant_receipt_keys",
     ]
 
 
@@ -73,6 +74,7 @@ def test_sanic_config_state_field_order() -> None:
     assert [f.name for f in fields(SanicConfigState)] == [
         *_COMMON_FIELDS[:8],
         "tenant_extractor",
+        "tenant_receipt_keys",
         *_COMMON_FIELDS[8:],
         "sqlcommenter_framework",
     ]
@@ -90,6 +92,7 @@ def test_flask_config_state_field_order() -> None:
         "is_async",
         "disable_di",
         "tenant_extractor",
+        "tenant_receipt_keys",
         "extractor_takes_request",
         "enable_correlation_middleware",
         "correlation_header",
