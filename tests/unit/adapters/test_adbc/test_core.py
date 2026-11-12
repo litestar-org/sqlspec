@@ -1106,7 +1106,9 @@ def test_snowflake_adbc_compiles_to_qmark(
 def test_snowflake_vendor_diagnostics(code: str, expected: type[SQLSpecError], diagnostic: str) -> None:
     """Snowflake vendor diagnostics take precedence over generic SQLSTATE fallbacks."""
     error = Exception(
-        f"{code} (42000): Snowflake operation failed" if diagnostic == "message" else "Snowflake operation failed"
+        f"INTERNAL: [Snowflake] {code} (42000): operation failed"
+        if diagnostic == "message"
+        else "INTERNAL: [Snowflake] operation failed"
     )
     setattr(error, "sqlstate", "42000")
     if diagnostic == "vendor_code":
@@ -1114,6 +1116,16 @@ def test_snowflake_vendor_diagnostics(code: str, expected: type[SQLSpecError], d
     mapped = adbc_core.create_mapped_exception(error)
     assert isinstance(mapped, expected)
     assert mapped.__cause__ is error
+
+
+def test_snowflake_vendor_codes_ignore_other_backends() -> None:
+    """Vendor codes from non-Snowflake drivers never select Snowflake error classes."""
+    error = Exception("Can't connect to MySQL server on 'db' (111)")
+    setattr(error, "vendor_code", 2003)
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert not isinstance(mapped, NotFoundError)
 
 
 @pytest.mark.parametrize("port", [0, 70000, True, "bad"])
@@ -1459,3 +1471,16 @@ def test_adbc_snowflake_script_parameter_slicing_and_stream_cleanup() -> None:
         driver.close_streams()
     assert closed_steps == ["first", "second"]
     assert runtime.config_name == "AdbcConfig"
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "snowflake"])
+def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
+    """Drivers that cannot bind null-typed Arrow parameters receive NULL literals instead."""
+    config = get_statement_config(dialect)
+
+    compiled_sql, parameters = SQL(
+        "INSERT INTO items (name, note) VALUES (:name, :note)", {"name": "x", "note": None}, statement_config=config
+    ).compile()
+
+    assert "NULL" in compiled_sql.upper()
+    assert list(parameters) == ["x"]

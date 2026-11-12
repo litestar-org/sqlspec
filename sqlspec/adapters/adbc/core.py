@@ -1218,7 +1218,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK}
 
-    if is_postgres_dialect(detected_dialect):
+    if is_postgres_dialect(detected_dialect) or detected_dialect == "snowflake":
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
 
     return build_statement_config_from_profile(
@@ -2329,6 +2329,7 @@ _SNOWFLAKE_DURATION_OPTIONS: Final[tuple[str, ...]] = (
     "jwt_expire_timeout",
 )
 _GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+$")
+_SNOWFLAKE_ERROR_MARKER: Final = "[snowflake]"
 _SNOWFLAKE_ERROR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b(\d{6})(?:\s*\([0-9A-Z]{5}\))?\s*:")
 _SNOWFLAKE_ERROR_CODES: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "002003": (NotFoundError, "object does not exist"),
@@ -2504,7 +2505,9 @@ def _lift_snowflake_db_kwargs(config: dict[str, Any]) -> None:
 
 
 def _map_snowflake_exception(error: Any, message: str) -> SQLSpecError | None:
-    """Map Snowflake vendor diagnostics before generic SQLSTATE fallbacks."""
+    """Map diagnostics carrying the Snowflake driver marker before generic SQLSTATE fallbacks."""
+    if _SNOWFLAKE_ERROR_MARKER not in message.lower():
+        return None
     match = _SNOWFLAKE_ERROR_PATTERN.search(message)
     code = match.group(1) if match else None
     vendor_code = getattr(error, "vendor_code", None)
