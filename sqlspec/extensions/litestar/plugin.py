@@ -1,9 +1,8 @@
 """Litestar plugin for SQLSpec database configuration, lifecycle, and dependency injection."""
 
 import asyncio
-import inspect
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableMapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
@@ -42,7 +41,6 @@ from sqlspec.extensions.litestar.handlers import (
     _REQUEST_EXCEPTION_KEY,
     _capture_connection_tenant,
     _exit_connection_context,
-    _resolve_connection_tenant,
     autocommit_handler_maker,
     connection_provider_maker,
     has_tenant_strategy,
@@ -53,13 +51,17 @@ from sqlspec.extensions.litestar.handlers import (
     session_provider_maker,
     tenant_payload_key,
 )
-from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, raise_missing_tenant_http_exception
+from sqlspec.extensions.litestar.tenant import (
+    TenantResolutionSettings,
+    raise_missing_tenant_http_exception,
+    resolve_litestar_tenant,
+)
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
 from sqlspec.utils.sync_tools import ensure_async_
-from sqlspec.utils.tenant import TenantContext
+from sqlspec.utils.tenant import TenantContext, TenantRequestBinding
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -218,6 +220,70 @@ class CorrelationMiddleware:
             with suppress(KeyError):
                 delete_sqlspec_scope_state(scope, CORRELATION_STATE_KEY)
             CorrelationContext.set(previous_correlation_id)
+
+
+@dataclass(frozen=True)
+class _TenantResolutionTarget:
+    """Resolution inputs for one tenant-enabled configuration."""
+
+    config: Any
+    settings: TenantResolutionSettings
+    receipt_keys: tuple[str, ...]
+
+
+class TenantRequestMiddleware:
+    """Bind one lazy tenant resolver for each HTTP or WebSocket request.
+
+    Installed only when a registered configuration enables ``tenant_strategy``. Request start
+    costs one context variable assignment; route bypass, connection receipts, the extractor, and
+    verified auth resolution run when a lease, session, or ``TenantContext`` first needs the
+    tenant. Pending resolutions finish before the final response message, and the binding is
+    reset when the ASGI call returns.
+    """
+
+    __slots__ = ("_app", "_default", "_keys", "_targets")
+
+    def __init__(self, app: "ASGIApp", *, targets: "tuple[_TenantResolutionTarget, ...]") -> None:
+        self._app = app
+        self._targets = {id(target.config): target for target in targets}
+        self._keys = tuple(target.config for target in targets)
+        self._default = targets[0] if targets else None
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope.get("type") not in {ScopeType.HTTP, ScopeType.WEBSOCKET} or self._default is None:
+            await self._app(scope, receive, send)
+            return
+        binding = TenantRequestBinding(
+            lambda key: self._resolve(scope, key),
+            keys=self._keys,
+            ambient=TenantContext.current_binding(),
+            missing=lambda _key: raise_missing_tenant_http_exception(cast("Mapping[str, Any]", scope)),
+        )
+        token = TenantContext.bind_request(binding)
+        try:
+            if scope.get("type") == ScopeType.HTTP:
+
+                async def frozen_send(message: "Message") -> None:
+                    message_type = cast("str", message["type"])
+                    if message_type == "http.response.pathsend" or (
+                        message_type == "http.response.body" and not message.get("more_body", False)
+                    ):
+                        await binding.afreeze()
+                    await send(message)
+
+                await self._app(scope, receive, frozen_send)
+            else:
+                await self._app(scope, receive, send)
+        finally:
+            TenantContext.reset(token)
+
+    def _resolve(self, scope: "Scope", key: Any) -> Any:
+        target = self._targets.get(id(key), self._default)
+        if target is None:
+            return None
+        return resolve_litestar_tenant(
+            cast("MutableMapping[str, Any]", scope), target.settings, receipt_keys=target.receipt_keys
+        )
 
 
 class ConnectionCleanupMiddleware:
@@ -529,6 +595,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             app_config.type_decoders = [*(app_config.type_decoders or []), *sqlspec_decoders]
 
         new_middlewares: list[DefineMiddleware] = []
+        tenant_targets = self._tenant_targets()
         if self._correlation_headers:
             existing_correlation = _find_correlation_middleware(app_config.middleware)
             if existing_correlation is not None:
@@ -572,6 +639,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 new_middlewares.append(DefineMiddleware(ConnectionCleanupMiddleware, targets=cleanup_targets))
         if new_middlewares:
             app_config.middleware = [*new_middlewares, *(app_config.middleware or [])]
+        if tenant_targets:
+            app_config.middleware = [
+                *(app_config.middleware or []),
+                DefineMiddleware(TenantRequestMiddleware, targets=tenant_targets),
+            ]
 
         log_with_context(
             logger,
@@ -668,6 +740,22 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             raise KeyError(msg)
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
+
+    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
+        """Return the resolution inputs of every tenant-enabled configuration."""
+        return tuple(
+            _TenantResolutionTarget(
+                config=state.config,
+                settings=state.tenant_settings,
+                receipt_keys=tuple(
+                    key
+                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
+                    if isinstance(key, str) and key
+                ),
+            )
+            for state in self._plugin_configs
+            if has_tenant_strategy(state.config)
+        )
 
     def resolve_tenant_settings(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig] | None" = None
@@ -1023,9 +1111,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         commit_mode = state.commit_mode
         config = state.config
 
-        state.connection_provider = connection_provider_maker(
-            config, pool_key, connection_key, tenant_settings=state.tenant_settings
-        )
+        state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
         state.session_provider = session_provider_maker(config, connection_key)
 
@@ -1047,19 +1133,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        payload = _resolve_connection_tenant(plugin_state.config, scope, plugin_state.tenant_settings)
-        if inspect.isawaitable(payload):
-            close = getattr(payload, "close", None)
-            if callable(close):
-                close()
-            msg = "Synchronous on-demand connections require a synchronous tenant_extractor"
-            raise ImproperConfigurationError(msg)
-        if (
-            payload is None
-            and has_tenant_strategy(plugin_state.config)
-            and scope.get("type") in {ScopeType.HTTP, ScopeType.WEBSOCKET, "http", "websocket"}
-        ):
-            raise_missing_tenant_http_exception(cast("Mapping[str, Any]", scope))
+        payload = TenantContext.require(plugin_state.config) if has_tenant_strategy(plugin_state.config) else None
         payload_key = tenant_payload_key(plugin_state.connection_key)
         set_sqlspec_scope_state(scope, payload_key, payload)
         try:
@@ -1083,9 +1157,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        payload = await _capture_connection_tenant(
-            plugin_state.config, scope, plugin_state.connection_key, plugin_state.tenant_settings
-        )
+        payload = await _capture_connection_tenant(plugin_state.config, scope, plugin_state.connection_key)
         try:
             with TenantContext.bind(payload):
                 cm = cast("AbstractAsyncContextManager[Any]", plugin_state.config.provide_connection(pool))

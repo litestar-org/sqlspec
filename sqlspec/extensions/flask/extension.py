@@ -4,7 +4,7 @@ import atexit
 import inspect
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, overload
 
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
@@ -24,7 +24,13 @@ from sqlspec.extensions.flask._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, coerce_tenant_payload
+from sqlspec.utils.tenant import (
+    TenantContext,
+    TenantContextPayload,
+    TenantRequestBinding,
+    coerce_tenant_payload,
+    is_tenant_bypass_route,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,6 +48,7 @@ logger = get_logger("sqlspec.extensions.flask")
 DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
 DEFAULT_SESSION_KEY = "db_session"
 _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
+_TENANT_BINDING_KEY: Final = "sqlspec_tenant_binding"
 
 
 class SQLSpecPlugin:
@@ -149,6 +156,7 @@ class SQLSpecPlugin:
 
         if any(
             not state.disable_di
+            or _has_tenant_strategy(state.config)
             or state.enable_correlation_middleware
             or (state.enable_sqlcommenter_middleware and state.config.statement_config.enable_sqlcommenter)
             for state in self._config_states
@@ -156,6 +164,10 @@ class SQLSpecPlugin:
             app.before_request(self._before_request_handler)
             app.after_request(self._after_request_handler)
             app.teardown_appcontext(self._teardown_appcontext_handler)
+            if any(_has_tenant_strategy(state.config) for state in self._config_states):
+                from flask import appcontext_pushed
+
+                appcontext_pushed.connect(_rebind_streamed_tenant, app, weak=False)
 
         self._register_shutdown_hook()
 
@@ -315,6 +327,9 @@ class SQLSpecPlugin:
         enable_sqlcommenter = flask_config.get("enable_sqlcommenter_middleware", True)
 
         is_async = isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig))
+        if flask_config.get("tenant_extractor") is not None and not _has_tenant_strategy(config):
+            msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
+            raise ImproperConfigurationError(msg)
 
         return FlaskConfigState(
             config=config,
@@ -381,20 +396,21 @@ class SQLSpecPlugin:
                 attrs["action"] = endpoint
             SQLCommenterContext.set(attrs)
 
-        for config_state in self._config_states:
-            if config_state.disable_di:
-                continue
-            if _has_tenant_strategy(config_state.config):
-                continue
+        tenant_keys = tuple(state.config for state in self._config_states if _has_tenant_strategy(state.config))
+        if tenant_keys and not has_context_value(g, _TENANT_SCOPE_KEY):
+            binding = TenantRequestBinding(
+                self._resolve_route_tenant,
+                keys=tenant_keys,
+                ambient=TenantContext.current_binding(),
+                missing=_reject_missing_tenant,
+            )
+            set_context_value(g, _TENANT_BINDING_KEY, binding)
+            set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.bind_request(binding))
 
-            payload: TenantContextPayload | None = None
-            has_payload = False
-            if config_state.tenant_extractor is not None:
-                payload = self._invoke_extractor(config_state, request)
-                has_payload = True
-                if not has_context_value(g, _TENANT_SCOPE_KEY):
-                    set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.set(payload))
-            self._acquire_config_connection(current_app, g, config_state, payload, bind_payload=has_payload)
+        for config_state in self._config_states:
+            if config_state.disable_di or _has_tenant_strategy(config_state.config):
+                continue
+            self._acquire_config_connection(current_app, g, config_state, None, bind_payload=False)
 
     def _after_request_handler(self, response: "Response") -> "Response":
         """Handle transaction after request based on response status.
@@ -409,6 +425,10 @@ class SQLSpecPlugin:
             Response object with correlation ID header if enabled.
         """
         from flask import g
+
+        binding = TenantContext.current_binding()
+        if isinstance(binding, TenantRequestBinding) and has_context_value(g, _TENANT_SCOPE_KEY):
+            binding.freeze()
 
         if self._enable_correlation:
             correlation_id = get_context_value(g, "correlation_id", None)
@@ -543,22 +563,32 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
         return coerce_tenant_payload(raw)
 
-    def _resolve_request_tenant(self, config_state: FlaskConfigState, request: Any) -> TenantContextPayload | None:
+    def _resolve_route_tenant(self, key: Any) -> TenantContextPayload | None:
+        """Resolve the route bypass marker, request receipt, or extractor for a configuration."""
+        from flask import current_app, request
+
+        config_state = next(
+            (state for state in self._config_states if state.config is key),
+            next(state for state in self._config_states if _has_tenant_strategy(state.config)),
+        )
+        endpoint = request.endpoint
+        if endpoint is not None and is_tenant_bypass_route(current_app.view_functions.get(endpoint)):
+            return TenantContextPayload.bypass()
         receipt = get_request_tenant(config_state)
         if receipt is not None:
             return coerce_tenant_payload(receipt)
         if config_state.tenant_extractor is not None:
             return self._invoke_extractor(config_state, request)
-        return TenantContext.get()
+        return None
 
     def _ensure_request_connection(self, config_state: FlaskConfigState) -> Any:
-        from flask import current_app, g, request
+        from flask import current_app, g
 
         if has_context_value(g, config_state.connection_key):
             return get_context_value(g, config_state.connection_key)
         if not _has_tenant_strategy(config_state.config):
             return get_context_value(g, config_state.connection_key)
-        payload = self._resolve_request_tenant(config_state, request)
+        payload = TenantContext.require(config_state.config)
         return self._acquire_config_connection(current_app, g, config_state, payload, bind_payload=True)
 
     def _acquire_config_connection(
@@ -743,6 +773,26 @@ class SQLSpecPlugin:
                 status="failed",
                 error_type=type(exc).__name__,
             )
+
+
+def _rebind_streamed_tenant(_app: Any, **_: Any) -> None:
+    """Rebind the frozen request binding when ``stream_with_context`` pushes the context again."""
+    from flask import g
+
+    binding = g.get(_TENANT_BINDING_KEY, None)
+    if isinstance(binding, TenantRequestBinding) and not has_context_value(g, _TENANT_SCOPE_KEY):
+        set_context_value(g, _TENANT_SCOPE_KEY, TenantContext.bind_request(binding))
+
+
+def _reject_missing_tenant(_key: Any) -> NoReturn:
+    """Raise the Flask response for a request without an authorized tenant."""
+    from flask import g
+    from werkzeug.exceptions import Forbidden, Unauthorized
+
+    user = g.get("user", None) or g.get("_login_user", None)
+    if user is None or not bool(getattr(user, "is_authenticated", True)):
+        raise Unauthorized(description="Authentication required")
+    raise Forbidden(description="An authorized tenant is required")
 
 
 def _has_tenant_strategy(config: Any) -> bool:

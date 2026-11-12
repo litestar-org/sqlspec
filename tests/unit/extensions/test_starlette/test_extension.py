@@ -25,6 +25,7 @@ from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.utils.tenant import TenantContext
+from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -260,57 +261,22 @@ def test_plugin_tenant_extractor_state_and_validation(framework: str) -> None:
     def extractor(scope: Any) -> str:
         return "a"
 
-    config = AiosqliteConfig(extension_config={framework: {"tenant_extractor": extractor}})
+    strategy = AsyncRecordingStrategy()
+    config = TenantAiosqliteConfig(
+        driver_features={"tenant_strategy": strategy}, extension_config={framework: {"tenant_extractor": extractor}}
+    )
     plugin = plugin_cls(config)
     assert plugin._config_states[0].tenant_extractor is extractor
     assert plugin.get_config() is config
 
-    invalid = AiosqliteConfig(extension_config={framework: {"tenant_extractor": 123}})
+    invalid = TenantAiosqliteConfig(
+        driver_features={"tenant_strategy": strategy}, extension_config={framework: {"tenant_extractor": 123}}
+    )
     with pytest.raises(ImproperConfigurationError, match="tenant_extractor"):
         plugin_cls(invalid)
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
-@pytest.mark.parametrize("value", ["inner", None])
-async def test_tenant_extractor_binds_connection_entry_and_exit(middleware_type: Any, value: str | None) -> None:
-    seen = []
-    connection = _Connection()
-
-    @asynccontextmanager
-    async def provide_connection(pool: object) -> "AsyncIterator[_Connection]":
-        seen.append(("enter", TenantContext.get_tenant_id()))
-        try:
-            yield connection
-        finally:
-            seen.append(("exit", TenantContext.get_tenant_id()))
-
-    config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
-    state = _make_state(config)
-    state.tenant_extractor = lambda scope: value
-    middleware = middleware_type(app=object(), config_state=state)
-    request = _make_request(object())
-    request.scope = {}
-    with TenantContext.scope("outer"):
-        async with middleware._connection_cm(request):
-            assert TenantContext.get_tenant_id() == value
-        assert TenantContext.get_tenant_id() == "outer"
-    assert seen == [("enter", value), ("exit", value)]
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
-async def test_tenant_extractor_rejection_prevents_acquisition(middleware_type: Any) -> None:
-    config = _Config(pooled=False, connection=_Connection())
-    state = _make_state(config)
-    state.tenant_extractor = lambda scope: 123
-    middleware = middleware_type(app=object(), config_state=state)
-    request = _make_request()
-    request.scope = {}
-    with pytest.raises(TenantContextError):
-        async with middleware._connection_cm(request):
-            pytest.fail("invalid tenant acquired a connection")
-    assert config.created is False
+    without_strategy = AiosqliteConfig(extension_config={framework: {"tenant_extractor": extractor}})
+    with pytest.raises(ImproperConfigurationError, match="tenant_strategy"):
+        plugin_cls(without_strategy)
 
 
 @pytest.mark.anyio
@@ -327,7 +293,6 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
 
     async def query(stage: str) -> None:
         assert active, "database connection released before delayed I/O"
-        assert TenantContext.get_tenant_id() == "inner"
         events.append(stage)
 
     async def commit() -> None:
@@ -377,7 +342,6 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
         app = Starlette(routes=[Route("/", endpoint)])
     config = SimpleNamespace(supports_connection_pooling=True, provide_connection=provide_connection)
     state = _make_state(config, cast("CommitMode", mode))
-    state.tenant_extractor = lambda scope: "inner"
     middleware_type = SQLSpecManualMiddleware if mode == "manual" else SQLSpecAutocommitMiddleware
     middleware = middleware_type(app=app, config_state=state)
     scope = {
@@ -477,39 +441,6 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
-async def test_tenant_nonpooled_connection_uses_lease_context_with_async_extractor(middleware_type: Any) -> None:
-    events = []
-    connection = _Connection()
-
-    @asynccontextmanager
-    async def provide_connection() -> "AsyncIterator[_Connection]":
-        events.append(("enter", TenantContext.get_tenant_id()))
-        try:
-            yield connection
-        finally:
-            events.append(("exit", TenantContext.get_tenant_id()))
-
-    async def extractor(scope: Any) -> str:
-        return "inner"
-
-    config = SimpleNamespace(
-        supports_connection_pooling=False,
-        provide_connection=provide_connection,
-        driver_features={"tenant_strategy": object()},
-    )
-    state = _make_state(config)
-    state.tenant_extractor = extractor
-    request = _make_request()
-    request.scope = {}
-    with TenantContext.scope("outer"):
-        async with middleware_type(app=object(), config_state=state)._connection_cm(request) as acquired:
-            assert acquired is connection
-        assert TenantContext.get_tenant_id() == "outer"
-    assert events == [("enter", "inner"), ("exit", "inner")]
-
-
-@pytest.mark.anyio
 @pytest.mark.parametrize("scope_type", ["lifespan", "websocket"])
 @pytest.mark.parametrize("middleware_type", [SQLSpecManualMiddleware, SQLSpecAutocommitMiddleware])
 async def test_tenant_connection_middleware_non_http_passthrough(scope_type: str, middleware_type: Any) -> None:
@@ -573,9 +504,7 @@ async def test_tenant_response_error_retains_identity_when_rollback_fails() -> N
 def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
     """Deferred tenant configs wait for set_request_tenant + get_session_async without false extractor conflicts."""
     checkouts: list[tuple[str | None, dict[str, str]]] = []
-    teardown_tenants: list[str | None] = []
-    commits: list[str | None] = []
-    rollbacks: list[str | None] = []
+    events: list[str] = []
 
     class _SessionDriver:
         def __init__(self, connection: Any, **_kwargs: Any) -> None:
@@ -598,15 +527,15 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
             checkouts.append((payload.tenant_id, dict(payload.variables)))
 
             async def commit() -> None:
-                commits.append(TenantContext.get_tenant_id())
+                events.append(f"commit:{payload.tenant_id}")
 
             async def rollback() -> None:
-                rollbacks.append(TenantContext.get_tenant_id())
+                events.append(f"rollback:{payload.tenant_id}")
 
             try:
                 yield SimpleNamespace(tenant_id=payload.tenant_id, commit=commit, rollback=rollback)
             finally:
-                teardown_tenants.append(TenantContext.get_tenant_id())
+                events.append(f"release:{payload.tenant_id}")
 
     auth_cfg = AiosqliteConfig(
         bind_key="auth",
@@ -680,11 +609,9 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
         assert ok.status_code == 200
         assert ok.json() == {"tenant": "globex"}
         assert checkouts == [("globex", {"tier": "enterprise"})]
-        assert commits == ["globex"]
-        assert teardown_tenants == ["globex"]
+        assert events == ["commit:globex", "release:globex"]
 
         err = client.get("/fail")
         assert err.status_code == 500
-        assert rollbacks == ["acme"]
-        assert teardown_tenants == ["globex", "acme"]
+        assert events[2:] == ["rollback:acme", "release:acme"]
     assert TenantContext.get() is None

@@ -53,13 +53,13 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
 
     @app.get("/")
     async def rows(request: Request) -> Any:
-        session = plugin.get_session(request)
+        session = await plugin.get_session_async(request)
         values = await session.select(f'SELECT value, pg_backend_pid() AS pid FROM "{table}" ORDER BY value')
         return response.json({"rows": values})
 
     @app.post("/fail")
     async def fail(request: Request) -> Any:
-        session = plugin.get_session(request)
+        session = await plugin.get_session_async(request)
         await session.execute(f'INSERT INTO "{table}" VALUES (:tenant, :value)', {"tenant": "a", "value": 99})
         raise ValueError("handler failed")
 
@@ -81,7 +81,7 @@ def test_sanic_tenant_isolation_and_failed_request_cleanup(
             assert result.status == 200
             assert result.json == {"tenant": None}
             _, result = client.get("/", headers={"X-Tenant-ID": "evil"})
-            assert result.status == 500
+            assert result.status == 401
             app.ctx.test_identity = "a"
             if adapter == "psycopg":
                 _, result = client.post("/fail")

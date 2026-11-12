@@ -20,6 +20,7 @@ from sqlspec.extensions.litestar.handlers import (
     pool_provider_maker,
     session_provider_maker,
 )
+from tests.unit.extensions.test_litestar._request import within_tenant_request
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -995,6 +996,7 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
     from contextlib import asynccontextmanager, contextmanager
     from types import SimpleNamespace
 
+    from sqlspec.extensions.litestar.plugin import _TenantResolutionTarget
     from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
     from sqlspec.utils.tenant import TenantContext
 
@@ -1027,84 +1029,35 @@ async def test_tenant_provider_captures_payload_for_acquisition_and_checkin(
         provide_connection=async_connection if is_async else sync_connection,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(
-        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
-        "pool",
-        "tenant_conn",
-        tenant_settings=TenantResolutionSettings(tenant_extractor=extractor),
-    )
-    iterator = provider(State({"pool": object()}), scope)
-    assert TenantContext.get() is None
-    if failure == "enter":
-        with pytest.raises(RuntimeError, match="entry"):
-            await anext(iterator)
-        assert events == [("enter", "acme")]
-    else:
+    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "tenant_conn")
+    targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=extractor), ()),)
+
+    async def run_request() -> None:
+        iterator = provider(State({"pool": object()}), scope)
+        if failure == "enter":
+            with pytest.raises(RuntimeError, match="entry"):
+                await anext(iterator)
+            return
         assert await anext(iterator) is connection
-        assert TenantContext.get() is None
         if failure == "body":
             error = ValueError("body")
             with pytest.raises(ValueError) as raised:
                 await iterator.athrow(error)
             assert raised.value is error
-        else:
-            with pytest.raises(StopAsyncIteration):
-                await anext(iterator)
-            handler = manual_handler_maker("tenant_conn")
-            if failure == "exit":
-                with pytest.raises(RuntimeError, match="checkin"):
-                    await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
-            else:
+            return
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+        handler = manual_handler_maker("tenant_conn")
+        if failure == "exit":
+            with pytest.raises(RuntimeError, match="checkin"):
                 await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
-        assert events == [("enter", "acme"), ("exit", "acme")]
-    assert TenantContext.get() is None
+        else:
+            await handler(cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope)
+
+    await within_tenant_request(targets, scope, run_request)
+    assert events == ([("enter", "acme")] if failure == "enter" else [("enter", "acme"), ("exit", "acme")])
+    assert TenantContext.current_binding() is None
     assert get_sqlspec_scope_state(scope, "tenant_conn_tenant_payload") is None
-
-
-@pytest.mark.parametrize("source", ["none", "receipt", "bypass_route", "extractor"])
-async def test_tenant_provider_prefers_request_resolution_over_ambient_scope(source: str) -> None:
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
-
-    from sqlspec.extensions.litestar.tenant import TenantResolutionSettings, set_connection_tenant
-    from sqlspec.utils.tenant import TenantContext
-
-    seen: list[tuple[str | None, bool]] = []
-
-    @asynccontextmanager
-    async def connection(pool: object) -> "AsyncGenerator[object, None]":
-        seen.append((TenantContext.get_tenant_id(), TenantContext.is_bypassed()))
-        yield object()
-
-    def extractor(scope: object) -> str | None:
-        return "extracted" if source == "extractor" else None
-
-    config = SimpleNamespace(
-        supports_tenant_strategy=True, driver_features={"tenant_strategy": object()}, provide_connection=connection
-    )
-    scope: dict[str, Any] = {"type": "http"}
-    if source == "receipt":
-        set_connection_tenant(scope, "authorized")
-    if source == "bypass_route":
-        scope["route_handler"] = SimpleNamespace(opt={"tenant_bypass": True})
-    provider = connection_provider_maker(
-        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
-        "pool",
-        "tenant_conn",
-        tenant_settings=TenantResolutionSettings(tenant_extractor=extractor),
-    )
-    with TenantContext.scope("outer"):
-        iterator = provider(State({"pool": object()}), cast("Scope", scope))
-        await anext(iterator)
-        await iterator.aclose()
-        assert TenantContext.get_tenant_id() == "outer"
-    expected = {
-        "none": ("outer", False),
-        "receipt": ("authorized", False),
-        "bypass_route": (None, True),
-        "extractor": ("extracted", False),
-    }
-    assert seen == [expected[source]]
 
 
 @pytest.mark.parametrize("is_async", [False, True])
@@ -1128,7 +1081,7 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
     )
     config_type = AiosqliteConfig if is_async else SqliteConfig
     monkeypatch.setattr(config_type, "supports_tenant_strategy", True)
-    monkeypatch.setattr(config_type, "_create_tenant_lease", lambda self, **kwargs: None)
+    monkeypatch.setattr(config_type, "_create_tenant_lease", lambda self: None)
     config = config_type(
         driver_features={"tenant_strategy": strategy},
         extension_config={"litestar": {"tenant_extractor": lambda scope: "acme"}},
@@ -1139,16 +1092,19 @@ async def test_tenant_plugin_on_demand_connection(is_async: bool, monkeypatch: p
     pool = await config.create_pool() if isinstance(config, AiosqliteConfig) else config.create_pool()
     scope = cast("Scope", {"type": "http"})
     state = State({"db_pool": pool})
-    try:
+
+    async def run_request() -> None:
         if is_async:
             connection = await plugin.provide_request_connection_async("db_connection", state, scope)
         else:
             connection = plugin.provide_request_connection_sync("db_connection", state, scope)
-        assert TenantContext.get() is None
         assert get_sqlspec_scope_state(scope, "db_connection") is connection
         await manual_handler_maker("db_connection")(
             cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
         )
+
+    try:
+        await within_tenant_request(plugin._tenant_targets(), scope, run_request)
         assert TenantContext.get() is None
     finally:
         if isinstance(config, AiosqliteConfig):
@@ -1179,11 +1135,14 @@ async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeyp
     spec.add_config(config)
     plugin = SQLSpecPlugin(sqlspec=spec)
     pool = config.create_pool()
+    scope = cast("Scope", {"type": "http"})
+
+    async def run_request() -> None:
+        plugin.provide_request_connection_sync("db_connection", State({"db_pool": pool}), scope)
+
     try:
         with pytest.raises(ImproperConfigurationError, match="synchronous tenant_extractor"):
-            plugin.provide_request_connection_sync(
-                "db_connection", State({"db_pool": pool}), cast("Scope", {"type": "http"})
-            )
+            await within_tenant_request(plugin._tenant_targets(), scope, run_request)
         assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
         assert TenantContext.get() is None
     finally:
@@ -1195,9 +1154,10 @@ async def test_tenant_sync_on_demand_closes_rejected_extractor_coroutine(monkeyp
 async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(tenant_enabled: bool) -> None:
     import asyncio
     from contextlib import asynccontextmanager
-    from contextvars import Context
+    from contextvars import copy_context
     from types import SimpleNamespace
 
+    from sqlspec.extensions.litestar.plugin import _TenantResolutionTarget
     from sqlspec.extensions.litestar.tenant import TenantResolutionSettings
     from sqlspec.utils.tenant import TenantContext
 
@@ -1218,12 +1178,8 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
         provide_connection=connection_context,
     )
     scope = cast("Scope", {"type": "http"})
-    provider = connection_provider_maker(
-        cast("DatabaseConfigProtocol[Any, Any, Any]", config),
-        "pool",
-        "db_connection",
-        tenant_settings=TenantResolutionSettings(tenant_extractor=lambda scope: "acme"),
-    )
+    provider = connection_provider_maker(cast("DatabaseConfigProtocol[Any, Any, Any]", config), "pool", "db_connection")
+    targets = (_TenantResolutionTarget(config, TenantResolutionSettings(tenant_extractor=lambda scope: "acme"), ()),)
     iterator = provider(State({"pool": object()}), scope)
 
     async def enter() -> object:
@@ -1234,17 +1190,18 @@ async def test_tenant_provider_handoff_rebinds_payload_in_each_owning_context(te
             assert TenantContext.get_tenant_id() == "child"
             return result
 
-    with TenantContext.scope("parent"):
-        assert await asyncio.create_task(enter(), context=Context()) is connection
-        assert TenantContext.get_tenant_id() == "parent"
+    async def run_request() -> None:
+        assert await asyncio.create_task(enter(), context=copy_context()) is connection
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
-        assert TenantContext.get_tenant_id() == "parent"
         with TenantContext.scope("cleanup"):
             await manual_handler_maker("db_connection")(
                 cast("Message", {"type": HTTP_RESPONSE_START, "status": 200}), scope
             )
             assert TenantContext.get_tenant_id() == "cleanup"
+
+    with TenantContext.scope("parent"):
+        await within_tenant_request(targets, scope, run_request)
         assert TenantContext.get_tenant_id() == "parent"
     expected = "acme" if tenant_enabled else None
     assert events == [("acquire", expected), ("checkin", expected)]

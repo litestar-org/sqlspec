@@ -1,6 +1,6 @@
 """Immutable tenant identities and explicit context scopes."""
 
-from collections.abc import Awaitable, Callable, Collection, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Collection, Mapping, MutableMapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from inspect import isawaitable
@@ -18,13 +18,22 @@ __all__ = (
     "TenantContextPayload",
     "TenantExtractor",
     "TenantExtractorValue",
+    "TenantRequestBinding",
     "TenantScope",
     "coerce_tenant_payload",
+    "is_tenant_bypass_route",
     "single_membership_tenant_extractor",
+    "tenant_bypass",
     "tenant_context_var",
 )
 
 MAX_TENANT_ID_BYTES: Final = 256
+_TENANT_BYPASS_ATTR: Final = "__sqlspec_tenant_bypass__"
+_MISSING_TENANT_MESSAGE: Final = "A tenant scope or explicit bypass is required before acquiring a connection"
+_SYNC_RESOLUTION_MESSAGE: Final = (
+    "This request resolves its tenant asynchronously; use await TenantContext.aget() / arequire(), "
+    "an async session, or a synchronous tenant_extractor"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +83,156 @@ class TenantContextPayload:
         return cls(is_bypass=True)
 
 
-tenant_context_var: ContextVar[TenantContextPayload | None] = ContextVar("sqlspec_tenant_context", default=None)
+class TenantRequestBinding:
+    """Resolve a framework request's tenant lazily, once per database configuration.
+
+    A plugin binds one instance at request start. Nothing runs until a lease, a session, or
+    ``TenantContext`` asks for the tenant; the request-specific resolver then runs once per
+    configuration key and its result is memoized. A resolver that yields no tenant falls back to
+    the ambient value captured when the request started. After ``freeze()`` the binding only
+    answers from memoized results, so work that outlives the response never reads request state.
+    """
+
+    __slots__ = ("_ambient", "_frozen", "_keys", "_memo", "_missing", "_resolver")
+
+    def __init__(
+        self,
+        resolver: Callable[[Any], object],
+        *,
+        keys: Sequence[Any],
+        ambient: "TenantContextPayload | TenantRequestBinding | None" = None,
+        missing: Callable[[Any], None] | None = None,
+    ) -> None:
+        """Configure request resolution.
+
+        Args:
+            resolver: Callable returning the route tenant for a configuration key as a payload,
+                string, UUID, or None, or an awaitable of one.
+            keys: Tenant-enabled configuration keys; the first is the default key.
+            ambient: Tenant state bound outside the request, used when route resolution yields none.
+            missing: Callable raising the framework's unauthenticated or forbidden response for a key.
+        """
+        self._resolver = resolver
+        self._keys = tuple(keys)
+        self._ambient = ambient
+        self._missing = missing
+        self._memo: dict[int, TenantContextPayload | None] = {}
+        self._frozen = False
+
+    @property
+    def frozen(self) -> bool:
+        """Return whether request state may no longer be read."""
+        return self._frozen
+
+    def _key(self, key: Any) -> Any:
+        if key is None and self._keys:
+            return self._keys[0]
+        return key
+
+    def _ambient_value(self, key: Any) -> TenantContextPayload | None:
+        ambient = self._ambient
+        if isinstance(ambient, TenantRequestBinding):
+            return ambient.resolve(key)
+        return ambient
+
+    async def _ambient_value_async(self, key: Any) -> TenantContextPayload | None:
+        ambient = self._ambient
+        if isinstance(ambient, TenantRequestBinding):
+            return await ambient.aresolve(key)
+        return ambient
+
+    def resolve(self, key: Any = None) -> TenantContextPayload | None:
+        """Return the tenant for ``key``, resolving it synchronously on first use.
+
+        Raises:
+            ImproperConfigurationError: The request resolves its tenant asynchronously.
+        """
+        key = self._key(key)
+        memo_key = id(key)
+        if memo_key in self._memo:
+            return self._memo[memo_key]
+        if self._frozen:
+            return self._ambient_value(key)
+        raw = self._resolver(key)
+        if isawaitable(raw):
+            close = getattr(raw, "close", None)
+            if callable(close):
+                close()
+            raise ImproperConfigurationError(_SYNC_RESOLUTION_MESSAGE)
+        payload = coerce_tenant_payload(raw)
+        if payload is None:
+            payload = self._ambient_value(key)
+        self._memo[memo_key] = payload
+        return payload
+
+    async def aresolve(self, key: Any = None) -> TenantContextPayload | None:
+        """Return the tenant for ``key``, awaiting an asynchronous resolver on first use."""
+        key = self._key(key)
+        memo_key = id(key)
+        if memo_key in self._memo:
+            return self._memo[memo_key]
+        if self._frozen:
+            return await self._ambient_value_async(key)
+        raw = self._resolver(key)
+        if isawaitable(raw):
+            raw = await raw
+        payload = coerce_tenant_payload(raw)
+        if payload is None:
+            payload = await self._ambient_value_async(key)
+        self._memo[memo_key] = payload
+        return payload
+
+    def _require_resolved(self, key: Any, payload: TenantContextPayload | None) -> TenantContextPayload:
+        if payload is not None:
+            return payload
+        if not self._frozen and self._missing is not None:
+            self._missing(self._key(key))
+        raise TenantContextError(_MISSING_TENANT_MESSAGE)
+
+    def require(self, key: Any = None) -> TenantContextPayload:
+        """Return the tenant for ``key`` or reject the request.
+
+        Raises:
+            TenantContextError: No tenant resolved and no framework response applies.
+        """
+        return self._require_resolved(key, self.resolve(key))
+
+    async def arequire(self, key: Any = None) -> TenantContextPayload:
+        """Return the tenant for ``key`` or reject the request, awaiting asynchronous resolution.
+
+        Raises:
+            TenantContextError: No tenant resolved and no framework response applies.
+        """
+        return self._require_resolved(key, await self.aresolve(key))
+
+    def freeze(self) -> None:
+        """Resolve every pending key from request state, then stop reading it.
+
+        Called when work is handed off past the response. Resolution failures leave the key
+        without a tenant instead of failing the response.
+        """
+        for key in self._keys:
+            if id(key) not in self._memo:
+                try:
+                    self.resolve(key)
+                except Exception:
+                    self._memo[id(key)] = None
+        self._frozen = True
+
+    async def afreeze(self) -> None:
+        """Resolve every pending key from request state asynchronously, then stop reading it."""
+        for key in self._keys:
+            if id(key) not in self._memo:
+                try:
+                    await self.aresolve(key)
+                except Exception:
+                    self._memo[id(key)] = None
+        self._frozen = True
+
+
+tenant_context_var: ContextVar[TenantContextPayload | TenantRequestBinding | None] = ContextVar(
+    "sqlspec_tenant_context", default=None
+)
 
 
 class TenantContext:
@@ -84,7 +242,71 @@ class TenantContext:
 
     @classmethod
     def get(cls) -> TenantContextPayload | None:
-        """Return the current payload, including explicit bypass state."""
+        """Return the current payload, including explicit bypass state.
+
+        Inside a framework request this resolves the request tenant on first use.
+        """
+        value = tenant_context_var.get()
+        if isinstance(value, TenantRequestBinding):
+            return value.resolve()
+        return value
+
+    @classmethod
+    async def aget(cls) -> TenantContextPayload | None:
+        """Return the current payload, awaiting asynchronous request resolution."""
+        value = tenant_context_var.get()
+        if isinstance(value, TenantRequestBinding):
+            return await value.aresolve()
+        return value
+
+    @classmethod
+    def require(cls, key: Any = None) -> TenantContextPayload:
+        """Return the current payload or fail.
+
+        Args:
+            key: Database configuration whose request tenant is required.
+
+        Returns:
+            The bound payload, including explicit bypass.
+
+        Raises:
+            TenantContextError: No tenant is bound outside a framework request.
+        """
+        value = tenant_context_var.get()
+        if isinstance(value, TenantRequestBinding):
+            return value.require(key)
+        if value is None:
+            raise TenantContextError(_MISSING_TENANT_MESSAGE)
+        return value
+
+    @classmethod
+    async def arequire(cls, key: Any = None) -> TenantContextPayload:
+        """Return the current payload or fail, awaiting asynchronous request resolution.
+
+        Args:
+            key: Database configuration whose request tenant is required.
+
+        Returns:
+            The bound payload, including explicit bypass.
+
+        Raises:
+            TenantContextError: No tenant is bound outside a framework request.
+        """
+        value = tenant_context_var.get()
+        if isinstance(value, TenantRequestBinding):
+            return await value.arequire(key)
+        if value is None:
+            raise TenantContextError(_MISSING_TENANT_MESSAGE)
+        return value
+
+    @classmethod
+    def bind_request(cls, binding: TenantRequestBinding) -> Token[TenantContextPayload | TenantRequestBinding | None]:
+        """Bind a lazy request resolver and return its restoration token."""
+        return tenant_context_var.set(binding)
+
+    @classmethod
+    def current_binding(cls) -> "TenantContextPayload | TenantRequestBinding | None":
+        """Return the raw bound value without resolving a request binding."""
         return tenant_context_var.get()
 
     @classmethod
@@ -101,14 +323,14 @@ class TenantContext:
 
     @overload
     @classmethod
-    def set(cls, payload: TenantContextPayload) -> Token[TenantContextPayload | None]: ...
+    def set(cls, payload: TenantContextPayload) -> Token[TenantContextPayload | TenantRequestBinding | None]: ...
 
     @overload
     @classmethod
-    def set(cls, payload: None) -> Token[TenantContextPayload | None]: ...
+    def set(cls, payload: None) -> Token[TenantContextPayload | TenantRequestBinding | None]: ...
 
     @classmethod
-    def set(cls, payload: object) -> Token[TenantContextPayload | None]:
+    def set(cls, payload: object) -> Token[TenantContextPayload | TenantRequestBinding | None]:
         """Set or clear the payload and return its restoration token.
 
         Raises:
@@ -120,7 +342,7 @@ class TenantContext:
         return tenant_context_var.set(payload)
 
     @classmethod
-    def reset(cls, token: Token[TenantContextPayload | None]) -> None:
+    def reset(cls, token: Token[TenantContextPayload | TenantRequestBinding | None]) -> None:
         """Restore a token in its original context."""
         tenant_context_var.reset(token)
 
@@ -178,7 +400,7 @@ class TenantScope:
 
     def __init__(self, payload: TenantContextPayload) -> None:
         self._payload = payload
-        self._token: Token[TenantContextPayload | None] | None = None
+        self._token: Token[TenantContextPayload | TenantRequestBinding | None] | None = None
 
     def __enter__(self) -> TenantContextPayload:
         if self._token is not None:
@@ -207,7 +429,7 @@ class TenantBinding:
 
     def __init__(self, payload: TenantContextPayload | None) -> None:
         self._payload = payload
-        self._token: Token[TenantContextPayload | None] | None = None
+        self._token: Token[TenantContextPayload | TenantRequestBinding | None] | None = None
 
     def __enter__(self) -> None:
         if self._token is not None:
@@ -274,6 +496,35 @@ class SQLSpecTenantMiddleware:
             await self.app(scope, receive, send)
         finally:
             TenantContext.reset(token)
+
+
+def tenant_bypass(handler: Any) -> Any:
+    """Mark a route handler as an explicit tenant bypass.
+
+    Framework plugins resolve a bypass payload for marked routes, so public routes such as
+    login or health checks can use tenant-enabled sessions without a tenant.
+
+    Args:
+        handler: Route function or handler object.
+
+    Returns:
+        The same handler.
+    """
+    setattr(handler, _TENANT_BYPASS_ATTR, True)
+    return handler
+
+
+def is_tenant_bypass_route(handler: Any) -> bool:
+    """Return whether ``tenant_bypass`` marked a route handler or its wrapped function."""
+    if handler is None:
+        return False
+    if getattr(handler, _TENANT_BYPASS_ATTR, False) is True:
+        return True
+    for attribute in ("fn", "__wrapped__", "func", "endpoint"):
+        inner = getattr(handler, attribute, None)
+        if inner is not None and inner is not handler and getattr(inner, _TENANT_BYPASS_ATTR, False) is True:
+            return True
+    return False
 
 
 def single_membership_tenant_extractor(

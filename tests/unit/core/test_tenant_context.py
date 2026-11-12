@@ -1,12 +1,13 @@
 """Tenant identity validation and context lifetime contracts."""
 
 import asyncio
+import inspect
 from collections.abc import Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import FrozenInstanceError
 from threading import Thread
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -359,3 +360,104 @@ def test_bind_restores_after_body_failure() -> None:
         with pytest.raises(RuntimeError), TenantContext.bind(TenantContextPayload("inner")):
             raise RuntimeError
         assert TenantContext.get() is outer
+
+
+def test_request_binding_resolves_lazily_once_per_key_with_ambient_fallback() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    first, second = object(), object()
+    calls: list[object] = []
+
+    def resolve(key: object) -> str | None:
+        calls.append(key)
+        return "routed" if key is first else None
+
+    binding = TenantRequestBinding(resolve, keys=(first, second), ambient=TenantContextPayload("ambient"))
+    token = TenantContext.bind_request(binding)
+    try:
+        assert calls == []
+        assert TenantContext.get_tenant_id() == "routed"
+        assert TenantContext.require(second).tenant_id == "ambient"
+        assert TenantContext.require(first).tenant_id == "routed"
+        with TenantContext.scope("handler"):
+            assert TenantContext.require(first).tenant_id == "handler"
+        assert calls == [first, second]
+    finally:
+        TenantContext.reset(token)
+    assert TenantContext.current_binding() is None
+
+
+def test_request_binding_freeze_resolves_pending_keys_and_stops_reading_request_state() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    key = object()
+    outcomes: list[str | None] = ["handoff"]
+
+    binding = TenantRequestBinding(lambda _key: outcomes.pop(0), keys=(key,))
+    binding.freeze()
+    assert binding.frozen
+    assert binding.resolve(key) == TenantContextPayload("handoff")
+    assert outcomes == []
+    assert binding.resolve(object()) is None
+
+
+def test_request_binding_missing_tenant_calls_framework_rejection_until_frozen() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    class Rejected(Exception):
+        pass
+
+    def reject(_key: object) -> None:
+        raise Rejected
+
+    binding = TenantRequestBinding(lambda _key: None, keys=(object(),), missing=reject)
+    with pytest.raises(Rejected):
+        binding.require()
+    binding.freeze()
+    with pytest.raises(TenantContextError):
+        binding.require()
+
+
+def test_request_binding_rejects_synchronous_access_to_asynchronous_resolution() -> None:
+    from sqlspec.utils.tenant import TenantRequestBinding
+
+    async def resolve(_key: object) -> str:
+        return "async"
+
+    coroutines: list[Any] = []
+
+    def resolver(key: object) -> Any:
+        coroutines.append(resolve(key))
+        return coroutines[-1]
+
+    binding = TenantRequestBinding(resolver, keys=(object(),))
+    with pytest.raises(ImproperConfigurationError, match="await TenantContext"):
+        binding.resolve()
+    assert inspect.getcoroutinestate(coroutines[0]) == inspect.CORO_CLOSED
+    assert asyncio.run(binding.aresolve()) == TenantContextPayload("async")
+
+
+def test_require_outside_a_request_raises_tenant_context_error() -> None:
+    with pytest.raises(TenantContextError):
+        TenantContext.require()
+    with pytest.raises(TenantContextError):
+        asyncio.run(TenantContext.arequire())
+    assert asyncio.run(TenantContext.aget()) is None
+
+
+def test_tenant_bypass_marks_route_handlers_and_wrapped_functions() -> None:
+    from types import SimpleNamespace
+
+    from sqlspec.utils.tenant import is_tenant_bypass_route, tenant_bypass
+
+    @tenant_bypass
+    def public() -> None:
+        return None
+
+    def private() -> None:
+        return None
+
+    assert is_tenant_bypass_route(public)
+    assert is_tenant_bypass_route(SimpleNamespace(fn=public))
+    assert not is_tenant_bypass_route(private)
+    assert not is_tenant_bypass_route(None)

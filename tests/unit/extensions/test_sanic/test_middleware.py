@@ -13,7 +13,7 @@ from sanic import Sanic
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
-from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.sanic._utils import has_context_value
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
@@ -213,48 +213,6 @@ class _SyncConnectionManager(AbstractContextManager[MagicMock]):
         self.exited += 1
 
 
-@pytest.mark.parametrize("identity", ["a", "uuid", "bypass", "none", "awaitable"])
-async def test_tenant_extractor_binds_and_resets_sanic_request(identity: str) -> None:
-    from uuid import UUID
-
-    from sqlspec.utils.tenant import TenantContext, TenantContextPayload
-
-    identities: dict[str, str | UUID | TenantContextPayload | None] = {
-        "a": "a",
-        "uuid": UUID(int=1),
-        "bypass": TenantContextPayload.bypass(),
-        "none": None,
-        "awaitable": "a",
-    }
-    raw = identities[identity]
-    seen = []
-    config = _make_config(connection=_make_connection())
-
-    async def async_extractor(request: object) -> str:
-        return "a"
-
-    config.extension_config["sanic"]["tenant_extractor"] = (
-        async_extractor if identity == "awaitable" else lambda request: raw
-    )
-    original = config.provide_connection
-
-    def provide_connection(pool: object) -> object:
-        seen.append(TenantContext.get())
-        return original(pool)
-
-    config.provide_connection = provide_connection
-    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
-    plugin.init_app(Sanic("tenant_" + uuid4().hex))
-    request = _make_request(pool=object())
-    with TenantContext.scope("outer"):
-        await plugin._on_request(request)
-        await plugin._on_response(request, SimpleNamespace(status=200))
-        await plugin._on_response(request, SimpleNamespace(status=200))
-        assert TenantContext.get_tenant_id() == "outer"
-    expected = None if raw is None else raw if isinstance(raw, TenantContextPayload) else TenantContextPayload(raw)
-    assert seen == [expected]
-
-
 @pytest.mark.parametrize("failure", ["extractor", "acquire", "release", "complete"])
 async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None:
     from sqlspec.utils.tenant import TenantContext
@@ -265,6 +223,7 @@ async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None
         return "a"
 
     config = _make_config(connection=_make_connection())
+    config.driver_features["tenant_strategy"] = object()
     config.extension_config["sanic"]["tenant_extractor"] = extractor
     if failure == "acquire":
         config.provide_connection.side_effect = ValueError("acquire")
@@ -274,16 +233,18 @@ async def test_tenant_context_restores_after_sanic_failure(failure: str) -> None
     plugin.init_app(Sanic("failure_" + uuid4().hex))
     request = _make_request(pool=object())
     with TenantContext.scope("outer"):
+        await plugin._on_request(request)
         if failure in {"extractor", "acquire"}:
             with pytest.raises(ValueError):
-                await plugin._on_request(request)
+                await plugin.get_connection_async(request)
+            await plugin._on_lifecycle_response(request=request, response=SimpleNamespace(status=500))
+        elif failure == "complete":
+            await plugin.get_connection_async(request)
+            await plugin._on_request_complete(request=request)
         else:
-            await plugin._on_request(request)
-            if failure == "complete":
-                await plugin._on_request_complete(request=request)
-            else:
-                with pytest.raises(ValueError):
-                    await plugin._on_response(request, SimpleNamespace(status=200))
+            await plugin.get_connection_async(request)
+            with pytest.raises(ValueError):
+                await plugin._on_lifecycle_response(request=request, response=SimpleNamespace(status=200))
         assert TenantContext.get_tenant_id() == "outer"
 
 
@@ -356,6 +317,7 @@ async def test_sanic_supports_independent_per_config_tenant_extractors_and_direc
             }
         },
     )
+    cfg_a.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
     cfg_b.driver_features["tenant_strategy"] = object()  # type: ignore[typeddict-unknown-key]
 
     def provide_a(_pool: object) -> object:
@@ -385,6 +347,8 @@ async def test_sanic_supports_independent_per_config_tenant_extractors_and_direc
         headers={"x-alpha": "org-a"},
     )
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+    assert seen == {}
+    await plugin.get_connection_async(request, "alpha_db")
     assert seen == {"a": TenantContextPayload("org-a")}
     set_request_tenant(request, "org-b", key="beta_db")
     resolved_conn = await plugin.get_connection_async(request, "beta_db")
@@ -395,6 +359,7 @@ async def test_sanic_supports_independent_per_config_tenant_extractors_and_direc
 
 async def test_sanic_rejects_non_callable_tenant_extractor() -> None:
     config = _make_config(connection=_make_connection())
+    config.driver_features["tenant_strategy"] = object()
     config.extension_config["sanic"]["tenant_extractor"] = "untrusted"
     with pytest.raises(ImproperConfigurationError, match="must be callable"):
         SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
@@ -408,6 +373,6 @@ async def test_sanic_sync_get_connection_raises_when_tenant_connection_is_deferr
         app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())), ctx=SimpleNamespace(), headers={}
     )
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(TenantContextError, match="get_session_async"):
+    with pytest.raises(ImproperConfigurationError, match="get_session_async"):
         plugin.get_connection(request)
     await plugin._on_response(request, SimpleNamespace(status=401))  # pyright: ignore[reportPrivateUsage]

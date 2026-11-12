@@ -1,10 +1,9 @@
 """HTTP middleware classes for the Starlette SQLSpec extension."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, AsyncExitStack, asynccontextmanager, contextmanager
-from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from anyio import CancelScope
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,7 +12,7 @@ from starlette.requests import Request
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._utils import (
     get_request_tenant,
     get_state_value,
@@ -23,7 +22,7 @@ from sqlspec.extensions.starlette._utils import (
 )
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, coerce_tenant_payload
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
@@ -39,8 +38,10 @@ __all__ = (
     "SQLCommenterMiddleware",
     "SQLSpecAutocommitMiddleware",
     "SQLSpecManualMiddleware",
+    "SQLSpecTenantRequestMiddleware",
     "acquire_pending_connection_async",
     "acquire_pending_connection_sync",
+    "has_tenant_strategy",
 )
 
 
@@ -260,6 +261,86 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
             SQLCommenterContext.set(previous)
 
 
+class SQLSpecTenantRequestMiddleware:
+    """Bind one lazy tenant resolver for each HTTP or WebSocket request.
+
+    The plugin installs this middleware only when a configuration enables ``tenant_strategy``.
+    Request start costs one context variable assignment; the route bypass marker, the request
+    receipt, and the configuration's ``tenant_extractor`` run only when a lease, session, or
+    ``TenantContext`` first needs the tenant. Pending resolutions finish before the final response
+    message, and the binding is reset when the ASGI call returns.
+    """
+
+    __slots__ = ("_default_state", "_keys", "_states", "app")
+
+    def __init__(self, app: "ASGIApp", config_states: "Sequence[SQLSpecConfigState]") -> None:
+        """Configure the tenant-enabled configuration states.
+
+        Args:
+            app: Downstream ASGI application.
+            config_states: Registered configuration states.
+        """
+        self.app = app
+        tenant_states = [state for state in config_states if has_tenant_strategy(state.config)]
+        self._states = {id(state.config): state for state in tenant_states}
+        self._keys = tuple(state.config for state in tenant_states)
+        self._default_state = tenant_states[0] if tenant_states else None
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        """Bind the lazy resolver for the downstream call and restore the caller afterwards."""
+        if scope["type"] not in {"http", "websocket"} or self._default_state is None:
+            await self.app(scope, receive, send)
+            return
+        binding = TenantRequestBinding(
+            lambda key: self._resolve(scope, key),
+            keys=self._keys,
+            ambient=TenantContext.current_binding(),
+            missing=lambda _key: _reject_missing_tenant(scope),
+        )
+        token = TenantContext.bind_request(binding)
+        try:
+            if scope["type"] == "http":
+
+                async def frozen_send(message: "Message") -> None:
+                    if _completes_response(message):
+                        await binding.afreeze()
+                    await send(message)
+
+                await self.app(scope, receive, frozen_send)
+            else:
+                await self.app(scope, receive, send)
+        finally:
+            TenantContext.reset(token)
+
+    def _resolve(self, scope: "Scope", key: Any) -> Any:
+        state = self._states.get(id(key), self._default_state)
+        if is_tenant_bypass_route(scope.get("endpoint")) or is_tenant_bypass_route(scope.get("route")):
+            return TenantContextPayload.bypass()
+        if state is None:
+            return None
+        receipt = get_request_tenant(Request(scope), state)
+        if receipt is not None:
+            return receipt
+        if state.tenant_extractor is not None:
+            return state.tenant_extractor(scope)
+        return None
+
+
+def _reject_missing_tenant(scope: "Scope") -> NoReturn:
+    """Raise the Starlette response for a request without an authorized tenant."""
+    from starlette.exceptions import HTTPException, WebSocketException
+
+    user = scope.get("user")
+    authenticated = user is not None and bool(getattr(user, "is_authenticated", True))
+    if scope.get("type") == "websocket":
+        if authenticated:
+            raise WebSocketException(code=4003, reason="An authorized tenant is required")
+        raise WebSocketException(code=4001, reason="Authentication required")
+    if authenticated:
+        raise HTTPException(status_code=403, detail="An authorized tenant is required")
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
 async def acquire_pending_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Acquire a deferred tenant-scoped connection asynchronously if not yet checked out."""
     if has_state_value(request.state, config_state.connection_key):
@@ -271,14 +352,17 @@ async def acquire_pending_connection_async(request: "Request", config_state: "SQ
     async with pending.lock:
         if has_state_value(request.state, config_state.connection_key):
             return get_state_value(request.state, config_state.connection_key)
-        payload = await _resolve_request_tenant(config_state, request, run_extractor=not pending.extractor_evaluated)
-        connection = await pending.stack.enter_async_context(_open_config_connection(config_state, request, payload))
+        connection = await pending.stack.enter_async_context(_open_config_connection(config_state, request))
         pop_state_value(request.state, pending_key)
         return connection
 
 
 def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Acquire a deferred tenant-scoped synchronous connection on demand."""
+    """Acquire a deferred tenant-scoped synchronous connection on demand.
+
+    Raises:
+        ImproperConfigurationError: The configuration is asynchronous.
+    """
     if has_state_value(request.state, config_state.connection_key):
         return get_state_value(request.state, config_state.connection_key)
     pending_key = _pending_connection_key(config_state.connection_key)
@@ -289,40 +373,33 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
     config = config_state.config
     if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
         msg = (
-            "Async tenant-scoped connections require an upfront tenant_extractor, SQLSpecTenantMiddleware, "
-            "or await plugin.get_session_async(request) / Depends(plugin.provide_session()) after set_request_tenant."
+            "Async tenant-scoped connections are acquired on first use; call await plugin.get_session_async(request), "
+            "await plugin.get_connection_async(request), or use Depends(plugin.provide_session())."
         )
-        raise TenantContextError(msg)
+        raise ImproperConfigurationError(msg)
 
-    payload = _resolve_request_tenant_sync(config_state, request, run_extractor=not pending.extractor_evaluated)
     provided: Any = None
     if config.supports_connection_pooling:
         provided = config.provide_connection(get_state_value(request.app.state, config_state.pool_key))
-    elif _has_tenant_strategy(config):
+    elif has_tenant_strategy(config):
         provided = config.provide_connection()
     if provided is not None:
         cm = cast("AbstractContextManager[Any]", provided)
-        with TenantContext.bind(payload):
-            connection: Any = cm.__enter__()
+        connection: Any = cm.__enter__()
         set_state_value(request.state, config_state.connection_key, connection)
-        set_state_value(request.state, _captured_tenant_key(config_state.connection_key), payload)
 
         async def _exit_sync_cm(exc_type: Any, exc: Any, tb: Any) -> bool:
             _clear_published_connection(request, config_state)
-            with TenantContext.bind(payload):
-                return bool(await with_ensure_async_(cm).__aexit__(exc_type, exc, tb))
+            return bool(await with_ensure_async_(cm).__aexit__(exc_type, exc, tb))
 
         pending.stack.push_async_exit(_exit_sync_cm)
     else:
-        with TenantContext.bind(payload):
-            connection = config.create_connection()
+        connection = config.create_connection()
         set_state_value(request.state, config_state.connection_key, connection)
-        set_state_value(request.state, _captured_tenant_key(config_state.connection_key), payload)
 
         async def _close_sync_conn(_exc_type: Any, _exc: Any, _tb: Any) -> bool:
             _clear_published_connection(request, config_state)
-            with TenantContext.bind(payload):
-                await ensure_async_(connection.close)()
+            await ensure_async_(connection.close)()
             return False
 
         pending.stack.push_async_exit(_close_sync_conn)
@@ -332,22 +409,14 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
 
 
 class _PendingTenantConnection:
-    """Deferred request-scoped connection slot awaiting tenant resolution."""
+    """Deferred request-scoped connection slot for a tenant-enabled configuration."""
 
-    __slots__ = ("config_state", "extractor_evaluated", "lock", "request", "stack")
+    __slots__ = ("config_state", "lock", "request", "stack")
 
-    def __init__(
-        self,
-        stack: AsyncExitStack,
-        request: "Request",
-        config_state: "SQLSpecConfigState",
-        *,
-        extractor_evaluated: bool = False,
-    ) -> None:
+    def __init__(self, stack: AsyncExitStack, request: "Request", config_state: "SQLSpecConfigState") -> None:
         self.stack = stack
         self.request = request
         self.config_state = config_state
-        self.extractor_evaluated = extractor_evaluated
         self.lock = asyncio.Lock()
 
 
@@ -359,11 +428,8 @@ def _pending_connection_key(connection_key: str) -> str:
     return f"sqlspec_pending_connection_{connection_key}"
 
 
-def _captured_tenant_key(connection_key: str) -> str:
-    return f"sqlspec_captured_tenant_{connection_key}"
-
-
-def _has_tenant_strategy(config: Any) -> bool:
+def has_tenant_strategy(config: Any) -> bool:
+    """Return whether a configuration enables an active tenant strategy."""
     features = getattr(config, "driver_features", None)
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
@@ -377,177 +443,69 @@ def _completes_response(message: "Message") -> bool:
 def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
     pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
     pop_state_value(request.state, f"{config_state.session_key}_instance")
-    pop_state_value(request.state, _captured_tenant_key(config_state.connection_key))
     pop_state_value(request.state, config_state.connection_key)
 
 
 @contextmanager
-def _published_connection(
-    request: "Request",
-    config_state: "SQLSpecConfigState",
-    connection: Any,
-    payload: TenantContextPayload | None = None,
-    *,
-    bind_payload: bool = False,
-) -> "Generator[None]":
+def _published_connection(request: "Request", config_state: "SQLSpecConfigState", connection: Any) -> "Generator[None]":
     """Expose a connection on request state and clear every derived entry on exit.
 
     Yields:
         Control while the connection is visible to the request.
     """
     set_state_value(request.state, config_state.connection_key, connection)
-    if bind_payload:
-        set_state_value(request.state, _captured_tenant_key(config_state.connection_key), payload)
     try:
         yield
     finally:
         _clear_published_connection(request, config_state)
 
 
-async def _resolve_request_tenant(
-    config_state: "SQLSpecConfigState", request: "Request", *, run_extractor: bool = True
-) -> TenantContextPayload | None:
-    receipt = get_request_tenant(request, config_state)
-    if receipt is not None:
-        return coerce_tenant_payload(receipt)
-    extractor = config_state.tenant_extractor
-    if run_extractor and extractor is not None:
-        raw = extractor(request.scope)
-        if isawaitable(raw):
-            raw = await raw
-        return coerce_tenant_payload(raw)
-    return TenantContext.get()
-
-
-def _resolve_request_tenant_sync(
-    config_state: "SQLSpecConfigState", request: "Request", *, run_extractor: bool = True
-) -> TenantContextPayload | None:
-    receipt = get_request_tenant(request, config_state)
-    if receipt is not None:
-        return coerce_tenant_payload(receipt)
-    extractor = config_state.tenant_extractor
-    if run_extractor and extractor is not None:
-        raw = extractor(request.scope)
-        if isawaitable(raw):
-            close = getattr(raw, "close", None)
-            if callable(close):
-                close()
-            msg = "Synchronous on-demand connections require a synchronous tenant_extractor"
-            raise ImproperConfigurationError(msg)
-        return coerce_tenant_payload(raw)
-    return TenantContext.get()
-
-
 @asynccontextmanager
-async def _open_config_connection(
-    config_state: "SQLSpecConfigState",
-    request: "Request",
-    payload: TenantContextPayload | None,
-    *,
-    bind_payload: bool = True,
-) -> "AsyncGenerator[Any]":
+async def _open_config_connection(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
     config = config_state.config
     provided: Any = None
-    if bind_payload:
-        with TenantContext.bind(payload):
-            if config.supports_connection_pooling:
-                provided = config.provide_connection(get_state_value(request.app.state, config_state.pool_key))
-            elif _has_tenant_strategy(config):
-                provided = config.provide_connection()
-    elif config.supports_connection_pooling:
+    if config.supports_connection_pooling:
         provided = config.provide_connection(get_state_value(request.app.state, config_state.pool_key))
-    elif _has_tenant_strategy(config):
+    elif has_tenant_strategy(config):
         provided = config.provide_connection()
 
     if provided is not None:
         cm = with_ensure_async_(provided)
-        if bind_payload:
-            with TenantContext.bind(payload):
-                connection = await cm.__aenter__()
-        else:
-            connection = await cm.__aenter__()
+        connection = await cm.__aenter__()
         try:
-            with _published_connection(request, config_state, connection, payload, bind_payload=bind_payload):
+            with _published_connection(request, config_state, connection):
                 yield connection
         except BaseException as exc:
-            if bind_payload:
-                with TenantContext.bind(payload):
-                    suppressed = await cm.__aexit__(type(exc), exc, exc.__traceback__)
-            else:
-                suppressed = await cm.__aexit__(type(exc), exc, exc.__traceback__)
-            if not suppressed:
+            if not await cm.__aexit__(type(exc), exc, exc.__traceback__):
                 raise
         else:
-            if bind_payload:
-                with TenantContext.bind(payload):
-                    await cm.__aexit__(None, None, None)
-            else:
-                await cm.__aexit__(None, None, None)
+            await cm.__aexit__(None, None, None)
         return
 
-    if bind_payload:
-        with TenantContext.bind(payload):
-            connection = await ensure_async_(config.create_connection)()
-    else:
-        connection = await ensure_async_(config.create_connection)()
+    connection = await ensure_async_(config.create_connection)()
     try:
-        with _published_connection(request, config_state, connection, payload, bind_payload=bind_payload):
+        with _published_connection(request, config_state, connection):
             yield connection
     finally:
-        if bind_payload:
-            with TenantContext.bind(payload):
-                await ensure_async_(connection.close)()
-        else:
-            await ensure_async_(connection.close)()
+        await ensure_async_(connection.close)()
 
 
 @asynccontextmanager
 async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "Request") -> "AsyncGenerator[Any]":
     """Own an eager or deferred request connection through verified cleanup.
 
+    Tenant-enabled configurations defer checkout until the request first asks for a session or
+    connection; the lease resolves the request tenant at that point.
+
     Yields:
-        The active request connection, or None while deferred awaiting a tenant.
+        The active request connection, or None while a tenant connection is deferred.
     """
     async with AsyncExitStack() as stack:
-        if not _has_tenant_strategy(config_state.config):
-            extractor = config_state.tenant_extractor
-            if extractor is not None:
-                raw = extractor(request.scope)
-                if isawaitable(raw):
-                    raw = await raw
-                token = TenantContext.set(coerce_tenant_payload(raw))
-                stack.callback(TenantContext.reset, token)
-            else:
-                receipt = get_request_tenant(request, config_state)
-                if receipt is not None:
-                    token = TenantContext.set(coerce_tenant_payload(receipt))
-                    stack.callback(TenantContext.reset, token)
-            connection = await stack.enter_async_context(
-                _open_config_connection(config_state, request, None, bind_payload=False)
-            )
-            yield connection
+        if not has_tenant_strategy(config_state.config):
+            yield await stack.enter_async_context(_open_config_connection(config_state, request))
             return
-
-        extractor_evaluated = (
-            config_state.tenant_extractor is not None and get_request_tenant(request, config_state) is None
-        )
-        payload = await _resolve_request_tenant(config_state, request)
-        if payload is not None:
-            token = TenantContext.set(payload)
-            stack.callback(TenantContext.reset, token)
-            connection = await stack.enter_async_context(_open_config_connection(config_state, request, payload))
-            yield connection
-            return
-        if extractor_evaluated:
-            token = TenantContext.set(None)
-            stack.callback(TenantContext.reset, token)
-
         pending_key = _pending_connection_key(config_state.connection_key)
-        set_state_value(
-            request.state,
-            pending_key,
-            _PendingTenantConnection(stack, request, config_state, extractor_evaluated=extractor_evaluated),
-        )
+        set_state_value(request.state, pending_key, _PendingTenantConnection(stack, request, config_state))
         try:
             yield None
         finally:
@@ -641,9 +599,4 @@ async def _finalize_request_transaction(
     target = session if session is not None and hasattr(session, operation) else connection
     callback = getattr(target, operation, None)
     if callback is not None:
-        tenant_key = _captured_tenant_key(config_state.connection_key)
-        if has_state_value(request.state, tenant_key):
-            with TenantContext.bind(get_state_value(request.state, tenant_key, None)):
-                await ensure_async_(callback)()
-        else:
-            await ensure_async_(callback)()
+        await ensure_async_(callback)()

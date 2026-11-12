@@ -1359,13 +1359,7 @@ async def test_tenant_providers_apply_structural_strategy_and_dispose(
             await invoke()
     else:
         await invoke()
-    assert calls == [
-        "checkout:a",
-        "commit",
-        "checkin:a",
-        *(["close"] if cleanup_failure else []),
-        "release",
-    ]
+    assert calls == ["checkout:a", "commit", "checkin:a", *(["close"] if cleanup_failure else []), "release"]
 
 
 @pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])

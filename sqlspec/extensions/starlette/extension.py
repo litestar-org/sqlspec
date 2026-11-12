@@ -4,6 +4,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast, overload
 
+from starlette.middleware import Middleware
+
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
@@ -13,8 +15,10 @@ from sqlspec.extensions.starlette.middleware import (
     SQLCommenterMiddleware,
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
+    SQLSpecTenantRequestMiddleware,
     acquire_pending_connection_async,
     acquire_pending_connection_sync,
+    has_tenant_strategy,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_
@@ -127,6 +131,8 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if not config_state.disable_di:
                 self._add_middleware(app, config_state)
+        if any(has_tenant_strategy(state.config) for state in self._config_states):
+            app.user_middleware.append(Middleware(SQLSpecTenantRequestMiddleware, config_states=self._config_states))
 
         self._add_correlation_middleware(app)
         self._add_sqlcommenter_middleware(app)
@@ -361,7 +367,13 @@ class SQLSpecPlugin:
 
         Returns:
             Configuration state instance.
+
+        Raises:
+            ImproperConfigurationError: A tenant extractor is configured without a tenant strategy.
         """
+        if settings.get("tenant_extractor") is not None and not has_tenant_strategy(config):
+            msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
+            raise ImproperConfigurationError(msg)
         return SQLSpecConfigState(
             config=config,
             connection_key=settings["connection_key"],

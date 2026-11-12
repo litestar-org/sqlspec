@@ -99,7 +99,7 @@ async def test_tenant_request_isolation_missing_identity_and_worker(tenant_datab
     plugin: Any = None
 
     async def endpoint(request: Request) -> JSONResponse:
-        session = plugin.get_session(request)
+        session = await plugin.get_session_async(request)
         rows = await session.select(f"SELECT value FROM {table} ORDER BY value")
         return JSONResponse([row["value"] for row in rows])
 
@@ -113,7 +113,7 @@ async def test_tenant_request_isolation_missing_identity_and_worker(tenant_datab
                 assert response.status_code == 200
                 assert response.json() == values
             for headers in ({}, {"authorization": "evil", "x-tenant-id": "a"}):
-                assert (await client.get("/", headers=headers)).status_code == 500
+                assert (await client.get("/", headers=headers)).status_code == 401
                 assert (await client.get("/", headers={"authorization": "bob"})).json() == [2]
 
         async def worker() -> list[dict[str, Any]]:
@@ -141,7 +141,7 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
     plugin: Any = None
 
     async def endpoint(request: Request) -> StreamingResponse:
-        session = plugin.get_session(request)
+        session = await plugin.get_session_async(request)
 
         async def body() -> AsyncIterator[bytes]:
             try:

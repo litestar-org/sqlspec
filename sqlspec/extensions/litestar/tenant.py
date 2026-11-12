@@ -1,7 +1,7 @@
 """Resolve tenants from verified Litestar authentication and scope receipts."""
 
 import inspect
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from uuid import UUID
@@ -16,7 +16,7 @@ from sqlspec.extensions.litestar._tenant_resolution import (
     scope_value,
 )
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
-from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload
+from sqlspec.utils.tenant import TenantContextPayload, coerce_tenant_payload, is_tenant_bypass_route
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Generator
@@ -38,11 +38,16 @@ _TENANT_SCOPE_KEY: Final = "_sqlspec_tenant_context"
 _UNSET: Final[Any] = object()
 
 
+def _receipt_key(key: str | None) -> str:
+    return _TENANT_SCOPE_KEY if key is None else f"{_TENANT_SCOPE_KEY}_{key}"
+
+
 def set_connection_tenant(
     connection_or_scope: Any,
     tenant_id: str | UUID | TenantContextPayload,
     *,
     variables: Mapping[str, str] | None = None,
+    key: str | None = None,
 ) -> TenantContextPayload:
     """Store a tenant receipt after trusted application code authorizes access.
 
@@ -50,6 +55,8 @@ def set_connection_tenant(
         connection_or_scope: A Litestar connection or its raw ASGI scope.
         tenant_id: The authorized tenant identity or an existing payload.
         variables: Extra session variables merged with an existing payload.
+        key: Session key, connection key, or bind key of one database configuration; None stores
+            a receipt shared by every configuration without a keyed receipt.
 
     Returns:
         The immutable payload stored on the connection scope.
@@ -60,23 +67,40 @@ def set_connection_tenant(
         payload = TenantContextPayload(
             payload.tenant_id, variables={**payload.variables, **variables}, is_bypass=payload.is_bypass
         )
-    set_sqlspec_scope_state(cast("Scope", scope), _TENANT_SCOPE_KEY, payload)
+    set_sqlspec_scope_state(cast("Scope", scope), _receipt_key(key), payload)
     return payload
 
 
 def resolve_litestar_tenant(
-    scope: MutableMapping[str, Any], settings: TenantResolutionSettings
+    scope: MutableMapping[str, Any], settings: TenantResolutionSettings, *, receipt_keys: Sequence[str] = ()
 ) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
     """Resolve an authorized tenant without changing the ambient context.
 
     Route bypass and explicit trusted receipts precede an application extractor.
     Automatic selection checks path, session and optional header values against
     authenticated memberships; route guard declarations only name selectors.
+
+    Args:
+        scope: The ASGI connection scope.
+        settings: Tenant resolution settings for the database configuration.
+        receipt_keys: Configuration keys whose keyed receipts precede the shared receipt.
+
+    Returns:
+        The resolved payload, None, or an awaitable resolving to either.
     """
     route = scope.get("route_handler")
-    if scope_value(getattr(route, "opt", None), "tenant_bypass") is True:
+    if scope_value(getattr(route, "opt", None), "tenant_bypass") is True or is_tenant_bypass_route(route):
         return TenantContextPayload.bypass()
-    receipt = get_sqlspec_scope_state(cast("Scope", scope), _TENANT_SCOPE_KEY)
+    receipt = next(
+        (
+            value
+            for value in (get_sqlspec_scope_state(cast("Scope", scope), _receipt_key(key)) for key in receipt_keys)
+            if value is not None
+        ),
+        None,
+    )
+    if receipt is None:
+        receipt = get_sqlspec_scope_state(cast("Scope", scope), _TENANT_SCOPE_KEY)
     if receipt is not None:
         return coerce_tenant_payload(receipt)
     if settings.tenant_extractor is not None:

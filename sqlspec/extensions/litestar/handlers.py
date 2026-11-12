@@ -24,16 +24,11 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
-from sqlspec.extensions.litestar.tenant import (
-    TenantResolutionSettings,
-    raise_missing_tenant_http_exception,
-    resolve_litestar_tenant,
-)
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Coroutine, Generator
+    from collections.abc import Awaitable, Coroutine
 
     from litestar import Litestar
     from litestar.datastructures.state import State
@@ -262,11 +257,7 @@ def pool_provider_maker(
 
 
 def connection_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
-    pool_key: str,
-    connection_key: str,
-    *,
-    tenant_settings: TenantResolutionSettings | None = None,
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", pool_key: str, connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[ConnectionT, None]]":
     """Create provider for database connections with proper lifecycle management.
 
@@ -274,7 +265,6 @@ def connection_provider_maker(
         config: The database configuration object.
         pool_key: The key used to retrieve the connection pool from `app.state`.
         connection_key: The key used to store the connection in the ASGI scope.
-        tenant_settings: Tenant resolution settings for this connection.
 
     Returns:
         The connection provider function.
@@ -286,7 +276,7 @@ def connection_provider_maker(
             msg = f"Database pool with key '{pool_key}' not found. Cannot create a connection."
             raise ImproperConfigurationError(msg)
 
-        payload = await _capture_connection_tenant(config, scope, connection_key, tenant_settings)
+        payload = await _capture_connection_tenant(config, scope, connection_key)
         try:
             context_manager: AbstractAsyncContextManager[ConnectionT] | None = None
             with TenantContext.bind(payload):
@@ -394,59 +384,15 @@ def has_tenant_strategy(config: Any) -> bool:
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
-class _AmbientFallback:
-    """Await a deferred tenant resolution and fall back to the captured ambient payload."""
-
-    __slots__ = ("_ambient", "_resolved")
-
-    def __init__(
-        self, resolved: "Awaitable[TenantContextPayload | None]", ambient: TenantContextPayload | None
-    ) -> None:
-        self._resolved = resolved
-        self._ambient = ambient
-
-    def __await__(self) -> "Generator[Any, None, TenantContextPayload | None]":
-        return self._resolve().__await__()
-
-    async def _resolve(self) -> TenantContextPayload | None:
-        payload = await self._resolved
-        return payload if payload is not None else self._ambient
-
-    def close(self) -> None:
-        """Close the pending resolution without running it."""
-        close = getattr(self._resolved, "close", None)
-        if callable(close):
-            close()
-
-
-def _resolve_connection_tenant(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", settings: TenantResolutionSettings | None
-) -> "Awaitable[TenantContextPayload | None] | TenantContextPayload | None":
-    """Resolve the request tenant, falling back to an ambient scope only when resolution yields none.
-
-    Route bypass, connection receipts, the configured extractor, and verified auth resolution
-    take precedence over an ambient scope bound by outer middleware.
-    """
-    if not has_tenant_strategy(config):
-        return None
-    ambient = TenantContext.get()
-    resolved = resolve_litestar_tenant(cast("Any", scope), settings or TenantResolutionSettings())
-    if inspect.isawaitable(resolved):
-        return _AmbientFallback(resolved, ambient)
-    return resolved if resolved is not None else ambient
-
-
 async def _capture_connection_tenant(
-    config: "DatabaseConfigProtocol[Any, Any, Any]",
-    scope: "Scope",
-    connection_key: str,
-    settings: TenantResolutionSettings | None,
+    config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", connection_key: str
 ) -> TenantContextPayload | None:
-    payload = _resolve_connection_tenant(config, scope, settings)
-    if inspect.isawaitable(payload):
-        payload = await payload
-    if payload is None and has_tenant_strategy(config) and scope.get("type") in _REQUEST_SCOPE_TYPES:
-        raise_missing_tenant_http_exception(cast("Mapping[str, Any]", scope))
+    """Resolve and record the tenant for one request connection.
+
+    Returns:
+        The request tenant for a tenant-enabled configuration, otherwise None.
+    """
+    payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
     set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
     return payload
 

@@ -1,5 +1,6 @@
 """Verified tenant resolution and guards for the Litestar integration."""
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from inspect import isawaitable
@@ -41,6 +42,7 @@ from sqlspec.extensions.litestar import (
     set_connection_tenant,
 )
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from tests.unit.extensions.test_litestar._request import within_tenant_request
 
 if TYPE_CHECKING:
     from litestar.handlers import BaseRouteHandler
@@ -605,12 +607,16 @@ def test_litestar_unguarded_routes_controller_bypass_and_websockets_translate_te
             assert ws.receive_json() == {"ok": 1}
         assert last_seen() == ("acme", False)
 
-        with pytest.raises(NotAuthorizedException):
-            plugin.provide_request_session_sync("db_connection", app.state, cast("Any", {"type": "http"}))
-        with pytest.raises(PermissionDeniedException):
-            plugin.provide_request_session_sync(
-                "db_connection", app.state, cast("Any", {"type": "http", "user": {"tenant_ids": ("acme", "globex")}})
-            )
+        for scope, error in (
+            ({"type": "http"}, NotAuthorizedException),
+            ({"type": "http", "user": {"tenant_ids": ("acme", "globex")}}, PermissionDeniedException),
+        ):
+
+            async def provide(request_scope: Any = scope) -> Any:
+                return plugin.provide_request_session_sync("db_connection", app.state, request_scope)
+
+            with pytest.raises(error):
+                asyncio.run(within_tenant_request(plugin._tenant_targets(), scope, provide))
 
 
 async def test_provide_request_session_async_translates_missing_tenant() -> None:
@@ -627,12 +633,58 @@ async def test_provide_request_session_async_translates_missing_tenant() -> None
     app = Litestar([], openapi_config=None, plugins=[plugin])
     app.state.db_pool = object()
 
-    with pytest.raises(NotAuthorizedException):
-        await plugin.provide_request_session_async("db_connection", app.state, cast("Any", {"type": "http"}))
-    with pytest.raises(PermissionDeniedException):
-        await plugin.provide_request_session_async(
-            "db_connection", app.state, cast("Any", {"type": "http", "user": {"tenant_ids": ("acme", "globex")}})
+    async def provide(scope: Any) -> Any:
+        return await within_tenant_request(
+            plugin._tenant_targets(),
+            scope,
+            lambda: plugin.provide_request_session_async("db_connection", app.state, scope),
         )
+
+    with pytest.raises(NotAuthorizedException):
+        await provide({"type": "http"})
+    with pytest.raises(PermissionDeniedException):
+        await provide({"type": "http", "user": {"tenant_ids": ("acme", "globex")}})
     with pytest.raises(WebSocketException) as ws_err:
-        await plugin.provide_request_session_async("db_connection", app.state, cast("Any", {"type": "websocket"}))
+        await provide({"type": "websocket"})
     assert ws_err.value.code == 4001
+
+
+def test_set_connection_tenant_key_scopes_receipts_to_one_configuration() -> None:
+    from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
+
+    strategies = {name: AsyncRecordingStrategy() for name in ("alpha", "beta")}
+    configs = {
+        name: TenantAiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features={"tenant_strategy": strategy},
+            extension_config={
+                "litestar": {"session_key": f"{name}_db", "connection_key": f"{name}_conn", "pool_key": f"{name}_pool"}
+            },
+        )
+        for name, strategy in strategies.items()
+    }
+
+    async def open_both() -> None:
+        for config in configs.values():
+            async with config.provide_session() as session:
+                await session.select_value("SELECT 1")
+
+    @get("/keyed")
+    async def keyed(request: Any) -> dict[str, bool]:
+        set_connection_tenant(request, "shared")
+        set_connection_tenant(request, "alpha-tenant", key="alpha_db")
+        await open_both()
+        return {"ok": True}
+
+    @get("/shared")
+    async def shared(request: Any) -> dict[str, bool]:
+        set_connection_tenant(request, "shared")
+        await open_both()
+        return {"ok": True}
+
+    app = Litestar([keyed, shared], openapi_config=None, plugins=[SQLSpecPlugin(list(configs.values()))])
+    with TestClient(app=app) as client:
+        assert client.get("/keyed").status_code == 200
+        assert client.get("/shared").status_code == 200
+    assert strategies["alpha"].checkouts == ["alpha-tenant", "shared"]
+    assert strategies["beta"].checkouts == ["shared", "shared"]

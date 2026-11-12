@@ -63,7 +63,7 @@ def test_flask_tenant_policy_isolation_and_missing_identity(
                 assert current_pid == pid
             pid = current_pid
         app.config["TEST_IDENTITY"] = None
-        assert client.get("/", headers={"X-Tenant-ID": "evil"}).status_code == 500
+        assert client.get("/", headers={"X-Tenant-ID": "evil"}).status_code == 401
         app.config["TEST_IDENTITY"] = "b"
         response = client.get("/")
         assert response.status_code == 200

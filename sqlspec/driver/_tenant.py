@@ -30,14 +30,6 @@ def _lease_state(payload: TenantContextPayload, state: TenantLeaseState | Mappin
     return TenantLeaseState(payload, state)
 
 
-def _require_payload() -> TenantContextPayload:
-    payload = TenantContext.get()
-    if payload is None:
-        msg = "A tenant scope or explicit bypass is required before acquiring a connection"
-        raise TenantContextError(msg)
-    return payload
-
-
 def _report_cleanup_failure(
     cause: BaseException, body_error: BaseException | None, invalidation_error: BaseException | None
 ) -> None:
@@ -59,12 +51,13 @@ class SyncTenantLease:
     Adapters subclass the lease and implement the four connection hooks.
     """
 
-    __slots__ = ("_connection", "_state", "_strategy")
+    __slots__ = ("_connection", "_state", "_strategy", "tenant_key")
 
     def __init__(self, strategy: SyncTenantStrategy) -> None:
         self._strategy = strategy
         self._connection: Any = None
         self._state: TenantLeaseState | None = None
+        self.tenant_key: Any = None
 
     def _acquire(self) -> Any:
         """Return one connection from the adapter pool."""
@@ -87,7 +80,7 @@ class SyncTenantLease:
         if self._state is not None:
             msg = "Tenant lease already owns a connection"
             raise TenantContextError(msg)
-        payload = _require_payload()
+        payload = TenantContext.require(self.tenant_key)
         connection = self._acquire()
         try:
             state = (
@@ -182,7 +175,7 @@ class AsyncTenantLease:
     Adapters subclass the lease and implement the four connection hooks.
     """
 
-    __slots__ = ("_cleanup_timeout", "_connection", "_state", "_strategy")
+    __slots__ = ("_cleanup_timeout", "_connection", "_state", "_strategy", "tenant_key")
 
     def __init__(
         self, strategy: AsyncTenantStrategy, *, cleanup_timeout: float = DEFAULT_TENANT_CLEANUP_TIMEOUT
@@ -194,6 +187,7 @@ class AsyncTenantLease:
         self._cleanup_timeout = cleanup_timeout
         self._connection: Any = None
         self._state: TenantLeaseState | None = None
+        self.tenant_key: Any = None
 
     async def _acquire(self) -> Any:
         """Return one connection from the adapter pool."""
@@ -216,7 +210,7 @@ class AsyncTenantLease:
         if self._state is not None:
             msg = "Tenant lease already owns a connection"
             raise TenantContextError(msg)
-        payload = _require_payload()
+        payload = await TenantContext.arequire(self.tenant_key)
         connection = await self._acquire()
         try:
             state = (

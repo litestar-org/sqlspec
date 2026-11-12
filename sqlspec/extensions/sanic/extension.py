@@ -6,14 +6,13 @@ import logging
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from contextvars import ContextVar
-from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, Final, cast, overload
+from typing import TYPE_CHECKING, Any, Final, NoReturn, cast, overload
 
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
-from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
@@ -27,7 +26,7 @@ from sqlspec.extensions.sanic._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
-from sqlspec.utils.tenant import TenantContext, TenantContextPayload, coerce_tenant_payload
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
 
 if TYPE_CHECKING:
@@ -243,7 +242,7 @@ class SQLSpecPlugin:
             if isinstance(lock, asyncio.Lock):
                 async with lock:
                     if not has_context_value(request.ctx, config_state.connection_key):
-                        payload = await self._resolve_request_tenant(request, config_state)
+                        payload = await TenantContext.arequire(config_state.config)
                         await self._acquire_request_connection(request, config_state, payload, bind_payload=True)
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
@@ -288,7 +287,13 @@ class SQLSpecPlugin:
 
         Returns:
             Configuration state instance.
+
+        Raises:
+            ImproperConfigurationError: A tenant extractor is configured without a tenant strategy.
         """
+        if settings["tenant_extractor"] is not None and not _has_tenant_strategy(config):
+            msg = "tenant_extractor requires driver_features['tenant_strategy'] on the same configuration"
+            raise ImproperConfigurationError(msg)
         return SanicConfigState(
             config=config,
             connection_key=settings["connection_key"],
@@ -307,47 +312,31 @@ class SQLSpecPlugin:
             sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
 
-    async def _invoke_extractor(self, request: Any, config_state: SanicConfigState) -> TenantContextPayload | None:
-        extractor = config_state.tenant_extractor
-        if extractor is None:
-            return None
-        raw = extractor(request)
-        if isawaitable(raw):
-            raw = await raw
-        return coerce_tenant_payload(raw)
-
-    async def _resolve_request_tenant(
-        self, request: Any, config_state: SanicConfigState
-    ) -> TenantContextPayload | None:
+    def _resolve_route_tenant(self, request: Any, key: Any) -> Any:
+        """Resolve the route bypass marker, request receipt, or extractor for a configuration."""
+        config_state = next(
+            (state for state in self._config_states if state.config is key),
+            next(state for state in self._config_states if _has_tenant_strategy(state.config)),
+        )
+        route = getattr(request, "route", None)
+        if is_tenant_bypass_route(getattr(route, "handler", None)):
+            return TenantContextPayload.bypass()
         receipt = get_request_tenant(request, config_state)
         if receipt is not None:
-            return coerce_tenant_payload(receipt)
+            return receipt
         if config_state.tenant_extractor is not None:
-            return await self._invoke_extractor(request, config_state)
-        return TenantContext.get()
+            return config_state.tenant_extractor(request)
+        return None
 
     def _acquire_deferred_connection_sync(self, request: Any, config_state: SanicConfigState) -> Any:
         config = config_state.config
         if isinstance(config, (AsyncDatabaseConfig, NoPoolAsyncConfig)) or bool(getattr(config, "is_async", False)):
             msg = (
-                "Async tenant-scoped Sanic connections require an upfront tenant_extractor "
-                "or await plugin.get_session_async(request) after set_request_tenant(request, ...)."
+                "Async tenant-scoped Sanic connections are acquired on first use; call "
+                "await plugin.get_session_async(request) or await plugin.get_connection_async(request)."
             )
-            raise TenantContextError(msg)
-        receipt = get_request_tenant(request, config_state)
-        if receipt is not None:
-            payload = coerce_tenant_payload(receipt)
-        elif config_state.tenant_extractor is not None:
-            raw = config_state.tenant_extractor(request)
-            if isawaitable(raw):
-                close = getattr(raw, "close", None)
-                if callable(close):
-                    close()
-                msg = "Synchronous Sanic session acquisition requires a synchronous tenant_extractor"
-                raise ImproperConfigurationError(msg)
-            payload = coerce_tenant_payload(raw)
-        else:
-            payload = TenantContext.get()
+            raise ImproperConfigurationError(msg)
+        payload = TenantContext.require(config)
         payload_key = self._tenant_payload_key(config_state)
         set_context_value(request.ctx, payload_key, payload)
         try:
@@ -445,7 +434,8 @@ class SQLSpecPlugin:
         """Finalize request state when an earlier response middleware short-circuits ``_on_response``.
 
         Sanic stops running response middleware once one returns a response, so this per-request
-        signal repeats the idempotent finalization before the response is sent.
+        signal repeats the idempotent finalization before the response is sent. The signal fires
+        after the handler returns, so it also restores the caller's tenant context.
 
         Args:
             request: Sanic request instance.
@@ -454,7 +444,10 @@ class SQLSpecPlugin:
         """
         if request is None or not hasattr(request, "ctx"):
             return
-        await self._on_response(request, response)
+        try:
+            await self._on_response(request, response)
+        finally:
+            self._reset_tenant(request)
 
     async def _on_request_complete(self, conn_info: Any = None, request: Any = None, **_: Any) -> None:
         """Release any residual request connections and contexts when a request aborts or disconnects.
@@ -523,28 +516,22 @@ class SQLSpecPlugin:
         self._set_observability_contexts(request)
         acquired_states: list[SanicConfigState] = []
         try:
+            tenant_keys = tuple(state.config for state in self._config_states if _has_tenant_strategy(state.config))
+            if tenant_keys and not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                binding = TenantRequestBinding(
+                    lambda key: self._resolve_route_tenant(request, key),
+                    keys=tenant_keys,
+                    ambient=TenantContext.current_binding(),
+                    missing=lambda _key: _reject_missing_tenant(request),
+                )
+                set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.bind_request(binding))
             for config_state in self._config_states:
                 if config_state.disable_di:
                     continue
-                if not _has_tenant_strategy(config_state.config):
-                    has_payload = False
-                    payload: TenantContextPayload | None = None
-                    if config_state.tenant_extractor is not None:
-                        payload = await self._invoke_extractor(request, config_state)
-                        has_payload = True
-                        if not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-                            set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
-                    await self._acquire_request_connection(request, config_state, payload, bind_payload=has_payload)
-                    acquired_states.append(config_state)
-                    continue
-
-                payload = await self._resolve_request_tenant(request, config_state)
-                if payload is None:
+                if _has_tenant_strategy(config_state.config):
                     set_context_value(request.ctx, self._deferred_key(config_state), asyncio.Lock())
                     continue
-                if not has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-                    set_context_value(request.ctx, _TENANT_SCOPE_KEY, TenantContext.set(payload))
-                await self._acquire_request_connection(request, config_state, payload, bind_payload=True)
+                await self._acquire_request_connection(request, config_state)
                 acquired_states.append(config_state)
         except BaseException as exc:
             try:
@@ -571,11 +558,17 @@ class SQLSpecPlugin:
     async def _on_response(self, request: Any, response: Any) -> None:
         """Finalize request-scoped connections.
 
+        Pending tenant resolutions finish first, so streaming bodies keep the request tenant.
+        The tenant binding itself stays active until the handler returns.
+
         Args:
             request: Sanic request instance.
             response: Sanic response instance.
         """
         primary_exc: BaseException | None = None
+        binding = TenantContext.current_binding()
+        if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+            await binding.afreeze()
         try:
             for config_state in self._config_states[::-1]:
                 if config_state.disable_di:
@@ -587,11 +580,8 @@ class SQLSpecPlugin:
             if primary_exc is not None:
                 raise primary_exc
         finally:
-            try:
-                self._restore_observability_contexts(request, response)
-                self._unbind_active_request(request)
-            finally:
-                self._reset_tenant(request)
+            self._restore_observability_contexts(request, response)
+            self._unbind_active_request(request)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.
@@ -600,7 +590,10 @@ class SQLSpecPlugin:
             ``True`` when connection management or observability middleware is enabled.
         """
         return any(
-            not state.disable_di or state.enable_correlation_middleware or self._state_enables_sqlcommenter(state)
+            not state.disable_di
+            or _has_tenant_strategy(state.config)
+            or state.enable_correlation_middleware
+            or self._state_enables_sqlcommenter(state)
             for state in self._config_states
         )
 
@@ -1054,6 +1047,18 @@ class SQLSpecPlugin:
                 return state
         msg = f"No configuration found for: {key!r}"
         raise ValueError(msg)
+
+
+def _reject_missing_tenant(request: Any) -> NoReturn:
+    """Raise the Sanic response for a request without an authorized tenant."""
+    from sanic.exceptions import Forbidden, Unauthorized
+
+    user = getattr(getattr(request, "ctx", None), "user", None)
+    if user is None or not bool(getattr(user, "is_authenticated", True)):
+        msg = "Authentication required"
+        raise Unauthorized(msg)
+    msg = "An authorized tenant is required"
+    raise Forbidden(msg)
 
 
 def _has_tenant_strategy(config: Any) -> bool:

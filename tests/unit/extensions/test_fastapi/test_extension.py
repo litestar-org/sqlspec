@@ -193,10 +193,10 @@ class _TenantConn:
         self.rollbacks: list[str | None] = []
 
     async def commit(self) -> None:
-        self.commits.append(TenantContext.get_tenant_id())
+        self.commits.append(self.tenant_id)
 
     async def rollback(self) -> None:
-        self.rollbacks.append(TenantContext.get_tenant_id())
+        self.rollbacks.append(self.tenant_id)
 
 
 class _TenantDriver:
@@ -221,10 +221,7 @@ def _make_deferred_tenant_config(checkouts: list[_TenantConn]) -> AiosqliteConfi
                 raise TenantContextError("Tenant context required")
             conn = _TenantConn(payload.tenant_id, dict(payload.variables))
             checkouts.append(conn)
-            try:
-                yield conn
-            finally:
-                assert TenantContext.get_tenant_id() == payload.tenant_id
+            yield conn
 
     cfg = _DeferredTenantConfig(
         bind_key="tenant_db",

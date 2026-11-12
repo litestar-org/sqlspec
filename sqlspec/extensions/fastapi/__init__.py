@@ -9,7 +9,7 @@ from sqlspec.extensions.fastapi.providers import DependencyDefaults, FieldNameTy
 from sqlspec.extensions.starlette._utils import set_request_tenant
 from sqlspec.extensions.starlette.middleware import SQLSpecAutocommitMiddleware, SQLSpecManualMiddleware
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
-from sqlspec.utils.tenant import SQLSpecTenantMiddleware
+from sqlspec.utils.tenant import SQLSpecTenantMiddleware, tenant_bypass
 
 __all__ = (
     "DependencyDefaults",
@@ -23,4 +23,5 @@ __all__ = (
     "SQLSpecTenantMiddleware",
     "provide_filters",
     "set_request_tenant",
+    "tenant_bypass",
 )

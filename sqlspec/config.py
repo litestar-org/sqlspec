@@ -1575,7 +1575,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if lease_type is None:
             msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
             raise ImproperConfigurationError(msg)
-        return lease_type(self, strategy)
+        lease = lease_type(self, strategy)
+        lease.tenant_key = self
+        return lease
 
     def _require_leased_tenant_connection(self) -> None:
         """Reject standalone connections that would bypass tenant leases.

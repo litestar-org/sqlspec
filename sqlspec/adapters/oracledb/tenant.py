@@ -243,7 +243,8 @@ class OracleSyncTenantLease(SyncTenantLease):
     def _acquire(self) -> Any:
         self._pool = self._config.provide_pool()
         connection = self._pool.acquire()
-        hook = self._config.driver_features.get("session_context_hook") if TenantContext.is_bypassed() else None
+        bypass = TenantContext.require(self.tenant_key).is_bypass
+        hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
             try:
                 execute_session_checkout_sync(connection, hook)
@@ -289,7 +290,8 @@ class OracleAsyncTenantLease(AsyncTenantLease):
     async def _acquire(self) -> Any:
         self._pool = await self._config.provide_pool()
         connection = await self._pool.acquire()
-        hook = self._config.driver_features.get("session_context_hook") if TenantContext.is_bypassed() else None
+        bypass = (await TenantContext.arequire(self.tenant_key)).is_bypass
+        hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
             setup_error: BaseException | None = None
             try:

@@ -27,6 +27,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.protocols import AsyncWritableBytesSink, DirectStreamWriteProtocol, ObjectStoreProtocol, WritableBytesSink
 from sqlspec.storage import encode_arrow_to_async_sink, encode_arrow_to_sink, supports_direct_stream_write
 from sqlspec.typing import ArrowTable, BaseModel, DTOData
+from sqlspec.utils.tenant import TenantRequestBinding
 
 T = TypeVar("T")
 
@@ -49,7 +50,7 @@ def tenant_exports() -> TenantContextPayload:
     assert_type(TenantContext.get_tenant_id(), str | None)
     assert_type(TenantContext.is_bypassed(), bool)
     token = TenantContext.set(None)
-    assert_type(token, Token[TenantContextPayload | None])
+    assert_type(token, Token[TenantContextPayload | TenantRequestBinding | None])
     TenantContext.reset(token)
     with TenantContext.scope(payload) as scoped:
         assert_type(scoped, TenantContextPayload)

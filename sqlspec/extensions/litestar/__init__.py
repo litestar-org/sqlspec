@@ -23,7 +23,7 @@ from sqlspec.extensions.litestar.tenant import (
     set_connection_tenant,
 )
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
-from sqlspec.utils.tenant import SQLSpecTenantMiddleware
+from sqlspec.utils.tenant import SQLSpecTenantMiddleware, tenant_bypass
 
 __all__ = (
     "DEFAULT_COMMIT_MODE",
@@ -48,4 +48,5 @@ __all__ = (
     "resolve_litestar_tenant",
     "set_connection_tenant",
     "set_sqlspec_scope_state",
+    "tenant_bypass",
 )
