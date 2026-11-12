@@ -16,12 +16,11 @@ from sqlspec.adapters.oracledb.core import (
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease, await_owned_release
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
-from sqlspec.utils.tenant import TenantContext
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
     from sqlspec.core.tenant.base import AsyncTenantStrategy, SyncTenantStrategy
-    from sqlspec.utils.tenant import TenantContextPayload
 
 __all__ = (
     "ORACLE_TENANT_IDENTIFIER_MAX_BYTES",
@@ -260,7 +259,8 @@ class OracleSyncTenantLease(SyncTenantLease):
     def _release(self, connection: Any) -> None:
         hook, self._bypass_hook = self._bypass_hook, None
         if hook is not None:
-            execute_session_release_sync(connection, hook)
+            with TenantContext.bind(TenantContextPayload.bypass()):
+                execute_session_release_sync(connection, hook)
         self._pool.release(connection)
 
     def _invalidate(self, connection: Any) -> None:
@@ -308,7 +308,8 @@ class OracleAsyncTenantLease(AsyncTenantLease):
     async def _release(self, connection: Any) -> None:
         hook, self._bypass_hook = self._bypass_hook, None
         if hook is not None:
-            await execute_session_release_async(connection, hook)
+            with TenantContext.bind(TenantContextPayload.bypass()):
+                await execute_session_release_async(connection, hook)
         await self._pool.release(connection)
 
     async def _invalidate(self, connection: Any) -> None:
