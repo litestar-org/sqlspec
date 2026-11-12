@@ -5,6 +5,7 @@ from typing import Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.snowflake.core import format_snowflake_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -54,19 +55,13 @@ _DDL_TYPES: Final[dict[str, str]] = {
 }
 
 
-def _format_snowflake_identifier(identifier: str) -> str:
-    from sqlspec.adapters.snowflake.driver import _format_identifier
-
-    return _format_identifier(identifier)
-
-
 def _format_snowflake_show_scope(schema_name: str | None = None, table_name: str | None = None) -> str:
     if table_name is not None:
-        qualified = _format_snowflake_identifier(table_name)
+        qualified = format_snowflake_identifier(table_name)
         if schema_name is not None and len(split_qualified_identifier(table_name)) == 1:
-            qualified = f"{_format_snowflake_identifier(schema_name)}.{qualified}"
+            qualified = f"{format_snowflake_identifier(schema_name)}.{qualified}"
         return f"IN TABLE {qualified}"
-    return f"IN SCHEMA {_format_snowflake_identifier(schema_name)}" if schema_name is not None else "IN SCHEMA"
+    return f"IN SCHEMA {format_snowflake_identifier(schema_name)}" if schema_name is not None else "IN SCHEMA"
 
 
 def _resolve_snowflake_catalog_scope(
@@ -77,13 +72,13 @@ def _resolve_snowflake_catalog_scope(
     database_name = None
     schema_name = None
     if schema is not None:
-        schema_parts = split_qualified_identifier(_format_snowflake_identifier(schema))
+        schema_parts = split_qualified_identifier(format_snowflake_identifier(schema))
         schema_name = schema_parts[-1]
         if len(schema_parts) > 1:
             database_name = schema_parts[-2]
     table_name = None
     if table is not None:
-        table_parts = split_qualified_identifier(_format_snowflake_identifier(table))
+        table_parts = split_qualified_identifier(format_snowflake_identifier(table))
         table_name = table_parts[-1]
         if len(table_parts) > 1:
             schema_name = table_parts[-2]
@@ -244,14 +239,14 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
     def resolve_ddl_object_name(self, driver: Any, object_name: str, schema: str | None) -> tuple[str, str | None]:
         """Resolve qualified or quoted Snowflake object and schema identifiers into exact catalog names."""
         _ = driver
-        object_parts = split_qualified_identifier(_format_snowflake_identifier(object_name))
+        object_parts = split_qualified_identifier(format_snowflake_identifier(object_name))
         resolved_name = object_parts[-1]
         if len(object_parts) >= _DATABASE_QUALIFIED_PARTS:
             return resolved_name, f"{quote_identifier(object_parts[-3])}.{quote_identifier(object_parts[-2])}"
         if len(object_parts) > 1:
             return resolved_name, object_parts[-2]
         if schema is not None:
-            schema_parts = split_qualified_identifier(_format_snowflake_identifier(schema))
+            schema_parts = split_qualified_identifier(format_snowflake_identifier(schema))
             if len(schema_parts) > 1:
                 return resolved_name, f"{quote_identifier(schema_parts[-2])}.{quote_identifier(schema_parts[-1])}"
             return resolved_name, (schema_parts[0] if schema_parts else self.resolve_schema(None))
@@ -277,7 +272,7 @@ class SnowflakeSyncDataDictionary(SyncDataDictionaryBase):
     ) -> DDLResult:
         """Resolve one Snowflake object's DDL while avoiding default schema qualification for schemas."""
         if object_type.lower() == "schema" and schema is None:
-            object_parts = split_qualified_identifier(_format_snowflake_identifier(object_name))
+            object_parts = split_qualified_identifier(format_snowflake_identifier(object_name))
             resolved_name = object_parts[-1]
             resolved_schema = object_parts[-2] if len(object_parts) > 1 else None
             return self._get_exact_object_ddl(

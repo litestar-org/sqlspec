@@ -18,6 +18,7 @@ from sqlspec.adapters.snowflake.core import (
     descriptor_column_name,
     descriptor_type_code,
     driver_profile,
+    format_snowflake_identifier,
     is_snowflake_error,
     normalize_column_names,
     normalize_execute_parameters,
@@ -54,9 +55,6 @@ if TYPE_CHECKING:
 __all__ = ("SnowflakeDriver", "SnowflakeExceptionHandler")
 
 
-_QUALIFIED_IDENTIFIER_PART = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
-
-
 _INSERT_SOURCE_TOKENS = re.compile(
     r"'(?:''|\\.|[^'])*'|\"(?:\"\"|[^\"])*\"|\$\$.*?\$\$|--[^\r\n]*|//[^\r\n]*|/\*.*?\*/|(?P<paren>[()])|(?P<source>\b(?:INSERT|SELECT|VALUES)\b)",
     re.IGNORECASE | re.DOTALL,
@@ -76,25 +74,6 @@ def _insert_uses_select(sql: str) -> bool:
             elif insert_seen:
                 return keyword == "SELECT"
     return False
-
-
-def _format_identifier(identifier: str) -> str:
-    position = 0
-    parts: list[str] = []
-    while position < len(identifier):
-        matched = _QUALIFIED_IDENTIFIER_PART.match(identifier, position)
-        if matched is None:
-            msg = "Invalid Snowflake identifier"
-            raise SQLSpecError(msg)
-        parts.append(quote_identifier(normalize_identifier(matched.group(1), "snowflake")))
-        position = matched.end()
-        if matched.group(2) == "." and position == len(identifier):
-            msg = "Invalid Snowflake identifier"
-            raise SQLSpecError(msg)
-    if not parts:
-        msg = "Snowflake identifier must not be empty"
-        raise SQLSpecError(msg)
-    return ".".join(parts)
 
 
 def _session_query_tag(connection: Any) -> str | None:
@@ -208,7 +187,13 @@ class SnowflakeExceptionHandler(BaseSyncExceptionHandler):
 class SnowflakeDriver(SyncDriverAdapterBase):
     """Execute Snowflake SQL with explicit transactions and zero-pandas Arrow I/O."""
 
-    __slots__ = ("_active_stream_cursors", "_column_name_cache", "_data_dictionary", "_session_query_tag")
+    __slots__ = (
+        "_active_stream_cursors",
+        "_column_name_cache",
+        "_data_dictionary",
+        "_migration_schema_restore",
+        "_session_query_tag",
+    )
     dialect = "snowflake"
     native_arrow_export: ClassVar[bool] = True
 
@@ -237,6 +222,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         self._data_dictionary: SnowflakeSyncDataDictionary | None = None
         self._active_stream_cursors: dict[int, Any] = {}
         self._column_name_cache: dict[tuple[tuple[str, ...], bool], list[str]] = {}
+        self._migration_schema_restore: str | None = None
         self._session_query_tag: str | None = (
             _session_query_tag(connection) if self.driver_features.get("enable_query_tag_correlation") else None
         )
@@ -516,16 +502,27 @@ class SnowflakeDriver(SyncDriverAdapterBase):
         )
 
     def set_migration_session_schema(self, schema: str) -> None:
-        """Capture and change the migration schema."""
-        from sqlspec.adapters.snowflake.migrations import apply_snowflake_migration_schema
-
-        apply_snowflake_migration_schema(self, schema)
+        """Capture the exact current database and schema once, then switch to a validated schema."""
+        quoted = format_snowflake_identifier(schema)
+        if self._migration_schema_restore is None:
+            current = self.select_one('SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name"')
+            database_name, schema_name = current.get("database_name"), current.get("schema_name")
+            if not isinstance(schema_name, str) or not schema_name:
+                msg = "Cannot switch Snowflake migration schema without a restorable current schema"
+                raise SQLSpecError(msg)
+            previous = quote_identifier(schema_name)
+            if isinstance(database_name, str) and database_name:
+                previous = f"{quote_identifier(database_name)}.{previous}"
+            self._migration_schema_restore = previous
+        self.execute(f"USE SCHEMA {quoted}")
 
     def reset_migration_session_schema(self) -> None:
-        """Restore the exact schema captured before migrations."""
-        from sqlspec.adapters.snowflake.migrations import restore_snowflake_migration_schema
-
-        restore_snowflake_migration_schema(self)
+        """Restore the exact captured schema, clearing the capture only after success."""
+        previous = self._migration_schema_restore
+        if previous is None:
+            return
+        self.execute(f"USE SCHEMA {previous}")
+        self._migration_schema_restore = None
 
     def select_to_arrow(
         self,
@@ -625,7 +622,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
             msg = "batch_size must be positive"
             raise ValueError(msg)
         arrow_table = self._coerce_arrow_table(source)
-        formatted = _format_identifier(table)
+        formatted = format_snowflake_identifier(table)
         if if_not_exists:
             self.execute(build_create_table_from_arrow_schema(formatted, arrow_table, dialect="snowflake"))
         arrow_table = arrow_table.rename_columns([
@@ -639,7 +636,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
                 partitioner=partitioner,
                 overwrite=overwrite,
                 telemetry=telemetry,
-                stage_table=_format_identifier(stage_table) if isinstance(stage_table, str) else stage_table,
+                stage_table=format_snowflake_identifier(stage_table) if isinstance(stage_table, str) else stage_table,
                 conflict_keys=[normalize_identifier(key, "snowflake") for key in conflict_keys]
                 if conflict_keys
                 else None,
@@ -675,7 +672,7 @@ class SnowflakeDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load already normalized physical columns without folding them again."""
         arrow_table = self._coerce_arrow_table(source)
-        formatted = _format_identifier(table)
+        formatted = format_snowflake_identifier(table)
         threshold = int(self.driver_features.get("stage_parquet_threshold_rows", DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS))
         if (
             arrow_table.num_rows

@@ -1,48 +1,10 @@
 """Snowflake migration tracking and reversible session schema switches."""
 
-from typing import TYPE_CHECKING
-
 from sqlspec.builder import CreateTable, Select
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.migrations.tracker import SyncMigrationTracker
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 
-if TYPE_CHECKING:
-    from sqlspec.driver import SyncDriverAdapterBase
-
-__all__ = ("SnowflakeSyncMigrationTracker", "apply_snowflake_migration_schema", "restore_snowflake_migration_schema")
-
-_PREVIOUS_SCHEMA_KEY = "_migration_previous_schema"
-
-
-def apply_snowflake_migration_schema(driver: "SyncDriverAdapterBase", schema: str) -> None:
-    """Capture the exact database/schema and switch to a validated schema name."""
-    from sqlspec.adapters.snowflake.driver import _format_identifier
-
-    quoted = _format_identifier(schema)
-    if driver.driver_features.get(_PREVIOUS_SCHEMA_KEY) is None:
-        current = driver.select_one('SELECT CURRENT_DATABASE() AS "database_name", CURRENT_SCHEMA() AS "schema_name"')
-        database_name, schema_name = current.get("database_name"), current.get("schema_name")
-        if not isinstance(schema_name, str) or not schema_name:
-            msg = "Cannot switch Snowflake migration schema without a restorable current schema"
-            raise SQLSpecError(msg)
-        previous = quote_identifier(schema_name)
-        if isinstance(database_name, str) and database_name:
-            previous = f"{quote_identifier(database_name)}.{previous}"
-        driver.driver_features[_PREVIOUS_SCHEMA_KEY] = previous
-    driver.execute(f"USE SCHEMA {quoted}")
-
-
-def restore_snowflake_migration_schema(driver: "SyncDriverAdapterBase") -> None:
-    """Restore captured exact-case identifiers, clearing state only after success."""
-    previous = driver.driver_features.get(_PREVIOUS_SCHEMA_KEY)
-    if previous is None:
-        return
-    if not isinstance(previous, str) or not previous:
-        msg = "Invalid captured Snowflake migration schema"
-        raise SQLSpecError(msg)
-    driver.execute(f"USE SCHEMA {previous}")
-    driver.driver_features.pop(_PREVIOUS_SCHEMA_KEY, None)
+__all__ = ("SnowflakeSyncMigrationTracker",)
 
 
 class SnowflakeSyncMigrationTracker(SyncMigrationTracker):
