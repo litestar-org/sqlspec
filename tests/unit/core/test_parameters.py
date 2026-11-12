@@ -3339,3 +3339,21 @@ def test_parameter_processor_fast_path_qmark_escape_honors_unescape_output() -> 
     assert preserved.sql == qmark_sql
     assert preserved.sqlglot_sql == "SELECT payload ? 'region' FROM events WHERE id = ?"
     assert preserved.parameters == (7,)
+
+
+def test_snowflake_concatenation_between_qmarks_extracts_both_parameters() -> None:
+    """Snowflake has no ``?|`` or ``?&`` operators, so ``?||?`` concatenates two placeholders."""
+    parameters = ParameterValidator().extract_parameters("SELECT ?||? AS joined", dialect="snowflake")
+
+    assert [parameter.style for parameter in parameters] == [ParameterStyle.QMARK, ParameterStyle.QMARK]
+
+
+def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
+    """Dialects without distinct lexing reuse one cached extraction."""
+    validator = ParameterValidator()
+
+    validator.extract_parameters("SELECT ?", dialect="postgres")
+    validator.extract_parameters("SELECT ?", dialect="sqlite")
+    validator.extract_parameters("SELECT ?")
+
+    assert validator.cache_stats()["size"] == 1

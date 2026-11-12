@@ -762,6 +762,7 @@ class StatementSplitter:
         max_nesting_depth = dialect.max_nesting_depth
         is_real_block_ender = dialect.is_real_block_ender
         should_delay_semicolon_termination = dialect.should_delay_semicolon_termination
+        is_snowflake = dialect.name == "snowflake"
 
         all_tokens = self._tokenize(sql)
 
@@ -781,7 +782,7 @@ class StatementSplitter:
             if token.type == TokenType.KEYWORD:
                 if token_upper in block_starters:
                     if (
-                        dialect.name == "snowflake"
+                        is_snowflake
                         and token_upper == _BEGIN_BLOCK_KEYWORD
                         and block_stack
                         and block_stack[-1] == "DECLARE"
@@ -792,12 +793,9 @@ class StatementSplitter:
                         if len(block_stack) > max_nesting_depth:
                             msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
                             raise ValueError(msg)
-                elif (
-                    dialect.name == "snowflake"
-                    and token_upper.endswith("CASE")
-                    and block_stack
-                    and block_stack[-1] == "CASE"
-                ) or (token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)):
+                elif (is_snowflake and token_upper.endswith("CASE") and block_stack and block_stack[-1] == "CASE") or (
+                    token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)
+                ):
                     block_stack.pop()
 
             is_terminator = False

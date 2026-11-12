@@ -41,7 +41,7 @@ SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     (?P<dollar_quoted_string>\$\$[\s\S]*?\$\$) |
     (?P<line_comment>--[^\r\n]*) |
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
-    (?P<pg_q_operator>\?\?|\?\||\?&) |
+    (?P<pg_q_operator>\?\?) |
     (?P<pg_cast>::(?P<cast_type>\w+)) |
     (?P<sql_server_global>@@(?P<global_var_name>\w+)) |
     (?P<sf_slash_comment>(?<!:)//[^\r\n]*) |
@@ -195,7 +195,7 @@ class ParameterValidator:
 
     def extract_parameters(self, sql: str, dialect: str | None = None) -> "list[ParameterInfo]":
         """Extract ordered parameter metadata from SQL text."""
-        normalized_dialect = _normalize_dialect(dialect)
+        normalized_dialect = "snowflake" if _normalize_dialect(dialect) == "snowflake" else None
         if self._cache_max_size <= 0:
             return self._extract_parameters_uncached(sql, normalized_dialect)
 
