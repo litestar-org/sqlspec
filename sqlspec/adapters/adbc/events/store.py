@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING, Final
 
 from sqlspec.adapters.adbc.core import (
+    _TERADATA_TABLE_EXISTS_SQL,
     RECONCILE_ADBC_DIALECTS,
     is_postgres_dialect,
     resolve_dialect_from_config,
@@ -25,7 +26,7 @@ from sqlspec.adapters.adbc.core import (
 )
 from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.extensions.events import BaseEventQueueStore
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -101,6 +102,19 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         if index_sql:
             statements.append(self._wrap_create_statement(index_sql, "index"))
         return statements
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self.dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self.table_name),
+            )
+            for statement in self.drop_statements()
+        ]
 
     def drop_statements(self) -> "list[str]":
         """Return drop statements in reverse dependency order."""

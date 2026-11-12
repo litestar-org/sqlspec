@@ -295,3 +295,57 @@ def test_adbc_litestar_store_teradata_create_table_commits_after_companion_recon
         "execute_script:idx_my_db_my_sessions_expires_at",
         "commit",
     ]
+
+
+class _TeradataCatalogDriver:
+    """Fake session driver whose DROP TABLE fails for absent tables, like Teradata error 3807."""
+
+    dialect = "vantage"
+
+    def __init__(self, tables: "set[str]") -> None:
+        self.tables = tables
+        self.dropped: list[str] = []
+
+    def select_one_or_none(self, _sql: str, parameters: "tuple[str | None, str]") -> "dict[str, int] | None":
+        return {"found": 1} if parameters[1] in self.tables else None
+
+    def execute_script(self, statement: str) -> None:
+        name = statement.removeprefix("DROP TABLE ").upper()
+        if name not in self.tables:
+            msg = f"[Error 3807] Object '{name}' does not exist."
+            raise RuntimeError(msg)
+        self.tables.discard(name)
+        self.dropped.append(name)
+
+    def commit(self) -> None:
+        return None
+
+
+def test_adbc_teradata_extension_downgrades_skip_tables_already_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.adbc.adk.store import AdbcADKMemoryStore, AdbcADKStore
+    from sqlspec.extensions.adk.migrations.reconcile import _downgrade_sync as adk_downgrade
+    from sqlspec.extensions.events.migrations.reconcile import _downgrade_sync as events_downgrade
+    from sqlspec.extensions.litestar.migrations.reconcile import _downgrade_sync as litestar_downgrade
+
+    config = AdbcConfig(
+        connection_config={"uri": "teradata://user:pass@host/database"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    driver = _TeradataCatalogDriver({"ADK_SESSION", "ADK_EVENT", "ADK_MEMORY", "LITESTAR_SESSION"})
+    monkeypatch.setattr(AdbcConfig, "provide_session", lambda _: nullcontext(driver))
+
+    adk_stores = [AdbcADKStore(config), AdbcADKMemoryStore(config)]
+    adk_downgrade(driver, adk_stores)
+    adk_downgrade(driver, adk_stores)
+    litestar_store = AdbcStore(config)
+    assert litestar_store._get_dialect() == "teradata"
+    litestar_downgrade(driver, litestar_store)
+    litestar_downgrade(driver, litestar_store)
+    events_downgrade(driver, AdbcEventQueueStore(config), True)
+    assert driver.dropped == ["ADK_MEMORY", "ADK_EVENT", "ADK_SESSION", "LITESTAR_SESSION"]
+
+    driver.tables.update({"ADK_SESSION", "ADK_MEMORY"})
+    adk_stores[0].drop_tables()
+    adk_stores[1].drop_tables()
+    assert driver.dropped[-2:] == ["ADK_SESSION", "ADK_MEMORY"]
+    assert driver.tables == set()

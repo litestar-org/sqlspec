@@ -23,13 +23,14 @@ from sqlspec.adapters.adbc.core import (
     _DB2_TABLE_EXISTS_SQL,
     _TERADATA_TABLE_EXISTS_SQL,
     is_postgres_dialect,
+    resolve_dialect_name,
     resolve_reconcile_adbc_dialect,
     split_teradata_table_name,
 )
 from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_name
 from sqlspec.exceptions import IntegrityError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
-from sqlspec.migrations.schema import SchemaTarget
+from sqlspec.migrations.schema import DropStatement, SchemaTarget
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
@@ -170,7 +171,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 self._dialect = resolved
                 return
         dialect_value = getattr(driver, "dialect", None)
-        raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+        raw_dialect = resolve_dialect_name(dialect_value) if dialect_value else "postgres"
         if raw_dialect in {"tsql", "sqlserver"}:
             self._dialect = "mssql"
         elif raw_dialect == "postgresql":
@@ -279,7 +280,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
 
         with self._config.provide_session() as driver:
             dialect_value = driver.dialect
-            raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+            raw_dialect = resolve_dialect_name(dialect_value) if dialect_value else "postgres"
             self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
 
         assert self._dialect is not None
@@ -530,6 +531,19 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                     driver.rollback()
                 raise
         self._log_table_created()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._get_dialect() != "teradata":
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self._table_name),
+            )
+            for statement in self._drop_table_sql()
+        ]
 
     def _drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.

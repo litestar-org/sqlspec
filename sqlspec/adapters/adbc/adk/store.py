@@ -31,7 +31,7 @@ from sqlspec.data_dictionary import normalize_dialect_name
 from sqlspec.exceptions import ImproperConfigurationError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
-from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
+from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index, run_drop_statements_sync
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -123,20 +123,26 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     __slots__ = ("_dialect",)
 
-    def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
+    def drop_tables(self) -> None:
+        """Drop all ADK tables in FK-safe order, probing the Teradata catalog before each drop."""
         if self._dialect != DIALECT_TERADATA:
-            super()._execute_lifecycle_scripts(statements)
+            super().drop_tables()
             return
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                for statement in statements:
-                    table = statement.removeprefix("DROP TABLE ").strip()
-                    if _teradata_table_exists(cursor, table):
-                        cursor.execute(statement)
-                        conn.commit()
-            finally:
-                cursor.close()
+        _run_guarded_drops(self._config, self.downgrade_drops())
+        self._log_tables_dropped()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        tables = (
+            self._metadata_table,
+            self._user_state_table,
+            self._app_state_table,
+            self._events_table,
+            self._session_table,
+        )
+        return [_teradata_guarded_drop(table) for table in tables]
 
     def __init__(self, config: "AdbcConfig") -> None:
         """Initialize ADBC ADK store.
@@ -1785,26 +1791,17 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     __slots__ = ("_dialect", "_sqlite_fts_enabled")
 
     def drop_tables(self) -> None:
-        """Drop memory tables through the dialect-aware catalog guard."""
-        self._execute_lifecycle_scripts(self._drop_memory_table_sql())
-
-    def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
+        """Drop the memory table, probing the Teradata catalog before dropping."""
         if self._dialect != DIALECT_TERADATA:
-            with self._config.provide_session() as driver:
-                for statement in statements:
-                    driver.execute(statement)
-                driver.commit()
+            super().drop_tables()
             return
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                for statement in statements:
-                    table = statement.removeprefix("DROP TABLE ").strip()
-                    if _teradata_table_exists(cursor, table):
-                        cursor.execute(statement)
-                        conn.commit()
-            finally:
-                cursor.close()
+        _run_guarded_drops(self._config, self.downgrade_drops())
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        return [_teradata_guarded_drop(self._memory_table)]
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
@@ -3235,6 +3232,22 @@ def _teradata_ddl(ddl: str) -> str:
         .replace("TIMESTAMP NOT NULL", "TIMESTAMP(6) WITH TIME ZONE NOT NULL")
         .replace(" ON DELETE CASCADE", "")
     )
+
+
+def _teradata_guarded_drop(table_name: str) -> DropStatement:
+    """Return a DROP TABLE that runs only when the Teradata catalog lists the table."""
+    return DropStatement(
+        _drop_table_sql_for_dialect(DIALECT_TERADATA, table_name),
+        exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+        exists_parameters=split_teradata_table_name(table_name),
+    )
+
+
+def _run_guarded_drops(config: "AdbcConfig", drops: "list[DropStatement]") -> None:
+    """Run catalog-probed drops in one session and commit."""
+    with config.provide_session() as driver:
+        run_drop_statements_sync(driver, drops)
+        driver.commit()
 
 
 def _teradata_table_exists(cursor: Any, table_name: str) -> bool:
