@@ -431,24 +431,28 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         """Build tableless typed SELECT branches for Teradata MERGE sources."""
         builder = cast("QueryBuilder", self)
         columns = list(rows[0])
+        resolved_rows = [
+            [resolve_value_expression(row.get(column), self, column.split(".")[-1]) for column in columns]
+            for row in rows
+        ]
         column_types = {
             column: exp.DataType.build(
                 self._infer_teradata_column_type([
                     row.get(column)
-                    for row in rows
-                    if resolve_value_expression(row.get(column), self, column.split(".")[-1]) is None
+                    for row, resolved_row in zip(rows, resolved_rows, strict=True)
+                    if resolved_row[index] is None
                 ]),
                 dialect="teradata",
             )
-            for column in columns
+            for index, column in enumerate(columns)
         }
         query: exp.Expr | None = None
-        for row in rows:
+        for row, resolved_row in zip(rows, resolved_rows, strict=True):
             projections: list[exp.Expr] = []
-            for column in columns:
+            for index, column in enumerate(columns):
                 value = row.get(column)
                 leaf = column.split(".")[-1]
-                resolved = resolve_value_expression(value, self, leaf)
+                resolved = resolved_row[index]
                 if resolved is None:
                     if isinstance(value, (dict, list)):
                         value = to_json(value)

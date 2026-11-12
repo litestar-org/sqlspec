@@ -161,3 +161,18 @@ def test_teradata_upsert_uses_merge(dialect: str) -> None:
     from sqlspec.builder import Merge
 
     assert isinstance(sql.upsert("users", dialect=dialect), Merge)
+
+
+def test_teradata_merge_subquery_source_value_binds_parameters_once() -> None:
+    subquery = sql.select("MAX(amount)").from_("orders").where_eq("customer_id", 7)
+    built = (
+        sql
+        .merge(dialect="teradata")
+        .into("totals", alias="t")
+        .using([{"id": 1, "total": subquery}], alias="src")
+        .on("t.id = src.id")
+        .when_not_matched_then_insert(columns=["id", "total"], values=[1, 2])
+        .build()
+    )
+    assert '"customer_id" = :customer_id' in built.sql
+    assert [name for name in built.parameters if name.startswith("customer_id")] == ["customer_id"]
