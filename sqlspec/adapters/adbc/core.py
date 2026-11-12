@@ -900,6 +900,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if not uses_driver_manager:
         config.pop("entrypoint", None)
 
+    if driver_kind == "snowflake" and "user" in config:
+        user = config.pop("user")
+        config.setdefault("username", user)
+
     auth_token_provider = config.pop("auth_token_provider", None)
     if callable(auth_token_provider):
         fresh_token = str(auth_token_provider())

@@ -1674,3 +1674,14 @@ def test_snowflake_private_key_rejects_invalid_passphrase() -> None:
     """Private key passphrases must be strings or bytes."""
     with pytest.raises(ImproperConfigurationError, match="passphrase"):
         build_connection_config({"driver": "snowflake", "private_key": b"der", "private_key_passphrase": 1})
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"), [({"user": "alice"}, "alice"), ({"user": "alice", "username": "bob"}, "bob")]
+)
+def test_snowflake_user_alias_maps_to_username(options: dict[str, str], expected: str) -> None:
+    """Snowflake accepts ``user`` as the native connector spelling; an explicit ``username`` wins."""
+    config = build_connection_config({"driver": "snowflake", "account": "acct", "password": "secret", **options})
+
+    assert "user" not in config
+    assert config["db_kwargs"]["username"] == expected

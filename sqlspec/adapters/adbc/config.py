@@ -66,7 +66,7 @@ class AdbcConnectionParams(TypedDict):
     port: NotRequired[int | str]
     """Database server endpoint port (for example Teradata ``1025`` or Snowflake ``443``)."""
     user: NotRequired[str]
-    """Alias for the Teradata connection username."""
+    """Alias for the connection username on Teradata and Snowflake."""
     adbc_dialect: NotRequired[str]
     """Explicit database dialect for generic FlightSQL transports."""
     uri: NotRequired[str]
