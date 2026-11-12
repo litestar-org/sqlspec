@@ -42,6 +42,10 @@ The dialect renders a limit as `TOP` and offset pagination with `QUALIFY ROW_NUM
 
 `select_to_arrow()` converts bounded DB-API chunks to Arrow; `native_only=True` is refused because this is a conversion path. `select_stream()` yields row dictionaries or mapped objects. FastExport and FastLoad are opt-in driver capabilities; check server permissions and restrictions before enabling them. Storage upserts use a staging table and separate update and insert requests.
 
+### Bulk loads and transactions
+
+Teradata requires a DDL statement to be the last statement of a transaction (error 3932) in both TERA and ANSI transaction modes. Staged loads (`stage_table` or `conflict_keys`), `drop_indexes=True`, and `checkpoint_table` all run DDL, so they need a session with no open transaction. When the session is inside `begin()` or `transaction()`, or runs in manual mode (`autocommit=False`), these operations raise `TransactionError` before they change anything, rather than committing work the caller still owns. Commit or roll back first, or run the load from an autocommit session. Plain `load_from_arrow()` and `load_from_storage()` inserts without these options run inside the caller's transaction as usual.
+
 The data dictionary queries modern Unicode `DBC.*V` catalog views with `LOCKING ROW FOR ACCESS`. Catalog access depends on the connected user's privileges. See the [catalog reference](../reference/data-dictionary/dialects/teradata.md) and [adapter API](../reference/adapters/teradata.md).
 
 ## Extensions and ADBC

@@ -68,6 +68,7 @@ def test_teradata_checkpoint_existing_table_and_permission_error() -> None:
 
     driver = MagicMock()
     driver.dialect = "teradata"
+    driver.is_in_transaction.return_value = False
     driver.execute.side_effect = [SimpleNamespace(data=[(1,)]), SimpleNamespace(data=[])]
     job = execute_load_from_storage_sync(
         driver, "orders", [], file_format="parquet", checkpoint_table="mart.checkpoint"
@@ -104,3 +105,46 @@ async def test_teradata_checkpoint_probe_async_skips_ddl_when_existing() -> None
     driver.execute.assert_awaited_once()
     assert "DBC.TablesV" in driver.execute.await_args.args[0]
     assert driver.execute.await_args.args[1] == ("MART", "CHECKPOINT")
+
+
+@pytest.mark.parametrize("dialect", ["teradata", "vantage"])
+def test_teradata_ddl_steps_refuse_open_transactions_before_mutating(dialect: str) -> None:
+    from unittest.mock import MagicMock
+
+    from sqlspec.data_dictionary._index_ddl import SyncWithoutIndexesContext
+    from sqlspec.exceptions import TransactionError
+    from sqlspec.storage._ingest import execute_load_from_storage_sync, execute_staged_load_sync
+
+    driver = MagicMock(spec=["dialect", "execute", "execute_script", "data_dictionary", "_connection_in_transaction"])
+    driver.dialect = dialect
+    driver._connection_in_transaction.return_value = True
+    raw_loader = MagicMock()
+
+    with pytest.raises(TransactionError, match="3932"):
+        execute_staged_load_sync(driver, "orders", [], raw_loader=raw_loader, conflict_keys=["id"])
+    with pytest.raises(TransactionError, match="3932"):
+        execute_staged_load_sync(driver, "orders", [], raw_loader=raw_loader, drop_indexes=True)
+    with pytest.raises(TransactionError, match="3932"):
+        execute_load_from_storage_sync(driver, "orders", [], file_format="parquet", checkpoint_table="checkpoint")
+    with pytest.raises(TransactionError, match="3932"):
+        with SyncWithoutIndexesContext(driver, "orders"):
+            pass
+    driver.execute.assert_not_called()
+    driver.execute_script.assert_not_called()
+    raw_loader.assert_not_called()
+
+    driver._connection_in_transaction.return_value = False
+    execute_staged_load_sync(driver, "orders", [], raw_loader=raw_loader)
+    raw_loader.assert_called_once()
+
+
+def test_ddl_transaction_guard_ignores_other_dialects() -> None:
+    from unittest.mock import MagicMock
+
+    from sqlspec.data_dictionary._index_ddl import ensure_teradata_ddl_outside_transaction
+
+    driver = MagicMock(spec=["dialect", "_connection_in_transaction"])
+    driver.dialect = "postgres"
+    driver._connection_in_transaction.return_value = True
+    ensure_teradata_ddl_outside_transaction(driver, "staged load")
+    driver._connection_in_transaction.assert_not_called()

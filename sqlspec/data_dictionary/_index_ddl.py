@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Self, final
 
 from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
+from sqlspec.exceptions import TransactionError
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
@@ -16,6 +17,7 @@ __all__ = (
     "SyncWithoutIndexesContext",
     "build_create_index_sql",
     "build_drop_index_sql",
+    "ensure_teradata_ddl_outside_transaction",
     "filter_droppable_table_indexes",
 )
 
@@ -231,6 +233,7 @@ class SyncWithoutIndexesContext:
         dialect = _canonical_index_dialect(str(getattr(self._driver, "dialect", "") or ""))
         if dialect == "bigquery":
             return self
+        ensure_teradata_ddl_outside_transaction(self._driver, "index drop and rebuild")
         schema_name, table_name = _split_schema_and_table(self._table, self._schema)
         dd = getattr(self._driver, "data_dictionary", None)
         if dd is None:
@@ -319,6 +322,7 @@ class AsyncWithoutIndexesContext:
         dialect = _canonical_index_dialect(str(getattr(self._driver, "dialect", "") or ""))
         if dialect == "bigquery":
             return self
+        ensure_teradata_ddl_outside_transaction(self._driver, "index drop and rebuild")
         schema_name, table_name = _split_schema_and_table(self._table, self._schema)
         dd = getattr(self._driver, "data_dictionary", None)
         if dd is None:
@@ -413,6 +417,32 @@ def _extract_ddl_text(result: Any) -> str | None:
             if isinstance(val, str) and val.strip():
                 return val.strip()
     return None
+
+
+def ensure_teradata_ddl_outside_transaction(driver: Any, operation: str) -> None:
+    """Refuse a Teradata DDL step that would end a transaction the caller still owns.
+
+    Teradata requires DDL to be the last statement of a transaction (error 3932) in both TERA
+    and ANSI transaction modes, so running it inside an open transaction would either fail or
+    commit the caller's pending work. Other dialects are not checked.
+
+    Args:
+        driver: Driver about to run the DDL step.
+        operation: Description of the operation for the error message.
+
+    Raises:
+        TransactionError: When ``driver`` is a Teradata driver with an open transaction.
+    """
+    if _canonical_index_dialect(str(getattr(driver, "dialect", "") or "")) != "teradata":
+        return
+    if not _safe_driver_in_transaction(driver):
+        return
+    msg = (
+        f"Teradata {operation} runs DDL, and Teradata requires DDL to be the last statement of a "
+        "transaction (error 3932). Commit or roll back the open transaction, or use an autocommit "
+        "session, before running it."
+    )
+    raise TransactionError(msg)
 
 
 def _safe_driver_in_transaction(driver: Any) -> bool:

@@ -8,7 +8,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, cast
 
-from sqlspec.data_dictionary._index_ddl import AsyncWithoutIndexesContext, SyncWithoutIndexesContext
+from sqlspec.data_dictionary._index_ddl import (
+    AsyncWithoutIndexesContext,
+    SyncWithoutIndexesContext,
+    ensure_teradata_ddl_outside_transaction,
+)
 from sqlspec.storage._staging_sql import (
     SAP_DIALECTS,
     build_checkpoint_insert_sql,
@@ -92,6 +96,8 @@ def execute_staged_load_sync(
     multi_worker: bool = False,
 ) -> StorageBridgeJob:
     """Orchestrate index drop/rebuild and staging table creation/merge/cleanup for sync bulk loads."""
+    if drop_indexes or stage_table or conflict_keys:
+        ensure_teradata_ddl_outside_transaction(driver, "staged load")
     if drop_indexes:
         with SyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
             return execute_staged_load_sync(
@@ -170,6 +176,8 @@ async def execute_staged_load_async(
     multi_worker: bool = False,
 ) -> StorageBridgeJob:
     """Orchestrate index drop/rebuild and staging table creation/merge/cleanup for async bulk loads."""
+    if drop_indexes or stage_table or conflict_keys:
+        ensure_teradata_ddl_outside_transaction(driver, "staged load")
     if drop_indexes:
         async with AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
             return await execute_staged_load_async(
@@ -282,6 +290,8 @@ def execute_load_from_storage_sync(
             driver.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound),
         )
 
+    if drop_indexes or checkpoint_table or stage_table or conflict_keys:
+        ensure_teradata_ddl_outside_transaction(driver, "storage load")
     if drop_indexes:
         with SyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
             return execute_load_from_storage_sync(
@@ -493,6 +503,8 @@ async def execute_load_from_storage_async(
             ),
         )
 
+    if drop_indexes or checkpoint_table or stage_table or conflict_keys:
+        ensure_teradata_ddl_outside_transaction(driver, "storage load")
     if drop_indexes:
         async with AsyncWithoutIndexesContext(driver, table, concurrent=concurrent_indexes):
             return await execute_load_from_storage_async(

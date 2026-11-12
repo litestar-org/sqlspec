@@ -313,3 +313,17 @@ def test_arrow_helpers_teradata_and_vantage_type_mappings(dialect: str) -> None:
     assert sql_type_from_arrow_type(pa.decimal128(38, 6), dialect=dialect) == "DECIMAL(38, 6)"
     with pytest.raises(SQLBuilderError, match="38"):
         sql_type_from_arrow_type(pa.decimal256(40, 6), dialect=dialect)
+
+
+@pytest.mark.parametrize("options", [{"conflict_keys": ["id"]}, {"drop_indexes": True}, {"stage_table": True}])
+def test_load_from_arrow_ddl_paths_refuse_caller_transaction(options: dict[str, Any]) -> None:
+    from sqlspec.exceptions import TransactionError
+
+    connection = _connection([])
+    driver = TeradataDriver(connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}})
+    driver.begin()
+    connection.cursor.reset_mock()
+    with pytest.raises(TransactionError, match="3932"):
+        driver.load_from_arrow("orders", pa.table({"id": [1], "total": [Decimal("1.00")]}), **options)
+    connection.cursor.assert_not_called()
+    connection.commit.assert_not_called()
