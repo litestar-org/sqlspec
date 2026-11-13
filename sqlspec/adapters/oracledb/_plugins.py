@@ -44,7 +44,6 @@ ORACLE_PLUGIN_INSTALL_HINTS: Final[dict[str, tuple[str, str]]] = {
 }
 VALID_ORACLE_PLUGIN_NAMES: Final[frozenset[str]] = frozenset(ORACLE_PLUGIN_INSTALL_HINTS)
 _ORACLE_HOOKS_LOCK: Final[threading.RLock] = threading.RLock()
-_REGISTERED_PARAMS_HOOKS: Final[set[Callable[[Any], None]]] = set()
 
 
 def resolve_oracle_dsn_plugin(dsn: str | None) -> OraclePluginName | None:
@@ -108,7 +107,6 @@ def register_oracle_params_hook(hook_function: Callable[[Any], None]) -> None:
         registry = importlib.import_module("oracledb.base_impl").REGISTERED_PARAMS_HOOKS
         if hook_function not in registry:
             oracledb.register_params_hook(hook_function)
-        _REGISTERED_PARAMS_HOOKS.add(hook_function)
 
 
 def unregister_oracle_params_hook(hook_function: Callable[[Any], None]) -> None:
@@ -120,7 +118,6 @@ def unregister_oracle_params_hook(hook_function: Callable[[Any], None]) -> None:
         registry = importlib.import_module("oracledb.base_impl").REGISTERED_PARAMS_HOOKS
         while hook_function in registry:
             oracledb.unregister_params_hook(hook_function)
-        _REGISTERED_PARAMS_HOOKS.discard(hook_function)
 
 
 def refresh_oracle_config_cache(dsn: str, *, remove_permanently: bool = False) -> None:

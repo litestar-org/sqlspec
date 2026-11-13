@@ -245,14 +245,14 @@ async def test_sessionless_transaction_error_preserves_body_error(mode: str) -> 
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_sessionless_transaction_validates_before_native_call(mode: str) -> None:
+@pytest.mark.parametrize(("transaction_id", "resume"), [(b"", False), ("界" * 22, False), (None, True)])
+async def test_sessionless_transaction_validates_before_native_call(
+    mode: str, transaction_id: str | bytes | None, resume: bool
+) -> None:
     from types import SimpleNamespace
 
     from sqlspec.exceptions import ImproperConfigurationError
 
     driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", SimpleNamespace()))
-    for transaction_id in (b"", "界" * 22):
-        with pytest.raises(ImproperConfigurationError):
-            driver.sessionless_transaction(transaction_id)
     with pytest.raises(ImproperConfigurationError):
-        driver.sessionless_transaction(resume=True)
+        driver.sessionless_transaction(transaction_id, resume=resume)

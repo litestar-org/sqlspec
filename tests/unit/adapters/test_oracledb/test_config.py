@@ -1330,23 +1330,27 @@ def test_build_connection_config_thick_dsn_passthrough() -> None:
 
 
 def test_oracle_params_hooks_are_idempotent() -> None:
-    import importlib
+    import oracledb
 
     from sqlspec.adapters.oracledb import register_oracle_params_hook, unregister_oracle_params_hook
 
-    registry = importlib.import_module("oracledb.base_impl").REGISTERED_PARAMS_HOOKS
+    calls: list[str] = []
 
     def hook(params: object) -> None:
-        return None
+        calls.append("hook")
 
     try:
         register_oracle_params_hook(hook)
         register_oracle_params_hook(hook)
-        assert registry.count(hook) == 1
+        pool = oracledb.create_pool(dsn="localhost:1/FREEPDB1", user="app", password="pw", min=0, max=1)
+        pool.close()
+        assert calls == ["hook"]
     finally:
         unregister_oracle_params_hook(hook)
         unregister_oracle_params_hook(hook)
-    assert registry.count(hook) == 0
+    pool = oracledb.create_pool(dsn="localhost:1/FREEPDB1", user="app", password="pw", min=0, max=1)
+    pool.close()
+    assert calls == ["hook"]
 
 
 @pytest.mark.parametrize(
@@ -1410,18 +1414,29 @@ def test_config_refresh_and_derive_rebind(config_type: type[Any], monkeypatch: p
 
 
 @pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
-def test_config_drcp_rejects_stateful_statement_boundary(config_type: type[Any]) -> None:
-    for params in [
+@pytest.mark.parametrize(
+    "params",
+    [
         {"pool_boundary": "statement"},
         {"dsn": "host/service?pool_boundary=statement"},
         {"dsn": "(DESCRIPTION=(CONNECT_DATA=(POOL_BOUNDARY=STATEMENT)))"},
-    ]:
-        with pytest.raises(ImproperConfigurationError):
-            config_type(connection_config=params, driver_features={"session_context_hook": {"edition": "V2"}})
+    ],
+)
+def test_config_drcp_rejects_stateful_statement_boundary(config_type: type[Any], params: dict[str, str]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config=params, driver_features={"session_context_hook": {"edition": "V2"}})
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_stateless_drcp_normalizes_statement_boundary(config_type: type[Any]) -> None:
     config = config_type(
         connection_config={"pool_boundary": "STATEMENT"}, driver_features={"session_context_hook": {"module": "api"}}
     )
     assert config.connection_config["pool_boundary"] == "statement"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_drcp_rejects_connect_edition_with_connection_class(config_type: type[Any]) -> None:
     with pytest.raises(ImproperConfigurationError):
         config_type(connection_config={"edition": "V2", "cclass": "APP"})
 
@@ -2016,3 +2031,30 @@ def test_signature_namespace_includes_both_sessionless_contexts(config_type: Any
     namespace = config_type().get_signature_namespace()
     assert namespace["OracleSyncSessionlessTransactionContext"] is OracleSyncSessionlessTransactionContext
     assert namespace["OracleAsyncSessionlessTransactionContext"] is OracleAsyncSessionlessTransactionContext
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("session_provider", [False, True])
+async def test_public_providers_forward_prebuilt_acquire_options(asynchronous: bool, session_provider: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleAcquireOptions
+
+    connection = MagicMock()
+    connection.thin = True
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if asynchronous else Mock(return_value=connection)
+    pool.release = AsyncMock() if asynchronous else Mock()
+    config = cast("Any", (OracleAsyncConfig if asynchronous else OracleSyncConfig)(connection_instance=pool))
+    options = OracleAcquireOptions(cclass="ANALYTICS")
+    context = (
+        config.provide_session(acquire_options=options)
+        if session_provider
+        else config.provide_connection(acquire_options=options)
+    )
+    if asynchronous:
+        async with context:
+            pass
+    else:
+        with context:
+            pass
+    pool.acquire.assert_called_once_with(cclass="ANALYTICS")
