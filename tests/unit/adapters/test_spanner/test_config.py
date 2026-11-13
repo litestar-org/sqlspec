@@ -52,7 +52,7 @@ def _assert_sdk_call(mock: Mock, *args: object) -> None:
         mock.assert_awaited_once_with(*args)
 
 
-def _hook_checkout(is_async: bool, hook: Callable[[Any], Any]) -> SimpleNamespace:
+def _hook_checkout(is_async: bool, hook: Callable[[Any], Any], *, replicas: bool = False) -> SimpleNamespace:
     connection = MagicMock(committed=None, rolled_back=False, _transaction_id=b"txn", _mutations=[])
     snapshot = MagicMock()
     if is_async:
@@ -76,6 +76,7 @@ def _hook_checkout(is_async: bool, hook: Callable[[Any], Any]) -> SimpleNamespac
         connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
         connection_instance=cast("Any", object()),
         on_connection_create=hook,
+        replicas=replicas,
     )
     config._database = cast("Any", database)
     return SimpleNamespace(config=config, connection=connection, snapshot=snapshot, manager=manager, session=session)
@@ -1374,3 +1375,28 @@ async def test_pool_type_from_other_variant_is_rejected() -> None:
         await SpannerAsyncConfig(connection_config={**connection, "pool_type": FixedSizePool}).provide_pool()
     with pytest.raises(ImproperConfigurationError, match="SpannerSyncConfig requires a sync session pool"):
         SpannerSyncConfig(connection_config={**connection, "pool_type": AsyncFixedSizePool}).provide_pool()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("raw", [False, True], ids=["session", "connection"])
+@pytest.mark.parametrize("replicas", [False, True])
+async def test_strict_replica_scope_preserves_native_spanner_snapshot(
+    is_async: bool, raw: bool, replicas: bool
+) -> None:
+    from sqlspec.utils.routing import RoutingContext
+
+    checkout = _hook_checkout(is_async, Mock(return_value=None), replicas=replicas)
+    config = checkout.config
+    provider = config.provide_read_connection if raw else config.provide_read_session
+    with RoutingContext.replica():
+        if is_async:
+            async with provider(exact_staleness=timedelta(seconds=3)) as value:
+                assert (value if raw else value.connection) is checkout.connection
+        else:
+            with provider(exact_staleness=timedelta(seconds=3)) as value:
+                assert (value if raw else value.connection) is checkout.connection
+    database = await config.get_database() if is_async else config.get_database()
+    database.snapshot.assert_called_once_with(multi_use=True, exact_staleness=timedelta(seconds=3))
+    snapshot_exit = checkout.snapshot.__aexit__ if is_async else checkout.snapshot.__exit__
+    _assert_sdk_call(snapshot_exit, None, None, None)
+    checkout.manager.get_session.assert_not_called()
