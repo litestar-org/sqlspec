@@ -889,3 +889,12 @@ def test_cockroach_asyncpg_tenant_on_connection_create_defaults_baseline_and_has
                 if len(parts) >= 4 and parts[2] != adapter_name and parts[3] == "tenant":
                     violations.append(f"{path}:{node.module}")
     assert violations == []
+
+
+@pytest.mark.parametrize("config_type", [CockroachAsyncpgConfig])
+def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> None:
+    config = config_type(replicas=True)
+    assert not config.has_replicas
+    assert config.supports_read_routing
+    assert config.driver_features["enable_follower_reads"] is True
+    assert config.driver_features["default_staleness"] == "follower_read_timestamp()"
