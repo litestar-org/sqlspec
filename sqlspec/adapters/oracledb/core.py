@@ -279,6 +279,7 @@ __all__ = (
     "resolve_row_metadata",
     "resolve_rowcount",
     "retain_extracted_wallet_dir",
+    "rewrite_oracle_dsn_service_name",
     "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
@@ -510,6 +511,7 @@ SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
+    "retry_on_standby_lag",
     "_statement_cache_holder",
     "on_pool_destroying",
     "on_session_end",
@@ -1915,6 +1917,9 @@ def apply_driver_features(
             msg = f"Unknown Oracle driver_features key(s): {', '.join(unknown_keys)}"
             raise ImproperConfigurationError(msg)
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    if not isinstance(features.get("retry_on_standby_lag", False), bool):
+        msg = "retry_on_standby_lag must be a boolean"
+        raise ImproperConfigurationError(msg)
     features.setdefault("enable_otel_trace_context", True)
     features.setdefault("enable_auto_state_tagging", True)
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
@@ -2396,6 +2401,31 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_oracle_error(error, error_code, SQLParsingError, "SQL syntax error")
 
     return _create_oracle_error(error, error_code, SQLSpecError, "database error")
+
+
+def rewrite_oracle_dsn_service_name(dsn: str, service_name: str) -> str:
+    """Retarget a TNS descriptor or Easy Connect DSN, refusing opaque aliases."""
+    _validate_tns_token(service_name, "service_name")
+    if not service_name.strip():
+        msg = "Oracle service_name must be non-empty"
+        raise ImproperConfigurationError(msg)
+    if re.search(r"\(SERVICE_NAME\s*=", dsn, flags=re.IGNORECASE):
+        return re.sub(
+            r"(\(SERVICE_NAME\s*=)[^)]*(\))",
+            lambda match: match.group(1) + service_name + match.group(2),
+            dsn,
+            flags=re.IGNORECASE,
+        )
+    target, separator, service = dsn.partition("/")
+    prefix = ""
+    if dsn.startswith("//"):
+        target, separator, service = dsn[2:].partition("/")
+        prefix = "//"
+    if not separator or not target or "(" in target:
+        msg = "Cannot replace service_name in an opaque Oracle TNS alias"
+        raise ImproperConfigurationError(msg)
+    _, query_separator, query = service.partition("?")
+    return prefix + target + "/" + service_name + ("?" + query if query_separator else "")
 
 
 def _oracle_standby_error_code(error: BaseException | None) -> int | None:

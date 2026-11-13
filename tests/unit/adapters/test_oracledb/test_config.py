@@ -1830,3 +1830,113 @@ def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
     assert len(cursor.execute.call_args_list) == 2
     assert "TIME_ZONE = ''UTC''" in cursor.execute.call_args_list[0].args[0]
     assert "TIME_ZONE = ''+01:00''" in cursor.execute.call_args_list[1].args[0]
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "writer:1521/APP_RW",
+        "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=writer)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=APP_RW)))",
+    ],
+)
+def test_oracle_replica_derivation_rewrites_service_without_native_conflicts(config_type, dsn: str) -> None:
+    primary = config_type(connection_config={"dsn": dsn, "user": "app"})
+    reader = primary.derive_pool(service_name="APP_RO", is_replica=True)
+    assert "APP_RO" in reader.connection_config["dsn"]
+    assert reader.is_replica is True
+    assert "APP_RW" in primary.connection_config["dsn"]
+    host_reader = primary.derive_pool(host="standby", service_name="APP_TC")
+    assert host_reader.connection_config["host"] == "standby"
+    assert host_reader.connection_config["service_name"] == "APP_TC"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_oracle_topology_clone_service_and_opaque_alias_guard(config_type) -> None:
+    from sqlspec.adapters.oracledb import OracleEndpoint, OracleTopologyConfig
+
+    primary = config_type(connection_config={"topology": OracleTopologyConfig([OracleEndpoint("writer")], "APP_RW")})
+    reader = primary.derive_pool(service_name="APP_RO")
+    assert "APP_RO" in reader.connection_config["dsn"]
+    with pytest.raises(ImproperConfigurationError, match="alias"):
+        config_type(connection_config={"dsn": "OPAQUE_ALIAS"}).derive_pool(service_name="APP_RO")
+    with pytest.raises(ImproperConfigurationError):
+        config_type(replicas=True)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("code", [3172, 16456, 16000])
+async def test_oracle_standby_retry_is_pre_checkout_and_explicit(async_mode: bool, retry: bool, code: int) -> None:
+    import oracledb
+
+    from sqlspec.adapters.oracledb import OracleAcquireOptions
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    native = oracledb.DatabaseError(f"ORA-{code:05d}: standby checkout rejected")
+    connection = MagicMock()
+    connection.thin = True
+    connection.rollback = AsyncMock() if async_mode else Mock()
+    writer_pool = MagicMock()
+    writer_pool.thin = True
+    writer_pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    writer_pool.release = AsyncMock() if async_mode else Mock()
+    reader_pool = MagicMock()
+    reader_pool.thin = True
+    reader_pool.acquire = AsyncMock(side_effect=native) if async_mode else Mock(side_effect=native)
+    config_type: Any = OracleAsyncConfig if async_mode else OracleSyncConfig
+    reader = config_type(connection_instance=reader_pool)
+    primary = config_type(
+        connection_instance=writer_pool, replicas=[reader], driver_features={"retry_on_standby_lag": retry}
+    )
+    options = OracleAcquireOptions(cclass="REPORTING")
+
+    async def exercise() -> None:
+        if async_mode:
+            async with primary.provide_read_session(acquire_options=options) as session:
+                assert session.connection is connection
+        else:
+            with primary.provide_read_session(acquire_options=options) as session:
+                assert session.connection is connection
+
+    if retry and code != 16000:
+        await exercise()
+        writer_pool.acquire.assert_called_once_with(cclass="REPORTING")
+    else:
+        expected = ReadOnlyTransactionError if code == 16000 else ReplicaUnavailableError
+        with pytest.raises(expected) as caught:
+            await exercise()
+        assert caught.value.__cause__ is native
+        writer_pool.acquire.assert_not_called()
+    reader_pool.acquire.assert_called_once_with(cclass="REPORTING")
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_oracle_query_time_standby_error_never_replays_on_primary(async_mode: bool) -> None:
+    import oracledb
+
+    connection = MagicMock()
+    connection.thin = True
+    connection.rollback = AsyncMock() if async_mode else Mock()
+    reader_pool = MagicMock()
+    reader_pool.thin = True
+    reader_pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    reader_pool.release = AsyncMock() if async_mode else Mock()
+    writer_pool = MagicMock()
+    writer_pool.thin = True
+    config_type: Any = OracleAsyncConfig if async_mode else OracleSyncConfig
+    reader = config_type(connection_instance=reader_pool)
+    primary = config_type(
+        connection_instance=writer_pool, replicas=[reader], driver_features={"retry_on_standby_lag": True}
+    )
+    native = oracledb.DatabaseError("ORA-03172: query-time lag")
+    with pytest.raises(oracledb.DatabaseError) as caught:
+        if async_mode:
+            async with primary.provide_read_session():
+                raise native
+        else:
+            with primary.provide_read_session():
+                raise native
+    assert caught.value is native
+    reader_pool.release.assert_called_once_with(connection)
+    writer_pool.acquire.assert_not_called()

@@ -1088,6 +1088,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             derived._tenant_key = self._tenant_key
         return derived
 
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        """Return whether a failed reader checkout may fall back to this primary."""
+        return True
+
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -3112,6 +3116,8 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 yield value
             return
         if self._fallback_to_primary and primary is not None:
+            if last_error is not None and not primary._allow_replica_fallback(last_error):
+                raise last_error
             provider = primary.provide_session if session else primary.provide_connection
             with cast("AbstractContextManager[Any]", provider(*args, **kwargs)) as value:
                 receipt.config = primary
@@ -3173,6 +3179,8 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 yield value
             return
         if self._fallback_to_primary and primary is not None:
+            if last_error is not None and not primary._allow_replica_fallback(last_error):
+                raise last_error
             provider = primary.provide_session if session else primary.provide_connection
             async with cast("AbstractAsyncContextManager[Any]", provider(*args, **kwargs)) as value:
                 receipt.config = primary

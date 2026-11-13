@@ -221,3 +221,35 @@ async def test_no_pool_primary_cascades_replica_create_and_close(endpoint_type: 
             NoPoolSyncConfig.close_pool(primary)
     assert first.events == ["close"]
     assert second.events == ["close"]
+
+
+class _StrictSyncPrimary(SyncEndpoint):
+    __slots__ = ()
+
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        return False
+
+
+class _StrictAsyncPrimary(AsyncEndpoint):
+    __slots__ = ()
+
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        return False
+
+
+@pytest.mark.parametrize(
+    ("endpoint_type", "primary_type"), [(SyncEndpoint, _StrictSyncPrimary), (AsyncEndpoint, _StrictAsyncPrimary)]
+)
+async def test_primary_may_refuse_checkout_fallback_without_losing_original_error(
+    endpoint_type: Any, primary_type: Any
+) -> None:
+    failed = endpoint_type(connection_config={"fail": True})
+    primary = primary_type(connection_config={"dsn": "primary"}, replicas=[failed])
+    with pytest.raises(OSError, match="endpoint unavailable"):
+        if primary.is_async:
+            async with primary.provide_read_session():
+                pytest.fail("failed checkout must not yield")
+        else:
+            with primary.provide_read_session():
+                pytest.fail("failed checkout must not yield")
+    assert primary.events == []

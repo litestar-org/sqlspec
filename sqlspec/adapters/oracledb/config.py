@@ -52,8 +52,10 @@ from sqlspec.adapters.oracledb.core import (
     extract_static_alter_session_config,
     forget_oracle_session_state,
     has_callable_alter_session_fields,
+    is_oracle_standby_failover_error,
     release_extracted_wallet_dir,
     retain_extracted_wallet_dir,
+    rewrite_oracle_dsn_service_name,
     synthesize_session_state_tag,
     validate_oracle_drcp_and_mode_constraints,
     validate_oracle_session_callback,
@@ -311,6 +313,8 @@ class OracleDriverFeatures(TypedDict):
     Native async pipeline execution is runtime-gated on Oracle Database 23ai/26ai+ in Thin mode and opted out via ``stack_native_disabled``.
     """
 
+    retry_on_standby_lag: NotRequired[bool]
+    """Allow primary fallback on standby checkout lag or switchover."""
     plugins: NotRequired[Sequence[OraclePluginName | str]]
     """Optional cloud configuration or token plugins imported lazily."""
     params_hooks: NotRequired[Sequence[Callable[[Any], None]]]
@@ -456,6 +460,10 @@ def _derive_oracle_pool_kwargs(
     overrides: dict[str, Any],
 ) -> dict[str, Any]:
     """Derive common configuration keyword arguments for cloned Oracle pools."""
+    overrides = dict(overrides)
+    is_replica = bool(overrides.pop("is_replica", False))
+    overrides.pop("replicas", None)
+    connection_overrides = dict(connection_config_overrides or {})
     new_conn_cfg: dict[str, Any] = dict(source_config.connection_config)
     new_driver_features: dict[str, Any] = dict(source_config.driver_features)
     if source_config._pool_session_callback is not None and "session_callback" not in new_conn_cfg:
@@ -471,6 +479,37 @@ def _derive_oracle_pool_kwargs(
             new_driver_features[key] = val
         else:
             new_conn_cfg[key] = val
+            connection_overrides[key] = val
+    endpoint_keys = {"topology", "service_name", "host", "port", "sid", "tns_alias", "url", "connection_string"}
+    if endpoint_keys.intersection(connection_overrides):
+        source_dsn = source_config.connection_config.get("dsn")
+        topology = source_config._source_topology
+        if "topology" in connection_overrides:
+            for key in ("dsn", "host", "port", "service_name", "sid", "tns_alias", "url", "connection_string"):
+                if key not in connection_overrides:
+                    new_conn_cfg.pop(key, None)
+        elif set(connection_overrides).intersection(endpoint_keys) == {"service_name"} and isinstance(source_dsn, str):
+            service_name = str(connection_overrides["service_name"])
+            if isinstance(topology, OracleTopologyConfig):
+                new_conn_cfg.pop("dsn", None)
+                new_conn_cfg.pop("service_name", None)
+                new_conn_cfg["topology"] = topology.with_service_name(service_name)
+            else:
+                new_conn_cfg["dsn"] = rewrite_oracle_dsn_service_name(source_dsn, service_name)
+                new_conn_cfg.pop("service_name", None)
+        elif "dsn" not in connection_overrides:
+            new_conn_cfg.pop("dsn", None)
+            if (
+                isinstance(source_dsn, str)
+                and ("/" in source_dsn or source_dsn.startswith("("))
+                and not set(connection_overrides).intersection({"tns_alias", "url", "connection_string"})
+            ):
+                params = oracledb.ConnectParams()
+                params.parse_connect_string(source_dsn)
+                for key in ("host", "port", "service_name", "sid"):
+                    value = getattr(params, key, None)
+                    if value is not None:
+                        new_conn_cfg.setdefault(key, value)
     if (
         "tenant_strategy" in new_driver_features
         and "tenant_strategy" not in (driver_features_overrides or {})
@@ -478,6 +517,8 @@ def _derive_oracle_pool_kwargs(
     ):
         new_driver_features["tenant_strategy"] = source_config._raw_tenant_strategy
     return {
+        "is_replica": is_replica,
+        "replicas": None,
         "connection_config": new_conn_cfg,
         "connection_instance": None,
         "migration_config": cast("dict[str, Any] | None", dict(source_config.migration_config))
@@ -550,12 +591,18 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
 
     def acquire_connection(self) -> OracleSyncConnection:
         if self._tenant_lease is not None:
-            return cast("OracleSyncConnection", self._tenant_lease.acquire())
+            try:
+                return cast("OracleSyncConnection", self._tenant_lease.acquire())
+            except oracledb.DatabaseError as exc:
+                raise create_mapped_exception(exc) from exc
         pool = self._config.provide_pool()
         hook = self._config.driver_features.get("session_context_hook")
-        conn = pool.acquire(
-            **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
-        )
+        try:
+            conn = pool.acquire(
+                **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
+            )
+        except oracledb.DatabaseError as exc:
+            raise create_mapped_exception(exc) from exc
         self._conn = conn
         try:
             self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
@@ -670,6 +717,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         "_owns_pool_session_callback",
         "_pool_session_callback",
         "_raw_tenant_strategy",
+        "_source_topology",
         "_tenant_source_hook",
         "_thin_sharding_warned",
         "_user_connection_hook",
@@ -722,9 +770,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
+        source_topology = connection_config.get("topology") if connection_config is not None else None
+        self._source_topology = (
+            OracleTopologyConfig(**source_topology) if isinstance(source_topology, Mapping) else source_topology
+        )
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
         try:
-            self._extracted_wallet_dir: Path | None = None
+            self._extracted_wallet_dir: Path | None = pending_wallet_dir
+            if pending_wallet_dir is not None:
+                retain_extracted_wallet_dir(pending_wallet_dir)
             self._oracle_version_cache = OracleVersionCache()
             self._owns_pool_session_callback = False
             self._thin_sharding_warned = False
@@ -778,12 +832,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                         ),
                     },
                 )
-            if pending_wallet_dir is not None:
-                self._extracted_wallet_dir = pending_wallet_dir
-                retain_extracted_wallet_dir(pending_wallet_dir)
         except BaseException:
             if pending_wallet_dir is not None:
-                retain_extracted_wallet_dir(pending_wallet_dir)
                 release_extracted_wallet_dir(pending_wallet_dir)
             raise
 
@@ -842,6 +892,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _provide_connection_impl(
         self,
         *args: Any,
+        acquire_options: OracleAcquireOptions | None = None,
         sharding_key: Sequence[Any] | None = None,
         super_sharding_key: Sequence[Any] | None = None,
         tag: str | None = None,
@@ -851,7 +902,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         transaction_priority: Any = None,
         **kwargs: Any,
     ) -> Any:
-        options = OracleAcquireOptions(
+        options = acquire_options or OracleAcquireOptions(
             sharding_key=sharding_key,
             super_sharding_key=super_sharding_key,
             tag=tag,
@@ -866,6 +917,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         self,
         *args: Any,
         statement_config: "StatementConfig | None" = None,
+        acquire_options: OracleAcquireOptions | None = None,
         sharding_key: Sequence[Any] | None = None,
         super_sharding_key: Sequence[Any] | None = None,
         tag: str | None = None,
@@ -875,7 +927,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         transaction_priority: Any = None,
         **kwargs: Any,
     ) -> Any:
-        options = OracleAcquireOptions(
+        options = acquire_options or OracleAcquireOptions(
             sharding_key=sharding_key,
             super_sharding_key=super_sharding_key,
             tag=tag,
@@ -930,6 +982,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_instance = self.create_pool()
         return self.connection_instance
 
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        if is_oracle_standby_failover_error(_error):
+            return bool(self.driver_features.get("retry_on_standby_lag", False))
+        return super()._allow_replica_fallback(_error)
+
     def derive_pool(
         self,
         *,
@@ -963,6 +1020,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         ):
             derived._extracted_wallet_dir = self._extracted_wallet_dir
             retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
         return derived
 
     def get_signature_namespace(self) -> "dict[str, Any]":
@@ -1123,13 +1182,19 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
 
     async def __aenter__(self) -> Any:
         if self._tenant_lease is not None:
-            return await self._tenant_lease.acquire()
+            try:
+                return await self._tenant_lease.acquire()
+            except oracledb.DatabaseError as exc:
+                raise create_mapped_exception(exc) from exc
         pool = await self._config.provide_pool()
         self._pool = pool
         hook = self._config.driver_features.get("session_context_hook")
-        conn = await pool.acquire(
-            **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
-        )
+        try:
+            conn = await pool.acquire(
+                **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
+            )
+        except oracledb.DatabaseError as exc:
+            raise create_mapped_exception(exc) from exc
         self._connection = conn
         try:
             self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
@@ -1234,6 +1299,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         "_owns_pool_session_callback",
         "_pool_session_callback",
         "_raw_tenant_strategy",
+        "_source_topology",
         "_tenant_source_hook",
         "_thin_sharding_warned",
         "_user_connection_hook",
@@ -1288,9 +1354,15 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
+        source_topology = connection_config.get("topology") if connection_config is not None else None
+        self._source_topology = (
+            OracleTopologyConfig(**source_topology) if isinstance(source_topology, Mapping) else source_topology
+        )
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
         try:
-            self._extracted_wallet_dir: Path | None = None
+            self._extracted_wallet_dir: Path | None = pending_wallet_dir
+            if pending_wallet_dir is not None:
+                retain_extracted_wallet_dir(pending_wallet_dir)
             self._oracle_version_cache = OracleVersionCache()
             self._owns_pool_session_callback = False
             self._thin_sharding_warned = False
@@ -1345,12 +1417,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                         ),
                     },
                 )
-            if pending_wallet_dir is not None:
-                self._extracted_wallet_dir = pending_wallet_dir
-                retain_extracted_wallet_dir(pending_wallet_dir)
         except BaseException:
             if pending_wallet_dir is not None:
-                retain_extracted_wallet_dir(pending_wallet_dir)
                 release_extracted_wallet_dir(pending_wallet_dir)
             raise
 
@@ -1409,6 +1477,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def _provide_connection_impl(
         self,
         *args: Any,
+        acquire_options: OracleAcquireOptions | None = None,
         sharding_key: Sequence[Any] | None = None,
         super_sharding_key: Sequence[Any] | None = None,
         tag: str | None = None,
@@ -1418,7 +1487,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         transaction_priority: Any = None,
         **kwargs: Any,
     ) -> Any:
-        options = OracleAcquireOptions(
+        options = acquire_options or OracleAcquireOptions(
             sharding_key=sharding_key,
             super_sharding_key=super_sharding_key,
             tag=tag,
@@ -1433,6 +1502,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         self,
         *args: Any,
         statement_config: "StatementConfig | None" = None,
+        acquire_options: OracleAcquireOptions | None = None,
         sharding_key: Sequence[Any] | None = None,
         super_sharding_key: Sequence[Any] | None = None,
         tag: str | None = None,
@@ -1442,7 +1512,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         transaction_priority: Any = None,
         **kwargs: Any,
     ) -> Any:
-        options = OracleAcquireOptions(
+        options = acquire_options or OracleAcquireOptions(
             sharding_key=sharding_key,
             super_sharding_key=super_sharding_key,
             tag=tag,
@@ -1496,6 +1566,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self.connection_instance = await self.create_pool()
         return self.connection_instance
 
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        if is_oracle_standby_failover_error(_error):
+            return bool(self.driver_features.get("retry_on_standby_lag", False))
+        return super()._allow_replica_fallback(_error)
+
     def derive_pool(
         self,
         *,
@@ -1529,6 +1604,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         ):
             derived._extracted_wallet_dir = self._extracted_wallet_dir
             retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
         return derived
 
     def get_signature_namespace(self) -> "dict[str, Any]":
