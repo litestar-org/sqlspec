@@ -20,6 +20,7 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
@@ -71,6 +72,7 @@ _CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("host", "Server"),
     ("port", "Port"),
     ("database", "Database"),
+    ("application_intent", "ApplicationIntent"),
     ("uid", "UID"),
     ("pwd", "PWD"),
     ("trusted_connection", "Trusted_Connection"),
@@ -181,6 +183,14 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
 
 def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
+    if (
+        getattr(error, "sqlstate", None) == "25006"
+        or "25006" in str(error)
+        or (_is_sql_server_diagnostic(str(error)) and extract_native_error_number(error) in {3906, 3908, 978})
+    ):
+        mapped_readonly = ReadOnlyTransactionError(str(error))
+        mapped_readonly.__cause__ = error
+        return mapped_readonly
     _ = logger
     if isinstance(error, ArrowException):
         return DataError(f"PyArrow data error. Original error: {error}")

@@ -325,3 +325,73 @@ def test_driver_features_chunk_size_default() -> None:
     """ArrowOdbcConfig defaults chunk_size to 65536 matching documentation."""
     config = ArrowOdbcConfig()
     assert config.driver_features["chunk_size"] == 65_536
+
+
+def test_replica_derivation_recomputes_implicit_connection_properties() -> None:
+    primary = ArrowOdbcConfig(
+        connection_config={"driver": "ODBC Driver 18 for SQL Server", "server": "writer", "database": "app"}
+    )
+    replica = primary.derive_pool(driver="PostgreSQL Unicode", server="reader", database="reader_app")
+    assert replica.statement_config.dialect == "postgres"
+    assert "PostgreSQL Unicode" in replica.driver_features["connection_string"]
+    assert "reader" in replica.driver_features["connection_string"]
+    assert primary.statement_config.dialect == "tsql"
+
+
+def test_replica_read_intent_shorthand_requires_sql_server_database() -> None:
+    primary = ArrowOdbcConfig(
+        connection_config={"driver": "ODBC Driver 18 for SQL Server", "server": "listener", "database": "app"},
+        replicas=True,
+    )
+    reader = primary.replica_groups["default"].configs[0]
+    assert "ApplicationIntent=ReadOnly" in reader.driver_features["connection_string"]
+    with pytest.raises(ImproperConfigurationError):
+        ArrowOdbcConfig(connection_config={"driver": "PostgreSQL Unicode", "server": "reader"}, replicas=True)
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "[25006] read-only transaction",
+        "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server] read-only; Native error: 3906",
+        "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server] read-only; Native error: 3908",
+        "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server] read-only; Native error: 978",
+    ),
+)
+def test_replica_write_errors_map_to_read_only_transaction(message: str) -> None:
+    from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = Exception(message)
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+
+
+def test_replica_odbc_connection_string_shorthand_replaces_inherited_endpoint() -> None:
+    primary = ArrowOdbcConfig(
+        connection_config={"driver": "ODBC Driver 18 for SQL Server", "server": "writer", "database": "app"},
+        replicas=["Driver={PostgreSQL Unicode};Server=reader;Database=reader_app;"],
+    )
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.statement_config.dialect == "postgres"
+    assert "Server=reader" in reader.driver_features["connection_string"]
+    assert "ODBC Driver 18" not in reader.driver_features["connection_string"]
+
+
+def test_replica_derivation_preserves_explicit_statement_and_hook() -> None:
+    from sqlspec.core import StatementConfig
+
+    def hook(connection: Any) -> None:
+        return None
+
+    explicit = StatementConfig(dialect="oracle")
+    primary = ArrowOdbcConfig(
+        connection_config={"driver": "PostgreSQL Unicode", "server": "writer"},
+        statement_config=explicit,
+        driver_features={"on_connection_create": hook, "chunk_size": 123},
+    )
+    reader = primary.derive_pool(server="reader")
+    assert reader.statement_config.dialect == "oracle"
+    assert reader.driver_features["chunk_size"] == 123
+    assert reader._user_connection_hook is hook
