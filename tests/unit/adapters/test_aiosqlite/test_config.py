@@ -339,3 +339,40 @@ async def test_create_pool_preserves_zero_timeouts(tmp_path: Path) -> None:
         assert pool._operation_timeout == 0.0
     finally:
         await pool.close()
+
+
+async def test_aiosqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "wal.db")}, replicas=True)
+    async with config.provide_session() as session:
+        await session.execute("CREATE TABLE entries (id INTEGER)")
+        await session.execute("INSERT INTO entries VALUES (1)")
+        await session.commit()
+    async with config.provide_read_session() as reader:
+        assert await reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        assert await reader.select_value("PRAGMA query_only") == 1
+        async with reader.transaction():
+            assert await reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            await reader.execute("INSERT INTO entries VALUES (2)")
+    await config.close_pool()
+
+
+def test_aiosqlite_readonly_clone_defaults_deferred_without_changing_writer(tmp_path) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    primary = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "writer.db")},
+        driver_features={"default_transaction_mode": "IMMEDIATE"},
+    )
+    reader = primary.derive_pool(database=f"file:{tmp_path / 'writer.db'}?mode=ro")
+    assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
+    assert primary.driver_features["default_transaction_mode"] == "IMMEDIATE"
+    with pytest.raises(ImproperConfigurationError, match="DEFERRED"):
+        primary.derive_pool(
+            database=f"file:{tmp_path / 'writer.db'}?mode=ro",
+            driver_features_overrides={"default_transaction_mode": "EXCLUSIVE"},
+        )
+    with pytest.raises(ImproperConfigurationError, match="file-backed"):
+        AiosqliteConfig(replicas=True)

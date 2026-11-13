@@ -13,7 +13,9 @@ from sqlspec.adapters.sqlite._typing import (
 from sqlspec.adapters.sqlite.core import (
     apply_driver_features,
     build_connection_config,
+    build_readonly_sqlite_uri,
     default_statement_config,
+    is_read_only_sqlite_config,
     render_pragmas,
     require_python_version,
 )
@@ -65,6 +67,8 @@ class SqliteConnectionParams(TypedDict):
     """Custom ``sqlite3.Connection`` subclass passed to ``sqlite3.connect``."""
     cached_statements: NotRequired[int]
     """Number of compiled SQLite VM statements cached per connection by ``sqlite3``."""
+    query_only: NotRequired[bool]
+    """Enforce read-only queries on every physical connection."""
     uri: NotRequired[bool]
     """Interpret ``database`` as a SQLite ``file:`` URI supporting query parameters."""
     autocommit: NotRequired[SQLiteAutocommitMode]
@@ -241,6 +245,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
+        self._serialize_writes = False
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
         database = (
             config_dict.pop("database", None)
@@ -285,6 +290,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if spec_input is True:
+            self._serialize_writes = True
+            database = build_readonly_sqlite_uri(str(self.connection_config.get("database", "")))
+            return {"connection_config_overrides": {"database": database, "uri": True, "query_only": True}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def create_connection(self) -> SqliteConnection:
         """Open a standalone connection owned by the caller.
@@ -350,6 +362,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             connection_parameters=config_dict,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            is_read_only=is_read_only_sqlite_config(self.connection_config),
+            serialize_writes=self._serialize_writes,
             **pool_kwargs,
         )
 

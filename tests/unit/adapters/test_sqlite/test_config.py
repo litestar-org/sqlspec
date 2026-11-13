@@ -309,3 +309,26 @@ def test_filter_connection_params_with_hoisted_helper() -> None:
     raw = {"database": ":memory:", "extra": {}, "pool_min_size": 10, "timeout": 30.0, "isolation_level": None}
     filtered = _filter_connection_params(raw)
     assert filtered == {"database": ":memory:", "timeout": 30.0, "isolation_level": None}
+
+
+def test_sqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "wal.db")}, replicas=True)
+    with config.provide_session() as session:
+        session.execute("CREATE TABLE entries (id INTEGER)")
+        session.execute("INSERT INTO entries VALUES (1)")
+    with config.provide_read_session() as reader:
+        assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        assert reader.select_value("PRAGMA query_only") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            reader.execute("INSERT INTO entries VALUES (2)")
+    config.close_pool()
+
+
+@pytest.mark.parametrize("database", [":memory:", "", "file::memory:?cache=shared", "file:x?mode=memory"])
+def test_sqlite_memory_cannot_be_readonly_replica(database: str) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError):
+        SqliteConfig(connection_config={"database": database}, replicas=True)

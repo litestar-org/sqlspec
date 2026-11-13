@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.core import end_transaction, run_on_worker_thread
+from sqlspec.adapters.aiosqlite.core import end_transaction, is_read_only_sqlite_config, run_on_worker_thread
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -214,6 +214,7 @@ class AiosqliteConnectionPool:
         "_health_check_interval",
         "_idle_timeout",
         "_in_flight_creations",
+        "_is_read_only",
         "_lock",
         "_min_size",
         "_on_connection_create",
@@ -238,6 +239,7 @@ class AiosqliteConnectionPool:
         enable_foreign_keys: bool = SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS,
         on_connection_create: "Callable[[AiosqliteConnection], Awaitable[None]] | None" = None,
         runtime_setup: "dict[str, Any] | None" = None,
+        is_read_only: bool = False,
     ) -> None:
         """Initialize connection pool.
 
@@ -253,7 +255,9 @@ class AiosqliteConnectionPool:
             enable_foreign_keys: Whether to enable foreign-key enforcement
             on_connection_create: Async callback executed when connection is created
             runtime_setup: Runtime feature setup to apply to new connections
+            is_read_only: Enforce read-only queries and omit write PRAGMAs.
         """
+        self._is_read_only = is_read_only or is_read_only_sqlite_config(connection_parameters)
         self._connection_parameters = connection_parameters
         self._pool_size = pool_size
         self._min_size = min(min_size, pool_size)
@@ -339,13 +343,16 @@ class AiosqliteConnectionPool:
                             "PRAGMA temp_store = MEMORY",
                             f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}",
                         ])
-                    else:
+                    elif not self._is_read_only:
                         await _enable_wal(connection)
                         pragma_lines.append("PRAGMA synchronous = NORMAL")
 
                     pragma_lines.append(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
                     if is_shared_cache and is_memory_db:
                         pragma_lines.append("PRAGMA read_uncommitted = ON")
+
+                if self._is_read_only:
+                    pragma_lines.append("PRAGMA query_only = ON")
 
                 if self._enable_foreign_keys:
                     pragma_lines.append("PRAGMA foreign_keys = ON")

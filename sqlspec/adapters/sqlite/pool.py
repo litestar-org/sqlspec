@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.core import end_transaction, is_read_only_sqlite_config
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -48,6 +48,7 @@ class SqliteConnectionPool:
         "_generation",
         "_health_check_interval",
         "_is_memory_db",
+        "_is_read_only",
         "_is_shared_memory",
         "_on_connection_create",
         "_pool_id",
@@ -56,6 +57,7 @@ class SqliteConnectionPool:
         "_runtime_setup",
         "_thread_connections",
         "_thread_local",
+        "_write_lock",
     )
 
     def __init__(
@@ -67,6 +69,8 @@ class SqliteConnectionPool:
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[SqliteConnection], None] | None" = None,
         runtime_setup: "dict[str, Any] | None" = None,
+        is_read_only: bool = False,
+        serialize_writes: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -78,9 +82,13 @@ class SqliteConnectionPool:
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
             runtime_setup: Runtime feature configuration applied after internal PRAGMAs
+            is_read_only: Enforce read-only queries and omit write PRAGMAs.
+            serialize_writes: Hold a reentrant writer lock throughout each lease.
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
+        self._is_read_only = is_read_only or is_read_only_sqlite_config(connection_parameters)
+        self._write_lock = threading.RLock() if serialize_writes else None
         self._connection_parameters = connection_parameters
         database = self._connection_parameters.get("database", ":memory:")
         database_str = str(database)
@@ -128,11 +136,14 @@ class SqliteConnectionPool:
                     _execute_and_close(connection, "PRAGMA synchronous = OFF")
                     _execute_and_close(connection, "PRAGMA temp_store = MEMORY")
                     _execute_and_close(connection, f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
-                else:
+                elif not self._is_read_only:
                     _enable_wal(connection)
                     _execute_and_close(connection, "PRAGMA synchronous = NORMAL")
 
                 _execute_and_close(connection, f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
+
+            if self._is_read_only:
+                _execute_and_close(connection, "PRAGMA query_only = ON")
 
             if self._enable_foreign_keys:
                 _execute_and_close(connection, "PRAGMA foreign_keys = ON")
@@ -151,6 +162,19 @@ class SqliteConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[SqliteConnection, None, None]":
+        """Lease a connection, serializing writer leases when configured.
+
+        Yields:
+            A connection with its lease held until context exit.
+        """
+        with (
+            self._write_lock if self._write_lock is not None else contextlib.nullcontext(),
+            self._get_connection_unlocked() as connection,
+        ):
+            yield connection
+
+    @contextmanager
+    def _get_connection_unlocked(self) -> "Generator[SqliteConnection, None, None]":
         """Get a thread-local connection.
 
         Yields:
@@ -213,7 +237,14 @@ class SqliteConnectionPool:
         Returns:
             SqliteConnection: A thread-local connection
         """
-        return self._get_thread_connection()
+        if self._write_lock is not None:
+            self._write_lock.acquire()
+        try:
+            return self._get_thread_connection()
+        except BaseException:
+            if self._write_lock is not None:
+                self._write_lock.release()
+            raise
 
     def release(self, connection: SqliteConnection) -> None:
         """Release a connection and roll back any uncommitted transaction.
@@ -221,8 +252,12 @@ class SqliteConnectionPool:
         Args:
             connection: The connection to release
         """
-        with contextlib.suppress(Exception):
-            end_transaction(connection, commit=False)
+        try:
+            with contextlib.suppress(Exception):
+                end_transaction(connection, commit=False)
+        finally:
+            if self._write_lock is not None:
+                self._write_lock.release()
 
     def _prune_dead_threads(self) -> None:
         """Prune connections owned by dead threads."""

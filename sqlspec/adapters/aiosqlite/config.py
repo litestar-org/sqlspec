@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict
 
 from mypy_extensions import mypyc_attr
 
@@ -15,13 +15,15 @@ from sqlspec.adapters.aiosqlite._typing import (
 from sqlspec.adapters.aiosqlite.core import (
     apply_driver_features,
     build_connection_config,
+    build_readonly_sqlite_uri,
     default_statement_config,
+    is_read_only_sqlite_config,
     render_pragmas,
 )
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectionPool, AiosqlitePoolConnectionContext
 from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
-from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, MigrationConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -70,6 +72,8 @@ class AiosqliteConnectionParams(TypedDict):
     """Custom ``sqlite3.Connection`` subclass instantiated on the worker thread."""
     cached_statements: NotRequired[int]
     """Number of compiled SQLite VM statements cached per connection."""
+    query_only: NotRequired[bool]
+    """Enforce read-only queries on every physical connection."""
     uri: NotRequired[bool]
     """Interpret ``database`` as a SQLite ``file:`` URI supporting query parameters."""
     iter_chunk_size: NotRequired[int]
@@ -333,6 +337,15 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
+        if is_read_only_sqlite_config(config_dict):
+            mode = features_dict.get("default_transaction_mode")
+            if mode is not None and str(mode).upper() != "DEFERRED":
+                msg = "Read-only SQLite connections require DEFERRED transaction mode"
+                raise ImproperConfigurationError(msg)
+            features_dict["default_transaction_mode"] = "DEFERRED"
+        if kwargs.get("replicas") is True:
+            config_dict.setdefault("pool_size", 1)
+
         self._user_connection_hook: Callable[[AiosqliteConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -351,6 +364,49 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: Mapping[str, Any] | None = None,
+        driver_features_overrides: Mapping[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: dict[str, Any] | MigrationConfig | None = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: str | None = None,
+        is_replica: bool = False,
+        **overrides: Any,
+    ) -> Self:
+        """Clone an independent pool, defaulting read-only clones to deferred transactions."""
+        connection = {**self.connection_config, **(connection_config_overrides or {}), **overrides}
+        features = dict(driver_features_overrides or {})
+        if (
+            is_read_only_sqlite_config(connection)
+            and "default_transaction_mode" not in features
+            and "default_transaction_mode" not in overrides
+        ):
+            features["default_transaction_mode"] = "DEFERRED"
+        return super().derive_pool(
+            connection_config_overrides=connection_config_overrides,
+            driver_features_overrides=features,
+            statement_config=statement_config,
+            migration_config=migration_config,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            bind_key=bind_key,
+            is_replica=is_replica,
+            **overrides,
+        )
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if spec_input is True:
+            database = build_readonly_sqlite_uri(str(self.connection_config.get("database", "")))
+            return {
+                "connection_config_overrides": {"database": database, "uri": True, "query_only": True, "pool_size": 5},
+                "driver_features_overrides": {"default_transaction_mode": "DEFERRED"},
+            }
+        return super()._build_replica_spec_overrides(spec_input)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AiosqliteConfig types.
@@ -444,6 +500,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             health_check_interval=health_check_interval,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            is_read_only=is_read_only_sqlite_config(self.connection_config),
             **pool_kwargs,
         )
 
