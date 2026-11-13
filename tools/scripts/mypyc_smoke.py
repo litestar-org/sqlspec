@@ -44,6 +44,10 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
     SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
+    SmokeImport("core_routing", "sqlspec.core.routing", "ReplicaSpec", True),
+    SmokeImport("routing_context", "sqlspec.utils.routing", "RoutingContext"),
+    SmokeImport("driver_routing", "sqlspec.driver._routing", "SyncRoutingSession"),
+    SmokeImport("deferred_session", "sqlspec.extensions._deferred_session", "DeferredAsyncSession"),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
     SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
@@ -1220,9 +1224,9 @@ class AppSyncService(SQLSpecSyncService[SqliteDriver]):
         super().__init__(config=config)
         self.calls = 0
 
-    def provide_session(self, session=None):
+    def provide_session(self, session=None, *, read_only=False):
         self.calls += 1
-        return super().provide_session(session)
+        return super().provide_session(session, read_only=read_only)
 
 
 class SyncService(AppSyncService):
@@ -1236,9 +1240,9 @@ class AppAsyncService(SQLSpecAsyncService[AiosqliteDriver]):
         super().__init__(config=config)
         self.calls = 0
 
-    def provide_session(self, session=None):
+    def provide_session(self, session=None, *, read_only=False):
         self.calls += 1
-        return super().provide_session(session)
+        return super().provide_session(session, read_only=read_only)
 
 
 class AsyncService(AppAsyncService):
@@ -1292,6 +1296,14 @@ async def main():
 asyncio.run(main())
 print("service-subclasses:ok")
 """
+    if not require_compiled:
+        package = importlib.import_module("sqlspec")
+        source_file = package.__file__
+        if source_file is None:
+            result["error"] = "SQLSpec package origin is unavailable"
+            return result
+        source_root = str(Path(source_file).resolve().parent.parent)
+        child_script = f"import sys; sys.path.insert(0, {source_root!r})\n" + child_script
     try:
         completed = subprocess.run(
             [sys.executable, "-I", "-c", child_script, "compiled" if require_compiled else "source"],
@@ -1734,7 +1746,7 @@ def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, 
     """Build an interpreted subclass of a compiled lease that routes its hooks to callables."""
     acquire, release, invalidate, finish = hooks
 
-    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc,name-defined]
+    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc]
         __slots__ = ()
 
         def _acquire(self) -> object:
@@ -1749,7 +1761,7 @@ def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, 
         def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
             finish(conn, exc_type)
 
-    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc,name-defined]
+    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc]
         __slots__ = ()
 
         async def _acquire(self) -> object:
@@ -1922,6 +1934,8 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
         from opentelemetry import trace
         from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
+        from sqlspec.adapters.oracledb import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
+
         oracle = importlib.import_module("sqlspec.adapters.oracledb")
         core = importlib.import_module("sqlspec.adapters.oracledb.core")
         tenant = importlib.import_module("sqlspec.adapters.oracledb.tenant")
@@ -1941,13 +1955,13 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
         with trace.use_span(NonRecordingSpan(propagated)):
             assert common.get_w3c_trace_context()[0].endswith("-00")
 
-        class FailedSyncStrategy(oracle.OracleSyncClientContextStrategy):
+        class FailedSyncStrategy(OracleSyncClientContextStrategy):
             __slots__ = ()
 
             def checkin(self, connection: Any, state: Any) -> None:
                 raise RuntimeError("cleanup failed")
 
-        class FailedAsyncStrategy(oracle.OracleAsyncClientContextStrategy):
+        class FailedAsyncStrategy(OracleAsyncClientContextStrategy):
             __slots__ = ()
 
             async def checkin(self, connection: Any, state: Any) -> None:
@@ -2015,6 +2029,99 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
     return result
 
 
+def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise compiled classification with interpreted routing facades and native WAL readers."""
+    result = _new_smoke_result(
+        name="session_routing_boundary",
+        module="sqlspec.core.routing",
+        attribute="ReplicaSpec",
+        compiled_required=require_compiled,
+    )
+    expected_count = 2
+    try:
+        core = importlib.import_module("sqlspec.core.routing")
+        errors = importlib.import_module("sqlspec.exceptions")
+        registry_module = importlib.import_module("sqlspec.base")
+        context = importlib.import_module("sqlspec.utils.routing")
+        statements = importlib.import_module("sqlspec.core.statement")
+        services = importlib.import_module("sqlspec.service")
+        sqlite = importlib.import_module("sqlspec.adapters.sqlite")
+        result["imported"] = True
+        result["compiled"] = is_compiled_module(core)
+        if require_compiled:
+            assert is_compiled_module(core)
+            assert is_compiled_module(errors)
+            for module_name in (
+                "sqlspec.utils.routing",
+                "sqlspec.driver._routing",
+                "sqlspec.extensions._deferred_session",
+                "sqlspec.service._base",
+            ):
+                assert not is_compiled_module(importlib.import_module(module_name)), module_name
+        assert statements.SQL("SELECT 1").is_read_only()
+        assert not statements.SQL("SELECT nextval('sequence')", dialect="postgres").is_read_only()
+        with tempfile.TemporaryDirectory() as directory:
+            config = sqlite.SqliteConfig(
+                connection_config={"database": str(Path(directory) / "routing.db")}, replicas=True
+            )
+            registry = registry_module.SQLSpec()
+            registry.add_config(config)
+            try:
+                with registry.provide_session(config) as writer:
+                    writer.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY)")
+                    writer.execute("INSERT INTO entries VALUES (1)")
+                    writer.commit()
+                with registry.provide_read_session(config) as reader:
+                    assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+                    try:
+                        reader.execute("INSERT INTO entries VALUES (2)")
+                    except errors.ReadOnlyTransactionError:
+                        pass
+                    else:
+                        raise AssertionError("Read provider accepted a write")
+                with context.RoutingContext.scope(), registry.provide_routing_session(config) as routing:
+                    assert routing.select_value("SELECT COUNT(*) FROM entries") == 1
+                    routing.execute("INSERT INTO entries VALUES (2)")
+                    routing.commit()
+                    assert routing.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                service = services.SQLSpecSyncService(config=config)
+                with service.provide_session(read_only=True) as reader:
+                    assert reader.select_value("SELECT COUNT(*) FROM entries") == expected_count
+            finally:
+                config.close_pool()
+            if importlib.util.find_spec("aiosqlite") is not None:
+                asynchronous = importlib.import_module("sqlspec.adapters.aiosqlite")
+
+                async def run_async() -> None:
+                    config = asynchronous.AiosqliteConfig(
+                        connection_config={"database": str(Path(directory) / "async.db")}, replicas=True
+                    )
+                    registry = registry_module.SQLSpec()
+                    registry.add_config(config)
+                    try:
+                        async with registry.provide_session(config) as writer:
+                            await writer.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY)")
+                            await writer.execute("INSERT INTO entries VALUES (1)")
+                            await writer.commit()
+                        async with context.RoutingContext.scope(), registry.provide_routing_session(config) as routing:
+                            assert await routing.select_value("SELECT COUNT(*) FROM entries") == 1
+                            async with routing.select_stream("SELECT id FROM entries") as stream:
+                                assert [row async for row in stream] == [{"id": 1}]
+                            await routing.execute("INSERT INTO entries VALUES (2)")
+                            await routing.commit()
+                            assert await routing.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                        service = services.SQLSpecAsyncService(config=config)
+                        async with service.provide_session(read_only=True) as reader:
+                            assert await reader.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                    finally:
+                        await config.close_pool()
+
+                asyncio.run(run_async())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -2029,6 +2136,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
         _check_tenant_lease_boundary(require_compiled=require_compiled),
+        _check_session_routing_boundary(require_compiled=require_compiled),
         _check_oracle_26ai_boundary(require_compiled=require_compiled),
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
