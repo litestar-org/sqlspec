@@ -52,6 +52,7 @@ from sqlspec.core.query_modifiers import (
     expr_neq,
     extract_column_name,
     safe_modify_with_cte,
+    sanitize_parameter_name,
     wrap_as_subquery,
 )
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
@@ -742,20 +743,31 @@ class SQL:
 
         Returns:
             New SQL instance with the WHERE condition applied
+
+        Raises:
+            SQLParsingError: If the condition is empty, contains a NUL character,
+                contains a statement separator outside quoted text, or is a
+                statement rather than a condition.
         """
         current_expr = self._current_expression()
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
+            if not condition.strip() or "\x00" in condition:
+                msg = "WHERE condition must be nonempty and must not contain NUL characters"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             if not self._statement_config.enable_parsing:
-                condition_expr = exp.Paren(this=exp.Var(this=condition))
+                condition_expr = _raw_condition(condition)
             else:
                 try:
                     condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
                 except ParseError:
-                    condition_expr = exp.Paren(this=exp.Var(this=condition))
+                    condition_expr = _raw_condition(condition)
         else:
             condition_expr = condition
+        if isinstance(condition_expr, (exp.Block, exp.Command, exp.DDL, exp.DML)):
+            msg = f"WHERE condition must be an expression, got {type(condition_expr).__name__}"
+            raise sqlspec.exceptions.SQLParsingError(msg)
 
         if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) or (
             not isinstance(current_expr, (exp.Query, exp.Values)) and supports_where(current_expr)
@@ -1551,7 +1563,7 @@ class SQL:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
-        prefixed_base = f"param_{base_name}"
+        prefixed_base = f"param_{sanitize_parameter_name(base_name)}"
         current_index = self._sql_param_counters.get(prefixed_base, 0)
 
         if prefixed_base not in self._named_parameters:
@@ -2105,6 +2117,9 @@ def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
     """Parse a single ORDER BY item string into a SQLGlot expression."""
+    if "\x00" in order_item:
+        msg = "ORDER BY item must not contain NUL characters"
+        raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
     if not normalized:
         return exp.column(order_item)
@@ -2123,3 +2138,27 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
         return ordered(base_expr, desc=True if parts[1].lower() == "desc" else None)
 
     return exp.column(normalized)
+
+
+def _raw_condition(condition: str) -> exp.Expr:
+    """Wrap an unparsed condition fragment, requiring it to be a single expression."""
+    if _has_unquoted_semicolon(condition):
+        msg = "WHERE condition must be a single expression without statement separators"
+        raise sqlspec.exceptions.SQLParsingError(msg)
+    return exp.Paren(this=exp.Var(this=condition))
+
+
+def _has_unquoted_semicolon(fragment: str) -> bool:
+    """Return whether a SQL fragment contains a statement separator outside quoted text."""
+    if ";" not in fragment:
+        return False
+    quote = ""
+    for char in fragment:
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in {"'", '"', "`"}:
+            quote = char
+        elif char == ";":
+            return True
+    return False
