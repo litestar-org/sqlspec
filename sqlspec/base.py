@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from sqlspec.core import SQL, ParameterDeclaration, StatementConfig
+    from sqlspec.driver._routing import AsyncDriverT, AsyncRoutingSession, SyncDriverT, SyncRoutingSession
     from sqlspec.typing import PoolT
     from sqlspec.utils.tenant import TenantContextPayload
 
@@ -287,6 +288,153 @@ class SQLSpec:
         return _RuntimeSyncContext[DriverT](sync_session, runtime, config)
 
     @overload
+    def provide_read_connection(
+        self,
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[ConnectionT]": ...
+    @overload
+    def provide_read_connection(
+        self,
+        config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[ConnectionT]": ...
+    def provide_read_connection(
+        self,
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
+        """Provide a read connection with lifecycle events owned by the selected configuration.
+
+        Args:
+            config: Configuration instance owning the replica topology.
+            *args: Positional arguments forwarded to the read provider.
+            bind_group: Named replica group, or the default group.
+            **kwargs: Additional read provider arguments.
+
+        Returns:
+            A context manager yielding the selected connection.
+        """
+        self._ensure_registered(config)
+        context = config.provide_read_connection(*args, bind_group=bind_group, **kwargs)
+        if _is_async_context_manager(context):
+            return _RuntimeReadAsyncContext[ConnectionT](context, session=False)
+        return _RuntimeReadSyncContext[ConnectionT](cast("AbstractContextManager[ConnectionT]", context), session=False)
+
+    @overload
+    def provide_read_session(
+        self,
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT]": ...
+    @overload
+    def provide_read_session(
+        self,
+        config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[DriverT]": ...
+    def provide_read_session(
+        self,
+        config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
+        """Provide a read session with lifecycle events owned by the selected configuration.
+
+        Args:
+            config: Configuration instance owning the replica topology.
+            *args: Positional arguments forwarded to the read provider.
+            bind_group: Named replica group, or the default group.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload for the selected session.
+            bypass_tenant: Explicitly bypass tenant setup.
+            **kwargs: Additional read provider arguments.
+
+        Returns:
+            A context manager yielding the selected session.
+        """
+        self._ensure_registered(config)
+        context = config.provide_read_session(
+            *args,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            **kwargs,
+        )
+        if _is_async_context_manager(context):
+            return _RuntimeReadAsyncContext[DriverT](context, session=True)
+        return _RuntimeReadSyncContext[DriverT](cast("AbstractContextManager[DriverT]", context), session=True)
+
+    @overload
+    def provide_routing_session(
+        self,
+        config: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT] | NoPoolSyncConfig[ConnectionT, SyncDriverT]",
+        *,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+    ) -> "SyncRoutingSession[SyncDriverT]": ...
+    @overload
+    def provide_routing_session(
+        self,
+        config: "AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT] | NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
+        *,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+    ) -> "AsyncRoutingSession[AsyncDriverT]": ...
+    def provide_routing_session(
+        self,
+        config: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT] | NoPoolSyncConfig[ConnectionT, SyncDriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT] | NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
+        *,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+    ) -> "SyncRoutingSession[SyncDriverT] | AsyncRoutingSession[AsyncDriverT]":
+        """Create a lazy routing session managed by this registry.
+
+        Args:
+            config: Configuration instance owning the replica topology.
+            bind_group: Replica group used for eligible reads.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload for physical checkouts.
+            bypass_tenant: Explicitly bypass tenant setup.
+
+        Returns:
+            A lazy routing facade preserving the configured driver type.
+        """
+        self._ensure_registered(config)
+        session = config.provide_routing_session(
+            bind_group=bind_group, statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant
+        )
+        session._registry_lifecycle = True
+        return cast("SyncRoutingSession[SyncDriverT] | AsyncRoutingSession[AsyncDriverT]", session)
+
+    @overload
     def get_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT]"
     ) -> None: ...
@@ -427,13 +575,44 @@ class SQLSpec:
         loader_metrics = self._loader_runtime.metrics_snapshot()
         if loader_metrics:
             diagnostics.add_metric_snapshot(loader_metrics)
-        for config in tuple(self._configs.values()):
-            runtime = config.get_observability_runtime()
-            diagnostics.add_lifecycle_snapshot(runtime.diagnostics_key, runtime.lifecycle_snapshot())
-            metrics_snapshot = runtime.metrics_snapshot()
-            if metrics_snapshot:
-                diagnostics.add_metric_snapshot(metrics_snapshot)
+        seen: set[int] = set()
+        configurations = tuple(self._configs.values())
+        for config in sorted(configurations, key=lambda item: not bool(item.replica_groups)):
+            self._collect_replica_telemetry(config, diagnostics, seen)
         return diagnostics.snapshot()
+
+    @staticmethod
+    def _collect_replica_telemetry(
+        config: "DatabaseConfigProtocol[Any, Any, Any]", diagnostics: TelemetryDiagnostics, seen: set[int]
+    ) -> None:
+        runtime = config.get_observability_runtime()
+        base_key = runtime.diagnostics_key
+        if id(config) not in seen:
+            seen.add(id(config))
+            diagnostics.add_lifecycle_snapshot(base_key, runtime.lifecycle_snapshot())
+            diagnostics.add_metric_snapshot(runtime.metrics_snapshot())
+        for group_name, group in config.replica_groups.items():
+            for index, replica in enumerate(group.configs):
+                if id(replica) in seen:
+                    continue
+                seen.add(id(replica))
+                replica_runtime = replica.get_observability_runtime()
+                prefix = (
+                    f"{base_key}:replica:{index}"
+                    if group_name == "default"
+                    else f"{base_key}:replica:{group_name}:{index}"
+                )
+                original_prefix = f"{replica_runtime.diagnostics_key}."
+                lifecycle = {
+                    f"{prefix}.{key.removeprefix(original_prefix)}": value
+                    for key, value in replica_runtime.lifecycle_snapshot().items()
+                }
+                metrics = {
+                    f"{prefix}.{key.removeprefix(original_prefix)}": value
+                    for key, value in replica_runtime.metrics_snapshot().items()
+                }
+                diagnostics.add_lifecycle_snapshot(prefix, lifecycle)
+                diagnostics.add_metric_snapshot(metrics)
 
     @staticmethod
     def get_cache_config() -> CacheConfig:
@@ -842,3 +1021,99 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                     if connection is not None:
                         await self._runtime.emit_connection_destroy_async(connection)
                 self._value = None
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _RuntimeReadSyncContext(Generic[ContextValueT]):
+    __slots__ = ("_context", "_runtime", "_session", "_value")
+
+    def __init__(self, context: "AbstractContextManager[Any]", *, session: bool = False) -> None:
+        self._context = context
+        self._session = session
+        self._runtime: ObservabilityRuntime | None = None
+        self._value: Any = None
+
+    def __enter__(self) -> ContextValueT:
+        value = self._context.__enter__()
+        receipt = getattr(self._context, "_selection_receipt", None)
+        selected = getattr(receipt, "config", None)
+        if selected is None:
+            error = ImproperConfigurationError("Read provider did not publish the selected configuration")
+            self._context.__exit__(type(error), error, error.__traceback__)
+            raise error
+        runtime = selected.get_observability_runtime()
+        self._runtime = runtime
+        self._value = value
+        connection = value.connection if self._session else value
+        if connection is not None:
+            runtime.emit_connection_create_sync(connection)
+        if self._session:
+            runtime.emit_session_start_sync(value)
+        return cast("ContextValueT", value)
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
+        value = self._value
+        runtime = self._runtime
+        connection = value.connection if self._session and value is not None else value
+        try:
+            return self._context.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._value = None
+            self._runtime = None
+            if runtime is not None:
+                try:
+                    if self._session:
+                        runtime.emit_session_end_sync(value)
+                finally:
+                    if connection is not None:
+                        runtime.emit_connection_destroy_sync(connection)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _RuntimeReadAsyncContext(Generic[ContextValueT]):
+    __slots__ = ("_context", "_runtime", "_session", "_value")
+
+    def __init__(self, context: "AbstractAsyncContextManager[Any]", *, session: bool = False) -> None:
+        self._context = context
+        self._session = session
+        self._runtime: ObservabilityRuntime | None = None
+        self._value: Any = None
+
+    async def __aenter__(self) -> ContextValueT:
+        value = await self._context.__aenter__()
+        receipt = getattr(self._context, "_selection_receipt", None)
+        selected = getattr(receipt, "config", None)
+        if selected is None:
+            error = ImproperConfigurationError("Read provider did not publish the selected configuration")
+            await self._context.__aexit__(type(error), error, error.__traceback__)
+            raise error
+        runtime = selected.get_observability_runtime()
+        self._runtime = runtime
+        self._value = value
+        connection = value.connection if self._session else value
+        if connection is not None:
+            await runtime.emit_connection_create_async(connection)
+        if self._session:
+            await runtime.emit_session_start_async(value)
+        return cast("ContextValueT", value)
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
+        value = self._value
+        runtime = self._runtime
+        connection = value.connection if self._session and value is not None else value
+        try:
+            return await self._context.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._value = None
+            self._runtime = None
+            if runtime is not None:
+                try:
+                    if self._session:
+                        await runtime.emit_session_end_async(value)
+                finally:
+                    if connection is not None:
+                        await runtime.emit_connection_destroy_async(connection)
