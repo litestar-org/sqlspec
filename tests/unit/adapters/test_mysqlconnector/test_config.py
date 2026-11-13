@@ -572,3 +572,136 @@ def test_mysqlconnector_async_config_inherited_methods() -> None:
 
 def test_mysqlconnector_sync_dispatch_execute_script_counts_statements() -> None:
     """dispatch_execute_script runs each split statement and reports accurate counts."""
+
+
+def test_mysqlconnectorsyncconfig_replica_shorthands_preserve_overrides() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"host": "writer", "user": "writer", "database": "app"},
+        replicas=["mysql://reader:pw@replica:3307/reporting", "standby:3308"],
+    )
+    replicas = config.replica_groups["default"].configs
+    assert replicas[0].connection_config["host"] == "replica"
+    assert replicas[0].connection_config["port"] == 3307
+    assert replicas[0].connection_config["user"] == "reader"
+    assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
+    assert replicas[1].connection_config["host"] == "standby"
+    assert replicas[1].connection_config["port"] == 3308
+    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert config.connection_config["host"] == "writer"
+
+
+def test_mysqlconnectorsyncconfig_derive_alias_overrides_replace_inherited_values() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"host": "writer", "user": "writer", "password": "old", "database": "app"}
+    )
+    derived = config.derive_pool(username="reader", passwd="new", db="reporting")
+    assert derived.connection_config["user"] == "reader"
+    assert derived.connection_config["password"] == "new"
+    assert derived.connection_config.get("database", derived.connection_config.get("db")) == "reporting"
+    assert config.connection_config["user"] == "writer"
+
+
+def test_mysqlconnectorsyncconfig_explicit_read_write_replica_preserves_init_command() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
+
+    config = MysqlConnectorSyncConfig(
+        replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+    assert "read_only" not in replica.connection_config
+
+
+def test_mysqlconnectorasyncconfig_replica_shorthands_preserve_overrides() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig
+
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"host": "writer", "user": "writer", "database": "app"},
+        replicas=["mysql://reader:pw@replica:3307/reporting", "standby:3308"],
+    )
+    replicas = config.replica_groups["default"].configs
+    assert replicas[0].connection_config["host"] == "replica"
+    assert replicas[0].connection_config["port"] == 3307
+    assert replicas[0].connection_config["user"] == "reader"
+    assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
+    assert replicas[1].connection_config["host"] == "standby"
+    assert replicas[1].connection_config["port"] == 3308
+    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert config.connection_config["host"] == "writer"
+
+
+def test_mysqlconnectorasyncconfig_derive_alias_overrides_replace_inherited_values() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig
+
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"host": "writer", "user": "writer", "password": "old", "database": "app"}
+    )
+    derived = config.derive_pool(username="reader", passwd="new", db="reporting")
+    assert derived.connection_config["user"] == "reader"
+    assert derived.connection_config["password"] == "new"
+    assert derived.connection_config.get("database", derived.connection_config.get("db")) == "reporting"
+    assert config.connection_config["user"] == "writer"
+
+
+def test_mysqlconnectorasyncconfig_explicit_read_write_replica_preserves_init_command() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig
+
+    config = MysqlConnectorAsyncConfig(
+        replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+    assert "read_only" not in replica.connection_config
+
+
+def test_mysqlconnectorsyncconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "set session transaction read only"
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorSyncConfig(replicas=True)
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorSyncConfig(replicas=["postgres://replica"])
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorSyncConfig(replicas=[""])
+
+
+def test_mysqlconnector_derived_pools_own_distinct_native_names_and_readonly_state() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorSyncConfig
+
+    primary = MysqlConnectorSyncConfig(
+        connection_config={"pool_name": "primary", "pool_reset_session": True}, replicas=["reader"]
+    )
+    derived = primary.derive_pool()
+    assert derived.connection_config.get("pool_name") is None
+    assert primary.derive_pool(pool_name="other").connection_config["pool_name"] == "other"
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config.get("pool_name") is None
+    assert reader.connection_config["pool_reset_session"] is False
+    assert primary.connection_config["pool_reset_session"] is True
+
+
+def test_mysqlconnectorasyncconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
+    from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "set session transaction read only"
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorAsyncConfig(replicas=True)
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorAsyncConfig(replicas=["postgres://replica"])
+    with pytest.raises(ImproperConfigurationError):
+        MysqlConnectorAsyncConfig(replicas=[""])

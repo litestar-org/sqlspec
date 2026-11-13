@@ -1,6 +1,7 @@
 """AsyncMy adapter compiled helpers."""
 
 import contextlib
+import math
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -15,16 +16,19 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_mysql_dsn
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
@@ -37,7 +41,9 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncmyStreamSource",
     "_resolve_column_types",
+    "append_read_only_init_command",
     "apply_driver_features",
+    "build_gtid_wait_query",
     "build_insert_statement",
     "build_load_data_statement",
     "build_profile",
@@ -51,9 +57,11 @@ __all__ = (
     "encode_records_for_local_infile",
     "escape_literal_percent",
     "format_identifier",
+    "merge_derive_overrides",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "parse_mysql_replica_shorthand",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -61,6 +69,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.asyncmy")
 
+MYSQL_ER_OPTION_PREVENTS_STATEMENT: Final[int] = 1290
 MYSQL_ER_DUP_ENTRY: Final[int] = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD: Final[int] = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED: Final[int] = 3819
@@ -472,6 +481,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
+    read_only_message = str(error).lower().replace("-", "_")
+    if (
+        sqlstate == "25006"
+        or error_code in {1792, 1836}
+        or (error_code == MYSQL_ER_OPTION_PREVENTS_STATEMENT and "read_only" in read_only_message)
+    ):
+        return _create_mysql_error(error, sqlstate, error_code, ReadOnlyTransactionError, "read-only transaction")
+
     dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
@@ -693,3 +710,104 @@ def _resolve_column_types(description: Any) -> "dict[str, str] | None":
 
 
 default_statement_config = build_statement_config()
+
+
+def merge_derive_overrides(
+    base_config: Mapping[str, Any], overrides: Mapping[str, Any], *, clear_pool_name: bool = False
+) -> dict[str, Any]:
+    """Merge clone parameters with explicit aliases taking precedence.
+
+    Args:
+        base_config: Inherited connection options.
+        overrides: Explicit clone options.
+        clear_pool_name: Remove an inherited native pool name.
+
+    Returns:
+        Independent normalized connection options.
+    """
+    result = dict(base_config)
+    aliases = {
+        "database": ("db",),
+        "user": ("username",),
+        "password": ("passwd",),
+        "local_infile": ("allow_local_infile",),
+        "connect_timeout": ("connection_timeout",),
+        "cursor_cls": ("cursor_class", "cursorclass"),
+    }
+    for canonical, alternatives in aliases.items():
+        if canonical not in overrides and any(alias in overrides for alias in alternatives):
+            result.pop(canonical, None)
+    result.update(overrides)
+    for canonical, alternatives in aliases.items():
+        for alias in alternatives:
+            if alias in result:
+                value = result.pop(alias)
+                result.setdefault(canonical, value)
+    if clear_pool_name and "pool_name" not in overrides:
+        result.pop("pool_name", None)
+    return result
+
+
+def append_read_only_init_command(existing: str | None) -> str:
+    """Append session read-only mode once.
+
+    Args:
+        existing: Existing initialization SQL.
+
+    Returns:
+        SQL preserving existing initialization statements.
+    """
+    command = "SET SESSION TRANSACTION READ ONLY"
+    if not existing:
+        return command
+    if command in " ".join(existing.upper().split()):
+        return existing
+    return existing.rstrip().rstrip(";") + "; " + command
+
+
+def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+    """Parse explicit MySQL or MariaDB replica endpoints.
+
+    Args:
+        spec: Endpoint URL, host shorthand, or override mapping.
+
+    Returns:
+        Independent connection or config overrides.
+
+    Raises:
+        ImproperConfigurationError: The endpoint is missing or unsupported.
+    """
+    if isinstance(spec, bool):
+        msg = "MySQL replicas require explicit endpoints or overrides"
+        raise ImproperConfigurationError(msg)
+    if isinstance(spec, Mapping):
+        return dict(spec)
+    endpoint = spec if "://" in spec else "mysql://" + spec
+    if not endpoint.startswith(("mysql://", "mariadb://")):
+        msg = "Replica endpoint must use mysql:// or mariadb://"
+        raise ImproperConfigurationError(msg)
+    options = parse_mysql_dsn(endpoint)
+    if not options.get("host"):
+        msg = "Replica endpoint requires a host"
+        raise ImproperConfigurationError(msg)
+    return options
+
+
+def build_gtid_wait_query(gtid_set: str, timeout: float, *, mariadb: bool) -> str:
+    """Select a parameterized native GTID wait query.
+
+    Args:
+        gtid_set: Native GTID position to await.
+        timeout: Finite nonnegative wait duration in seconds.
+        mariadb: Select the MariaDB native function.
+
+    Returns:
+        SQL containing placeholders for the GTID position and timeout.
+
+    Raises:
+        ValueError: The GTID position is blank or the timeout is invalid.
+    """
+    if not gtid_set.strip() or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+        msg = "GTID wait requires a nonempty GTID set and a finite nonnegative timeout"
+        raise ValueError(msg)
+    return "SELECT MASTER_GTID_WAIT(%s, %s)" if mariadb else "SELECT WAIT_FOR_EXECUTED_GTID_SET(%s, %s)"

@@ -17,7 +17,13 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorSyncCursor,
     MysqlConnectorSyncSessionContext,
 )
-from sqlspec.adapters.mysqlconnector.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.mysqlconnector.core import (
+    append_read_only_init_command,
+    apply_driver_features,
+    default_statement_config,
+    merge_derive_overrides,
+    parse_mysql_replica_shorthand,
+)
 from sqlspec.adapters.mysqlconnector.driver import (
     MysqlConnectorAsyncDriver,
     MysqlConnectorAsyncExceptionHandler,
@@ -426,6 +432,34 @@ class MysqlConnectorSyncConfig(
     _session_context_class: "ClassVar[type[MysqlConnectorSyncSessionContext]]" = MysqlConnectorSyncSessionContext
     _default_statement_config = default_statement_config
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=True)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        if read_only is not False:
+            connection["init_command"] = append_read_only_init_command(
+                connection.get("init_command", self.connection_config.get("init_command"))
+            )
+            connection.setdefault("pool_reset_session", False)
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     def __init__(
         self,
         *,
@@ -578,6 +612,33 @@ class MysqlConnectorAsyncConfig(
     )
     _session_context_class: "ClassVar[type[MysqlConnectorAsyncSessionContext]]" = MysqlConnectorAsyncSessionContext
     _default_statement_config = default_statement_config
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        if read_only is not False:
+            connection["init_command"] = append_read_only_init_command(
+                connection.get("init_command", self.connection_config.get("init_command"))
+            )
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
 
     def __init__(
         self,

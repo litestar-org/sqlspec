@@ -399,3 +399,58 @@ async def test_asyncmy_session_context_initialization() -> None:
     async with ctx as driver:
         assert driver.connection is mock_conn
     assert release.called
+
+
+def test_asyncmyconfig_replica_shorthands_preserve_overrides() -> None:
+    from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+
+    config = AsyncmyConfig(
+        connection_config={"host": "writer", "user": "writer", "database": "app"},
+        replicas=["mysql://reader:pw@replica:3307/reporting", "standby:3308"],
+    )
+    replicas = config.replica_groups["default"].configs
+    assert replicas[0].connection_config["host"] == "replica"
+    assert replicas[0].connection_config["port"] == 3307
+    assert replicas[0].connection_config["user"] == "reader"
+    assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
+    assert replicas[1].connection_config["host"] == "standby"
+    assert replicas[1].connection_config["port"] == 3308
+    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert config.connection_config["host"] == "writer"
+
+
+def test_asyncmyconfig_derive_alias_overrides_replace_inherited_values() -> None:
+    from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+
+    config = AsyncmyConfig(connection_config={"host": "writer", "user": "writer", "password": "old", "database": "app"})
+    derived = config.derive_pool(username="reader", passwd="new", database="reporting")
+    assert derived.connection_config["user"] == "reader"
+    assert derived.connection_config["password"] == "new"
+    assert derived.connection_config.get("database", derived.connection_config.get("db")) == "reporting"
+    assert config.connection_config["user"] == "writer"
+
+
+def test_asyncmyconfig_explicit_read_write_replica_preserves_init_command() -> None:
+    from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+
+    config = AsyncmyConfig(replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}])
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+    assert "read_only" not in replica.connection_config
+
+
+def test_asyncmyconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
+    from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = AsyncmyConfig(
+        connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "set session transaction read only"
+    with pytest.raises(ImproperConfigurationError):
+        AsyncmyConfig(replicas=True)
+    with pytest.raises(ImproperConfigurationError):
+        AsyncmyConfig(replicas=["postgres://replica"])
+    with pytest.raises(ImproperConfigurationError):
+        AsyncmyConfig(replicas=[""])
