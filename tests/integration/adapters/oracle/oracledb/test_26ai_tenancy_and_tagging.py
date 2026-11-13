@@ -77,7 +77,10 @@ def _admin(service: OracleService, statement: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_zero_rtt_clientcontext_and_current_schema_restore(mode: str, oracle_26ai_service: OracleService) -> None:
+@pytest.mark.parametrize("tenant_bypass", (False, True))
+async def test_zero_rtt_clientcontext_and_current_schema_restore(
+    mode: str, tenant_bypass: bool, oracle_26ai_service: OracleService
+) -> None:
     schema = f"ALT_{uuid4().hex[:8].upper()}"
     _admin(oracle_26ai_service, f'CREATE USER {schema} IDENTIFIED BY "Tenant_native_42" QUOTA UNLIMITED ON USERS;')
     try:
@@ -87,9 +90,12 @@ async def test_zero_rtt_clientcontext_and_current_schema_restore(mode: str, orac
             f"INSERT INTO {schema}.context_probe VALUES (42);\n"
             f"GRANT SELECT ON {schema}.context_probe TO {oracle_26ai_service.user};\nCOMMIT;",
         )
+        strategy_type = OracleSyncClientContextStrategy if mode == "sync" else OracleAsyncClientContextStrategy
+        tenant_features = {"tenant_strategy": strategy_type()} if tenant_bypass else {}
         config = _config(
             mode,
             oracle_26ai_service,
+            **tenant_features,
             session_context_hook=OracleSessionContextConfig(
                 contexts={"CLIENTCONTEXT": {"tier": "enterprise", "region": "us-east"}},
                 clientinfo="oracle26ai-test",
@@ -98,7 +104,7 @@ async def test_zero_rtt_clientcontext_and_current_schema_restore(mode: str, orac
             ),
         )
         try:
-            async with _session(config) as session:
+            async with _session(config, bypass_tenant=tenant_bypass) as session:
                 identity = await _invoke(session.select_value, _IDENTITY)
                 assert await _invoke(session.select_value, "SELECT value FROM context_probe") == 42
                 row = await _invoke(

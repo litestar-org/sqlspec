@@ -655,7 +655,6 @@ class OracleSyncTenantLease(SyncTenantLease):
                 execute_session_release_sync(connection, hook)
         if self._priority_baseline is not None:
             apply_oracle_transaction_priority(connection, self._priority_baseline)
-        clear_oracle_otel_trace_context(connection)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             self._pool.release(connection, tag=self._release_tag)
         else:
@@ -666,6 +665,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         self._pool.drop(connection)
 
     def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        clear_oracle_otel_trace_context(connection)
         connection.rollback()
 
 
@@ -732,7 +732,6 @@ class OracleAsyncTenantLease(AsyncTenantLease):
                 await execute_session_release_async(connection, hook)
         if self._priority_baseline is not None:
             apply_oracle_transaction_priority(connection, self._priority_baseline)
-        clear_oracle_otel_trace_context(connection)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             await self._pool.release(connection, tag=self._release_tag)
         else:
@@ -743,6 +742,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         await self._pool.drop(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
+        clear_oracle_otel_trace_context(connection)
         await connection.rollback()
 
 

@@ -644,13 +644,13 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         try:
             if kwargs.get("exc_type") is not None:
                 conn.rollback()
+            clear_oracle_otel_trace_context(conn)
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 execute_session_release_sync(conn, hook)
             if self._priority_baseline is not None and conn.transaction_priority != self._priority_baseline:
                 conn.rollback()
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
-            clear_oracle_otel_trace_context(conn)
         except BaseException as exc:
             if kwargs.get("exc_type") is None:
                 try:
@@ -1244,13 +1244,13 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         try:
             if exc_type is not None:
                 await conn.rollback()
+            clear_oracle_otel_trace_context(conn)
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 await execute_session_release_async(conn, hook)
             if self._priority_baseline is not None and conn.transaction_priority != self._priority_baseline:
                 await conn.rollback()
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
-            clear_oracle_otel_trace_context(conn)
         except BaseException as exc:
             if exc_type is None:
                 try:
