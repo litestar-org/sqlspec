@@ -40,13 +40,8 @@ def db2_image() -> str:
 
 
 @pytest.fixture(scope="session")
-def db2_volumes(request: pytest.FixtureRequest) -> dict[str, dict[str, str]] | None:
-    """Mount SQLSpec's host client only when Arrow ODBC acceptance is collected."""
-    if not any(
-        isinstance(item, pytest.Function) and "db2_arrow_odbc_runtime" in item.fixturenames
-        for item in request.session.items
-    ):
-        return None
+def db2_volumes() -> dict[str, dict[str, str]] | None:
+    """Keep read-only client mounts stable when the same Db2 service spans test shards."""
     return _db2_odbc_client_mounts() or None
 
 
