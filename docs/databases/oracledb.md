@@ -316,7 +316,7 @@ Run the [sessionless example](https://github.com/litestar-org/sqlspec/blob/main/
     --8<-- "docs/examples/databases/oracledb/sessionless_transactions.py:example"
     ```
 
-`session.set_transaction_priority("HIGH")` sets the native priority field without a query. This call is sync on both drivers. `OracleTransactionPriority` accepts `"DEFAULT"`, `"LOW"`, `"MEDIUM"`, or `"HIGH"`. Priority support and policy depend on the server. `execute(..., suspend_on_success=True)` suspends after one statement. It needs an active sessionless transaction and does not commit.
+`session.set_transaction_priority("HIGH")` sets the native priority field without a query. This call is sync on both drivers. `OracleTransactionPriority` accepts `"DEFAULT"`, `"LOW"`, `"MEDIUM"`, or `"HIGH"`. Priority support and policy depend on the server. Checkout-scoped priority restores the captured native baseline on release when `reset_on_release=True`; it does not assume the baseline is `"DEFAULT"`. The native server parameter for diagnostics is `TXN_PRIORITY`. `execute(..., suspend_on_success=True)` suspends after one statement. It needs an active sessionless transaction and does not commit.
 
 #### Async pipelines and trace propagation
 

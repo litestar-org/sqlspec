@@ -19,6 +19,8 @@ from sqlspec.utils.routing import (
 
 Use [Read Replicas](../learn/recipes/read-replicas.md) for setup and [Replica Operations](../learn/recipes/read-replicas-operations.md) for freshness and failure policy. Context scopes select intent; database roles and policies still govern access and write permission.
 
+`RoutingContext.replica()` requires a reader and never falls back to the primary. Missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Automatic read providers retain configured fallback. Outside an active transaction, an existing write pin can override an explicit replica scope and keep work on the primary; a conflicting replica choice during a primary transaction raises an error.
+
 ## Routing Context and ASGI Middleware
 
 ::: sqlspec.utils.routing.RoutingEntry

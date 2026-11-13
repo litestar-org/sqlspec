@@ -104,6 +104,8 @@ with RoutingContext.scope():
         pass
 ```
 
+An explicit `RoutingContext.replica()` choice requires a reader. It never falls back to the primary; missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Automatic read providers retain the group's configured primary fallback. A historical write pin can keep work on the primary even inside an explicit replica scope outside an active transaction.
+
 Each scope works with `with` or `async with` and restores its caller's state. `primary`, `replica`, and `auto` can target a `bind_key`. A write pins only the active logical bind in the active request scope. An explicit conflicting replica choice during a primary transaction fails rather than splitting that transaction across sockets.
 
 Frameworks expose `read_session`, `get_read_session`, or FastAPI's `provide_read_session` dependency factory. The [integration guides](../../integrations/index.md) show each form. For lag, failures, tenant policies, and request headers, continue with [replica operations](read-replicas-operations.md).
