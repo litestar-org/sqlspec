@@ -1,5 +1,6 @@
 """Unit tests for arrow-odbc ADK store data-dictionary existence checks."""
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -7,6 +8,7 @@ import pytest
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
 from sqlspec.adapters.arrow_odbc.adk import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk.store import _Db2AdkSql, _TsqlAdkSql
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 from sqlspec.extensions.adk.migrations.reconcile import reconcile
@@ -426,3 +428,123 @@ def test_arrow_odbc_reconcile_refuses_dialect_without_hooks() -> None:
         reconcile(MigrationContext(config=config, driver=driver, dialect="postgres"))
 
     assert driver.execute.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("sql_builder", "events_ref", "session_ref", "memory_ref", "expected_constraint"),
+    [
+        pytest.param(
+            _TsqlAdkSql(),
+            "[dbo].[adk_event]",
+            "[dbo].[adk_session]",
+            "[dbo].[adk_memory]",
+            "CONSTRAINT [uq_adk_memory_event_id] UNIQUE (app_name, user_id, event_id)",
+            id="tsql",
+        ),
+        pytest.param(
+            _Db2AdkSql(),
+            "adk_event",
+            "adk_session",
+            "adk_memory",
+            "CONSTRAINT uq_adk_memory_event UNIQUE (app_name, user_id, event_id)",
+            id="db2",
+        ),
+    ],
+)
+def test_arrow_odbc_sql_builders_scope_events_and_memory(
+    sql_builder: _TsqlAdkSql | _Db2AdkSql, events_ref: str, session_ref: str, memory_ref: str, expected_constraint: str
+) -> None:
+    """_TsqlAdkSql and _Db2AdkSql join sessions in events_query and use three-column memory deduplication."""
+    cutoff = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
+    events_sql, events_params = sql_builder.events_query("adk_event", "app", "u1", "s1", cutoff, 5, "adk_session")
+    normalized_events = _normalized(events_sql)
+    assert f"FROM {events_ref} e JOIN {session_ref} s" in normalized_events
+    assert "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in normalized_events
+    assert "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ?" in normalized_events
+    assert events_params[:3] == ("app", "u1", "s1")
+
+    dup_sql = _normalized(sql_builder.memory_duplicate_sql("adk_memory"))
+    assert f"FROM {memory_ref} WHERE app_name = ? AND user_id = ? AND event_id = ?" in dup_sql
+
+    ddl = _normalized(sql_builder.memory_table_ddl("adk_memory", None))
+    assert expected_constraint in ddl
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expected_updates", "expected_commits"),
+    [
+        pytest.param(None, 0, 0, id="none"),
+        pytest.param(0, 0, 0, id="zero"),
+        pytest.param(-1, 0, 0, id="negative"),
+        pytest.param(timedelta(0), 0, 0, id="zero-timedelta"),
+        pytest.param(30, 1, 1, id="positive"),
+        pytest.param(timedelta(milliseconds=250), 1, 1, id="subsecond-positive"),
+    ],
+)
+def test_arrow_odbc_get_session_gates_update_and_commit_on_should_renew(
+    renew_for: int | timedelta | None, expected_updates: int, expected_commits: int
+) -> None:
+    """ArrowOdbcADKStore.get_session runs UPDATE and commit() only when _should_renew holds."""
+    store, driver, _ = _store_with_driver()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    driver.select_one_or_none.return_value = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": "{}",
+        "create_time": now,
+        "update_time": now,
+    }
+
+    result = store.get_session("app", "u1", "s1", renew_for=renew_for)
+    assert result is not None
+    assert driver.execute.call_count == expected_updates
+    assert driver.commit.call_count == expected_commits
+
+
+@pytest.mark.parametrize("session_exists", [True, False])
+def test_arrow_odbc_append_event_and_scoped_memory_delete(session_exists: bool) -> None:
+    """ArrowOdbcADKStore verifies session ownership in append_event and scopes memory deletes."""
+    store, driver, config = _store_with_driver()
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    driver.select_one_or_none.return_value = (
+        {"id": "s1", "app_name": "app", "user_id": "u1", "state": "{}", "create_time": now, "update_time": now}
+        if session_exists
+        else None
+    )
+    event: Any = {
+        "id": "e1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv1",
+        "timestamp": now,
+        "event_data": {"x": 1},
+    }
+
+    if session_exists:
+        store.append_event(event)
+        executed_sql, executed_params = driver.execute.call_args.args
+        assert "FROM [dbo].[adk_session] WHERE id = ? AND app_name = ? AND user_id = ?" in _normalized(executed_sql)
+        assert executed_params[-3:] == ("s1", "app", "u1")
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            store.append_event(event)
+        driver.execute.assert_not_called()
+
+    config.provide_session.reset_mock()
+    with pytest.raises(ValueError, match="does not match target"):
+        store.append_event_and_update_state(event, "other_app", "u1", "s1", {})
+    config.provide_session.assert_not_called()
+
+    mem_store = ArrowOdbcADKMemoryStore(config)
+    driver.select_value.return_value = 2
+    driver.execute.reset_mock()
+    deleted = mem_store.delete_entries_by_session("s1", app_name="app", user_id="u1")
+    assert deleted == 2
+    delete_sql, delete_params = driver.execute.call_args.args
+    assert (
+        _normalized(delete_sql)
+        == "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?"
+    )
+    assert delete_params == ("s1", "app", "u1")

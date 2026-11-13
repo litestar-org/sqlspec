@@ -142,7 +142,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -245,23 +245,34 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
             return []
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = $4 AND app_name = $2 AND user_id = $3
+        )
         """
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 sql,
                 event_record["id"],
-                event_record["app_name"],
-                event_record["user_id"],
-                event_record["session_id"],
+                app_name,
+                user_id,
+                session_id,
                 event_record["invocation_id"],
                 event_record["timestamp"],
                 event_record["event_data"],
             )
+            if parse_status(result) == 0:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     async def append_event_and_update_state(
         self,
@@ -274,6 +285,14 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -301,6 +320,10 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         """
 
         async with self._config.provide_connection() as conn, conn.transaction():
+            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
+            if row is None:
+                msg = f"Session {session_id} not found during append_event_and_update_state."
+                raise ValueError(msg)
             await conn.execute(
                 insert_sql,
                 event_record["id"],
@@ -311,10 +334,6 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            row = await conn.fetchrow(update_sql, state, app_name, user_id, session_id)
-            if row is None:
-                msg = f"Session {session_id} not found during append_event_and_update_state."
-                raise ValueError(msg)
             if app_state is not None:
                 await conn.execute(app_upsert_sql, app_name, app_state)
             if user_state is not None:
@@ -340,7 +359,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "s.id = $3"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -355,7 +374,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
         """
@@ -596,7 +615,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
     - Full-text search using to_tsvector/to_tsquery (postgres_fts strategy)
     - Simple ILIKE search fallback (simple strategy)
     - TIMESTAMPTZ for precise timestamp storage
-    - Deduplication via event_id unique constraint
+    - Deduplication via (app_name, user_id, event_id) unique constraint
     - Efficient upserts using ON CONFLICT DO NOTHING
 
     Args:
@@ -679,7 +698,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                      {self._owner_id_column_name}, timestamp, embedding, content_json,
                      content_text, metadata_json, inserted_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8[]::vector, $11, $12, $13, $14)
-                    ON CONFLICT (event_id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """
                     result = await conn.execute(
                         sql,
@@ -704,7 +723,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                     (id, session_id, app_name, user_id, scope, event_id, author,
                      timestamp, embedding, content_json, content_text, metadata_json, inserted_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::float8[]::vector, $10, $11, $12, $13)
-                    ON CONFLICT (event_id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     """
                     result = await conn.execute(
                         sql,
@@ -821,14 +840,25 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             rows = await conn.fetch(sql, *params)
         return [cast("StoredMemory", dict(row)) for row in rows]
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
+        clauses = ["session_id = $1"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            params.append(app_name)
+            clauses.append(f"app_name = ${len(params)}")
+        if user_id is not None:
+            params.append(user_id)
+            clauses.append(f"user_id = ${len(params)}")
+
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn:
-            result = await conn.execute(sql, session_id)
+            result = await conn.execute(sql, *params)
         return parse_status(result)
 
     async def delete_entries_older_than(
@@ -879,14 +909,15 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
             embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         );
 
         {indexes_sql}

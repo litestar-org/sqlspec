@@ -153,7 +153,17 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
     for method_name in base.__abstractmethods__:
         base_signature = inspect.signature(getattr(base, method_name))
         concrete_signature = inspect.signature(getattr(cls, method_name))
-        assert list(base_signature.parameters) == list(concrete_signature.parameters), (
+        base_params = list(base_signature.parameters)
+        concrete_params = list(concrete_signature.parameters)
+        if (
+            method_name == "delete_entries_by_session"
+            and base_params == ["self", "session_id"]
+            and concrete_params == ["self", "session_id", "app_name", "user_id"]
+        ):
+            assert concrete_signature.parameters["app_name"].default is None
+            assert concrete_signature.parameters["user_id"].default is None
+            continue
+        assert base_params == concrete_params, (
             f"{class_path}.{method_name} parameters differ from {base.__name__}: "
             f"{concrete_signature} != {base_signature}"
         )

@@ -154,7 +154,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -262,25 +262,38 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             await conn.execute(sql, [app_name, user_id, session_id])
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = $4 AND app_name = $2 AND user_id = $3
+        )
+        RETURNING 1
         """
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(
+            result = await conn.fetch(
                 sql,
                 [
                     event_record["id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record["session_id"],
+                    app_name,
+                    user_id,
+                    session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
                     event_record["event_data"],
                 ],
             )
+            rows: list[dict[str, Any]] = result.result() if result else []
+            if not rows:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
 
     async def append_event_and_update_state(
         self,
@@ -293,6 +306,14 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -322,6 +343,10 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         async with self._config.provide_connection() as conn:
             try:
                 await conn.execute("BEGIN")
+                result = await conn.fetch(update_sql, [state, app_name, user_id, session_id])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                if not rows:
+                    _raise_missing_session(session_id)
                 await conn.execute(
                     insert_sql,
                     [
@@ -334,10 +359,6 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                         event_record["event_data"],
                     ],
                 )
-                result = await conn.fetch(update_sql, [state, app_name, user_id, session_id])
-                rows: list[dict[str, Any]] = result.result() if result else []
-                if not rows:
-                    _raise_missing_session(session_id)
                 if app_state is not None:
                     await conn.execute(app_upsert_sql, [app_name, app_state])
                 if user_state is not None:
@@ -368,7 +389,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = $1", "s.user_id = $2", "e.session_id = $3"]
+        where_clauses = ["s.app_name = $1", "s.user_id = $2", "s.id = $3"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -383,7 +404,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
         """
@@ -726,7 +747,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         _refresh_psqlpy_extension_state(self._config, installed)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
+        """Bulk insert memory entries deduplicated by (app_name, user_id, event_id)."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -768,7 +789,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             RETURNING 1
             """
             params = [
@@ -801,7 +822,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 $8::timestamptz[], $9::jsonb[], $10::text[], $11::jsonb[], $12::timestamptz[], $13::text[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at, embedding)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             RETURNING 1
             """
             params = [
@@ -869,21 +890,33 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 return []
             raise
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        clauses = ["session_id = $1"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            params.append(app_name)
+            clauses.append(f"app_name = ${len(params)}")
+        if user_id is not None:
+            params.append(user_id)
+            clauses.append(f"user_id = ${len(params)}")
+        where_clause = " AND ".join(clauses)
+
         sql = (
             f"WITH deleted AS (DELETE FROM {self._memory_table} "
-            f"WHERE session_id = $1 RETURNING 1) "
+            f"WHERE {where_clause} RETURNING 1) "
             "SELECT COUNT(*) AS count FROM deleted"
         )
 
         try:
             async with self._config.provide_connection() as conn:
-                result = await conn.fetch(sql, [session_id])
+                result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return int(rows[0]["count"]) if rows else 0
         except Exception as e:
@@ -949,14 +982,15 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
             embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         );
         {indexes_sql}
         """

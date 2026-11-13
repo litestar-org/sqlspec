@@ -1,6 +1,6 @@
 """Regression tests for common ADK store state mixins."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -211,3 +211,54 @@ def test_concrete_session_store_exposes_all_shared_properties() -> None:
         "owner_id_column_ddl": "tenant_id INTEGER",
         "owner_id_column_name": "tenant_id",
     }
+
+
+@pytest.mark.parametrize(
+    ("expires_in", "expected_kind", "expected_delta_seconds"),
+    [
+        pytest.param(None, "none", 0.0, id="none"),
+        pytest.param(timedelta(milliseconds=250), "future", 0.25, id="subsecond-timedelta"),
+        pytest.param(5, "future", 5.0, id="positive-int"),
+        pytest.param(0, "past", 0.0, id="zero-int"),
+        pytest.param(-5, "past", 0.0, id="negative-int"),
+        pytest.param(timedelta(0), "past", 0.0, id="zero-timedelta"),
+        pytest.param(timedelta(seconds=-1), "past", 0.0, id="negative-timedelta"),
+    ],
+)
+def test_adk_store_common_calculate_expires_at_precision_and_non_positive_expiry(
+    expires_in: int | timedelta | None, expected_kind: str, expected_delta_seconds: float
+) -> None:
+    store = SqliteADKStore(_sqlite_config())
+    before = datetime.now(UTC)
+    result = store._calculate_expires_at(expires_in)
+    after = datetime.now(UTC)
+
+    if expected_kind == "none":
+        assert result is None
+    elif expected_kind == "past":
+        assert result is not None
+        assert before - timedelta(microseconds=1) <= result <= after - timedelta(microseconds=1)
+    else:
+        assert result is not None
+        lower = before + timedelta(seconds=expected_delta_seconds) - timedelta(milliseconds=25)
+        upper = after + timedelta(seconds=expected_delta_seconds) + timedelta(milliseconds=25)
+        assert lower <= result <= upper
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expected"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-1, False, id="negative-int"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=-5), False, id="negative-timedelta"),
+        pytest.param(1, True, id="positive-int"),
+        pytest.param(timedelta(milliseconds=1), True, id="subsecond-timedelta"),
+    ],
+)
+def test_adk_store_common_should_renew_requires_positive_duration(
+    renew_for: int | timedelta | None, expected: bool
+) -> None:
+    store = SqliteADKStore(_sqlite_config())
+    assert store._should_renew(renew_for) is expected

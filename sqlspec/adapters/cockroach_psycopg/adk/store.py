@@ -116,13 +116,14 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE = (
     "            app_name VARCHAR(128) NOT NULL,\n"
     "            user_id VARCHAR(128) NOT NULL,\n"
     "            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
-    "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
+    "            event_id VARCHAR(128) NOT NULL,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMPTZ NOT NULL,\n"
     "            content_json JSONB NOT NULL,\n"
     "            content_text TEXT NOT NULL,\n"
     "            metadata_json JSONB,\n"
-    "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    "            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+    "            UNIQUE (app_name, user_id, event_id)\n"
     "        ){2};\n"
     "\n"
     "        {3}\n"
@@ -243,7 +244,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        should_touch = renew_for is not None and self._calculate_expires_at(renew_for) is not None
+        should_touch = self._should_renew(renew_for)
         if should_touch:
             sql = f"""
             UPDATE {self._session_table}
@@ -335,10 +336,18 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await conn.commit()
 
     async def append_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        )
+        SELECT %s, %s, %s, %s, %s, %s, %s
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = %s AND app_name = %s AND user_id = %s
+        )
         """
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -348,14 +357,23 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                 sql.encode(),
                 (
                     event_record["id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record["session_id"],
+                    app_name,
+                    user_id,
+                    session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
                     jsonb_value,
+                    session_id,
+                    app_name,
+                    user_id,
                 ),
             )
+            if not cur.rowcount or cur.rowcount <= 0:
+                rollback: Any = getattr(conn, "rollback", None)
+                if rollback is not None:
+                    await rollback()
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
             await conn.commit()
 
     async def append_event_and_update_state(
@@ -369,6 +387,14 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -393,6 +419,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
+                await cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+                row = await cur.fetchone()
+                if row is None:
+                    _raise_missing_session(session_id)
                 await cur.execute(
                     insert_sql.encode(),
                     (
@@ -405,16 +435,14 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                         jsonb_value,
                     ),
                 )
-                await cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
-                row = await cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
                 if app_state is not None:
                     await cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
                 if user_state is not None:
                     await cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
             except Exception:
-                await conn.rollback()
+                rollback: Any = getattr(conn, "rollback", None)
+                if rollback is not None:
+                    await rollback()
                 raise
             await conn.commit()
 
@@ -438,7 +466,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "s.id = %s"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -453,7 +481,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
         """
@@ -723,7 +751,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        should_touch = renew_for is not None and self._calculate_expires_at(renew_for) is not None
+        should_touch = self._should_renew(renew_for)
         if should_touch:
             sql = f"""
             UPDATE {self._session_table}
@@ -833,6 +861,14 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = "event_record scope does not match target session arguments."
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -857,6 +893,10 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
+                cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+                row = cur.fetchone()
+                if row is None:
+                    _raise_missing_session(session_id)
                 cur.execute(
                     insert_sql.encode(),
                     (
@@ -869,16 +909,14 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                         jsonb_value,
                     ),
                 )
-                cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
-                row = cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
                 if app_state is not None:
                     cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
                 if user_state is not None:
                     cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
             except Exception:
-                conn.rollback()
+                rollback = getattr(conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
                 raise
             conn.commit()
 
@@ -903,7 +941,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = %s", "s.user_id = %s", "e.session_id = %s"]
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "s.id = %s"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -918,7 +956,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
         """
@@ -1121,10 +1159,18 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         ]
 
     def _insert_event(self, event_record: StoredEvent) -> None:
+        session_id = event_record["session_id"]
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        )
+        SELECT %s, %s, %s, %s, %s, %s, %s
+        WHERE EXISTS (
+            SELECT 1 FROM {self._session_table}
+            WHERE id = %s AND app_name = %s AND user_id = %s
+        )
         """
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
@@ -1134,14 +1180,23 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                 sql.encode(),
                 (
                     event_record["id"],
-                    event_record["app_name"],
-                    event_record["user_id"],
-                    event_record["session_id"],
+                    app_name,
+                    user_id,
+                    session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
                     jsonb_value,
+                    session_id,
+                    app_name,
+                    user_id,
                 ),
             )
+            if not cur.rowcount or cur.rowcount <= 0:
+                rollback = getattr(conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
             conn.commit()
 
 
@@ -1214,7 +1269,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
             params: tuple[Any, ...] = (
                 owner_id,
@@ -1242,7 +1297,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 %s::varchar[], %s::varchar[], %s::varchar[],
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """).format(table=table_ident)
             params = (
                 ids,
@@ -1320,14 +1375,25 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             records.append(rec)
         return records
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), (session_id,))
+            await cur.execute(sql.encode(), tuple(params))
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1401,7 +1467,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             driver.execute_script(statement)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
+        """Bulk insert memory entries deduplicated by (app_name, user_id, event_id)."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -1440,7 +1506,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             ) AS batch(id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at)
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
             params: tuple[Any, ...] = (
                 owner_id,
@@ -1468,7 +1534,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 %s::varchar[], %s::varchar[], %s::varchar[],
                 %s::timestamptz[], %s::jsonb[], %s::text[], %s::jsonb[], %s::timestamptz[]
             )
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             """).format(table=table_ident)
             params = (
                 ids,
@@ -1547,15 +1613,26 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             records.append(rec)
         return records
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
+        clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+
+        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), (session_id,))
+            cur.execute(sql.encode(), tuple(params))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 

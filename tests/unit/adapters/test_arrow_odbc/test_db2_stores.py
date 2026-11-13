@@ -385,9 +385,10 @@ def test_db2_adk_statements_use_fetch_first_not_top() -> None:
         ('SELECT value FROM adk_internal_metadata WHERE "KEY" = ? FETCH FIRST 1 ROWS ONLY', ["k"]),
         (
             (
-                "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM adk_event "
-                "WHERE app_name = ? AND user_id = ? AND session_id = ? AND timestamp > ? "
-                "ORDER BY timestamp ASC FETCH FIRST 4 ROWS ONLY"
+                "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data "
+                "FROM adk_event e JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name "
+                "AND e.user_id = s.user_id WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? "
+                "AND e.timestamp > ? ORDER BY e.timestamp ASC FETCH FIRST 4 ROWS ONLY"
             ),
             ["app", "u", "s1", "2026-01-02 03:04:05.678901"],
         ),
@@ -563,7 +564,7 @@ def test_db2_adk_memory_insert_skips_duplicates_with_fetch_first() -> None:
     """Entries whose event id already exists are skipped; the check reads one row with FETCH FIRST."""
 
     def responder(sql: str, parameters: "list[str | None] | None") -> "pa.Table | None":
-        if "WHERE event_id = ?" in sql and parameters == ["e1"]:
+        if "WHERE app_name = ? AND user_id = ? AND event_id = ?" in sql and parameters == ["app", "u", "e1"]:
             return pa.table({"ID": ["m0"]})
         return None
 
@@ -576,8 +577,8 @@ def test_db2_adk_memory_insert_skips_duplicates_with_fetch_first() -> None:
     calls = normalized_calls(connection)
     assert inserted == 1
     assert [sql for sql, _ in calls] == [
-        "SELECT id FROM adk_memory WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
-        "SELECT id FROM adk_memory WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
+        "SELECT id FROM adk_memory WHERE app_name = ? AND user_id = ? AND event_id = ? FETCH FIRST 1 ROWS ONLY",
+        "SELECT id FROM adk_memory WHERE app_name = ? AND user_id = ? AND event_id = ? FETCH FIRST 1 ROWS ONLY",
         (
             "INSERT INTO adk_memory ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, "
             "content_text, metadata_json, inserted_at, tenant_id ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"

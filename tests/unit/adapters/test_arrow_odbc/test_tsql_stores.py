@@ -315,10 +315,18 @@ _TSQL_ADK_SESSION_CALLS = [
     ("BEGIN TRANSACTION", None),
     (
         (
-            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
-            "invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM "
+            "[dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?"
         ),
-        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
+        ["app", "u", "s1"],
+    ),
+    (
+        (
+            "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, "
+            "invocation_id, timestamp, event_data ) SELECT ?, ?, ?, ?, ?, ?, ? FROM "
+            "[dbo].[adk_session] WHERE id = ? AND app_name = ? AND user_id = ?"
+        ),
+        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}', "s1", "app", "u"],
     ),
     ("COMMIT TRANSACTION", None),
     ("BEGIN TRANSACTION", None),
@@ -369,17 +377,20 @@ _TSQL_ADK_SESSION_CALLS = [
     ("COMMIT TRANSACTION", None),
     (
         (
-            "SELECT TOP 4 id, app_name, user_id, session_id, invocation_id, timestamp, "
-            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
-            "session_id = ? AND timestamp > ? ORDER BY timestamp ASC"
+            "SELECT TOP 4 e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, "
+            "e.timestamp, e.event_data FROM [dbo].[adk_event] e JOIN [dbo].[adk_session] s "
+            "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ? "
+            "ORDER BY e.timestamp ASC"
         ),
         ["app", "u", "s1", "2026-01-02T03:04:05.678901"],
     ),
     (
         (
-            "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, "
-            "event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND "
-            "session_id = ? ORDER BY timestamp ASC"
+            "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, "
+            "e.timestamp, e.event_data FROM [dbo].[adk_event] e JOIN [dbo].[adk_session] s "
+            "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? ORDER BY e.timestamp ASC"
         ),
         ["app", "u", "s1"],
     ),
@@ -524,7 +535,7 @@ def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> 
 
 _TSQL_ADK_MEMORY_CALLS = [
     ("BEGIN TRANSACTION", None),
-    ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE event_id = ?", ["e1"]),
+    ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE app_name = ? AND user_id = ? AND event_id = ?", ["app", "u", "e1"]),
     (
         (
             "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, "
@@ -582,7 +593,7 @@ _TSQL_ADK_MEMORY_CALLS = [
     ),
     ("COMMIT TRANSACTION", None),
 ]
-_TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id) )"
+_TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (app_name, user_id, event_id) )"
 _TSQL_ADK_MEMORY_DROPS = ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
 
 _ADK_MEMORY_ENTRY: "Any" = {
