@@ -6,16 +6,12 @@ from uuid import uuid4
 
 import msgspec
 import pytest
-from pytest_databases.docker.postgres import PostgresService, create_worker_database, exec_psql
-from pytest_databases.helpers import get_xdist_worker_num
+from pytest_databases.docker.postgres import PostgresService, build_alloydb_omni_command
 
 from sqlspec.utils.module_loader import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
-
-    from pytest_databases import DockerService
-    from pytest_databases.types import ServiceContainer, XdistIsolationLevel
 
     from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
     from sqlspec.adapters.asyncpg import AsyncpgConfig, AsyncpgDriver
@@ -38,8 +34,9 @@ __all__ = (
     "adbc_postgres_config",
     "adbc_postgres_connection_config",
     "adbc_sync_driver",
-    "alloydb_omni_18_service",
+    "alloydb_omni_command",
     "alloydb_omni_harness",
+    "alloydb_omni_startup_timeout",
     "asyncpg_async_driver",
     "asyncpg_config",
     "asyncpg_connection_config",
@@ -129,15 +126,16 @@ class AlloydbOmniHarness(msgspec.Struct, frozen=True, gc=False):
 
     async def verify_vector_extension(self) -> tuple[str, float]:
         """Enable the AlloyDB Omni vector extension and compute L2 distance."""
-        _ensure_postgres_extension(self.service, "vector")
         ext_sql = "SELECT extname FROM pg_extension WHERE extname = $1"
         dist_sql = "SELECT ('[1,2,3]'::vector <-> '[1,2,3]'::vector)::float8"
         if self.is_async:
             async with self.session_config.provide_session() as driver:
+                await driver.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 ext_name = await driver.select_value(ext_sql, ("vector",))
                 distance = await driver.select_value(dist_sql)
                 return str(ext_name), float(distance)
         with self.session_config.provide_session() as driver:
+            driver.execute("CREATE EXTENSION IF NOT EXISTS vector")
             ext_name = driver.select_value(ext_sql, ("vector",))
             distance = driver.select_value(dist_sql)
             return str(ext_name), float(distance)
@@ -277,7 +275,6 @@ def pgvector_config_adbc(pgvector_service: PostgresService) -> "Generator[AdbcCo
     """Provide an ADBC config connected to a pgvector-enabled PostgreSQL service."""
     pytest.importorskip("adbc_driver_manager")
     pytest.importorskip("pyarrow")
-    _ensure_postgres_extension(pgvector_service, "vector")
     config = AdbcConfig(connection_config={"uri": _adbc_postgres_uri(pgvector_service)})
     try:
         yield config
@@ -289,7 +286,6 @@ def pgvector_config_adbc(pgvector_service: PostgresService) -> "Generator[AdbcCo
 def pgvector_config_asyncpg(pgvector_service: PostgresService) -> "AsyncpgConfig":
     """Provide an asyncpg config connected to a pgvector-enabled PostgreSQL service."""
     pytest.importorskip("asyncpg")
-    _ensure_postgres_extension(pgvector_service, "vector")
     return AsyncpgConfig(connection_config=_asyncpg_pool_config(pgvector_service))
 
 
@@ -297,7 +293,6 @@ def pgvector_config_asyncpg(pgvector_service: PostgresService) -> "AsyncpgConfig
 def pgvector_config_psqlpy(pgvector_service: PostgresService) -> "PsqlpyConfig":
     """Provide a psqlpy config connected to a pgvector-enabled PostgreSQL service."""
     pytest.importorskip("psqlpy")
-    _ensure_postgres_extension(pgvector_service, "vector")
     return PsqlpyConfig(connection_config=PsqlpyPoolParams(dsn=_psqlpy_dsn(pgvector_service)))
 
 
@@ -306,7 +301,6 @@ def pgvector_config_psycopg(pgvector_service: PostgresService) -> "Generator[Psy
     """Provide a psycopg config connected to a pgvector-enabled PostgreSQL service."""
     pytest.importorskip("psycopg")
     pytest.importorskip("psycopg_pool")
-    _ensure_postgres_extension(pgvector_service, "vector")
     config = PsycopgSyncConfig(
         connection_config=PsycopgPoolParams(conninfo=_postgres_conninfo(pgvector_service), min_size=1, max_size=4)
     )
@@ -361,70 +355,15 @@ def paradedb_config_psycopg(paradedb_service: PostgresService) -> "Generator[Psy
 
 
 @pytest.fixture(scope="session")
-def alloydb_omni_18_service(
-    docker_service: "DockerService",
-    xdist_postgres_isolation_level: "XdistIsolationLevel",
-    postgres_host: str,
-    postgres_user: str,
-    postgres_password: str,
-    alloydb_omni_18_port: int | None,
-) -> "Generator[PostgresService, None, None]":
-    """Provide an AlloyDB Omni 18 service with an extended initdb startup timeout.
+def alloydb_omni_command() -> list[str]:
+    """Keep SQLSpec AlloyDB columnar configuration at postmaster startup."""
+    return build_alloydb_omni_command(extra_gucs={"google_columnar_engine.enable_columnar_scan": "off"})
 
-    AlloyDB Omni preloads ``g_columnar_engine``, ``g_stats``, ``google_job_scheduler``,
-    ``google_ml_integration``, and ``google_storage`` during cold ``initdb``, which
-    takes ~15-20s and exceeds ``provide_postgres_service``'s 10s default timeout.
-    """
 
-    def check(service_container: "ServiceContainer") -> bool:
-        exit_code, output = exec_psql(
-            service_container.container,
-            user=postgres_user,
-            password=postgres_password,
-            database="postgres",
-            sql="SELECT 1",
-            tuples_only=True,
-        )
-        return exit_code == 0 and output.strip() == b"1"
-
-    name = "alloydb-omni-18"
-    db_name = "pytest_databases"
-    worker_num = get_xdist_worker_num()
-    if worker_num is not None:
-        suffix = f"_{worker_num}"
-        if xdist_postgres_isolation_level == "server":
-            name += suffix
-        else:
-            db_name += suffix
-
-    with docker_service.run(
-        image="gcr.io/alloydb-omni/alloydbomni:18",
-        command=[
-            "postgres",
-            "-c",
-            "google_columnar_engine.enabled=on",
-            "-c",
-            "google_columnar_engine.enable_columnar_scan=off",
-        ],
-        check=check,
-        container_host=postgres_host,
-        container_port=5432,
-        name=name,
-        env={"POSTGRES_PASSWORD": postgres_password},
-        transient=xdist_postgres_isolation_level == "server",
-        host_port=alloydb_omni_18_port,
-        timeout=90,
-        pause=0.5,
-    ) as service:
-        create_worker_database(service.container, user=postgres_user, password=postgres_password, db_name=db_name)
-        yield PostgresService(
-            host=service.host,
-            port=service.port,
-            container=service.container,
-            database=db_name,
-            user=postgres_user,
-            password=postgres_password,
-        )
+@pytest.fixture(scope="session")
+def alloydb_omni_startup_timeout() -> int:
+    """Allow cold AlloyDB initialization to finish before readiness expires."""
+    return 90
 
 
 @pytest.fixture(params=("asyncpg", "psycopg-sync", "psycopg-async", "psqlpy"))
@@ -560,18 +499,3 @@ def _adbc_postgres_uri(postgres_service: PostgresService) -> str:
 
 def _asyncpg_pool_config(postgres_service: PostgresService) -> dict[str, Any]:
     return _postgres_connection_config(postgres_service)
-
-
-def _ensure_postgres_extension(service: PostgresService, extension: str) -> None:
-    """Ensure a PostgreSQL extension is enabled inside the service database."""
-    exit_code, output = exec_psql(
-        service.container,
-        user=service.user,
-        password=service.password,
-        database=service.database,
-        sql=f'CREATE EXTENSION IF NOT EXISTS "{extension}"',
-    )
-    if exit_code != 0:
-        decoded_output = output.decode("utf-8", errors="replace")
-        msg = f"Failed to enable PostgreSQL extension {extension!r}: {decoded_output}"
-        raise RuntimeError(msg)
