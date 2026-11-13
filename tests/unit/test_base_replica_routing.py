@@ -139,3 +139,39 @@ def test_forced_primary_read_retains_primary_runtime() -> None:
         ]
     finally:
         asyncio.run(spec.close_all_pools())
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_failed_primary_pool_close_retains_retry_and_closes_replicas(asynchronous: bool) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    pool = MagicMock()
+    pool.is_closed = False
+    pool.close = (
+        AsyncMock(side_effect=OSError("primary close failed"))
+        if asynchronous
+        else MagicMock(side_effect=OSError("primary close failed"))
+    )
+    replica = AiosqliteConfig() if asynchronous else SqliteConfig()
+    primary = (
+        AiosqliteConfig(connection_instance=pool, replicas=[replica])
+        if asynchronous
+        else SqliteConfig(connection_instance=pool, replicas=[replica])
+    )
+    if isinstance(replica, AiosqliteConfig):
+        await replica.create_pool()
+    else:
+        replica.create_pool()
+    with pytest.raises(OSError, match="primary close failed"):
+        if isinstance(primary, AiosqliteConfig):
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+    assert primary.connection_instance is pool
+    assert replica.connection_instance is None
+    pool.close.side_effect = None
+    if isinstance(primary, AiosqliteConfig):
+        await primary.close_pool()
+    else:
+        primary.close_pool()
+    assert primary.connection_instance is None

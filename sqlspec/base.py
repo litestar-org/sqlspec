@@ -432,7 +432,7 @@ class SQLSpec:
             bind_group=bind_group, statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant
         )
         session._registry_lifecycle = True
-        return cast("SyncRoutingSession[SyncDriverT] | AsyncRoutingSession[AsyncDriverT]", session)
+        return session
 
     @overload
     def get_pool(

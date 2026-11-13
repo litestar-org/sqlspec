@@ -1279,10 +1279,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         try:
             if close_primary is not None:
                 close_primary()
+            self.connection_instance = None
         except BaseException as exc:
             error = exc
-        finally:
-            self.connection_instance = None
         for group in self._replica_groups.values():
             try:
                 group.close_pools()
@@ -1296,10 +1295,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         try:
             if close_primary is not None:
                 await close_primary()
+            self.connection_instance = None
         except BaseException as exc:
             error = exc
-        finally:
-            self.connection_instance = None
         for group in self._replica_groups.values():
             try:
                 await cast("Awaitable[None]", group.close_pools())
