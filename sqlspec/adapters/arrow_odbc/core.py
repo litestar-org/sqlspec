@@ -64,6 +64,11 @@ DB2_INDEX_EXISTS_SQL: Final[str] = (
 
 
 _CONNECT_KWARG_KEYS: Final[set[str]] = {"user", "password", "login_timeout_sec", "packet_size", "autocommit"}
+_USER_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("user", "uid", "username")
+_PASSWORD_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("password", "pwd")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
+_MIN_DELIMITER_LEN: Final[int] = 2
 _CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("dsn", "DSN"),
     ("driver", "Driver"),
@@ -301,18 +306,39 @@ def build_connection_config(params: dict[str, Any], *, dialect: str | None = Non
     if login_timeout is not None and "login_timeout_sec" not in config:
         config["login_timeout_sec"] = login_timeout
 
+    resolved_user = _pop_credential_alias(config, _USER_CREDENTIAL_KEYS, "user")
+    resolved_password = _pop_credential_alias(config, _PASSWORD_CREDENTIAL_KEYS, "password")
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
-    connection_string = config.pop("connection_string", None)
+    if resolved_user is not None:
+        connect_kwargs["user"] = resolved_user
+    if resolved_password is not None:
+        connect_kwargs["password"] = resolved_password
+    strip_uid = "user" in connect_kwargs
+    strip_pwd = "password" in connect_kwargs
 
-    if connection_string is not None and not config:
-        return str(connection_string), connect_kwargs
+    connection_string = config.pop("connection_string", None)
+    if connection_string is not None:
+        raw_conn_str = str(connection_string)
+        if "\x00" in raw_conn_str or "\r" in raw_conn_str or "\n" in raw_conn_str:
+            msg = "ODBC connection_string contains disallowed control characters."
+            raise ImproperConfigurationError(msg)
+        if not config:
+            return _strip_inline_credentials(raw_conn_str, strip_uid=strip_uid, strip_pwd=strip_pwd), connect_kwargs
 
     resolved_dialect = _resolve_connection_dialect(config, connection_string, dialect)
     if resolved_dialect == "db2":
-        return _build_db2_connection_string(config, connection_string), connect_kwargs
+        return (
+            _build_db2_connection_string(config, connection_string, strip_uid=strip_uid, strip_pwd=strip_pwd),
+            connect_kwargs,
+        )
 
     if connection_string is not None:
-        return _merge_connection_string(config, str(connection_string), resolved_dialect), connect_kwargs
+        return (
+            _merge_connection_string(
+                config, str(connection_string), resolved_dialect, strip_uid=strip_uid, strip_pwd=strip_pwd
+            ),
+            connect_kwargs,
+        )
 
     _apply_standalone_host_port(config, resolved_dialect)
 
@@ -322,13 +348,14 @@ def build_connection_config(params: dict[str, Any], *, dialect: str | None = Non
         value = config.get(key)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
+        parts.append(f"{option_name}={_format_odbc_connection_value(option_name, value)}")
         standalone_consumed.add(key)
 
     for remaining_key, remaining_value in config.items():
         if remaining_key in standalone_consumed or remaining_value is None:
             continue
-        parts.append(f"{remaining_key}={_format_connection_value(remaining_key, remaining_value)}")
+        canonical_remaining = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+        parts.append(f"{canonical_remaining}={_format_odbc_connection_value(canonical_remaining, remaining_value)}")
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -439,6 +466,52 @@ def db2_timestamp_text(value: "datetime | None") -> "str | None":
     return value.isoformat(sep=" ", timespec="microseconds")
 
 
+def quote_bracket_identifier(identifier: str) -> str:
+    """Quote an identifier using SQL Server / T-SQL bracket syntax."""
+    return f"[{identifier.replace(']', ']]')}]"
+
+
+def strip_bracket_quotes(part: str) -> str:
+    """Strip T-SQL bracket or double-quote enclosing delimiters from an identifier."""
+    stripped = part.strip()
+    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == "[" and stripped[-1] == "]":
+        return stripped[1:-1].replace("]]", "]")
+    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == '"' and stripped[-1] == '"':
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
+@contextlib.contextmanager
+def atomic_store_write(driver: Any) -> "Iterator[None]":
+    """Wrap multi-statement store mutations in an explicit transaction when supported.
+
+    Yields:
+        None while the atomic write block executes.
+    """
+    in_tx = getattr(driver, "_connection_in_transaction", None)
+    if callable(in_tx) and in_tx() is True:
+        yield
+        return
+
+    dialect = getattr(driver, "_dialect", "")
+    autocommit = getattr(driver, "_connection_autocommit", True)
+    can_begin = not (autocommit and dialect in {"db2", "oracle"})
+
+    if can_begin and hasattr(driver, "begin"):
+        driver.begin()
+
+    try:
+        yield
+    except BaseException:
+        if hasattr(driver, "rollback"):
+            with contextlib.suppress(Exception):
+                driver.rollback()
+        raise
+    else:
+        if hasattr(driver, "commit"):
+            driver.commit()
+
+
 def _match_dialect_from_dbms_name(dbms_name: str | None) -> str | None:
     if not dbms_name:
         return None
@@ -482,11 +555,21 @@ def _apply_standalone_host_port(config: "dict[str, Any]", resolved_dialect: str)
         config["port"] = port
 
 
-def _merge_connection_string(config: "dict[str, Any]", connection_string: str, resolved_dialect: str) -> str:
+def _merge_connection_string(
+    config: "dict[str, Any]",
+    connection_string: str,
+    resolved_dialect: str,
+    *,
+    strip_uid: bool = False,
+    strip_pwd: bool = False,
+) -> str:
     options: dict[str, tuple[str, str]] = {}
     for raw_key, raw_value in parse_odbc_connection_string(connection_string):
         canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
-        options[canonical_key.lower()] = (canonical_key, raw_value)
+        lower_canonical = canonical_key.lower()
+        if (strip_uid and lower_canonical == "uid") or (strip_pwd and lower_canonical == "pwd"):
+            continue
+        options[lower_canonical] = (canonical_key, raw_value)
 
     server = config.pop("server", None)
     if server is None:
@@ -494,17 +577,17 @@ def _merge_connection_string(config: "dict[str, Any]", connection_string: str, r
     port = config.pop("port", None)
     if resolved_dialect == "mssql":
         if server is not None:
-            options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
+            options["server"] = ("Server", _format_odbc_connection_value("Server", _append_port(str(server), port)))
         elif port is not None and "server" in options:
             disp, val = options["server"]
-            options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
+            options["server"] = (disp, _format_odbc_connection_value(disp, _append_port(val, port)))
         elif port is not None:
-            options["port"] = ("Port", _format_connection_value("Port", port))
+            options["port"] = ("Port", _format_odbc_connection_value("Port", port))
     else:
         if server is not None:
-            options["server"] = ("Server", _format_connection_value("Server", server))
+            options["server"] = ("Server", _format_odbc_connection_value("Server", server))
         if port is not None:
-            options["port"] = ("Port", _format_connection_value("Port", port))
+            options["port"] = ("Port", _format_odbc_connection_value("Port", port))
 
     consumed: set[str] = {"port"}
     for key, option_name in _CONNECTION_STRING_KEYS:
@@ -513,14 +596,14 @@ def _merge_connection_string(config: "dict[str, Any]", connection_string: str, r
         value = config.get(key)
         if value is not None:
             canonical_name = _CANONICAL_KEY_LOOKUP.get(option_name.lower(), option_name)
-            options[canonical_name.lower()] = (canonical_name, _format_connection_value(canonical_name, value))
+            options[canonical_name.lower()] = (canonical_name, _format_odbc_connection_value(canonical_name, value))
         consumed.add(key)
 
     for remaining_key, remaining_value in config.items():
         if remaining_key in consumed or remaining_value is None:
             continue
         canonical_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-        options[canonical_key.lower()] = (canonical_key, _format_connection_value(canonical_key, remaining_value))
+        options[canonical_key.lower()] = (canonical_key, _format_odbc_connection_value(canonical_key, remaining_value))
 
     merged_parts = [f"{name}={val}" for name, val in options.values()]
     return ";".join(merged_parts) + ";"
@@ -549,12 +632,16 @@ def _append_port(server: str, port: Any) -> str:
     return f"{server},{port_str}"
 
 
-def _build_db2_connection_string(config: "dict[str, Any]", connection_string: Any) -> str:
+def _build_db2_connection_string(
+    config: "dict[str, Any]", connection_string: Any, *, strip_uid: bool = False, strip_pwd: bool = False
+) -> str:
     """Render an IBM Db2 CLI connection string from a base string and discrete fields.
 
     Args:
         config: Discrete connection fields, which override matching options.
         connection_string: Optional base connection string.
+        strip_uid: Remove inline UID from base connection string when user is supplied out-of-band.
+        strip_pwd: Remove inline PWD from base connection string when password is supplied out-of-band.
 
     Returns:
         The connection string with CLI keywords in canonical order, followed by
@@ -573,12 +660,15 @@ def _build_db2_connection_string(config: "dict[str, Any]", connection_string: An
     if connection_string is not None:
         for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
             name = _DB2_CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
-            options[name.lower()] = (name, raw_value)
+            lower_name = name.lower()
+            if (strip_uid and lower_name == "uid") or (strip_pwd and lower_name == "pwd"):
+                continue
+            options[lower_name] = (name, raw_value)
     for key, value in config.items():
         if value is None:
             continue
         name = _DB2_CANONICAL_KEY_LOOKUP.get(key.lower(), key)
-        options[name.lower()] = (name, _format_connection_value(name, value))
+        options[name.lower()] = (name, _format_odbc_connection_value(name, value))
     if "hostname" in options and "protocol" not in options:
         options["protocol"] = ("Protocol", "TCPIP")
     if not options:
@@ -624,93 +714,71 @@ def _is_sql_server_diagnostic(message: str) -> bool:
     return any(marker in lowered for marker in _SQL_SERVER_DIAGNOSTIC_MARKERS)
 
 
-def _format_connection_value(option_name: str, value: Any) -> str:
-    """Render a value for an ODBC connection string.
+def _pop_credential_alias(config: "dict[str, Any]", aliases: tuple[str, ...], target_key: str) -> "str | None":
+    alias_set = set(aliases)
+    matched_by_lower: dict[str, Any] = {}
+    for raw_key in tuple(config):
+        lowered = raw_key.lower()
+        if lowered in alias_set:
+            val = config.pop(raw_key)
+            if val is not None and lowered not in matched_by_lower:
+                matched_by_lower[lowered] = val
+    for alias in aliases:
+        if alias in matched_by_lower:
+            text = str(matched_by_lower[alias])
+            if "\x00" in text or "\r" in text or "\n" in text:
+                msg = f"ODBC connection parameter {target_key!r} contains disallowed control characters."
+                raise ImproperConfigurationError(msg)
+            return text
+    return None
 
-    A value the caller already brace-quoted is emitted unchanged, since the
-    braced driver spelling is the usual way to write one. Any other value that
-    carries edge whitespace or a character ODBC treats as punctuation is
-    wrapped in braces so it cannot be read as the start of another keyword.
 
-    Args:
-        option_name: The connection string keyword this value belongs to.
-        value: The configured value.
+def _strip_inline_credentials(connection_string: str, *, strip_uid: bool, strip_pwd: bool) -> str:
+    if not strip_uid and not strip_pwd:
+        return connection_string
+    parsed = parse_odbc_connection_string(connection_string)
+    filtered: list[tuple[str, str]] = []
+    removed = False
+    for raw_key, raw_value in parsed:
+        canonical = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key).lower()
+        if (strip_uid and canonical == "uid") or (strip_pwd and canonical == "pwd"):
+            removed = True
+            continue
+        filtered.append((raw_key, raw_value))
+    if not removed:
+        return connection_string
+    if not filtered:
+        return ""
+    return ";".join(f"{key}={val}" for key, val in filtered) + ";"
 
-    Returns:
-        The value rendered for inclusion in the connection string.
 
-    Raises:
-        ImproperConfigurationError: If the value contains a closing brace that
-            does not terminate an already-quoted value. ODBC defines no escape
-            for one, so quoting it would silently truncate the value.
-    """
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    text = str(value)
-    if len(text) > 1 and text.startswith("{") and text.endswith("}") and text.count("}") == 1:
-        return text
-    if "}" in text:
-        msg = (
-            f"The arrow-odbc value for {option_name!r} contains a closing brace, "
-            "which an ODBC connection string cannot represent."
-        )
+def _format_odbc_connection_value(key: str, value: Any) -> str:
+    """Validate an ODBC keyword and format its value using MS-ODBCSTR brace escaping."""
+    if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid ODBC connection parameter key: {key!r}."
         raise ImproperConfigurationError(msg)
-    punctuation = _ODBC_PUNCTUATION
-    if option_name.lower() in ("server", "host"):
-        punctuation = punctuation.replace(",", "")
-    if text and text == text.strip() and not any(character in text for character in punctuation):
+    text = ("yes" if value else "no") if isinstance(value, bool) else str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"ODBC connection parameter {key!r} contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    if not text:
+        return ""
+    lowered_key = key.lower()
+    if (
+        lowered_key == "driver"
+        and len(text) >= _MIN_DELIMITER_LEN
+        and text[0] == "{"
+        and text[-1] == "}"
+        and "}" not in text[1:-1].replace("}}", "")
+    ):
         return text
-    return "{" + text + "}"
+    punctuation = _ODBC_PUNCTUATION
+    if lowered_key in {"server", "host", "hostname"}:
+        punctuation = punctuation.replace(",", "")
+    if text != text.strip() or any(ch in _ODBC_SPECIAL_CHARS or ch in punctuation for ch in text):
+        return "{" + text.replace("}", "}}") + "}"
+    return text
 
 
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
-
-
-_MIN_DELIMITER_LEN: Final = 2
-
-
-def quote_bracket_identifier(identifier: str) -> str:
-    """Quote an identifier using SQL Server / T-SQL bracket syntax."""
-    return f"[{identifier.replace(']', ']]')}]"
-
-
-def strip_bracket_quotes(part: str) -> str:
-    """Strip T-SQL bracket or double-quote enclosing delimiters from an identifier."""
-    stripped = part.strip()
-    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == "[" and stripped[-1] == "]":
-        return stripped[1:-1].replace("]]", "]")
-    if len(stripped) >= _MIN_DELIMITER_LEN and stripped[0] == '"' and stripped[-1] == '"':
-        return stripped[1:-1].replace('""', '"')
-    return stripped
-
-
-@contextlib.contextmanager
-def atomic_store_write(driver: Any) -> "Iterator[None]":
-    """Wrap multi-statement store mutations in an explicit transaction when supported.
-
-    Yields:
-        None while the atomic write block executes.
-    """
-    in_tx = getattr(driver, "_connection_in_transaction", None)
-    if callable(in_tx) and in_tx() is True:
-        yield
-        return
-
-    dialect = getattr(driver, "_dialect", "")
-    autocommit = getattr(driver, "_connection_autocommit", True)
-    can_begin = not (autocommit and dialect in {"db2", "oracle"})
-
-    if can_begin and hasattr(driver, "begin"):
-        driver.begin()
-
-    try:
-        yield
-    except BaseException:
-        if hasattr(driver, "rollback"):
-            with contextlib.suppress(Exception):
-                driver.rollback()
-        raise
-    else:
-        if hasattr(driver, "commit"):
-            driver.commit()

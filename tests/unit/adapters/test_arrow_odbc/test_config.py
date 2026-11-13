@@ -100,10 +100,56 @@ def test_a_value_needing_quotes_is_braced() -> None:
     assert "Driver={PostgreSQL Unicode(x64)};" in connection_string
 
 
-def test_a_value_carrying_a_closing_brace_is_rejected() -> None:
-    """ODBC defines no escape for it, so quoting would silently truncate the value."""
-    with pytest.raises(ImproperConfigurationError, match="closing brace"):
-        build_connection_config({"driver": "d", "pwd": "p{a}}ss}"})
+def test_closing_brace_in_non_credential_option_uses_ms_odbcstr_doubling() -> None:
+    """Closing braces inside non-credential ODBC attributes escape as doubled braces."""
+    connection_string, _ = build_connection_config({"driver": "d", "extra": {"APP": "my}app;v=1"}})
+
+    assert "APP={my}}app;v=1};" in connection_string
+
+
+@pytest.mark.parametrize(("user_key", "pwd_key"), [("uid", "pwd"), ("user", "password"), ("username", "PWD")])
+def test_credentials_route_to_out_of_band_connect_kwargs(user_key: str, pwd_key: str) -> None:
+    """Discrete user and password aliases normalize into out-of-band connect_kwargs."""
+    connection_string, connect_kwargs = build_connection_config({
+        "driver": "PostgreSQL Unicode",
+        "server": "db.internal",
+        user_key: "svc_user",
+        pwd_key: "p;a}s=s",
+    })
+
+    assert "UID=" not in connection_string
+    assert "PWD=" not in connection_string
+    assert connect_kwargs["user"] == "svc_user"
+    assert connect_kwargs["password"] == "p;a}s=s"
+
+
+def test_discrete_credentials_strip_inline_uid_pwd_from_connection_string() -> None:
+    """Discrete credential overrides remove inline UID/PWD from connection_string."""
+    connection_string, connect_kwargs = build_connection_config({
+        "connection_string": "Driver={PostgreSQL Unicode};Server=db;UID=inline_u;PWD=inline_p;",
+        "uid": "override_u",
+        "pwd": "override_p",
+    })
+
+    assert "UID=" not in connection_string
+    assert "PWD=" not in connection_string
+    assert connect_kwargs["user"] == "override_u"
+    assert connect_kwargs["password"] == "override_p"
+
+
+@pytest.mark.parametrize(
+    "bad_params",
+    [
+        {"driver": "d", "pwd": "bad\x00pwd"},
+        {"driver": "d", "uid": "bad\nuid"},
+        {"driver": "d", "extra": {"Bad;Key": "1"}},
+        {"connection_string": "DSN=analytics;\r\nUID=x;"},
+    ],
+)
+def test_invalid_odbc_keys_and_control_chars_are_rejected(bad_params: dict[str, Any]) -> None:
+    """Invalid ODBC parameter keys and control characters raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_params)
 
 
 def test_connection_string_alone_is_unchanged() -> None:

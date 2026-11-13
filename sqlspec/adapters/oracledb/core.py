@@ -17,6 +17,8 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
 from sqlspec.core import (
@@ -62,109 +64,6 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
-
-
-class OracleVersionCache:
-    """Pool-scoped cache for the resolved Oracle server version.
-
-    One instance is created per config and shared with every driver spawned from
-    that config's pool, so the server version is resolved once per pool lifetime
-    rather than once per acquired session. The cache lives and dies with the
-    pool; a server upgrade under a live pool is out of scope and picked up on the
-    next pool restart.
-    """
-
-    __slots__ = ("resolved", "version")
-
-    def __init__(self) -> None:
-        self.resolved: bool = False
-        self.version: Any | None = None
-
-    def reset(self) -> None:
-        """Clear the cached version so the next resolution re-queries the server."""
-        self.resolved = False
-        self.version = None
-
-
-def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
-    """Resolve an Oracle server major without issuing a metadata query.
-
-    Pool-scoped data-dictionary metadata is authoritative when it has already
-    been resolved. Otherwise, use the connection callback cache and finally
-    python-oracledb's connection ``version`` string. The final fallback matters
-    for reacquired pool wrappers that do not retain dynamic attributes.
-    """
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        return int(version_cache.version.major)
-    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
-    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
-        return cached_major
-    version = getattr(connection, "version", None)
-    if not version:
-        return None
-    components = parse_oracle_version_components(str(version))
-    return components[0] if components is not None else None
-
-
-def resolve_oracle_connection_compatible_major(
-    connection: Any, version_cache: "OracleVersionCache | None" = None
-) -> "int | None":
-    """Resolve an Oracle server compatible major version without issuing a metadata query."""
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        comp = version_cache.version.compatible_major
-        return int(comp) if comp is not None else None
-    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
-    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
-        return cached_compatible
-    return None
-
-
-def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
-        return fallback
-    return partial(_chained_input_handler, inner, fallback)
-
-
-def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an output type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
-        return fallback
-    return partial(_chained_output_handler, inner, fallback)
-
-
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
-def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
-    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, value, arraysize)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, value, arraysize)
-    return None
-
-
-def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
-    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, metadata)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, metadata)
-    return None
-
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -238,6 +137,7 @@ __all__ = (
     "extract_duality_etag",
     "extract_duality_view_etag",
     "extract_oracle_wallet_zip",
+    "format_oracle_table_identifier",
     "inject_duality_view_etag",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
@@ -258,6 +158,76 @@ __all__ = (
     "supports_direct_path_load",
     "truncate_utf8_bytes",
 )
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: Any | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return int(version_cache.version.major)
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        comp = version_cache.version.compatible_major
+        return int(comp) if comp is not None else None
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None
+
+
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
+        return fallback
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
+        return fallback
+    return partial(_chained_output_handler, inner, fallback)
 
 
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
@@ -1136,14 +1106,57 @@ async def coerce_many_parameters_async(
     return normalized if coerced_rows is None else coerced_rows
 
 
+def format_oracle_table_identifier(table: str) -> str:
+    """Validate and format a single or schema-qualified Oracle table identifier."""
+    if not isinstance(table, str) or "\x00" in table or "\r" in table or "\n" in table:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    cleaned = table.strip()
+    if not cleaned:
+        msg = "Oracle table identifier must not be empty"
+        raise ImproperConfigurationError(msg)
+    parts: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    idx = 0
+    length = len(cleaned)
+    while idx < length:
+        ch = cleaned[idx]
+        if ch == '"':
+            if in_quotes and idx + 1 < length and cleaned[idx + 1] == '"':
+                buf.append('""')
+                idx += 2
+                continue
+            in_quotes = not in_quotes
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "." and not in_quotes:
+            parts.append("".join(buf))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if in_quotes:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    parts.append("".join(buf))
+    if not parts or len(parts) > _QUALIFIED_TABLE_PARTS:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    return ".".join(_format_oracle_table_part(part, full_identifier=table) for part in parts)
+
+
 def build_insert_statement(table: str, columns: "list[str]") -> str:
+    formatted_table = format_oracle_table_identifier(table)
     column_list = ", ".join(_format_insert_column(col) for col in columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
-    return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
+    return f"INSERT INTO {formatted_table} ({column_list}) VALUES ({placeholders})"
 
 
 def build_truncate_statement(table: str) -> str:
-    return f"TRUNCATE TABLE {table}"
+    return f"TRUNCATE TABLE {format_oracle_table_identifier(table)}"
 
 
 def build_pipeline_stack_result(
@@ -1374,20 +1387,6 @@ def apply_driver_features(
     return statement_config, features
 
 
-def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
-    key_items: list[tuple[object, object]] = []
-    for column in description:
-        try:
-            col_name = column[0]
-            type_code = column[1]
-        except (TypeError, IndexError, KeyError):
-            col_name = getattr(column, "name", None)
-            type_code = getattr(column, "type_code", None)
-        type_identifier = getattr(type_code, "name", None) or type_code
-        key_items.append((col_name, type_identifier))
-    return tuple(key_items)
-
-
 def resolve_row_metadata(
     description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[Any, tuple[Any, list[str], bool]]"
 ) -> "tuple[list[str], bool]":
@@ -1446,6 +1445,7 @@ def resolve_row_metadata(
     return normalized_column_names, requires_lob_coercion
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class OracleSyncStreamSource:
     """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
@@ -1482,31 +1482,6 @@ class OracleSyncStreamSource:
         self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    def _start(self) -> None:
-        try:
-            cursor = self._driver.connection.cursor()
-            self._cursor = cursor
-            cursor.arraysize = self._chunk_size
-            cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
-                self._driver.driver_features
-            )
-            if self._fetch_lobs is not None:
-                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
-            parameters = coerce_large_parameters_sync(
-                self._driver.connection,
-                self._parameters,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=getattr(self._driver, "_oracle_version_cache", None),
-            )
-            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-        except BaseException:
-            self.close(error=True)
-            raise
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
@@ -1540,6 +1515,31 @@ class OracleSyncStreamSource:
             with contextlib.suppress(Exception):
                 cursor.close()
 
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
+            if self._fetch_lobs is not None:
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
+            parameters = coerce_large_parameters_sync(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            self.close(error=True)
+            raise
+
     def _caller_wants_locators(self) -> bool:
         """Report whether the caller asked to receive LOB locators.
 
@@ -1553,6 +1553,7 @@ class OracleSyncStreamSource:
         return bool(fetch_lobs)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class OracleAsyncStreamSource:
     """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
@@ -2565,6 +2566,89 @@ def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext 
     return ctx
 
 
+async def read_oracle_lob_async(value: Any) -> Any:
+    """Read a LOB value asynchronously from an async connection or return raw data."""
+    if is_async_readable(value):
+        return await value.read()
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def read_oracle_lob_sync(value: Any) -> Any:
+    """Read a LOB value synchronously from a sync connection or return raw data."""
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
+    key_items: list[tuple[object, object]] = []
+    for column in description:
+        try:
+            col_name = column[0]
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            col_name = getattr(column, "name", None)
+            type_code = getattr(column, "type_code", None)
+        type_identifier = getattr(type_code, "name", None) or type_code
+        key_items.append((col_name, type_identifier))
+    return tuple(key_items)
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
+
+
+def _format_oracle_table_part(raw_part: str, *, full_identifier: str) -> str:
+    cleaned = raw_part.strip()
+    if not cleaned:
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise ImproperConfigurationError(msg)
+    if cleaned.startswith('"') or cleaned.endswith('"'):
+        if len(cleaned) < _MIN_QUOTED_IDENTIFIER_LEN or not (cleaned.startswith('"') and cleaned.endswith('"')):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise ImproperConfigurationError(msg)
+        raw_inner = cleaned[1:-1]
+        if not raw_inner or '"' in raw_inner.replace('""', ""):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise ImproperConfigurationError(msg)
+        return f'"{raw_inner}"'
+    if not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(cleaned):
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise ImproperConfigurationError(msg)
+    return cleaned
+
+
 def _build_session_checkout_plan(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
@@ -3217,22 +3301,6 @@ def _resolve_callable_or_str(value: "str | Callable[[], str | None] | None") -> 
     return value
 
 
-async def read_oracle_lob_async(value: Any) -> Any:
-    """Read a LOB value asynchronously from an async connection or return raw data."""
-    if is_async_readable(value):
-        return await value.read()
-    if is_readable(value):
-        return value.read()
-    return value
-
-
-def read_oracle_lob_sync(value: Any) -> Any:
-    """Read a LOB value synchronously from a sync connection or return raw data."""
-    if is_readable(value):
-        return value.read()
-    return value
-
-
 class _OracleSyncStreamDriver(Protocol):
     connection: "OracleSyncConnection"
     driver_features: dict[str, Any]
@@ -3267,6 +3335,7 @@ class _OracleAsyncStreamDriver(Protocol):
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _OracleJsonBindingState:
     """Lazily resolve whether JSON-shaped values require BLOB locators."""
 
@@ -3613,6 +3682,9 @@ def _description_requires_lob_coercion(description: "list[Any]") -> bool:
 
 def _format_insert_column(column: str) -> str:
     """Format a column identifier for INSERT statements, quoting special names."""
+    if not column or "\x00" in column or "\r" in column or "\n" in column:
+        msg = f"Invalid Oracle column identifier: {column!r}"
+        raise ImproperConfigurationError(msg)
     if _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(column) and column.upper() not in _ORACLE_RESERVED_COLUMN_NAMES:
         return column
     escaped = column.replace('"', '""')

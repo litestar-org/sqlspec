@@ -41,6 +41,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     MigrationError,
     NotFoundError,
     NotNullViolationError,
@@ -1007,3 +1008,37 @@ def test_sqlanywhere_reconcile_end_to_end_orchestrators() -> None:
     assert any('"adk_memory"' in stmt for stmt in executed)
     assert any('"idx_adk_session_app_user"' in stmt for stmt in executed)
     assert any('"idx_adk_memory_session"' in stmt for stmt in executed)
+
+
+@pytest.mark.parametrize(
+    ("raw_pwd", "expected_pwd"),
+    [
+        ("pa;ss=word", "'pa;ss=word'"),
+        ("pa'ss;word", "'pa''ss;word'"),
+        ("{braced}", "'{braced}'"),
+        ("  padded  ", "'  padded  '"),
+        ("plain_pwd", "plain_pwd"),
+    ],
+)
+def test_sqlanywhere_build_connection_config_quotes_delimiter_values(raw_pwd: str, expected_pwd: str) -> None:
+    """Delimiter-bearing SQL Anywhere parameter strings are single-quoted with doubled inner quotes."""
+    cfg = build_connection_config({"user": "dba", "password": raw_pwd, "database": "demo"})
+    assert cfg["pwd"] == expected_pwd
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"user": "dba", "password": "bad\x00pwd"},
+        {"user": "dba", "password": "bad\npwd"},
+        {"user": "dba", "extra": {"bad;key": "1"}},
+        {"user": "dba", "host": "localhost", "port": 70000},
+        {"user": "dba", "host": "localhost", "port": True},
+    ],
+)
+def test_sqlanywhere_build_connection_config_rejects_invalid_keys_ports_and_controls(
+    bad_config: dict[str, Any],
+) -> None:
+    """Invalid SQL Anywhere keys, out-of-range ports, and control characters raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_config)

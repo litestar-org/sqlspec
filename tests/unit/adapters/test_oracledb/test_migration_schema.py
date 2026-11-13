@@ -7,7 +7,7 @@ import pytest
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 
 CAPTURE = ("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL", None)
 
@@ -276,3 +276,72 @@ def test_oracle_tracker_schema_and_queries_include_replaces_column() -> None:
     partial = RecordingSyncDriver(rows=[{"version_num": "0001"}])
     with pytest.raises(MigrationError, match="Partial squash state"):
         tracker.is_squash_already_applied(partial, "0001", ["0001", "0002"])  # type: ignore[arg-type]
+
+
+class _ScriptRecordingDataDictionary:
+    def get_columns(self, _driver: Any, _table: str, schema: str | None = None) -> list[dict[str, Any]]:
+        _ = schema
+        return [
+            {"column_name": name}
+            for name in (
+                "VERSION_NUM",
+                "VERSION_TYPE",
+                "EXECUTION_SEQUENCE",
+                "DESCRIPTION",
+                "APPLIED_AT",
+                "EXECUTION_TIME_MS",
+                "CHECKSUM",
+                "APPLIED_BY",
+                "REPLACES",
+            )
+        ]
+
+
+class _AsyncScriptRecordingDataDictionary:
+    async def get_columns(self, _driver: Any, _table: str, schema: str | None = None) -> list[dict[str, Any]]:
+        _ = schema
+        return _ScriptRecordingDataDictionary().get_columns(_driver, _table, schema=schema)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_oracle_ensure_tracking_table_escapes_single_quotes_in_quoted_identifier(is_async: bool) -> None:
+    """Quoted Oracle tracker table names containing apostrophes double single quotes inside EXECUTE IMMEDIATE."""
+    scripts: list[str] = []
+    if is_async:
+        tracker_async = OracleAsyncMigrationTracker(version_table_name='"mig\'versions"')
+
+        class _AsyncScriptDriver:
+            data_dictionary = _AsyncScriptRecordingDataDictionary()
+
+            async def execute_script(self, sql: str) -> None:
+                scripts.append(sql)
+
+            async def commit(self) -> None:
+                return None
+
+        await tracker_async.ensure_tracking_table(_AsyncScriptDriver())  # type: ignore[arg-type]
+    else:
+        tracker_sync = OracleSyncMigrationTracker(version_table_name='"mig\'versions"')
+
+        class _SyncScriptDriver:
+            data_dictionary = _ScriptRecordingDataDictionary()
+
+            def execute_script(self, sql: str) -> None:
+                scripts.append(sql)
+
+            def commit(self) -> None:
+                return None
+
+        tracker_sync.ensure_tracking_table(_SyncScriptDriver())  # type: ignore[arg-type]
+
+    assert len(scripts) == 1
+    assert "CREATE TABLE \"mig''versions\" (" in scripts[0]
+
+
+def test_oracle_ensure_tracking_table_rejects_malformed_mutated_version_table() -> None:
+    """Mutated unquoted version_table with SQL delimiters raises ImproperConfigurationError before DDL execution."""
+    tracker = OracleSyncMigrationTracker()
+    tracker.version_table = "bad'; DROP TABLE x; --"
+    with pytest.raises(ImproperConfigurationError):
+        tracker.ensure_tracking_table(RecordingSyncDriver())  # type: ignore[arg-type]

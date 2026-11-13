@@ -1484,3 +1484,12 @@ def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
 
     assert "NULL" in compiled_sql.upper()
     assert list(parameters) == ["x"]
+
+
+@pytest.mark.parametrize(
+    "bad_host", ["", "td.corp/extra", "td.corp?x=1", "td.corp#frag", "user@td.corp", "td corp", "[::1"]
+)
+def test_teradata_rejects_invalid_discrete_host(bad_host: str) -> None:
+    """Discrete Teradata host values containing URI delimiters or whitespace raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError, match="Teradata host"):
+        build_connection_config({"driver": "teradata", "host": bad_host})

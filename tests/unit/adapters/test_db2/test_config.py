@@ -247,10 +247,28 @@ def test_cli_values_are_quoted_when_needed(value: "str | bool", rendered: str) -
     assert dsn == f"DATABASE=d;Opt={rendered};"
 
 
-def test_value_with_closing_brace_is_rejected() -> None:
-    """A value containing ``}`` cannot be represented and is rejected."""
+@pytest.mark.parametrize("raw_password", ["p}x", "p}a;ss=word}"])
+def test_value_with_closing_brace_uses_ms_odbcstr_escaping_and_roundtrips(raw_password: str) -> None:
+    """Closing braces inside Db2 CLI values escape as doubled braces and round-trip cleanly."""
+    config = Db2SyncConfig(connection_config={"database": "d", "password": raw_password})
+    rendered = config.get_connection_string()
+    assert f"PWD={{{raw_password.replace('}', '}}')}}};" in rendered
+    reparsed = Db2SyncConfig(connection_config={"dsn": rendered})
+    assert reparsed.connection_config["password"] == raw_password
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"database": "d", "password": "bad\x00pwd"},
+        {"database": "d", "password": "bad\npwd"},
+        {"dsn": "DATABASE=d;\r\nUID=u;"},
+    ],
+)
+def test_control_characters_in_db2_config_are_rejected(bad_config: "dict[str, Any]") -> None:
+    """Control characters in Db2 CLI values or DSNs raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
-        Db2SyncConfig(connection_config={"database": "d", "password": "p}x"})
+        Db2SyncConfig(connection_config=bad_config)
 
 
 def test_invalid_extra_keyword_is_rejected() -> None:

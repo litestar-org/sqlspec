@@ -8,6 +8,8 @@ import sys
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
@@ -215,46 +217,6 @@ def build_statement_config(
     )
 
     return base_config.replace(parameter_config=parameter_config)
-
-
-class _JsonEncoder:
-    __slots__ = ("_encoder",)
-
-    def __init__(self, encoder: "Callable[[Any], str]") -> None:
-        self._encoder = encoder
-
-    def __call__(self, value: Any) -> bytes:
-        return _encode_json_payload(value, self._encoder)
-
-
-class _JsonDecoder:
-    __slots__ = ("_decoder",)
-
-    def __init__(self, decoder: "Callable[[str], Any]") -> None:
-        self._decoder = decoder
-
-    def __call__(self, value: Any) -> Any:
-        return _decode_json_payload(value, self._decoder)
-
-
-class _JsonbEncoder:
-    __slots__ = ("_encoder",)
-
-    def __init__(self, encoder: "Callable[[Any], str]") -> None:
-        self._encoder = encoder
-
-    def __call__(self, value: Any) -> bytes:
-        return _encode_jsonb_payload(value, self._encoder)
-
-
-class _JsonbDecoder:
-    __slots__ = ("_decoder",)
-
-    def __init__(self, decoder: "Callable[[str], Any]") -> None:
-        self._decoder = decoder
-
-    def __call__(self, value: Any) -> Any:
-        return _decode_jsonb_payload(value, self._decoder)
 
 
 async def register_json_codecs(connection: Any, encoder: Any, decoder: Any) -> None:
@@ -476,6 +438,7 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
     return records, column_names
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class AsyncpgStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
 
@@ -531,13 +494,13 @@ class AsyncpgStreamSource:
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
+        """Close the server-side portal and finalize any stream-owned transaction."""
         cursor = self._cursor
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
         try:
             if cursor is not None and getattr(cursor, "_portal_name", None):
-                # asyncpg has no public cursor close; CockroachDB requires closing its portal before transaction control.
                 await cursor._close_portal(self._timeout)
             if transaction is not None:
                 if error:
@@ -607,15 +570,48 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     }
 
 
-def _is_pre_serialized_json(value: str) -> bool:
-    stripped = value.strip()
-    if not stripped or stripped[0] not in '{["-0123456789tfn':
-        return False
-    try:
-        from_json(stripped)
-    except Exception:
-        return False
-    return True
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_json_payload(value, self._encoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_json_payload(value, self._decoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonbEncoder:
+    __slots__ = ("_encoder",)
+
+    def __init__(self, encoder: "Callable[[Any], str]") -> None:
+        self._encoder = encoder
+
+    def __call__(self, value: Any) -> bytes:
+        return _encode_jsonb_payload(value, self._encoder)
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _JsonbDecoder:
+    __slots__ = ("_decoder",)
+
+    def __init__(self, decoder: "Callable[[str], Any]") -> None:
+        self._decoder = decoder
+
+    def __call__(self, value: Any) -> Any:
+        return _decode_jsonb_payload(value, self._decoder)
 
 
 def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
@@ -624,8 +620,6 @@ def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
         if raw_bytes.startswith(_JSONB_BINARY_VERSION):
             return raw_bytes[1:]
         return raw_bytes
-    if isinstance(value, str) and _is_pre_serialized_json(value):
-        return value.encode("utf-8")
 
     encoded: Any = encoder(value)
     if isinstance(encoded, bytes):

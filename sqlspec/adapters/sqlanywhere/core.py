@@ -1,5 +1,6 @@
 """SAP SQL Anywhere adapter compiled helpers."""
 
+import re
 from collections.abc import Callable, Mapping, Sized
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -12,6 +13,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
@@ -55,9 +57,12 @@ __all__ = (
 )
 
 DEFAULT_SQLANYWHERE_PORT: Final[int] = 2638
+_MAX_SQLANYWHERE_PORT: Final[int] = 65535
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _SQLANYDB_FULL_ARGS_LEN: Final[int] = 3
 _SQLANYDB_PAIR_ARGS_LEN: Final[int] = 2
+_SQLANY_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_SQLANY_QUOTE_CHARS: Final[frozenset[str]] = frozenset({";", "'", '"', "{", "}", "="})
 _POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "pool_min_size",
     "pool_max_size",
@@ -266,12 +271,30 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         normalized["dbf"] = dbf_val
 
     port_val = normalized.pop("port", None)
+    if port_val is not None:
+        if isinstance(port_val, bool):
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+        try:
+            parsed_port = int(port_val)
+        except (TypeError, ValueError) as exc:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg) from exc
+        if not 1 <= parsed_port <= _MAX_SQLANYWHERE_PORT:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+    else:
+        parsed_port = DEFAULT_SQLANYWHERE_PORT
+
     host_val = normalized.get("host")
     if isinstance(host_val, str) and host_val and ":" not in host_val:
-        resolved_port = int(port_val) if port_val is not None else DEFAULT_SQLANYWHERE_PORT
-        normalized["host"] = f"{host_val}:{resolved_port}"
+        normalized["host"] = f"{host_val}:{parsed_port}"
 
-    return {key: value for key, value in normalized.items() if value is not None}
+    return {
+        str(key): _format_sqlanywhere_connection_value(str(key), value)
+        for key, value in normalized.items()
+        if value is not None
+    }
 
 
 def resolve_column_names(
@@ -376,6 +399,27 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
             return _create_error(error, sqlcode, sqlstate, IntegrityError, "integrity constraint violation")
 
     return _create_error(error, sqlcode, sqlstate, SQLSpecError, "database error")
+
+
+def _format_sqlanywhere_connection_value(key: str, value: Any) -> Any:
+    """Validate a SQL Anywhere connection key and single-quote delimiter-bearing strings."""
+    if "\x00" in key or "\r" in key or "\n" in key or _SQLANY_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid SQL Anywhere connection parameter key: {key!r}."
+        raise ImproperConfigurationError(msg)
+    if isinstance(value, str):
+        if "\x00" in value or "\r" in value or "\n" in value:
+            msg = f"SQL Anywhere connection parameter {key!r} contains disallowed control characters."
+            raise ImproperConfigurationError(msg)
+        if not value:
+            return ""
+        if any(ch in _SQLANY_QUOTE_CHARS for ch in value) or value != value.strip():
+            return "'" + value.replace("'", "''") + "'"
+        return value
+    text = str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"SQL Anywhere connection parameter {key!r} contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    return value
 
 
 def _bool_to_int(value: bool) -> int:
