@@ -711,3 +711,64 @@ def test_end_user_security_redacts_and_validates_credentials() -> None:
     ):
         with pytest.raises(ImproperConfigurationError):
             OracleEndUserSecurityConfig(**kwargs)
+
+
+@pytest.mark.parametrize("delay", [True, False, -1, "bad"])
+def test_oracle_adg_session_delay_rejects_invalid_values(delay) -> None:
+    from sqlspec.adapters.oracledb.core import OracleSessionContextConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError):
+        OracleSessionContextConfig(standby_max_data_delay=delay)
+
+
+def test_oracle_adg_checkout_release_compilation_and_tenant_composition() -> None:
+    from sqlspec.adapters.oracledb.core import (
+        OracleSessionContextConfig,
+        build_session_checkout_plsql,
+        build_session_release_plsql,
+    )
+    from sqlspec.adapters.oracledb.tenant import compose_tenant_session_hook
+
+    original = OracleSessionContextConfig(standby_max_data_delay=0, adg_redirect_dml=True, sync_with_primary=True)
+    composed = compose_tenant_session_hook(original)
+    checkout, _ = build_session_checkout_plsql(composed)
+    assert "ALTER SESSION SET STANDBY_MAX_DATA_DELAY = 0" in (checkout or "")
+    assert "ALTER SESSION ENABLE ADG_REDIRECT_DML" in (checkout or "")
+    assert "ALTER SESSION SYNC WITH PRIMARY" in (checkout or "")
+    release, _ = build_session_release_plsql(composed)
+    assert "ALTER SESSION SET STANDBY_MAX_DATA_DELAY = NONE" in (release or "")
+    assert "ALTER SESSION DISABLE ADG_REDIRECT_DML" in (release or "")
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_adg_checkout_maps_native_lag_and_does_not_skip_safety_settings(is_async: bool) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import oracledb
+
+    from sqlspec.adapters.oracledb.core import (
+        OracleSessionContextConfig,
+        execute_session_checkout_async,
+        execute_session_checkout_sync,
+    )
+    from sqlspec.exceptions import ReplicaUnavailableError
+
+    connection = MagicMock()
+    cursor = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    cursor.execute = AsyncMock() if is_async else MagicMock()
+    config = OracleSessionContextConfig(standby_max_data_delay=5, sync_with_primary=True)
+    if is_async:
+        await execute_session_checkout_async(connection, config, skip_alter_session=True)
+    else:
+        execute_session_checkout_sync(connection, config, skip_alter_session=True)
+    assert "STANDBY_MAX_DATA_DELAY = 5" in cursor.execute.call_args.args[0]
+    native = oracledb.DatabaseError("ORA-03172: standby lag")
+    cursor.execute.side_effect = native
+    with pytest.raises(ReplicaUnavailableError) as caught:
+        if is_async:
+            await execute_session_checkout_async(connection, config)
+        else:
+            execute_session_checkout_sync(connection, config)
+    assert caught.value.__cause__ is native

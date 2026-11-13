@@ -378,6 +378,9 @@ def compose_tenant_session_hook(
         msg = "Oracle tenant strategy conflicts with session_context_hook.client_identifier"
         raise ImproperConfigurationError(msg)
     return OracleSessionContextConfig(
+        standby_max_data_delay=source.standby_max_data_delay,
+        adg_redirect_dml=source.adg_redirect_dml,
+        sync_with_primary=source.sync_with_primary,
         clientinfo=source.clientinfo,
         current_schema=source.current_schema,
         dbop=source.dbop,

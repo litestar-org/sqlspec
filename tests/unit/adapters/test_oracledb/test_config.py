@@ -1763,3 +1763,49 @@ async def test_default_checkout_works_when_server_rejects_priority_probe(mode: s
         with cast("Any", config.provide_session()) as session:
             assert session.connection is connection
         pool.release.assert_called_once_with(connection)
+
+
+def test_oracle_multisite_topology_service_clone_and_validation() -> None:
+    from sqlspec.adapters.oracledb import OracleEndpoint, OracleTopologyConfig
+    from sqlspec.adapters.oracledb.core import build_tns_description
+
+    topology = OracleTopologyConfig(
+        service_name="APP_RW",
+        address_lists=[[OracleEndpoint("site-a-1"), OracleEndpoint("site-a-2")], [OracleEndpoint("site-b")]],
+        connect_timeout=5,
+    )
+    text = build_tns_description(topology)
+    assert text.count("(ADDRESS_LIST=") == 2
+    assert "(LOAD_BALANCE=OFF)(FAILOVER=ON)(CONNECT_TIMEOUT=5)" in text
+    assert "(SERVICE_NAME=APP_RO)" in build_tns_description(topology.with_service_name("APP_RO"))
+    assert topology.service_name == "APP_RW"
+    with pytest.raises(ImproperConfigurationError):
+        OracleTopologyConfig([OracleEndpoint("host")], "APP", address_lists=[[OracleEndpoint("other")]])
+    with pytest.raises(ImproperConfigurationError):
+        OracleTopologyConfig(service_name="APP", address_lists=[[]])
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_name"),
+    [
+        (372, "ReadOnlyTransactionError"),
+        (1456, "ReadOnlyTransactionError"),
+        (16000, "ReadOnlyTransactionError"),
+        (16397, "ReadOnlyTransactionError"),
+        (1033, "ReplicaUnavailableError"),
+        (3172, "ReplicaUnavailableError"),
+        (12757, "ReplicaUnavailableError"),
+        (16456, "ReplicaUnavailableError"),
+        (3173, "ImproperConfigurationError"),
+    ],
+)
+def test_oracle_replica_error_mapping(code: int, expected_name: str) -> None:
+    import oracledb
+
+    from sqlspec import exceptions
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+
+    native = oracledb.DatabaseError(f"ORA-{code:05d}: standby error")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, getattr(exceptions, expected_name))
+    assert mapped.__cause__ is native

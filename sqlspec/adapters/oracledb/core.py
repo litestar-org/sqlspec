@@ -15,7 +15,7 @@ import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
@@ -48,6 +48,8 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -253,6 +255,8 @@ __all__ = (
     "forget_oracle_session_state",
     "has_callable_alter_session_fields",
     "inject_duality_view_etag",
+    "is_oracle_standby_failover_error",
+    "is_oracle_standby_lag_error",
     "is_stateful_oracle_session_context",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
@@ -406,6 +410,7 @@ _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, byt
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
 ROW_CACHE_MAX_SIZE: int = 256
 
+ORA_STANDBY_MAX_DATA_DELAY = 3172
 ORA_CHECK_CONSTRAINT = 2290
 ORA_INTEGRITY_RANGE_START = 2200
 ORA_INTEGRITY_RANGE_END = 2300
@@ -414,6 +419,15 @@ ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
 
 _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
+    372: (ReadOnlyTransactionError, "file is read-only"),
+    1456: (ReadOnlyTransactionError, "read-only transaction"),
+    16000: (ReadOnlyTransactionError, "database is read-only"),
+    16397: (ReadOnlyTransactionError, "standby rejects DML"),
+    1033: (ReplicaUnavailableError, "database is initializing or shutting down"),
+    3172: (ReplicaUnavailableError, "standby maximum data delay exceeded"),
+    3173: (ImproperConfigurationError, "standby synchronization is not configured"),
+    12757: (ReplicaUnavailableError, "standby is unavailable"),
+    16456: (ReplicaUnavailableError, "standby switchover in progress"),
     1: (UniqueViolationError, "unique constraint violation"),
     28: (DatabaseConnectionError, "session has been killed"),
     54: (OperationalError, "resource busy and acquire with NOWAIT specified or timeout expired"),
@@ -478,10 +492,10 @@ _DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
     "DPY-3043": (OperationalError, "database does not support transaction priority"),
     "DPY-3044": (OperationalError, "database does not support OpenTelemetry tracing"),
     "DPY-4004": (DataError, "invalid number"),
-    "DPY-4005": (ConnectionTimeoutError, "connection pool checkout timed out"),
+    "DPY-4005": (ReplicaUnavailableError, "connection pool checkout timed out"),
     "DPY-4021": (ImproperConfigurationError, "invalid connection protocol"),
     "DPY-4027": (ImproperConfigurationError, "no configuration directory specified"),
-    "DPY-4033": (DatabaseConnectionError, "connection closed due to exceeded idle time"),
+    "DPY-4033": (ReplicaUnavailableError, "connection closed due to exceeded idle time"),
     "DPY-4034": (ImproperConfigurationError, "invalid password type"),
     "DPY-4011": (DatabaseConnectionError, "connection was closed"),
     "DPY-4024": (QueryTimeoutError, "query execution timeout expired"),
@@ -631,6 +645,8 @@ class OracleTopologyConfig:
     """Typed Oracle Net multi-endpoint topology configuration for RAC, Data Guard, and CMAN."""
 
     __slots__ = (
+        "address_lists",
+        "connect_timeout",
         "endpoints",
         "failover",
         "failover_delay",
@@ -649,9 +665,11 @@ class OracleTopologyConfig:
 
     def __init__(
         self,
-        endpoints: "Sequence[OracleEndpoint | Mapping[str, Any]]",
-        service_name: str,
+        endpoints: "Sequence[OracleEndpoint | Mapping[str, Any]] | None" = None,
+        service_name: str = "",
         *,
+        address_lists: "Sequence[Sequence[OracleEndpoint | Mapping[str, Any]]] | None" = None,
+        connect_timeout: int | None = None,
         load_balance: bool | None = True,
         failover: bool | None = True,
         retry_count: int | None = None,
@@ -667,7 +685,7 @@ class OracleTopologyConfig:
         failover_retries: int | None = None,
         failover_delay: int | None = None,
     ) -> None:
-        if not endpoints:
+        if bool(endpoints) == bool(address_lists):
             msg = "OracleTopologyConfig requires at least one endpoint"
             raise ImproperConfigurationError(msg)
         if not service_name or not service_name.strip():
@@ -676,7 +694,7 @@ class OracleTopologyConfig:
         cleaned_service_name = service_name.strip()
         _validate_tns_token(cleaned_service_name, "service_name")
         normalized_endpoints: list[OracleEndpoint] = []
-        for ep in endpoints:
+        for ep in endpoints or ():
             if isinstance(ep, OracleEndpoint):
                 normalized_endpoints.append(ep)
             elif isinstance(ep, Mapping):
@@ -701,6 +719,17 @@ class OracleTopologyConfig:
         resolved_fm_method = raw_fm_method.strip().upper() if raw_fm_method else None
         if resolved_fm_method is not None:
             _validate_tns_token(resolved_fm_method, "failover_mode_method")
+        if connect_timeout is not None and (
+            isinstance(connect_timeout, bool) or not isinstance(connect_timeout, int) or connect_timeout < 0
+        ):
+            msg = "Oracle connect_timeout must be a nonnegative integer"
+            raise ImproperConfigurationError(msg)
+        self.connect_timeout = connect_timeout
+        self.address_lists: tuple[tuple[OracleEndpoint, ...], ...] = (
+            tuple(OracleTopologyConfig(group, service_name).endpoints for group in address_lists)
+            if address_lists
+            else ()
+        )
         self.endpoints: tuple[OracleEndpoint, ...] = tuple(normalized_endpoints)
         self.service_name: str = cleaned_service_name
         self.load_balance: bool | None = None if load_balance is None else bool(load_balance)
@@ -716,6 +745,27 @@ class OracleTopologyConfig:
         self.failover_retries: int | None = failover_retries
         self.failover_delay: int | None = failover_delay
 
+    def with_service_name(self, service_name: str) -> "OracleTopologyConfig":
+        """Clone this topology while changing only its target service."""
+        return OracleTopologyConfig(
+            endpoints=self.endpoints or None,
+            address_lists=self.address_lists or None,
+            service_name=service_name,
+            connect_timeout=self.connect_timeout,
+            load_balance=self.load_balance,
+            failover=self.failover,
+            retry_count=self.retry_count,
+            retry_delay=self.retry_delay,
+            transport_connect_timeout=self.transport_connect_timeout,
+            sdu=self.sdu,
+            source_route=self.source_route,
+            server=self.server,
+            failover_mode_type=self.failover_mode_type,
+            failover_mode_method=self.failover_mode_method,
+            failover_retries=self.failover_retries,
+            failover_delay=self.failover_delay,
+        )
+
     def __repr__(self) -> str:
         return (
             f"OracleTopologyConfig(endpoints={self.endpoints!r}, service_name={self.service_name!r}, "
@@ -726,6 +776,8 @@ class OracleTopologyConfig:
         if not isinstance(other, OracleTopologyConfig):
             return NotImplemented
         return (
+            self.address_lists,
+            self.connect_timeout,
             self.endpoints,
             self.service_name,
             self.load_balance,
@@ -741,6 +793,8 @@ class OracleTopologyConfig:
             self.failover_retries,
             self.failover_delay,
         ) == (
+            other.address_lists,
+            other.connect_timeout,
             other.endpoints,
             other.service_name,
             other.load_balance,
@@ -759,6 +813,8 @@ class OracleTopologyConfig:
 
     def __hash__(self) -> int:
         return hash((
+            self.address_lists,
+            self.connect_timeout,
             self.endpoints,
             self.service_name,
             self.load_balance,
@@ -956,6 +1012,9 @@ def _copy_oracle_session_context(
         clear_context_namespaces=config.clear_context_namespaces,
         apex_detach=config.apex_detach,
         reset_on_release=config.reset_on_release,
+        standby_max_data_delay=config.standby_max_data_delay,
+        adg_redirect_dml=config.adg_redirect_dml,
+        sync_with_primary=config.sync_with_primary,
         clientinfo=config.clientinfo,
         current_schema=config.current_schema,
         dbop=config.dbop,
@@ -1052,6 +1111,7 @@ class OracleSessionContextConfig:
 
     __slots__ = (
         "action",
+        "adg_redirect_dml",
         "apex_detach",
         "apex_session",
         "clear_context_namespaces",
@@ -1071,6 +1131,8 @@ class OracleSessionContextConfig:
         "nls_parameters",
         "reset_on_release",
         "reset_package",
+        "standby_max_data_delay",
+        "sync_with_primary",
         "time_zone",
         "transaction_priority",
     )
@@ -1100,7 +1162,23 @@ class OracleSessionContextConfig:
         clear_context_namespaces: "Sequence[str]" = (),
         apex_detach: bool = False,
         reset_on_release: bool = True,
+        standby_max_data_delay: int | Literal["NONE"] | None = None,
+        adg_redirect_dml: bool = False,
+        sync_with_primary: bool = False,
     ) -> None:
+        if standby_max_data_delay is not None:
+            if isinstance(standby_max_data_delay, str) and standby_max_data_delay.upper() == "NONE":
+                standby_max_data_delay = "NONE"
+            elif (
+                isinstance(standby_max_data_delay, bool)
+                or not isinstance(standby_max_data_delay, int)
+                or standby_max_data_delay < 0
+            ):
+                msg = "standby_max_data_delay must be a nonnegative integer or NONE"
+                raise ImproperConfigurationError(msg)
+        self.standby_max_data_delay: int | Literal["NONE"] | None = standby_max_data_delay
+        self.adg_redirect_dml = bool(adg_redirect_dml)
+        self.sync_with_primary = bool(sync_with_primary)
         if isinstance(edition, str):
             _validate_oracle_identifier(edition, "edition")
         if isinstance(time_zone, str):
@@ -1157,6 +1235,9 @@ class OracleSessionContextConfig:
         if not isinstance(other, OracleSessionContextConfig):
             return NotImplemented
         return (
+            self.standby_max_data_delay,
+            self.adg_redirect_dml,
+            self.sync_with_primary,
             self.clientinfo,
             self.current_schema,
             self.dbop,
@@ -1179,6 +1260,9 @@ class OracleSessionContextConfig:
             self.apex_detach,
             self.reset_on_release,
         ) == (
+            other.standby_max_data_delay,
+            other.adg_redirect_dml,
+            other.sync_with_primary,
             other.clientinfo,
             other.current_schema,
             other.dbop,
@@ -1204,6 +1288,9 @@ class OracleSessionContextConfig:
 
     def __hash__(self) -> int:
         return hash((
+            self.standby_max_data_delay,
+            self.adg_redirect_dml,
+            self.sync_with_primary,
             self.clientinfo,
             self.current_schema,
             self.dbop,
@@ -2302,6 +2389,31 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_oracle_error(error, error_code, SQLSpecError, "database error")
 
 
+def _oracle_standby_error_code(error: BaseException | None) -> int | None:
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        native = error.args[0] if error.args else error
+        code = getattr(native, "code", None)
+        if isinstance(code, int) and not isinstance(code, bool):
+            return code
+        match = re.search(r"ORA-(\d+)", str(native))
+        if match:
+            return int(match.group(1))
+        error = error.__cause__
+    return None
+
+
+def is_oracle_standby_lag_error(error: BaseException | None) -> bool:
+    """Return whether an Oracle error reports excessive standby data delay."""
+    return _oracle_standby_error_code(error) == ORA_STANDBY_MAX_DATA_DELAY
+
+
+def is_oracle_standby_failover_error(error: BaseException | None) -> bool:
+    """Return whether an Oracle error reports standby lag or switchover."""
+    return _oracle_standby_error_code(error) in {3172, 16456}
+
+
 def build_profile() -> "DriverParameterProfile":
     """Create the OracleDB driver parameter profile."""
     return DriverParameterProfile(
@@ -2543,13 +2655,17 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
         Formatted TNS descriptor string.
     """
     resolved = OracleTopologyConfig(**topology) if isinstance(topology, Mapping) else topology
-    if not resolved.endpoints:
+    if not resolved.endpoints and not resolved.address_lists:
         msg = "OracleTopologyConfig requires at least one endpoint"
         raise ImproperConfigurationError(msg)
     _validate_tns_token(resolved.service_name, "service_name")
-    for ep in resolved.endpoints:
+    for ep in (*resolved.endpoints, *(ep for group in resolved.address_lists for ep in group)):
         _validate_tns_token(ep.host, "host")
     desc_parts: list[str] = []
+    if resolved.address_lists:
+        desc_parts.extend(["(LOAD_BALANCE=OFF)", "(FAILOVER=ON)"])
+    if resolved.connect_timeout is not None:
+        desc_parts.append(f"(CONNECT_TIMEOUT={resolved.connect_timeout})")
     if resolved.sdu is not None:
         desc_parts.append(f"(SDU={resolved.sdu})")
     if resolved.retry_count is not None:
@@ -2559,18 +2675,18 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
     if resolved.transport_connect_timeout is not None:
         desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={resolved.transport_connect_timeout})")
 
-    addr_parts: list[str] = []
-    if resolved.load_balance is not None:
-        addr_parts.append(f"(LOAD_BALANCE={'ON' if resolved.load_balance else 'OFF'})")
-    if resolved.failover is not None:
-        addr_parts.append(f"(FAILOVER={'ON' if resolved.failover else 'OFF'})")
-    if resolved.source_route:
-        addr_parts.append("(SOURCE_ROUTE=ON)")
-    addr_parts.extend(
-        f"(ADDRESS=(PROTOCOL={ep.protocol.upper()})(HOST={ep.host})(PORT={ep.port}))" for ep in resolved.endpoints
-    )
-    desc_parts.append(f"(ADDRESS_LIST={''.join(addr_parts)})")
-
+    for endpoints in resolved.address_lists or (resolved.endpoints,):
+        addr_parts: list[str] = []
+        if resolved.load_balance is not None:
+            addr_parts.append(f"(LOAD_BALANCE={'ON' if resolved.load_balance else 'OFF'})")
+        if resolved.failover is not None:
+            addr_parts.append(f"(FAILOVER={'ON' if resolved.failover else 'OFF'})")
+        if resolved.source_route:
+            addr_parts.append("(SOURCE_ROUTE=ON)")
+        addr_parts.extend(
+            f"(ADDRESS=(PROTOCOL={ep.protocol.upper()})(HOST={ep.host})(PORT={ep.port}))" for ep in endpoints
+        )
+        desc_parts.append(f"(ADDRESS_LIST={''.join(addr_parts)})")
     connect_parts: list[str] = [f"(SERVICE_NAME={resolved.service_name})"]
     if resolved.server is not None:
         _validate_tns_token(resolved.server, "server")
@@ -2624,42 +2740,54 @@ def execute_session_checkout_sync(
     connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> None:
     """Apply checkout state and execute the optional PL/SQL block."""
-    plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
+    try:
+        plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
+        if plsql is not None:
+            with connection.cursor() as cursor:
+                cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 def execute_session_release_sync(connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]) -> None:
     """Clear checkout state before making a connection available for reuse."""
-    plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
-    if deferred is not None:
-        deferred()
+    try:
+        plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
+        if plsql is not None:
+            with connection.cursor() as cursor:
+                cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
+        if deferred is not None:
+            deferred()
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 async def execute_session_checkout_async(
     connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> None:
     """Apply asynchronous checkout state and optional PL/SQL block."""
-    plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
+    try:
+        plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
+        if plsql is not None:
+            with connection.cursor() as cursor:
+                await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 async def execute_session_release_async(
     connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
 ) -> None:
     """Clear asynchronous session state before pool return."""
-    plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
-    if plsql is not None:
-        with connection.cursor() as cursor:
-            await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
-    if deferred is not None:
-        deferred()
+    try:
+        plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
+        if plsql is not None:
+            with connection.cursor() as cursor:
+                await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
+        if deferred is not None:
+            deferred()
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
@@ -3002,9 +3130,13 @@ def synthesize_session_state_tag(
     pairs: dict[str, str] = {}
     for field in ("edition", "time_zone", "current_schema", "standby_max_data_delay", "adg_redirect_dml"):
         value = _oracle_context_value(config, field)
-        if value is None or callable(value):
+        if value is None or callable(value) or (field == "adg_redirect_dml" and value is False):
             continue
-        if field == "standby_max_data_delay" and (isinstance(value, bool) or not isinstance(value, int)):
+        if (
+            field == "standby_max_data_delay"
+            and value != "NONE"
+            and (isinstance(value, bool) or not isinstance(value, int))
+        ):
             msg = "standby_max_data_delay must be an integer"
             raise ImproperConfigurationError(msg)
         pairs[field.upper()] = str(value).upper() if isinstance(value, bool) else str(value)
@@ -3408,6 +3540,15 @@ def _build_session_checkout_plan(
             alter_clauses.append(f"{key.upper()} = ''{val}''")
 
     plsql_statements: list[str] = []
+    if resolved.standby_max_data_delay is not None:
+        plsql_statements.append(
+            f"EXECUTE IMMEDIATE 'ALTER SESSION SET STANDBY_MAX_DATA_DELAY = {resolved.standby_max_data_delay}';"
+        )
+    if resolved.adg_redirect_dml:
+        plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION ENABLE ADG_REDIRECT_DML';")
+    if resolved.sync_with_primary:
+        plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION SYNC WITH PRIMARY';")
+
     if alter_clauses and not skip_alter_session:
         joined_alter = " ".join(alter_clauses)
         plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
@@ -3504,6 +3645,12 @@ def _build_session_release_plan(
         piggyback_attrs["dbop"] = ""
 
     plsql_statements: list[str] = []
+    if resolved.reset_on_release:
+        if resolved.standby_max_data_delay is not None:
+            plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION SET STANDBY_MAX_DATA_DELAY = NONE';")
+        if resolved.adg_redirect_dml:
+            plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION DISABLE ADG_REDIRECT_DML';")
+
     bind_params: dict[str, Any] = {}
     if resolved.apex_detach:
         plsql_statements.append("APEX_SESSION.DETACH;")
