@@ -153,11 +153,16 @@ async def test_transaction_priority_checkout_and_driver(mode: str, oracle_26ai_s
 async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
     oracle_async_config: OracleAsyncConfig, oracle_18c_async_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime, TelemetryConfig, get_w3c_trace_context
 
     provider = TracerProvider()
+    exported = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exported))
     runtime = ObservabilityRuntime(
         ObservabilityConfig(telemetry=TelemetryConfig(enable_spans=True, provider_factory=lambda: provider))
     )
@@ -176,6 +181,7 @@ async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
     try:
         with provider.get_tracer(__name__).start_as_current_span("oracle-acceptance"):
             expected = get_w3c_trace_context()
+            parent_context = trace.get_current_span().get_span_context()
             assert expected[0] is not None
             oracle_18c_async_session.attach_observability(runtime)
             assert oracle_18c_async_session.connection.supports_opentelemetry_tracing is False
@@ -188,7 +194,18 @@ async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
                     assert supported is True, session.connection.version
                 elif not supported:
                     pytest.skip(f"Oracle {session.connection.version} does not advertise native OTel tracing")
-                assert expected in calls
+                assert any(
+                    span.parent is not None
+                    and span.context is not None
+                    and span.parent.span_id == parent_context.span_id
+                    and span.context.trace_id == parent_context.trace_id
+                    and (
+                        f"00-{span.context.trace_id:032x}-{span.context.span_id:016x}-{int(span.context.trace_flags) & 0xFF:02x}",
+                        expected[1],
+                    )
+                    in calls
+                    for span in exported.get_finished_spans()
+                )
             assert calls[-1] == (None, "")
     finally:
         await _invoke(config.close_pool)
