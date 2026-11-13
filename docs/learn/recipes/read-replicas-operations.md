@@ -44,6 +44,8 @@ Groups track repeated checkout failures through `ReplicaHealthBreaker`. `failure
 
 For automatic read providers, the default `fallback_to_primary=True` permits primary checkout after reader exhaustion. Set it to `False` when primary load must remain bounded; exhaustion raises `ReplicaUnavailableError`. An explicit `RoutingContext.replica()` choice never uses this fallback: missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Outside an active transaction, an explicit replica scope can override a historical write pin; normal automatic routing remains pinned. Named groups must exist. A cancelled call releases its half-open probe. It finishes the failed lease before another attempt uses it.
 
+Close a routing stream before changing its replica policy. An open stream retains its selected lease; conflicting policy changes raise `RoutingContextError` until the stream closes.
+
 `ReadOnlyTransactionError` covers SQLSTATE `25006` and qualified native read-only failures. For example, MySQL errno `1290` maps this way only when the message names read-only mode; another option restriction keeps its existing error category. A generic primary fallback may accept writes, so retain reader roles and server policy where write refusal is required.
 
 ## Compose Tenant Isolation
