@@ -39,7 +39,7 @@ def test_from_config() -> None:
     config = {"protocol": "file", "base_path": "/tmp/test", "fs_config": {}}
     store = FSSpecBackend.from_config(config)
     assert store.protocol == "file"
-    assert store.base_path == "/tmp/test"
+    assert store.base_path == str(Path("/tmp/test").resolve())
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
@@ -492,8 +492,7 @@ def test_file_uri_auto_derives_base_path(tmp_path: Path) -> None:
 
     store = FSSpecBackend(f"file://{tmp_path}")
 
-    # base_path should be derived from URI (absolute path preserved)
-    assert store.base_path == str(tmp_path)
+    assert store.base_path == str(tmp_path.resolve())
 
 
 @pytest.mark.skipif(not FSSPEC_INSTALLED, reason="fsspec missing")
@@ -503,8 +502,7 @@ def test_file_uri_with_explicit_base_path_combination(tmp_path: Path) -> None:
 
     store = FSSpecBackend(f"file://{tmp_path}", base_path="subdir")
 
-    # base_path should combine URI path with explicit base_path (absolute path preserved)
-    expected_base_path = f"{tmp_path}/subdir"
+    expected_base_path = str((tmp_path / "subdir").resolve())
     assert store.base_path == expected_base_path
 
 

@@ -1715,3 +1715,26 @@ def test_versioned_extensions_skip_out_of_order_and_checksum_warnings(tmp_path: 
     report = SyncMigrationCommands._evaluate_verification(applied, loaded)
     assert report["valid"] is True
     assert report["checksum_mismatches"] == []
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_read_data_file_records_enforces_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compressed: bool
+) -> None:
+    """MigrationCommandsCore._read_data_file_records rejects oversized plain and gzipped data files."""
+    import gzip
+
+    import sqlspec.migrations.commands as commands_module
+    from sqlspec.migrations.commands import MigrationCommandsCore
+
+    monkeypatch.setattr(commands_module, "_MAX_DATA_FILE_BYTES", 64)
+    payload = b'[{"id": "' + (b"a" * 128) + b'"}]'
+    suffix = ".json.gz" if compressed else ".json"
+    data_path = tmp_path / f"seed{suffix}"
+    if compressed:
+        data_path.write_bytes(gzip.compress(payload))
+    else:
+        data_path.write_bytes(payload)
+
+    with pytest.raises(MigrationError, match="exceeds maximum allowed size"):
+        MigrationCommandsCore._read_data_file_records(data_path, suffix)

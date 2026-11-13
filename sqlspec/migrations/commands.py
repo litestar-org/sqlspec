@@ -79,6 +79,7 @@ SUPPORTED_DATA_FILE_SUFFIXES: Final[tuple[str, ...]] = (
 )
 _ARROW_FILE_SUFFIXES: Final[frozenset[str]] = frozenset({".arrow", ".ipc", ".feather"})
 _LINE_DELIMITED_SUFFIXES: Final[frozenset[str]] = frozenset({".jsonl", ".jsonl.gz", ".ndjson", ".ndjson.gz"})
+_MAX_DATA_FILE_BYTES: Final[int] = 256 * 1024 * 1024
 _OTHER_DATA_FILE_SUFFIXES: Final[tuple[str, ...]] = (
     ".csv",
     ".tsv",
@@ -442,7 +443,7 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         table_name = target_table or data_path.name[: -len(suffix)]
         dialect = self._context_dialect()
         table_sql = exp.Table(this=exp.to_identifier(table_name), db=exp.to_identifier(schema) if schema else None).sql(
-            dialect=dialect
+            dialect=dialect, copy=False
         )
         try:
             if suffix == ".parquet":
@@ -1130,12 +1131,19 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         """Read JSON or line-delimited JSON records from a (optionally gzipped) data file.
 
         Raises:
-            MigrationError: When the file does not contain a list of JSON objects.
+            MigrationError: When the file exceeds the size cap or does not contain a list of JSON objects.
         """
         if suffix.endswith(".gz"):
-            with gzip.open(data_path, mode="rt", encoding="utf-8") as handle:
-                content = handle.read()
+            with gzip.open(data_path, mode="rb") as handle:
+                raw = handle.read(_MAX_DATA_FILE_BYTES + 1)
+            if len(raw) > _MAX_DATA_FILE_BYTES:
+                msg = f"Compressed data file '{data_path}' exceeds maximum allowed size ({_MAX_DATA_FILE_BYTES} bytes)"
+                raise MigrationError(msg)
+            content = raw.decode("utf-8")
         else:
+            if data_path.stat().st_size > _MAX_DATA_FILE_BYTES:
+                msg = f"Data file '{data_path}' exceeds maximum allowed size ({_MAX_DATA_FILE_BYTES} bytes)"
+                raise MigrationError(msg)
             content = data_path.read_text(encoding="utf-8")
         decoded: Any
         if suffix in _LINE_DELIMITED_SUFFIXES:
@@ -1170,8 +1178,8 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         if not isinstance(target, exp.Table):
             msg = f"Inferred DDL is not a CREATE TABLE statement: {create_statement}"
             raise MigrationError(msg)
-        drop = exp.Drop(kind="TABLE", tables=[target.copy()], exists=True)
-        return MigrationCommandsCore._terminate_statement(drop.sql(dialect=dialect))
+        drop = exp.Drop(kind="TABLE", tables=[target], exists=True)
+        return MigrationCommandsCore._terminate_statement(drop.sql(dialect=dialect, copy=False))
 
 
 class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRunner]):
@@ -1619,79 +1627,6 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
 
-    def _run_reconcilers(
-        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
-    ) -> None:
-        """Execute enabled extension reconcilers in configured order."""
-        for descriptor in self.extension_reconcilers:
-            try:
-                execution_time = self.runner.execute_reconciliation(driver, descriptor)
-            except Exception as exc:
-                _output_error(
-                    use_logger,
-                    echo,
-                    summary_only,
-                    "Reconciler %s (mode=%s) %s",
-                    descriptor.name,
-                    "reconcile",
-                    "failed",
-                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
-                )
-                raise
-            invoked.append(descriptor.name)
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reconciler %s (mode=%s) %s in %dms",
-                descriptor.name,
-                "reconcile",
-                "complete",
-                execution_time,
-                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
-            )
-
-    def _run_reconciler_downgrades(
-        self,
-        driver: Any,
-        retained_reconcile: "AbstractSet[str]",
-        invoked: list[str],
-        *,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> None:
-        """Execute extension reconciler downgrades in reverse configured order at base."""
-        for descriptor in reversed(self.extension_reconcilers):
-            try:
-                execution_time = self.runner.execute_reconciliation_downgrade(driver, descriptor)
-            except Exception as exc:
-                _output_error(
-                    use_logger,
-                    echo,
-                    summary_only,
-                    "Reconciler %s (mode=%s) %s",
-                    descriptor.name,
-                    "reconcile",
-                    "downgrade failed",
-                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) downgrade failed: {exc}[/]",
-                )
-                raise
-            invoked.append(descriptor.name)
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reconciler %s (mode=%s) %s in %dms",
-                descriptor.name,
-                "reconcile",
-                "downgrade complete",
-                execution_time,
-                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) downgrade complete in {execution_time}ms[/]",
-            )
-        for version_num in sorted(retained_reconcile):
-            self.tracker.remove_migration(driver, version_num)
-
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
 
@@ -2096,6 +2031,79 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
             raise
+
+    def _run_reconcilers(
+        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
+    ) -> None:
+        """Execute enabled extension reconcilers in configured order."""
+        for descriptor in self.extension_reconcilers:
+            try:
+                execution_time = self.runner.execute_reconciliation(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
+            )
+
+    def _run_reconciler_downgrades(
+        self,
+        driver: Any,
+        retained_reconcile: "AbstractSet[str]",
+        invoked: list[str],
+        *,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> None:
+        """Execute extension reconciler downgrades in reverse configured order at base."""
+        for descriptor in reversed(self.extension_reconcilers):
+            try:
+                execution_time = self.runner.execute_reconciliation_downgrade(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "downgrade failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) downgrade failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "downgrade complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) downgrade complete in {execution_time}ms[/]",
+            )
+        for version_num in sorted(retained_reconcile):
+            self.tracker.remove_migration(driver, version_num)
 
     def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""
@@ -2776,79 +2784,6 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
 
-    async def _run_reconcilers(
-        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
-    ) -> None:
-        """Execute enabled extension reconcilers in configured order."""
-        for descriptor in self.extension_reconcilers:
-            try:
-                execution_time = await self.runner.execute_reconciliation(driver, descriptor)
-            except Exception as exc:
-                _output_error(
-                    use_logger,
-                    echo,
-                    summary_only,
-                    "Reconciler %s (mode=%s) %s",
-                    descriptor.name,
-                    "reconcile",
-                    "failed",
-                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
-                )
-                raise
-            invoked.append(descriptor.name)
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reconciler %s (mode=%s) %s in %dms",
-                descriptor.name,
-                "reconcile",
-                "complete",
-                execution_time,
-                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
-            )
-
-    async def _run_reconciler_downgrades(
-        self,
-        driver: Any,
-        retained_reconcile: "AbstractSet[str]",
-        invoked: list[str],
-        *,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> None:
-        """Execute extension reconciler downgrades in reverse configured order at base."""
-        for descriptor in reversed(self.extension_reconcilers):
-            try:
-                execution_time = await self.runner.execute_reconciliation_downgrade(driver, descriptor)
-            except Exception as exc:
-                _output_error(
-                    use_logger,
-                    echo,
-                    summary_only,
-                    "Reconciler %s (mode=%s) %s",
-                    descriptor.name,
-                    "reconcile",
-                    "downgrade failed",
-                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) downgrade failed: {exc}[/]",
-                )
-                raise
-            invoked.append(descriptor.name)
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reconciler %s (mode=%s) %s in %dms",
-                descriptor.name,
-                "reconcile",
-                "downgrade complete",
-                execution_time,
-                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) downgrade complete in {execution_time}ms[/]",
-            )
-        for version_num in sorted(retained_reconcile):
-            await self.tracker.remove_migration(driver, version_num)
-
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
 
@@ -3259,6 +3194,79 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
             raise
+
+    async def _run_reconcilers(
+        self, driver: Any, invoked: list[str], *, use_logger: bool, echo: bool, summary_only: bool
+    ) -> None:
+        """Execute enabled extension reconcilers in configured order."""
+        for descriptor in self.extension_reconcilers:
+            try:
+                execution_time = await self.runner.execute_reconciliation(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) complete in {execution_time}ms[/]",
+            )
+
+    async def _run_reconciler_downgrades(
+        self,
+        driver: Any,
+        retained_reconcile: "AbstractSet[str]",
+        invoked: list[str],
+        *,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> None:
+        """Execute extension reconciler downgrades in reverse configured order at base."""
+        for descriptor in reversed(self.extension_reconcilers):
+            try:
+                execution_time = await self.runner.execute_reconciliation_downgrade(driver, descriptor)
+            except Exception as exc:
+                _output_error(
+                    use_logger,
+                    echo,
+                    summary_only,
+                    "Reconciler %s (mode=%s) %s",
+                    descriptor.name,
+                    "reconcile",
+                    "downgrade failed",
+                    rich_message=f"[red]✗ Reconciler {descriptor.name} (mode=reconcile) downgrade failed: {exc}[/]",
+                )
+                raise
+            invoked.append(descriptor.name)
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Reconciler %s (mode=%s) %s in %dms",
+                descriptor.name,
+                "reconcile",
+                "downgrade complete",
+                execution_time,
+                rich_message=f"[green]✓ Reconciler {descriptor.name} (mode=reconcile) downgrade complete in {execution_time}ms[/]",
+            )
+        for version_num in sorted(retained_reconcile):
+            await self.tracker.remove_migration(driver, version_num)
 
     async def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""

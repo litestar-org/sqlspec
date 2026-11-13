@@ -103,14 +103,6 @@ _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "varbyte",
 })
 _BINARY_TYPE_PREFIXES: Final["tuple[str, ...]"] = ("binary(", "varbinary(", "byte(", "varbyte(")
-
-
-def _is_binary_type_info(data_type: str) -> bool:
-    """Return whether a normalized column data-type label represents raw binary data."""
-    normalized = data_type.strip().lower()
-    return normalized in _BINARY_TYPES or normalized.startswith(_BINARY_TYPE_PREFIXES)
-
-
 _UNORDERABLE_POSTGRES_TYPES: Final["frozenset[str]"] = frozenset({
     "box",
     "circle",
@@ -671,6 +663,12 @@ async def export_table_fixtures_async(
     return counts
 
 
+def _is_binary_type_info(data_type: str) -> bool:
+    """Return whether a normalized column data-type label represents raw binary data."""
+    normalized = data_type.strip().lower()
+    return normalized in _BINARY_TYPES or normalized.startswith(_BINARY_TYPE_PREFIXES)
+
+
 class _TableColumn(NamedTuple):
     """Column metadata used to convert, insert, order, and resync table fixture rows.
 
@@ -809,9 +807,13 @@ def _read_compressed_file(file_path: Path) -> str:
         ValueError: If the file format is not supported
     """
     if file_path.suffix == ".gz":
-        with gzip.open(file_path, mode="rt", encoding="utf-8") as f:
-            return f.read()
-    elif file_path.suffix == ".zip":
+        with gzip.open(file_path, mode="rb") as f:
+            data = f.read(_MAX_ZIP_FIXTURE_BYTES + 1)
+        if len(data) > _MAX_ZIP_FIXTURE_BYTES:
+            msg = f"Gzip fixture {file_path.name!r} exceeds maximum allowed size ({_MAX_ZIP_FIXTURE_BYTES} bytes)"
+            raise ValueError(msg)
+        return data.decode("utf-8")
+    if file_path.suffix == ".zip":
         with zipfile.ZipFile(file_path, "r") as zf:
             json_name = file_path.stem + ".json"
             if json_name in zf.namelist():
@@ -821,9 +823,8 @@ def _read_compressed_file(file_path: Path) -> str:
                 return _read_zip_member(zf, json_files[0])
             msg = f"No JSON file found in ZIP archive: {file_path}"
             raise ValueError(msg)
-    else:
-        msg = f"Unsupported compression format: {file_path.suffix}"
-        raise ValueError(msg)
+    msg = f"Unsupported compression format: {file_path.suffix}"
+    raise ValueError(msg)
 
 
 def _find_fixture_file(fixtures_path: Any, fixture_name: str) -> Path:
@@ -1229,7 +1230,11 @@ def _extract_sequence_from_default(column_default: Any) -> "str | None":
     if nextval_match is not None:
         single_quoted, identifier_expr = nextval_match.groups()
         if single_quoted is not None:
-            return single_quoted
+            cleaned_single = single_quoted.split("::", 1)[0].strip()
+            cleaned = ".".join(part.strip('`"[] ') for part in cleaned_single.split("."))
+            if _SEQUENCE_IDENTIFIER_PATTERN.fullmatch(cleaned):
+                return cleaned
+            return None
         if identifier_expr is not None:
             cleaned = ".".join(part.strip("` ") for part in identifier_expr.split("."))
             if _SEQUENCE_IDENTIFIER_PATTERN.fullmatch(cleaned):
@@ -1729,8 +1734,10 @@ def _conflict_clause(
     if family == "mysql":
         assignments = [
             exp.EQ(
-                this=exp.column(_quoted_identifier(column)),
-                expression=exp.Anonymous(this="VALUES", expressions=[exp.column(_quoted_identifier(column))]),
+                this=exp.column(_quoted_identifier(column), copy=False),
+                expression=exp.Anonymous(
+                    this="VALUES", expressions=[exp.column(_quoted_identifier(column), copy=False)]
+                ),
             )
             for column in updates or list(conflict_keys)
         ]
@@ -1740,8 +1747,8 @@ def _conflict_clause(
         return exp.OnConflict(conflict_keys=keys, action=exp.var("DO NOTHING"))
     assignments = [
         exp.EQ(
-            this=exp.column(_quoted_identifier(column)),
-            expression=exp.column(_quoted_identifier(column), table=_quoted_identifier("excluded")),
+            this=exp.column(_quoted_identifier(column), copy=False),
+            expression=exp.column(_quoted_identifier(column), table=_quoted_identifier("excluded"), copy=False),
         )
         for column in updates
     ]
@@ -1772,6 +1779,10 @@ def _table_insert_statement(
             value_expressions.append(exp.Anonymous(this="PARSE_JSON", expressions=[ph]))
         elif col is not None and family == "postgres" and _postgres_vector_kind(col.data_type):
             target_type = exp.DataType.build(col.data_type, dialect="postgres", udt=True)
+            cast_text = exp.Cast(this=ph, to=exp.DataType(this=exp.DataType.Type.TEXT))
+            value_expressions.append(exp.Cast(this=cast_text, to=target_type))
+        elif col is not None and family == "postgres" and col.data_type in _JSON_TYPE_NAMES:
+            target_type = exp.DataType.build(col.data_type, dialect="postgres")
             cast_text = exp.Cast(this=ph, to=exp.DataType(this=exp.DataType.Type.TEXT))
             value_expressions.append(exp.Cast(this=cast_text, to=target_type))
         elif col is not None and family == "mysql" and _mysql_vector_kind(col.data_type):
@@ -1816,7 +1827,7 @@ def _identity_insert_statements(
         column.is_identity and column.name in inserted for column in table_columns
     ):
         return None
-    table_sql = _quoted_table(table).sql(dialect=_sqlglot_dialect(dialect, family))
+    table_sql = _quoted_table(table).sql(dialect=_sqlglot_dialect(dialect, family), copy=False)
     return f"SET IDENTITY_INSERT {table_sql} ON", f"SET IDENTITY_INSERT {table_sql} OFF"
 
 
@@ -1933,10 +1944,10 @@ def _table_export_query(dialect: "DialectType", family: str, table: str, table_c
                 )
             else:
                 projections.append(expression)
-    query = exp.Select().select(*(projections or [exp.Star()])).from_(_quoted_table(table))
+    query = exp.Select().select(*(projections or [exp.Star()]), copy=False).from_(_quoted_table(table), copy=False)
     if order_by:
-        query = query.order_by(*order_by)
-    return query.sql(dialect=_sqlglot_dialect(dialect, family))
+        query = query.order_by(*order_by, copy=False)
+    return query.sql(dialect=_sqlglot_dialect(dialect, family), copy=False)
 
 
 def _sequence_resync_enabled(resync_sequences: bool, dialect_name: str, family: str) -> bool:
@@ -2055,7 +2066,7 @@ def _sequence_resync_statements(
 
     if family == "tsql":
         if any(column.is_identity for column in table_columns):
-            table_sql = _quoted_table(table).sql(dialect="tsql")
+            table_sql = _quoted_table(table).sql(dialect="tsql", copy=False)
             statement = f"DBCC CHECKIDENT ('{table_sql}', RESEED)"
             statements.append((statement, {}))
         return statements
@@ -2165,11 +2176,13 @@ def _plan_sequence_resync_steps(
             _ResyncStep(statement=stmt, parameters=params)
             for stmt, params in _sequence_resync_statements(table, columns, dialect_name=dialect_name, family=family)
         ]
-        quoted_table = _quoted_table(table).sql(dialect="tsql")
+        quoted_table = _quoted_table(table).sql(dialect="tsql", copy=False)
         for column in columns:
             if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="tsql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="tsql")
+                quoted_col = exp.column(_quoted_identifier(column.name), copy=False).sql(dialect="tsql", copy=False)
+                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(
+                    dialect="tsql", copy=False
+                )
                 steps.append(
                     _ResyncStep(
                         statement=f"ALTER SEQUENCE {quoted_seq} RESTART WITH {{next_val}}",
@@ -2180,12 +2193,14 @@ def _plan_sequence_resync_steps(
         return steps
 
     if family == "mysql":
-        quoted_table = _quoted_table(table).sql(dialect="mysql")
+        quoted_table = _quoted_table(table).sql(dialect="mysql", copy=False)
         steps = []
         for column in columns:
             if not column.is_identity and column.sequence_name is not None:
-                quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
-                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(dialect="mysql")
+                quoted_col = exp.column(_quoted_identifier(column.name), copy=False).sql(dialect="mysql", copy=False)
+                quoted_seq = _quoted_table(_validated_sequence_identifier(column.sequence_name)).sql(
+                    dialect="mysql", copy=False
+                )
                 steps.append(
                     _ResyncStep(
                         statement=f"ALTER SEQUENCE {quoted_seq} RESTART WITH {{next_val}}",
@@ -2201,7 +2216,7 @@ def _plan_sequence_resync_steps(
         ]
         if auto_columns:
             column = auto_columns[0]
-            quoted_col = exp.column(_quoted_identifier(column.name)).sql(dialect="mysql")
+            quoted_col = exp.column(_quoted_identifier(column.name), copy=False).sql(dialect="mysql", copy=False)
             steps.append(
                 _ResyncStep(
                     statement=f"ALTER TABLE {quoted_table} AUTO_INCREMENT = {{next_val}}",

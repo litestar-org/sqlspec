@@ -23,12 +23,14 @@ __all__ = (
 
 FILE_PROTOCOL: Final[str] = "file"
 FILE_SCHEME_PREFIX: Final[str] = "file://"
+_LOCAL_PROTOCOLS: Final[frozenset[str]] = frozenset({FILE_PROTOCOL, "local"})
 _WINDOWS_URI_DRIVE_MIN_LEN: Final[int] = 3
 _WINDOWS_DRIVE_PATH_MIN_LEN: Final[int] = 2
+_ENCODED_PATH_CONTROL_RE: Final[re.Pattern[str]] = re.compile(r"%(?:2e|2f|5c|00)", re.IGNORECASE)
 
 
 def reject_parent_traversal(path: "str | Path") -> None:
-    """Raise if any segment of ``path`` is a parent reference.
+    """Raise if ``path`` contains parent references, NUL bytes, or encoded path controls.
 
     Both separators are considered, so a Windows-style key cannot smuggle a
     parent reference past a POSIX-only split.
@@ -37,9 +39,11 @@ def reject_parent_traversal(path: "str | Path") -> None:
         path: Caller-supplied storage path.
 
     Raises:
-        StoragePathTraversalError: If a ``..`` segment is present.
+        StoragePathTraversalError: If a ``..`` segment, NUL byte, or encoded control sequence is present.
     """
     path_str = str(path)
+    if "\x00" in path_str or _ENCODED_PATH_CONTROL_RE.search(path_str) is not None:
+        raise StoragePathTraversalError(path_str)
     posix_parts = PurePosixPath(path_str).parts
     windows_parts = PureWindowsPath(path_str).parts
     if ".." in posix_parts or ".." in windows_parts:
@@ -146,12 +150,19 @@ def strip_windows_drive_prefix(path: str) -> str:
 
 
 def parse_file_uri_path(uri: str) -> str:
-    """Extract, unquote, and normalize a filesystem path from a ``file://`` URI."""
+    """Extract, unquote, validate, and normalize a filesystem path from a ``file://`` URI."""
+    if "\x00" in uri or _ENCODED_PATH_CONTROL_RE.search(uri) is not None:
+        raise StoragePathTraversalError(uri)
     parsed = urlparse(uri)
-    raw_path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else (parsed.path or "/")
+    if not parsed.netloc and not parsed.path:
+        raw_path = ""
+    else:
+        raw_path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
     if parsed.fragment:
         raw_path = f"{raw_path}#{parsed.fragment}"
-    return strip_windows_drive_prefix(unquote(raw_path))
+    decoded = strip_windows_drive_prefix(unquote(raw_path))
+    reject_parent_traversal(decoded)
+    return decoded
 
 
 def is_file_destination(path: "str | Path") -> bool:
@@ -191,10 +202,14 @@ def resolve_storage_path(
 
     path_str = str(path)
 
-    if path_str.startswith(FILE_SCHEME_PREFIX) and (strip_file_scheme or bool(base_path)):
-        path_str = parse_file_uri_path(path_str)
+    if path_str.startswith(FILE_SCHEME_PREFIX):
+        decoded_file_path = parse_file_uri_path(path_str)
+        if strip_file_scheme or bool(base_path) or protocol in _LOCAL_PROTOCOLS:
+            path_str = decoded_file_path
 
-    if protocol == FILE_PROTOCOL:
+    reject_parent_traversal(path_str)
+
+    if protocol in _LOCAL_PROTOCOLS:
         if _is_windows_drive_path(path_str):
             if base_path:
                 if not _is_windows_drive_path(base_path):

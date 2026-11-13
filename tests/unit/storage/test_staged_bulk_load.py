@@ -20,12 +20,17 @@ from sqlspec.adapters.sybase.core import default_statement_config as sybase_stat
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.storage import StorageBridgeJob
 from sqlspec.storage._staging_sql import (
+    build_checkpoint_insert_sql,
+    build_checkpoint_select_sql,
+    build_checkpoint_table_ddl,
     build_create_table_from_arrow_schema,
     build_drop_stage_table_sql,
     build_stage_merge_sql,
     build_stage_table_ddl,
     format_storage_identifier,
+    quote_dialect_column,
     resolve_stage_table_name,
+    validate_sql_cast_type,
 )
 
 
@@ -88,7 +93,7 @@ def test_build_stage_merge_sql_across_dialects(
     )
     assert expected_fragment in sql
     if dialect == "postgres":
-        assert "CAST(metadata AS JSONB)" in sql
+        assert 'CAST("metadata" AS JSONB)' in sql
 
     drop_sql = build_drop_stage_table_sql(dialect, "_stage_items")
     assert "DROP TABLE" in drop_sql
@@ -228,13 +233,13 @@ def test_sybase_stage_upsert_updates_then_inserts_with_composite_keys_and_casts(
         type_casts={"value": "INTEGER"},
     )
     assert statement == (
-        "UPDATE audit.items SET value = CAST(stg.value AS INTEGER) "
+        "UPDATE audit.items SET [value] = CAST(stg.[value] AS INTEGER) "
         "FROM audit.items tgt, audit.staged stg "
-        "WHERE tgt.tenant_id = stg.tenant_id AND tgt.id = stg.id; "
-        "INSERT INTO audit.items (tenant_id, id, value, created_at) "
-        "SELECT stg.tenant_id, stg.id, CAST(stg.value AS INTEGER), stg.created_at FROM audit.staged stg "
+        "WHERE tgt.[tenant_id] = stg.[tenant_id] AND tgt.[id] = stg.[id]; "
+        "INSERT INTO audit.items ([tenant_id], [id], [value], [created_at]) "
+        "SELECT stg.[tenant_id], stg.[id], CAST(stg.[value] AS INTEGER), stg.[created_at] FROM audit.staged stg "
         "WHERE NOT EXISTS (SELECT 1 FROM audit.items tgt "
-        "WHERE tgt.tenant_id = stg.tenant_id AND tgt.id = stg.id)"
+        "WHERE tgt.[tenant_id] = stg.[tenant_id] AND tgt.[id] = stg.[id])"
     )
 
 
@@ -251,8 +256,8 @@ def test_sybase_stage_insert_only_when_updates_are_disabled(
         on_conflict=on_conflict,
         exclude_update_columns=exclude,
     ) == (
-        "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
-        "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
+        "INSERT INTO items ([id], [value]) SELECT stg.[id], stg.[value] FROM staged stg "
+        "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.[id] = stg.[id])"
     )
     assert build_drop_stage_table_sql("sybase", "audit.staged") == "DROP TABLE audit.staged"
 
@@ -266,9 +271,9 @@ def test_sqlanywhere_stage_merge_preserves_non_primary_conflict_keys() -> None:
         conflict_keys=["external_key"],
         exclude_update_columns=["id"],
     ) == (
-        "MERGE INTO items tgt USING staged stg ON (tgt.external_key = stg.external_key)"
-        " WHEN MATCHED THEN UPDATE SET tgt.value = stg.value"
-        " WHEN NOT MATCHED THEN INSERT (id, external_key, value) VALUES (stg.id, stg.external_key, stg.value)"
+        'MERGE INTO items tgt USING staged stg ON (tgt."external_key" = stg."external_key")'
+        ' WHEN MATCHED THEN UPDATE SET tgt."value" = stg."value"'
+        ' WHEN NOT MATCHED THEN INSERT ("id", "external_key", "value") VALUES (stg."id", stg."external_key", stg."value")'
     )
 
 
@@ -417,17 +422,24 @@ async def test_sybase_staged_upserts_execute_native_inserts_and_always_cleanup(
     expected = [
         "SELECT TOP 0 * INTO staged FROM items",
         bulk_insert,
-        "UPDATE items SET value = stg.value FROM items tgt, staged stg WHERE tgt.id = stg.id",
+        "UPDATE items SET [value] = stg.[value] FROM items tgt, staged stg WHERE tgt.[id] = stg.[id]",
     ]
     if not fail_merge:
         expected.append(
-            "INSERT INTO items (id, value) SELECT stg.id, stg.value FROM staged stg "
-            "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.id = stg.id)"
+            "INSERT INTO items ([id], [value]) SELECT stg.[id], stg.[value] FROM staged stg "
+            "WHERE NOT EXISTS (SELECT 1 FROM items tgt WHERE tgt.[id] = stg.[id])"
         )
     expected.append("DROP TABLE staged")
     assert native.statements == expected
     assert native.inserted_rows == [(1, "value")]
     assert native.open_cursors == 0
+
+
+@pytest.mark.parametrize("bad_identifier", ["", "   ", "bad\x00name", "schema.  .table"])
+def test_format_storage_identifier_rejects_empty_and_nul(bad_identifier: str) -> None:
+    """format_storage_identifier rejects empty, whitespace, NUL, and malformed qualified segments."""
+    with pytest.raises(ValueError, match="Storage identifier"):
+        format_storage_identifier(bad_identifier, allow_qualified=True)
 
 
 def test_snowflake_staging_sql_identifiers_arrow_ddl_and_merge_quoting() -> None:
@@ -437,10 +449,6 @@ def test_snowflake_staging_sql_identifiers_arrow_ddl_and_merge_quoting() -> None
         '"Mixed""Schema"."Order Items"'
     )
     assert format_storage_identifier("order-items") == '"order-items"'
-
-    for bad_identifier in ("", "   ", "bad\x00name", "schema.  .table"):
-        with pytest.raises(ValueError, match="Storage identifier"):
-            format_storage_identifier(bad_identifier, allow_qualified=True)
 
     arrow_table = pa.table({"id": [1], "order total": [9.5]})
     assert build_create_table_from_arrow_schema("sales.orders", arrow_table) == (
@@ -465,3 +473,125 @@ def test_snowflake_staging_sql_identifiers_arrow_ddl_and_merge_quoting() -> None
     assert 'UPDATE SET tgt."payload" = CAST(stg."payload" AS VARIANT)' in snowflake_merge
     assert "created_at = stg" not in snowflake_merge
     assert 'CAST(stg."payload" AS VARIANT)' in snowflake_merge
+
+
+@pytest.mark.parametrize(
+    ("dialect", "raw_col", "expected_col", "raw_ident", "expected_ident"),
+    [
+        ("postgres", 'col"name', '"col""name"', "public.order", 'public."order"'),
+        ("mysql", "col`name", "`col``name`", "analytics.order-items", "analytics.`order-items`"),
+        ("bigquery", "col`name", "`col``name`", "dataset.select", "dataset.`select`"),
+        ("spanner", "col`name", "`col``name`", "order", "`order`"),
+        ("mssql", "col]name", "[col]]name]", "dbo.order items", "dbo.[order items]"),
+        ("sybase", "col]name", "[col]]name]", "dbo.select", "dbo.[select]"),
+    ],
+)
+def test_dialect_native_storage_quoting_and_checkpoint_sql(
+    dialect: str, raw_col: str, expected_col: str, raw_ident: str, expected_ident: str
+) -> None:
+    """quote_dialect_column, format_storage_identifier, and checkpoint SQL builders quote per dialect."""
+    assert quote_dialect_column(raw_col, dialect=dialect) == expected_col
+    assert format_storage_identifier(raw_ident, dialect=dialect, allow_qualified=True) == expected_ident
+    assert expected_ident in build_checkpoint_table_ddl(dialect, raw_ident)
+    assert expected_ident in build_checkpoint_select_sql(raw_ident, dialect=dialect)
+    assert expected_ident in build_checkpoint_insert_sql(dialect, raw_ident)
+
+
+@pytest.mark.parametrize("valid_type", ["INTEGER", "DECIMAL(18, 4)", "VARCHAR(255)", "JSONB"])
+def test_validate_sql_cast_type_accepts_standard_types(valid_type: str) -> None:
+    """validate_sql_cast_type normalizes valid scalar and parameterized SQL data types."""
+    rendered = validate_sql_cast_type(valid_type, dialect="postgres")
+    assert rendered
+
+
+@pytest.mark.parametrize(
+    "invalid_type",
+    ["", "   ", "INT\x00", "INT; SELECT 1", "INT) FROM users --", "INT /* comment */", "VARCHAR('x')", "DECIMAL((18)"],
+)
+def test_validate_sql_cast_type_rejects_malformed_or_compound_expressions(invalid_type: str) -> None:
+    """validate_sql_cast_type rejects empty, comment-bearing, unbalanced, or multi-clause cast strings."""
+    with pytest.raises(ValueError, match="Invalid SQL cast type"):
+        validate_sql_cast_type(invalid_type, dialect="postgres")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_multi_shard_storage_ingest_skips_empty_shards_quotes_delete_and_validates_columns(
+    tmp_path: Path, asynchronous: bool
+) -> None:
+    """Multi-shard ingestion skips leading 0-row shards, records checkpoints, quotes DELETE FROM, and checks column parity."""
+    import pyarrow.parquet as pq
+
+    empty_shard = tmp_path / "00_empty.parquet"
+    valid_shard_1 = tmp_path / "01_part.parquet"
+    valid_shard_2 = tmp_path / "02_part.parquet"
+    drift_shard = tmp_path / "03_drift.parquet"
+
+    pq.write_table(pa.table({"orphan_col": pa.array([], type=pa.int64())}), empty_shard)
+    pq.write_table(pa.table({"id": [1, 2], "label": ["a", "b"]}), valid_shard_1)
+    pq.write_table(pa.table({"id": [2, 3], "label": ["b_new", "c"]}), valid_shard_2)
+    pq.write_table(pa.table({"id": [4], "extra": ["bad"]}), drift_shard)
+
+    db_file = tmp_path / f"shards_{'async' if asynchronous else 'sync'}.db"
+    if asynchronous:
+        aio_cfg = AiosqliteConfig(connection_config={"database": str(db_file)})
+        try:
+            async with aio_cfg.provide_session() as aio_drv:
+                await aio_drv.execute('CREATE TABLE "order items" (id INTEGER PRIMARY KEY, label TEXT)')
+                await aio_drv.execute("INSERT INTO \"order items\" (id, label) VALUES (99, 'stale')")
+                job = await aio_drv.load_from_storage(
+                    '"order items"',
+                    [empty_shard, valid_shard_1],
+                    file_format="parquet",
+                    overwrite=True,
+                    stage_table=True,
+                    checkpoint_table="ingest_ckpt",
+                )
+                assert job.telemetry["rows_processed"] == 2
+                rows = await aio_drv.select('SELECT id, label FROM "order items" ORDER BY id')
+                assert rows == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+                ckpt = await aio_drv.select("SELECT shard_uri, rows_loaded FROM ingest_ckpt ORDER BY shard_uri")
+                assert len(ckpt) == 2
+                assert ckpt[0]["rows_loaded"] == 0
+
+                with pytest.raises(SQLSpecError, match="do not match expected columns"):
+                    await aio_drv.load_from_storage(
+                        '"order items"',
+                        [valid_shard_2, drift_shard],
+                        file_format="parquet",
+                        stage_table=True,
+                        conflict_keys=["id"],
+                    )
+        finally:
+            await aio_cfg.close_pool()
+    else:
+        sync_cfg = SqliteConfig(connection_config={"database": str(db_file)})
+        try:
+            with sync_cfg.provide_session() as sync_drv:
+                sync_drv.execute('CREATE TABLE "order items" (id INTEGER PRIMARY KEY, label TEXT)')
+                sync_drv.execute("INSERT INTO \"order items\" (id, label) VALUES (99, 'stale')")
+                job = sync_drv.load_from_storage(
+                    '"order items"',
+                    [empty_shard, valid_shard_1],
+                    file_format="parquet",
+                    overwrite=True,
+                    stage_table=True,
+                    checkpoint_table="ingest_ckpt",
+                )
+                assert job.telemetry["rows_processed"] == 2
+                rows = sync_drv.select('SELECT id, label FROM "order items" ORDER BY id')
+                assert rows == [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+                ckpt = sync_drv.select("SELECT shard_uri, rows_loaded FROM ingest_ckpt ORDER BY shard_uri")
+                assert len(ckpt) == 2
+                assert ckpt[0]["rows_loaded"] == 0
+
+                with pytest.raises(SQLSpecError, match="do not match expected columns"):
+                    sync_drv.load_from_storage(
+                        '"order items"',
+                        [valid_shard_2, drift_shard],
+                        file_format="parquet",
+                        stage_table=True,
+                        conflict_keys=["id"],
+                    )
+        finally:
+            sync_cfg.close_pool()
