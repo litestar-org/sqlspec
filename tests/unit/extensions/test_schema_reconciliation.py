@@ -50,7 +50,9 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
     """ADK memory target with one additive column."""
 
     def _memory_table_ddl(self) -> str:
-        return super()._memory_table_ddl().replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
+        return (
+            super()._memory_table_ddl().replace("embedding BLOB,\n", "embedding BLOB,\n            schema_tag TEXT,\n")
+        )
 
 
 class AdditiveSqliteEventQueueStore(SqliteEventQueueStore):
@@ -566,8 +568,10 @@ async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.Monkey
             del query, app_name, user_id, limit, scope_filter, embedding
             return []
 
-        def delete_entries_by_session(self, session_id: str) -> int:
-            del session_id
+        def delete_entries_by_session(
+            self, session_id: str, app_name: str | None = None, user_id: str | None = None
+        ) -> int:
+            del session_id, app_name, user_id
             return 0
 
         def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:

@@ -223,7 +223,9 @@ def test_adk_memory_store_validates_table_name_and_commits_drop() -> None:
         def search_entries(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-        def delete_entries_by_session(self, session_id: str) -> int:
+        def delete_entries_by_session(
+            self, session_id: str, app_name: str | None = None, user_id: str | None = None
+        ) -> int:
             return 0
 
         def delete_entries_older_than(self, days: int, app_name: Any = None, scope: Any = None) -> int:
@@ -266,7 +268,9 @@ async def test_adk_async_memory_store_drop_tables_commits_and_bridges_sync_sessi
         async def search_entries(self, *args: Any, **kwargs: Any) -> list[Any]:
             return []
 
-        async def delete_entries_by_session(self, session_id: str) -> int:
+        async def delete_entries_by_session(
+            self, session_id: str, app_name: str | None = None, user_id: str | None = None
+        ) -> int:
             return 0
 
         async def delete_entries_older_than(self, days: int, app_name: Any = None, scope: Any = None) -> int:
