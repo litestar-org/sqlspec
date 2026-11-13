@@ -47,6 +47,10 @@ class FlaskConfigState:
     correlation_headers: "tuple[str, ...] | None" = None
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
+    read_session_key: str = "read_session"
+    read_connection_key: str = "read_connection"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate status configuration and synchronous tenant extractor signature."""

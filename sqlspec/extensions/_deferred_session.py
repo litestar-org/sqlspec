@@ -12,15 +12,19 @@ runs each driver call on the plugin's portal event loop.
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterator
-from typing import TYPE_CHECKING, Any, NoReturn
+from contextvars import copy_context
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.routing import RoutingContext, RoutingContextPayload
+from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding
 
 if TYPE_CHECKING:
     from sqlspec.utils.portal import Portal
 
-__all__ = ("DeferredAsyncSession", "PortalSession", "raise_async_connection_required")
+__all__ = ("DeferredAsyncSession", "PortalSession", "call_portal_with_context", "raise_async_connection_required")
 
 _CONFIG_ATTRIBUTES = frozenset({"driver_features", "statement_config"})
 
@@ -63,6 +67,7 @@ class DeferredAsyncSession:
                 is already open, otherwise ``None``.
             accessor: Asynchronous accessor named in error messages, for example
                 ``"await plugin.get_session_async(request)"``.
+            target_type: Optional facade type inspected before first access.
         """
         self._config = config
         self._open = open_session
@@ -210,6 +215,65 @@ def raise_async_connection_required(accessor: str) -> NoReturn:
     raise ImproperConfigurationError(msg)
 
 
+def call_portal_with_context(
+    portal: "Portal",
+    coro_fn: Callable[..., Awaitable[Any]],
+    /,
+    *args: Any,
+    tenant_override: TenantContextPayload | Literal["ambient"] | None = "ambient",
+    routing_bind_key: str | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Run a portal operation with caller identity and monotonic write-pin receipts.
+
+    Args:
+        portal: Running background event-loop portal.
+        coro_fn: Async operation to execute.
+        args: Positional arguments forwarded to the operation.
+        tenant_override: Explicit checkout identity, or ambient caller identity.
+        routing_bind_key: Owning bind conservatively pinned if completion is unknown.
+        kwargs: Operation keywords; timeout retains the portal's deadline semantics.
+
+    Returns:
+        The operation's result.
+    """
+    tenant = TenantContext.current_binding() if tenant_override == "ambient" else tenant_override
+    caller_context = copy_context()
+    routing = RoutingContext.current()
+    receipt: list[RoutingContextPayload | None] = []
+    timeout = kwargs.pop("timeout", 300.0)
+
+    async def run() -> Any:
+        tenant_token = (
+            TenantContext.bind_request(tenant)
+            if isinstance(tenant, TenantRequestBinding)
+            else TenantContext.set(tenant)
+        )
+        routing_token = RoutingContext.set(routing)
+        try:
+            return await coro_fn(*args, **kwargs)
+        finally:
+            updated = RoutingContext.current()
+            RoutingContext.reset(routing_token)
+            TenantContext.reset(tenant_token)
+            receipt.append(updated)
+
+    async def invoke() -> Any:
+        return await asyncio.create_task(run(), context=caller_context)
+
+    try:
+        return portal.call(invoke, timeout=timeout)
+    finally:
+        if receipt:
+            updated = receipt[0]
+            if updated is not None:
+                for bind_key, entry in updated.entries.items():
+                    if entry.pinned_by_write:
+                        RoutingContext.mark_write(bind_key, causal_token=entry.causal_token)
+        else:
+            RoutingContext.mark_write(routing_bind_key)
+
+
 class PortalSession:
     """Blocking view of an asynchronous driver session for synchronous request handlers.
 
@@ -221,17 +285,19 @@ class PortalSession:
     session unchanged.
     """
 
-    __slots__ = ("_portal", "_session")
+    __slots__ = ("_portal", "_routing_bind_key", "_session")
 
-    def __init__(self, session: Any, portal: "Portal") -> None:
+    def __init__(self, session: Any, portal: "Portal", *, routing_bind_key: str | None = None) -> None:
         """Wrap an asynchronous driver session.
 
         Args:
             session: Asynchronous driver session bound to the request connection.
             portal: Portal whose event loop owns the session's connection.
+            routing_bind_key: Owning database bind for conservative write pinning.
         """
         self._session = session
         self._portal = portal
+        self._routing_bind_key = routing_bind_key
 
     def __getattr__(self, name: str) -> Any:
         value = getattr(self._session, name)
@@ -243,7 +309,7 @@ class PortalSession:
             result = value(*args, **kwargs)
             if _in_event_loop():
                 return result
-            return _to_blocking(portal, result)
+            return _to_blocking(portal, result, routing_bind_key=self._routing_bind_key)
 
         return call
 
@@ -254,11 +320,12 @@ class PortalSession:
 class _PortalResource:
     """Blocking view of an async iterator or async context manager returned by a driver call."""
 
-    __slots__ = ("_iterator", "_portal", "_resource")
+    __slots__ = ("_iterator", "_portal", "_resource", "_routing_bind_key")
 
-    def __init__(self, portal: "Portal", resource: Any) -> None:
+    def __init__(self, portal: "Portal", resource: Any, *, routing_bind_key: str | None = None) -> None:
         self._portal = portal
         self._resource = resource
+        self._routing_bind_key = routing_bind_key
         self._iterator: Any = None
 
     def __iter__(self) -> "Iterator[Any]":
@@ -268,15 +335,22 @@ class _PortalResource:
         if self._iterator is None:
             self._iterator = self._resource.__aiter__()
         try:
-            return self._portal.call(_anext, self._iterator)
+            return call_portal_with_context(
+                self._portal, _anext, self._iterator, routing_bind_key=self._routing_bind_key
+            )
         except StopAsyncIteration:
             raise StopIteration from None
 
     def __enter__(self) -> Any:
-        return _to_blocking(self._portal, self._portal.call(_aenter, self._resource))
+        result = call_portal_with_context(
+            self._portal, _aenter, self._resource, routing_bind_key=self._routing_bind_key
+        )
+        return _to_blocking(self._portal, result, routing_bind_key=self._routing_bind_key)
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
-        return self._portal.call(_aexit, self._resource, exc_type, exc, tb)
+        return call_portal_with_context(
+            self._portal, _aexit, self._resource, exc_type, exc, tb, routing_bind_key=self._routing_bind_key
+        )
 
 
 def _in_event_loop() -> bool:
@@ -287,13 +361,13 @@ def _in_event_loop() -> bool:
     return True
 
 
-def _to_blocking(portal: "Portal", result: Any) -> Any:
+def _to_blocking(portal: "Portal", result: Any, *, routing_bind_key: str | None = None) -> Any:
     if inspect.isawaitable(result):
-        result = portal.call(_await, result)
-    if isinstance(result, AsyncDriverAdapterBase):
-        return PortalSession(result, portal)
+        result = call_portal_with_context(portal, _await, result, routing_bind_key=routing_bind_key)
+    if isinstance(result, (AsyncDriverAdapterBase, AsyncRoutingSession)):
+        return PortalSession(result, portal, routing_bind_key=routing_bind_key)
     if hasattr(result, "__aiter__") or hasattr(result, "__aenter__"):
-        return _PortalResource(portal, result)
+        return _PortalResource(portal, result, routing_bind_key=routing_bind_key)
     return result
 
 
