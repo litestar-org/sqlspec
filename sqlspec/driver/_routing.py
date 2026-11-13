@@ -238,7 +238,7 @@ class _RoutingSessionState:
 class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     """Lazy synchronous session selecting replicas for provably safe reads."""
 
-    __slots__ = ("_stack",)
+    __slots__ = ("_primary_read_stack", "_stack")
 
     def __init__(
         self,
@@ -252,6 +252,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         """Configure lazy physical checkouts and optional tenant identity."""
         self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
         self._stack = ExitStack()
+        self._primary_read_stack: ExitStack | None = None
 
     @property
     def primary_session(self) -> "SyncDriverT | None":
@@ -284,9 +285,18 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         """Release all physical checkouts and prevent further execution."""
         self.__exit__(None, None, None)
 
+    def _release_primary_read(self) -> None:
+        if self._primary_read_stack is not None:
+            try:
+                self._primary_read_stack.close()
+            finally:
+                self._primary_read_stack = None
+                self._replica_driver = None
+
     def _acquire_primary(self) -> SyncDriverT:
         self._ensure_open()
         if self._primary_driver is None:
+            self._release_primary_read()
             with RoutingContext.primary(self._config.bind_key):
                 context = self._config.provide_session(
                     statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
@@ -321,9 +331,16 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 from sqlspec.base import _RuntimeReadSyncContext
 
                 context = _RuntimeReadSyncContext(context, session=True)
-            self._replica_driver = self._stack.enter_context(context)
-            if self._config.has_replicas and getattr(selection_receipt, "config", None) is self._config:
-                self._primary_driver = self._replica_driver
+            self._release_primary_read()
+            lease_stack = self._stack.enter_context(ExitStack())
+            self._replica_driver = lease_stack.enter_context(context)
+            managed_replicas = self._config.has_replicas
+            if getattr(selection_receipt, "config", None) is self._config:
+                features = self._replica_driver.driver_features
+                if features.get("read_only_session") or features.get("enable_follower_reads"):
+                    self._primary_read_stack = lease_stack
+                elif managed_replicas:
+                    self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
@@ -879,7 +896,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
 class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     """Lazy asynchronous session selecting replicas for provably safe reads."""
 
-    __slots__ = ("_stack",)
+    __slots__ = ("_primary_read_stack", "_stack")
 
     def __init__(
         self,
@@ -893,6 +910,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         """Configure lazy physical checkouts and optional tenant identity."""
         self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
         self._stack = AsyncExitStack()
+        self._primary_read_stack: AsyncExitStack | None = None
 
     @property
     def primary_session(self) -> "AsyncDriverT | None":
@@ -925,9 +943,18 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         """Release all physical checkouts and prevent further execution."""
         await self.__aexit__(None, None, None)
 
+    async def _release_primary_read(self) -> None:
+        if self._primary_read_stack is not None:
+            try:
+                await self._primary_read_stack.aclose()
+            finally:
+                self._primary_read_stack = None
+                self._replica_driver = None
+
     async def _acquire_primary(self) -> AsyncDriverT:
         self._ensure_open()
         if self._primary_driver is None:
+            await self._release_primary_read()
             with RoutingContext.primary(self._config.bind_key):
                 context = self._config.provide_session(
                     statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
@@ -962,9 +989,16 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 from sqlspec.base import _RuntimeReadAsyncContext
 
                 context = _RuntimeReadAsyncContext(context, session=True)
-            self._replica_driver = await self._stack.enter_async_context(context)
-            if self._config.has_replicas and getattr(selection_receipt, "config", None) is self._config:
-                self._primary_driver = self._replica_driver
+            await self._release_primary_read()
+            lease_stack = await self._stack.enter_async_context(AsyncExitStack())
+            self._replica_driver = await lease_stack.enter_async_context(context)
+            managed_replicas = self._config.has_replicas
+            if getattr(selection_receipt, "config", None) is self._config:
+                features = self._replica_driver.driver_features
+                if features.get("read_only_session") or features.get("enable_follower_reads"):
+                    self._primary_read_stack = lease_stack
+                elif managed_replicas:
+                    self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness

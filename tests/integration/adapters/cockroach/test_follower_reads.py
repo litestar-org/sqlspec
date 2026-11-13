@@ -82,11 +82,19 @@ def test_sync_follower_snapshot_and_strong_primary_override(cockroach_psycopg_sy
 
 @pytest.mark.parametrize("adapter", ["asyncpg", "psycopg"])
 @pytest.mark.parametrize("transaction", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
 async def test_async_routing_facade_primary_checkout_disables_global_follower_mode(
-    adapter: str, transaction: bool, cockroach_asyncpg_config: Any, cockroach_psycopg_async_config: Any
+    adapter: str, transaction: bool, fallback: bool, cockroach_asyncpg_config: Any, cockroach_psycopg_async_config: Any
 ) -> None:
     base = cockroach_asyncpg_config if adapter == "asyncpg" else cockroach_psycopg_async_config
-    config = type(base)(connection_config=dict(base.connection_config), replicas=True)
+    connection_config = dict(base.connection_config)
+    connection_config["min_size"] = 0
+    connection_config["max_size"] = 1
+    reader = type(base)(connection_config=dict(base.connection_config))
+    config = type(base)(connection_config=connection_config, replicas=[reader] if fallback else True)
+    if fallback:
+        for _ in range(3):
+            config.replica_groups["default"]._breaker.record_failure(0)
     table = quote_identifier("facade_writer_" + uuid4().hex)
     token = RoutingContext.set(None)
     try:
@@ -94,12 +102,12 @@ async def test_async_routing_facade_primary_checkout_disables_global_follower_mo
             await writer.execute(f"CREATE TABLE {table} (id integer PRIMARY KEY)")
             await writer.commit()
         async with config.provide_routing_session() as facade:
-            assert await facade.select_value("SELECT 1") == 1
+            assert await asyncio.wait_for(facade.select_value("SELECT 1"), timeout=10) == 1
             if transaction:
                 async with facade.transaction():
                     await facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
             else:
-                await facade.begin()
+                await asyncio.wait_for(facade.begin(), timeout=10)
                 await facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
                 await facade.commit()
         assert RoutingContext.current() is None
@@ -114,11 +122,19 @@ async def test_async_routing_facade_primary_checkout_disables_global_follower_mo
 
 
 @pytest.mark.parametrize("transaction", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
 def test_sync_routing_facade_primary_checkout_disables_global_follower_mode(
-    transaction: bool, cockroach_psycopg_sync_config: Any
+    transaction: bool, fallback: bool, cockroach_psycopg_sync_config: Any
 ) -> None:
     base = cockroach_psycopg_sync_config
-    config = type(base)(connection_config=dict(base.connection_config), replicas=True)
+    connection_config = dict(base.connection_config)
+    connection_config["min_size"] = 0
+    connection_config["max_size"] = 1
+    reader = type(base)(connection_config=dict(base.connection_config))
+    config = type(base)(connection_config=connection_config, replicas=[reader] if fallback else True)
+    if fallback:
+        for _ in range(3):
+            config.replica_groups["default"]._breaker.record_failure(0)
     table = quote_identifier("facade_sync_writer_" + uuid4().hex)
     token = RoutingContext.set(None)
     try:
