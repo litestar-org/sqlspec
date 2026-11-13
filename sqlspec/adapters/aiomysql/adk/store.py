@@ -9,6 +9,7 @@ from sqlspec.adapters.aiomysql.core import format_identifier, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -81,9 +82,9 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AiomysqlConfig") -> None:
+    def __init__(self, config: "AiomysqlConfig", *, read_config: "AiomysqlConfig | None" = None) -> None:
         """Initialize aiomysql ADK store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -143,7 +144,8 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -155,7 +157,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """Get session by scoped identifiers."""
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=renew_for is not None) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -220,7 +222,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -354,7 +356,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -566,9 +568,9 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AiomysqlConfig") -> None:
+    def __init__(self, config: "AiomysqlConfig", *, read_config: "AiomysqlConfig | None" = None) -> None:
         """Initialize aiomysql memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -708,7 +710,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)

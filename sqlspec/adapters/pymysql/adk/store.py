@@ -81,8 +81,8 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "PyMysqlConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PyMysqlConfig", *, read_config: "PyMysqlConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -126,7 +126,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by scoped identifiers."""
-        return _select_session(self, app_name, user_id, session_id, renew_for=renew_for)
+        return _select_session(self, app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
@@ -144,7 +144,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
     ) -> "list[StoredSession]":
         """List sessions for an app."""
         return _list_sessions(
-            self, app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            self, app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
         )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -180,7 +180,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Get events for a session."""
-        return _select_events(self, app_name, user_id, session_id, after_timestamp, limit)
+        return _select_events(self, app_name, user_id, session_id, after_timestamp, limit, read=True)
 
     def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
@@ -274,8 +274,8 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "PyMysqlConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PyMysqlConfig", *, read_config: "PyMysqlConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -318,7 +318,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, read=True)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -457,6 +457,8 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -486,7 +488,7 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)
@@ -608,10 +610,16 @@ def _create_session(
 
 
 def _select_session(
-    store: PyMysqlADKStore, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    store: PyMysqlADKStore,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    *,
+    renew_for: "int | timedelta | None" = None,
+    read: bool = False,
 ) -> "StoredSession | None":
     try:
-        with store._config.provide_connection() as conn:
+        with store._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 if renew_for is not None and store._calculate_expires_at(renew_for) is not None:
@@ -669,6 +677,7 @@ def _list_sessions(
     descending: bool = True,
     limit: "int | None" = None,
     offset: "int | None" = None,
+    read: bool = False,
 ) -> "list[StoredSession]":
     column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
     if page_limit == 0:
@@ -679,7 +688,7 @@ def _list_sessions(
     )
 
     try:
-        with store._config.provide_connection() as conn:
+        with store._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, params)
@@ -794,6 +803,8 @@ def _select_events(
     session_id: str,
     after_timestamp: "datetime | None" = None,
     limit: "int | None" = None,
+    *,
+    read: bool = False,
 ) -> "list[StoredEvent]":
     if limit == 0:
         return []
@@ -816,7 +827,7 @@ def _select_events(
     """
 
     try:
-        with store._config.provide_connection() as conn:
+        with store._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, tuple(params))

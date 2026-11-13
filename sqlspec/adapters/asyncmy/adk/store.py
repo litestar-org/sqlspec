@@ -9,6 +9,7 @@ from sqlspec.adapters.asyncmy.core import format_identifier, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -81,9 +82,9 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AsyncmyConfig") -> None:
+    def __init__(self, config: "AsyncmyConfig", *, read_config: "AsyncmyConfig | None" = None) -> None:
         """Initialize AsyncMy ADK store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -142,7 +143,8 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -154,7 +156,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """Get session by scoped identifiers."""
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=renew_for is not None) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -219,7 +221,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -353,7 +355,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -565,9 +567,9 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AsyncmyConfig") -> None:
+    def __init__(self, config: "AsyncmyConfig", *, read_config: "AsyncmyConfig | None" = None) -> None:
         """Initialize AsyncMy memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -708,7 +710,7 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
