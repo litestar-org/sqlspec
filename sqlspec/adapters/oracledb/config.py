@@ -34,6 +34,7 @@ from sqlspec.adapters.oracledb.core import (
     VALID_ORACLE_DRIVER_FEATURE_KEYS,
     OracleAcquireOptions,
     OracleEndpoint,
+    OracleEndUserSecurityConfig,
     OracleSessionContextConfig,
     OracleTopologyConfig,
     apply_driver_features,
@@ -97,6 +98,7 @@ __all__ = (
     "OracleAsyncConfig",
     "OracleConnectionParams",
     "OracleDriverFeatures",
+    "OracleEndUserSecurityConfig",
     "OracleEndpoint",
     "OraclePoolBoundary",
     "OraclePoolParams",
@@ -194,7 +196,7 @@ class OracleConnectionParams(TypedDict):
     """Pool session state tag requested when acquiring a connection."""
     matchanytag: NotRequired[bool]
     """Allow acquiring a pooled connection with a different tag when an exact match is unavailable."""
-    appcontext: NotRequired[list[OracleAppContext]]
+    appcontext: NotRequired[Sequence[OracleAppContext] | Mapping[str, Mapping[str, str]]]
     """Initial ``(namespace, name, value)`` application context entries set on connect."""
     sharding_key: NotRequired[Sequence[Any]]
     """Primary shard key forwarded as native ``shardingkey``."""
@@ -912,6 +914,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
+            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
             "OracleAcquireOptions": OracleAcquireOptions,
             "OraclePluginName": OraclePluginName,
             "OraclePoolBoundary": OraclePoolBoundary,
@@ -1418,6 +1421,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
+            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
             "OracleAcquireOptions": OracleAcquireOptions,
             "OraclePluginName": OraclePluginName,
             "OraclePoolBoundary": OraclePoolBoundary,
