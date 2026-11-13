@@ -511,9 +511,10 @@ def _oracle_checkout_state(
     if priority_type is not None:
         baseline = config.connection_config.get("transaction_priority")
         if baseline is None:
-            candidate = getattr(connection, "transaction_priority", None)
-            if isinstance(candidate, priority_type):
-                baseline = candidate
+            with contextlib.suppress(oracledb.NotSupportedError):
+                candidate = getattr(connection, "transaction_priority", None)
+                if isinstance(candidate, priority_type):
+                    baseline = candidate
     requested = options.transaction_priority
     if requested is None:
         requested = config.connection_config.get("transaction_priority")

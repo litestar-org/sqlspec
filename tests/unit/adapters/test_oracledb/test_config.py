@@ -1736,3 +1736,30 @@ async def test_session_release_rolls_back_forgotten_sessionless_before_hooks(
     else:
         assert events[-1] == "clear"
         pool.release.assert_called_once_with(connection)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_default_checkout_works_when_server_rejects_priority_probe(mode: str) -> None:
+    import oracledb
+
+    class OlderServerConnection:
+        thin = True
+
+        @property
+        def transaction_priority(self) -> Any:
+            raise oracledb.NotSupportedError("DPY-3043: database does not support transaction priority")
+
+    connection = OlderServerConnection()
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=connection) if mode == "async" else Mock(return_value=connection)
+    pool.release = AsyncMock() if mode == "async" else Mock()
+    config_type = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_type(connection_instance=pool)
+    if mode == "async":
+        async with cast("Any", config.provide_session()) as session:
+            assert session.connection is connection
+        pool.release.assert_awaited_once_with(connection)
+    else:
+        with cast("Any", config.provide_session()) as session:
+            assert session.connection is connection
+        pool.release.assert_called_once_with(connection)

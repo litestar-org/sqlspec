@@ -936,6 +936,34 @@ def extract_pipeline_single_row(pipeline_result: Any) -> tuple[Any, ...] | None:
     return tuple(rows[0]) if rows else None
 
 
+def _copy_oracle_session_context(
+    config: "OracleSessionContextConfig", *, contexts: Any, edition: Any
+) -> "OracleSessionContextConfig":
+    return OracleSessionContextConfig(
+        contexts=contexts,
+        edition=edition,
+        module=config.module,
+        action=config.action,
+        client_identifier=config.client_identifier,
+        ecid=config.ecid,
+        time_zone=config.time_zone,
+        nls_parameters=config.nls_parameters,
+        ebs_apps_initialize=config.ebs_apps_initialize,
+        mo_global_policy=config.mo_global_policy,
+        apex_session=config.apex_session,
+        reset_package=config.reset_package,
+        clear_identifier=config.clear_identifier,
+        clear_context_namespaces=config.clear_context_namespaces,
+        apex_detach=config.apex_detach,
+        reset_on_release=config.reset_on_release,
+        clientinfo=config.clientinfo,
+        current_schema=config.current_schema,
+        dbop=config.dbop,
+        transaction_priority=config.transaction_priority,
+        end_user_security=config.end_user_security,
+    )
+
+
 def prepare_session_checkout_pipeline(
     connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> tuple[str | None, dict[str, Any]]:
@@ -955,13 +983,7 @@ def prepare_session_checkout_pipeline(
         apply_end_user_security_checkout(connection, resolved.end_user_security)
     contexts = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
     if callable(resolved.contexts):
-        hook_values: dict[str, Any] = {
-            slot: getattr(resolved, slot)
-            for slot in OracleSessionContextConfig.__slots__
-            if slot != "context_attributes"
-        }
-        hook_values["contexts"] = contexts
-        resolved = OracleSessionContextConfig(**hook_values)
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=resolved.edition)
     if contexts:
         for namespace, attrs in contexts.items():
             if namespace.upper() == "CLIENTCONTEXT":
@@ -977,13 +999,7 @@ def prepare_session_checkout_pipeline(
     edition = _resolve_callable_or_str(resolved.edition)
     actual = getattr(connection, "edition", None)
     if edition is not None and isinstance(actual, str) and edition.upper() == actual.upper():
-        hook_values = {
-            slot: getattr(resolved, slot)
-            for slot in OracleSessionContextConfig.__slots__
-            if slot != "context_attributes"
-        }
-        hook_values["edition"] = None
-        resolved = OracleSessionContextConfig(**hook_values)
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=None)
     plsql, binds, piggybacks = _build_session_checkout_plan(resolved, skip_alter_session=skip_alter_session)
     for name, value in piggybacks.items():
         if name == "econtext_id" and connection_is_thin(connection):
@@ -1005,13 +1021,7 @@ def prepare_session_release_pipeline(
         clear_end_user_security_release(connection)
     contexts = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
     if callable(resolved.contexts):
-        hook_values: dict[str, Any] = {
-            slot: getattr(resolved, slot)
-            for slot in OracleSessionContextConfig.__slots__
-            if slot != "context_attributes"
-        }
-        hook_values["contexts"] = contexts
-        resolved = OracleSessionContextConfig(**hook_values)
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=resolved.edition)
     namespaces = set(resolved.clear_context_namespaces)
     if resolved.reset_on_release and contexts:
         namespaces.update(contexts)
@@ -2832,9 +2842,11 @@ def validate_oracle_drcp_and_mode_constraints(
         if thick or plain_tcp:
             msg = "Oracle Deep Data Security requires Thin mode over TCPS"
             raise ImproperConfigurationError(msg)
-    if values.get("pool_name") is not None and not str(values["pool_name"]).strip():
-        msg = "Oracle pool_name must be nonempty"
-        raise ImproperConfigurationError(msg)
+    if values.get("pool_name") is not None:
+        name = values["pool_name"]
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_$#.-]+", name):
+            msg = "Oracle pool_name must be a nonempty TNS-safe token"
+            raise ImproperConfigurationError(msg)
     return config
 
 
