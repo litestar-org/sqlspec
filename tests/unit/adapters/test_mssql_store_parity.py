@@ -59,8 +59,14 @@ def test_adk_session_list_query_matches_modulo_placeholder(monkeypatch: "pytest.
         calls["pymssql"] = (sql, tuple(params))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture_mssql)
-    monkeypatch.setattr(PymssqlADKStore, "_execute_fetchall", capture_pymssql)
+    for config, capture in ((mssql_cfg, capture_mssql), (pymssql_cfg, capture_pymssql)):
+        connection = MagicMock()
+        cursor = connection.cursor.return_value
+        cursor.execute.side_effect = lambda sql, params=(), capture=capture: capture(None, sql, params)
+        cursor.fetchall.return_value = []
+        provider = MagicMock()
+        provider.return_value.__enter__.return_value = connection
+        monkeypatch.setattr(type(config), "provide_connection", provider)
     MssqlPythonADKStore(mssql_cfg).list_sessions("app", "u1", limit=10, offset=20)
     PymssqlADKStore(pymssql_cfg).list_sessions("app", "u1", limit=10, offset=20)
 

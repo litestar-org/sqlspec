@@ -15,6 +15,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -180,8 +181,10 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "MysqlConnectorAsyncConfig", *, read_config: "MysqlConnectorAsyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -249,7 +252,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 await cursor.close()
             await conn.commit()
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -260,7 +264,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     ) -> "StoredSession | None":
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=renew_for is not None) as conn:
                 cursor = await conn.cursor()
                 try:
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -325,7 +329,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         )
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -455,7 +459,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -562,8 +566,10 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "MysqlConnectorSyncConfig", *, read_config: "MysqlConnectorSyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -633,7 +639,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-        result = self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -645,7 +652,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         """Get session by ID."""
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=renew_for is not None) as conn:
                 cursor = conn.cursor()
                 try:
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -711,7 +718,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)
@@ -847,7 +854,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, tuple(params))
@@ -963,8 +970,10 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "MysqlConnectorAsyncConfig", *, read_config: "MysqlConnectorAsyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -1107,7 +1116,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 cursor = await conn.cursor()
                 try:
                     await cursor.execute(sql, params)
@@ -1204,8 +1213,10 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "MysqlConnectorSyncConfig", *, read_config: "MysqlConnectorSyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
         driver_features = getattr(config, "driver_features", None)
         features = driver_features if isinstance(driver_features, Mapping) else {}
         serializer = features.get("json_serializer")
@@ -1351,7 +1362,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             params = (*scope_params, f"%{query}%", limit_value)
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=False) as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, params)

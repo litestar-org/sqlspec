@@ -50,8 +50,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "MssqlPythonConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "MssqlPythonConfig", *, read_config: "MssqlPythonConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
@@ -123,6 +123,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -131,6 +132,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 WHERE app_name = ? AND user_id = ? AND id = ?
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
@@ -169,7 +171,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
@@ -236,7 +238,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
@@ -410,21 +412,23 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchone(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
+    ) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             if commit:
                 conn.commit()
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -439,8 +443,8 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "MssqlPythonConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "MssqlPythonConfig", *, read_config: "MssqlPythonConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
@@ -553,7 +557,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         WHERE {where_scope} AND content_text LIKE ? ESCAPE N'\\'
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"), read=True)
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -632,8 +636,8 @@ END;
             return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 

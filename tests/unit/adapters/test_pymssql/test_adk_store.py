@@ -172,8 +172,9 @@ def test_pymssql_adk_search_entries_escapes_tsql_like_wildcards_and_rolls_back_o
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(PymssqlADKMemoryStore, "_execute_fetchall", capture)
-    store = PymssqlADKMemoryStore(_mock_config({"native_json": False}))
+    config = _mock_config({"native_json": False})
+    _capture_cursor(config, capture)
+    store = PymssqlADKMemoryStore(config)
     store.search_entries(r"50%_off[1]\test", "app", "u1", limit=5)
 
     sql, params = calls[0]
@@ -225,5 +226,12 @@ def _session_store_with_capture(
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(PymssqlADKStore, "_execute_fetchall", capture)
-    return PymssqlADKStore(_mock_config()), calls
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    return PymssqlADKStore(config), calls
+
+
+def _capture_cursor(config: MagicMock, capture: Any) -> None:
+    cursor = config.provide_connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): capture(None, sql, params)
+    cursor.fetchall.return_value = []

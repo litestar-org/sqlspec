@@ -204,8 +204,9 @@ def test_mssql_python_adk_memory_store_search_entries(monkeypatch: "pytest.Monke
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
-    store = MssqlPythonADKMemoryStore(_mock_config())
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    store = MssqlPythonADKMemoryStore(config)
     results = store.search_entries("latte", "app", "u1", limit=5, scope_filter="user")
 
     assert results == []
@@ -298,8 +299,9 @@ def test_mssql_python_adk_search_entries_escapes_tsql_like_wildcards(monkeypatch
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
-    store = MssqlPythonADKMemoryStore(_mock_config())
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    store = MssqlPythonADKMemoryStore(config)
     store.search_entries(r"50%_off[1]\test", "app", "u1", limit=5)
 
     sql, params = calls[0]
@@ -402,8 +404,9 @@ def _session_store_with_capture(
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture)
-    return MssqlPythonADKStore(_mock_config()), calls
+    config = _mock_config()
+    _capture_cursor(config, capture)
+    return MssqlPythonADKStore(config), calls
 
 
 def test_insert_memory_entries_batches_with_executemany() -> None:
@@ -444,3 +447,9 @@ def test_search_entries_raises_improper_configuration_on_embedding() -> None:
     mem_store = MssqlPythonADKMemoryStore(mem_config)
     with pytest.raises(ImproperConfigurationError, match="Vector embeddings are not configured"):
         mem_store.search_entries("test", "app", "user", embedding=[0.1, 0.2])
+
+
+def _capture_cursor(config: MagicMock, capture: Any) -> None:
+    cursor = config.provide_connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): capture(None, sql, params)
+    cursor.fetchall.return_value = []
