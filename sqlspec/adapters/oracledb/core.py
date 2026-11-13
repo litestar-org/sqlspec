@@ -242,6 +242,7 @@ __all__ = (
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
+    "normalize_oracle_config_dsn",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "read_oracle_lob_async",
@@ -2313,6 +2314,30 @@ def build_duality_etag_update_sql(
     )
 
 
+def normalize_oracle_config_dsn(dsn: str) -> str:
+    """Normalize file and centralized configuration URI schemes."""
+    scheme, separator, payload = dsn.partition("://")
+    normalized = scheme.lower()
+    if not separator or (normalized != "file" and not normalized.startswith("config-")):
+        return dsn
+    if normalized in {"config-aws", "config-gcp"}:
+        alternatives = (
+            "config-awss3:// or config-awssecretsmanager://"
+            if normalized == "config-aws"
+            else "config-gcpstorage:// or config-gcpsecretmanager://"
+        )
+        msg = f"Invalid Oracle config provider {scheme!r}; use {alternatives}"
+        raise ImproperConfigurationError(msg)
+    if not payload:
+        msg = "Oracle configuration URI requires a nonempty payload"
+        raise ImproperConfigurationError(msg)
+    if normalized == "file":
+        normalized = "config-file"
+        if payload.startswith("localhost/"):
+            payload = payload[len("localhost") :]
+    return f"{normalized}://{payload}"
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build a normalized connection configuration dictionary.
 
@@ -2347,7 +2372,22 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     user_alias = config.pop("username", None)
     if "user" not in config and user_alias is not None:
         config["user"] = user_alias
+    if isinstance(config.get("dsn"), str):
+        config["dsn"] = normalize_oracle_config_dsn(config["dsn"])
     _apply_ora_directory_resolution(config, tns_alias=tns_alias)
+    dsn = config.get("dsn", "")
+    if (
+        isinstance(dsn, str)
+        and dsn.startswith("config-")
+        and "://" in dsn
+        and (
+            bool(config.get("thick_mode"))
+            or config.get("lib_dir") is not None
+            or bool(config.get("soda_metadata_cache"))
+            or not oracledb_module.is_thin_mode()
+        )
+    ):
+        config.setdefault("thick_mode_dsn_passthrough", False)
     return config
 
 

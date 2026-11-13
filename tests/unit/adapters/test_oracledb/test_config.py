@@ -1293,3 +1293,100 @@ def test_oracle_tenant_strategy_public_exports(name: str) -> None:
 
     assert getattr(adapter, name) is getattr(tenant, name)
     assert name in adapter.__all__
+
+
+@pytest.mark.parametrize(
+    ("dsn", "expected"),
+    [
+        ("file:///etc/ora/C.json?key=App", "config-file:///etc/ora/C.json?key=App"),
+        ("file://localhost/etc/c.json", "config-file:///etc/c.json"),
+        ("file://c.json", "config-file://c.json"),
+        ("CONFIG-AWSS3://Bucket/Key", "config-awss3://Bucket/Key"),
+        ("CONFIG-VAULT://Secret", "config-vault://Secret"),
+        ("localhost:1521/FREEPDB1", "localhost:1521/FREEPDB1"),
+    ],
+)
+def test_build_connection_config_normalizes_config_uris(dsn: str, expected: str) -> None:
+    assert build_connection_config({"dsn": dsn})["dsn"] == expected
+
+
+@pytest.mark.parametrize("dsn", ["file://", "config-file://", "CONFIG-AWS://bucket", "config-gcp://project"])
+def test_build_connection_config_rejects_invalid_config_uri(dsn: str) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config({"dsn": dsn})
+
+
+def test_build_connection_config_thick_dsn_passthrough() -> None:
+    assert build_connection_config({"dsn": "file://c.json", "thick_mode": True})["thick_mode_dsn_passthrough"] is False
+    assert (
+        build_connection_config({"dsn": "file://c.json", "thick_mode": True, "thick_mode_dsn_passthrough": True})[
+            "thick_mode_dsn_passthrough"
+        ]
+        is True
+    )
+
+
+def test_oracle_params_hooks_are_idempotent() -> None:
+    import importlib
+
+    from sqlspec.adapters.oracledb import register_oracle_params_hook, unregister_oracle_params_hook
+
+    registry = importlib.import_module("oracledb.base_impl").REGISTERED_PARAMS_HOOKS
+
+    def hook(params: object) -> None:
+        return None
+
+    try:
+        register_oracle_params_hook(hook)
+        register_oracle_params_hook(hook)
+        assert registry.count(hook) == 1
+    finally:
+        unregister_oracle_params_hook(hook)
+        unregister_oracle_params_hook(hook)
+    assert registry.count(hook) == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "install"),
+    [
+        ("oci_config_provider", "oci"),
+        ("aws_config_provider", "boto3"),
+        ("azure_config_provider", "azure-appconfiguration azure-keyvault-secrets azure-identity azure-core"),
+        ("gcp_config_provider", "google-cloud-storage google-cloud-secret-manager google-cloud-pubsub google-crc32c"),
+        ("oci_tokens", "oci cryptography requests"),
+        ("azure_tokens", "msal"),
+    ],
+)
+def test_oracle_plugins_missing_sdk_hints(monkeypatch: pytest.MonkeyPatch, name: str, install: str) -> None:
+    from sqlspec.adapters.oracledb import _plugins
+    from sqlspec.exceptions import MissingDependencyError
+
+    attempted: list[str] = []
+
+    def missing(module: str) -> None:
+        attempted.append(module)
+        raise ModuleNotFoundError(module)
+
+    monkeypatch.setattr(_plugins.importlib, "import_module", missing)
+    with pytest.raises(MissingDependencyError, match=install):
+        _plugins.ensure_oracle_plugin(name)
+    assert attempted == [f"oracledb.plugins.{name}"]
+
+
+def test_oracle_plugins_validation_and_cache_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.oracledb import _plugins
+
+    update = Mock()
+    monkeypatch.setattr(_plugins.oracledb, "update_config_cache", update)
+    _plugins.ensure_oracle_config_plugins(dsn="file://c.json")
+    _plugins.ensure_oracle_config_plugins(dsn="config-vault://secret")
+    _plugins.refresh_oracle_config_cache("file://c.json", remove_permanently=True)
+    update.assert_called_once_with("config-file://c.json", remove_permanently=True)
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.ensure_oracle_config_plugins(plugins="oci_tokens")
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.ensure_oracle_plugin("unknown")
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.register_oracle_protocol("", None)
+    _plugins.register_oracle_protocol("config-testmissing", None)
+    _plugins.register_oracle_protocol("config-testmissing", None)

@@ -1,5 +1,11 @@
 """OracleDB database adapter for SQLSpec."""
 
+from sqlspec.adapters.oracledb._plugins import (
+    OraclePluginName,
+    register_oracle_params_hook,
+    register_oracle_protocol,
+    unregister_oracle_params_hook,
+)
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
@@ -76,6 +82,7 @@ __all__ = (
     "OracleEndpoint",
     "OracleJson",
     "OracleOutputConverter",
+    "OraclePluginName",
     "OraclePoolParams",
     "OracleSessionContextConfig",
     "OracleSyncConfig",
@@ -111,5 +118,8 @@ __all__ = (
     "oracle_df_to_arrow_table",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "register_oracle_params_hook",
+    "register_oracle_protocol",
     "sanitize_oracle_text_query",
+    "unregister_oracle_params_hook",
 )
