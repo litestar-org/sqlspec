@@ -520,6 +520,9 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
+        if getattr(config, "is_replica", False):
+            msg = "Migrations cannot run against a read replica configuration; use the primary configuration instead"
+            raise MigrationError(msg)
         raw_features = getattr(config, "driver_features", None)
         driver_features = raw_features if isinstance(raw_features, dict) else {}
         direct_dsn = driver_features.get("direct_dsn")
