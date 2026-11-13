@@ -84,8 +84,7 @@ def oracle_aq_privileges(oracle_26ai_service: OracleService) -> None:
     """Grant the application user privileges required by Oracle AQ tests."""
     app_user = oracle_26ai_service.user
     exit_code, output = oracle_26ai_service.exec_sql(
-        f"GRANT aq_administrator_role, aq_user_role TO {app_user};\n"
-        f"GRANT EXECUTE ON dbms_aq TO {app_user};",
+        f"GRANT aq_administrator_role, aq_user_role TO {app_user};\nGRANT EXECUTE ON dbms_aq TO {app_user};",
         user="system",
     )
     if exit_code != 0:
@@ -198,9 +197,7 @@ def _oracle_pool_params(oracle_service: OracleService) -> "OraclePoolParams":
     )
 
 
-def _oracle_adb_pool_params(
-    oracle_adb_service: OracleADBService, wallet_zip_path: "Path"
-) -> "OraclePoolParams":
+def _oracle_adb_pool_params(oracle_adb_service: OracleADBService, wallet_zip_path: "Path") -> "OraclePoolParams":
     return cast(
         "OraclePoolParams",
         {

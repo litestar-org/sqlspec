@@ -11,6 +11,18 @@ from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb.core import normalize_oracle_config_dsn
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 
+__all__ = (
+    "OraclePluginName",
+    "ensure_oracle_config_plugins",
+    "ensure_oracle_plugin",
+    "refresh_oracle_config_cache",
+    "register_oracle_params_hook",
+    "register_oracle_protocol",
+    "resolve_oracle_dsn_plugin",
+    "unregister_oracle_params_hook",
+)
+
+
 OraclePluginName: TypeAlias = Literal[
     "oci_config_provider",
     "aws_config_provider",

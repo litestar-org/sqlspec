@@ -241,8 +241,7 @@ def test_bigquery_replica_preserves_explicit_storage_client_provider() -> None:
         return object()
 
     primary = BigQueryConfig(
-        connection_config={"project": "writer"},
-        driver_features={"_storage_write_client_provider": client_provider},
+        connection_config={"project": "writer"}, driver_features={"_storage_write_client_provider": client_provider}
     )
     replica = primary.derive_pool(project="reader")
     assert replica.driver_features["_storage_write_client_provider"] is client_provider

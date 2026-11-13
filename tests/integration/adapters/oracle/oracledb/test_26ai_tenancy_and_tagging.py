@@ -210,7 +210,9 @@ async def test_config_file_uri_and_refresh_config_cache(
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_auto_session_state_tagging_and_thin_release_hygiene(mode: str, oracle_26ai_service: OracleService) -> None:
+async def test_auto_session_state_tagging_and_thin_release_hygiene(
+    mode: str, oracle_26ai_service: OracleService
+) -> None:
     hook = OracleSessionContextConfig(time_zone="UTC")
     assert synthesize_session_state_tag(hook, explicit_tag="ROLE=ANALYST") == "ROLE=ANALYST;TIME_ZONE=UTC"
     config = _config(mode, oracle_26ai_service, session_context_hook=hook, enable_auto_state_tagging=True)
