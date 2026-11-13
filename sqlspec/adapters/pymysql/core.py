@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 __all__ = (
     "PyMysqlStreamSource",
     "_resolve_column_types",
-    "append_read_only_init_command",
     "apply_driver_features",
     "build_gtid_wait_query",
     "build_insert_statement",
@@ -751,23 +750,6 @@ def merge_derive_overrides(
     if clear_pool_name and "pool_name" not in overrides:
         result.pop("pool_name", None)
     return result
-
-
-def append_read_only_init_command(existing: str | None) -> str:
-    """Append session read-only mode once.
-
-    Args:
-        existing: Existing initialization SQL.
-
-    Returns:
-        SQL preserving existing initialization statements.
-    """
-    command = "SET SESSION TRANSACTION READ ONLY"
-    if not existing:
-        return command
-    if command in " ".join(existing.upper().split()):
-        return existing
-    return existing.rstrip().rstrip(";") + "; " + command
 
 
 def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:

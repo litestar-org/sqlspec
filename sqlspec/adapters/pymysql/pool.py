@@ -35,6 +35,7 @@ class PyMysqlConnectionPool:
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
+        "_read_only",
         "_recycle_seconds",
         "_registry_lock",
         "_thread_local",
@@ -47,6 +48,7 @@ class PyMysqlConnectionPool:
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[PyMysqlConnection], None] | None" = None,
         connection_factory: "Callable[[], PyMysqlConnection] | None" = None,
+        read_only: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -56,9 +58,11 @@ class PyMysqlConnectionPool:
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
             connection_factory: Optional factory for custom connection creation
+            read_only: Initialize each connection in session read-only mode
         """
         self._connection_parameters = connection_parameters
         self._connection_factory = connection_factory
+        self._read_only = read_only
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
         self._connection_threads: dict[PyMysqlConnection, threading.Thread] = {}
@@ -89,13 +93,16 @@ class PyMysqlConnectionPool:
         else:
             connection = _pymysql_connect(**self._connection_parameters)
 
-        if self._on_connection_create is not None:
-            try:
+        try:
+            if self._read_only:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET SESSION TRANSACTION READ ONLY")
+            if self._on_connection_create is not None:
                 self._on_connection_create(connection)
-            except BaseException:
-                with contextlib.suppress(Exception):
-                    connection.close()
-                raise
+        except BaseException:
+            with contextlib.suppress(Exception):
+                connection.close()
+            raise
 
         return connection
 

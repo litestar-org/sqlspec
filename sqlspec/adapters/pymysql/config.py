@@ -15,7 +15,6 @@ from sqlspec.adapters.pymysql._typing import (
     PyMysqlSSCursor,
 )
 from sqlspec.adapters.pymysql.core import (
-    append_read_only_init_command,
     apply_driver_features,
     default_statement_config,
     merge_derive_overrides,
@@ -174,6 +173,8 @@ class PyMysqlConnectionParams(TypedDict):
 class PyMysqlPoolParams(PyMysqlConnectionParams):
     """PyMySQL pool parameters."""
 
+    read_only: NotRequired[bool]
+    """Initialize each connection in session read-only mode after native initialization."""
     pool_recycle_seconds: NotRequired[int]
     """Maximum connection age in seconds before recycling pooled PyMySQL connections."""
     health_check_interval: NotRequired[float]
@@ -335,10 +336,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
         connection.update(values)
         read_only = connection.pop("read_only", read_only)
-        if read_only is not False:
-            connection["init_command"] = append_read_only_init_command(
-                connection.get("init_command", self.connection_config.get("init_command"))
-            )
+        connection["read_only"] = read_only is not False
         forwarded["connection_config_overrides"] = connection
         return forwarded
 
@@ -461,6 +459,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
+        read_only = config.pop("read_only", False)
         connection_factory = None
         if self.driver_features.get("enable_cloud_sql", False):
             connection_factory = self._setup_cloud_sql_connector(config)
@@ -471,6 +470,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
                 health_check_interval=health_check,
                 on_connection_create=self._user_connection_hook,
                 connection_factory=connection_factory,
+                read_only=read_only,
             )
         except BaseException:
             if self._cloud_sql_connector is not None:

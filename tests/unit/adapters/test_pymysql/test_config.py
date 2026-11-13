@@ -281,13 +281,18 @@ def test_pool_checked_out_tracks_acquire_and_release_and_retires_unbuffered() ->
         pool.close()
 
 
-def test_pool_new_connection_closes_connection_when_hook_raises() -> None:
+@pytest.mark.parametrize("failure_stage", ["read_only", "hook"])
+def test_pool_new_connection_closes_connection_when_initialization_raises(failure_stage: str) -> None:
     raw_conn = MagicMock(server_status=0)
+    if failure_stage == "read_only":
+        raw_conn.cursor.return_value.__enter__.return_value.execute.side_effect = RuntimeError("hook boom")
 
     def _bad_hook(_conn: object) -> None:
         raise RuntimeError("hook boom")
 
-    pool = PyMysqlConnectionPool({}, on_connection_create=_bad_hook, connection_factory=lambda: raw_conn)
+    pool = PyMysqlConnectionPool(
+        {}, on_connection_create=_bad_hook, connection_factory=lambda: raw_conn, read_only=failure_stage == "read_only"
+    )
     try:
         with pytest.raises(RuntimeError, match="hook boom"):
             pool.acquire()
@@ -352,7 +357,7 @@ def test_pymysqlconfig_replica_shorthands_preserve_overrides() -> None:
     assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
     assert replicas[1].connection_config["host"] == "standby"
     assert replicas[1].connection_config["port"] == 3308
-    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert replicas[0].connection_config["read_only"] is True
     assert config.connection_config["host"] == "writer"
 
 
@@ -373,7 +378,7 @@ def test_pymysqlconfig_explicit_read_write_replica_preserves_init_command() -> N
     config = PyMysqlConfig(replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}])
     replica = config.replica_groups["default"].configs[0]
     assert replica.connection_config["init_command"] == "SET @probe = 1"
-    assert "read_only" not in replica.connection_config
+    assert replica.connection_config["read_only"] is False
 
 
 def test_pymysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
