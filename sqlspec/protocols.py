@@ -81,6 +81,7 @@ __all__ = (
     "PipelineCapableProtocol",
     "QueryResultProtocol",
     "ReadableProtocol",
+    "ReplicaRoutableConfigProtocol",
     "SQLBuilderProtocol",
     "SpanAttributeProtocol",
     "SpannerParamTypesProtocol",
@@ -1206,3 +1207,29 @@ class AsyncDataDictionaryProtocol(Protocol):
     ) -> "list[ForeignKeyMetadata]": ...
 
     def list_available_features(self) -> "list[str]": ...
+
+
+@runtime_checkable
+class ReplicaRoutableConfigProtocol(Protocol):
+    """Structural contract for configuration-level replica read routing."""
+
+    @property
+    def is_replica(self) -> bool: ...
+
+    @property
+    def has_replicas(self) -> bool: ...
+
+    @property
+    def replica_groups(self) -> "Mapping[str, Any]": ...
+
+    def provide_read_connection(self, *args: Any, bind_group: str | None = None, **kwargs: Any) -> Any: ...
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: Any = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> Any: ...
