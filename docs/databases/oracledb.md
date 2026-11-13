@@ -226,6 +226,7 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 <!-- GENERATED:START config-table:sqlspec.adapters.oracledb.config.OracleDriverFeatures -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `retry_on_standby_lag` | `bool` | - | Allow primary fallback on standby checkout lag or switchover. |
 | `plugins` | `Sequence[OraclePluginName or str]` | - | Optional cloud configuration or token plugins imported lazily. |
 | `params_hooks` | `Sequence[Callable[[Any], None]]` | - | Native parameter hooks registered idempotently before connecting. |
 | `enable_auto_state_tagging` | `bool` | `True` | Synthesize and reuse Thick pool session state tags (defaults to True). |
