@@ -21,6 +21,7 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
     extract_pipeline_single_row,
     forget_oracle_session_state,
+    has_callable_alter_session_fields,
     prepare_session_checkout_pipeline,
     prepare_session_release_pipeline,
     synthesize_session_state_tag,
@@ -150,7 +151,7 @@ def resolve_tenant_shard_keys(
 
 
 def _skip_tenant_alter(connection: Any, hook: OracleSessionContextConfig) -> bool:
-    if getattr(connection, "thin", None) is not False:
+    if getattr(connection, "thin", None) is not False or has_callable_alter_session_fields(hook):
         return False
     tag = synthesize_session_state_tag(hook)
     return tag is not None and connection.tag == tag

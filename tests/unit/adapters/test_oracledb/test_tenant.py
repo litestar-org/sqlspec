@@ -2,7 +2,7 @@
 
 from inspect import isawaitable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -610,9 +610,15 @@ async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(
     )
     strategy_type = OracleSyncClientContextStrategy if mode == "sync" else OracleAsyncClientContextStrategy
     config_type = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
-    config = config_type(
-        connection_instance=pool,
-        driver_features={"tenant_strategy": strategy_type(variable_keys=("shard",)), "sharding_key_variable": "shard"},
+    config = cast(
+        "Any",
+        config_type(
+            connection_instance=cast("Any", pool),
+            driver_features={
+                "tenant_strategy": strategy_type(variable_keys=("shard",)),
+                "sharding_key_variable": "shard",
+            },
+        ),
     )
     with TenantContext.scope("acme", variables={"shard": "us"}):
         context = config.provide_connection()
@@ -671,8 +677,8 @@ async def test_async_tenant_pipeline_single_flight_and_clear_order(vpd: bool) ->
         if vpd
         else OracleAsyncIdentifierStrategy()
     )
-    state = await strategy.checkout(connection, TenantContextPayload("acme"))
-    await strategy.checkin(connection, state)
+    state = await strategy.checkout(cast("Any", connection), TenantContextPayload("acme"))
+    await strategy.checkin(cast("Any", connection), state)
     assert len(connection.flights) == 2
     assert connection.client_identifier is None
     connection.cursor.assert_not_called()
@@ -685,7 +691,7 @@ async def test_async_pipeline_verification_failure_physically_drops(failure: str
     connection.run_pipeline = AsyncMock(side_effect=[[SimpleNamespace(rows=[row])] for row in rows])
     pool = SimpleNamespace(thin=True, acquire=AsyncMock(return_value=connection), release=AsyncMock(), drop=AsyncMock())
     config = OracleAsyncConfig(
-        connection_instance=pool, driver_features={"tenant_strategy": OracleAsyncIdentifierStrategy()}
+        connection_instance=cast("Any", pool), driver_features={"tenant_strategy": OracleAsyncIdentifierStrategy()}
     )
     expected = TenantContextError if failure == "checkout" else TenantCleanupError
     with TenantContext.scope("acme"), pytest.raises(expected):
@@ -720,3 +726,33 @@ async def test_vpd_strategy_binds_declared_variables_positionally(mode: str) -> 
     assert setter == ("BEGIN APP.SET_TENANT(:tenant_id, :var_0); END;", {"tenant_id": "acme", "var_0": "us"})
     with pytest.raises(TenantContextError, match="Undeclared"):
         await _invoke(strategy.checkout, connection, TenantContextPayload("acme", variables={"hidden": "bad"}))
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("vpd", [False, True])
+async def test_matching_thick_tenant_tag_keeps_dynamic_session_settings(mode: str, vpd: bool) -> None:
+    connection = _vpd_connection(mode) if vpd else _connection(mode)
+    connection.thin = False
+    connection.tag = "EDITION=V2"
+    zones = iter(["UTC", "+01:00"])
+    hook = OracleSessionContextConfig(edition="V2", time_zone=lambda: next(zones))
+    strategy: Any
+    if vpd:
+        strategy_type = OracleAsyncVPDStrategy if mode == "async" else OracleSyncVPDStrategy
+        strategy = strategy_type(
+            set_procedure="app.ctx.set_tenant",
+            clear_procedure="app.ctx.clear_tenant",
+            namespace="tenant_ctx",
+            attribute="tenant_id",
+            hook=hook,
+        )
+    else:
+        identifier_type = OracleAsyncIdentifierStrategy if mode == "async" else OracleSyncIdentifierStrategy
+        strategy = identifier_type(hook)
+    for tenant in ("a", "b"):
+        state = await _invoke(strategy.checkout, connection, TenantContextPayload(tenant))
+        await _invoke(strategy.checkin, connection, state)
+    alters = [sql for sql, _ in connection.calls if "TIME_ZONE" in sql]
+    assert len(alters) == 2
+    assert "UTC" in alters[0]
+    assert "+01:00" in alters[1]

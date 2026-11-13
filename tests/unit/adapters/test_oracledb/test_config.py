@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 from oracledb import AuthMode, PoolGetMode, Purity
+from oracledb import Error as NativeOracleError
 
 from sqlspec.adapters.oracledb import (
     OracleEndpoint,
@@ -38,7 +39,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 class _StubConnection:
@@ -1521,12 +1522,12 @@ async def test_thin_checkout_never_accesses_tag(async_mode: bool) -> None:
         pool.release = AsyncMock()
         config = OracleAsyncConfig(connection_instance=pool)
         async with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
-            assert acquired is connection
+            assert cast("object", acquired) is connection
     else:
         pool.acquire.return_value = connection
         config = OracleSyncConfig(connection_instance=pool)
         with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
-            assert acquired is connection
+            assert cast("object", acquired) is connection
     pool.acquire.assert_called_once_with()
     pool.release.assert_called_once_with(connection)
 
@@ -1940,3 +1941,78 @@ async def test_oracle_query_time_standby_error_never_replays_on_primary(async_mo
     assert caught.value is native
     reader_pool.release.assert_called_once_with(connection)
     writer_pool.acquire.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("operation", ["rollback", "commit"])
+@pytest.mark.parametrize("native_error", [False, True])
+async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
+    async_mode: bool, operation: str, native_error: bool
+) -> None:
+    connection = MagicMock()
+    connection.thin = True
+    connection.begin_sessionless_transaction = AsyncMock(return_value=b"tx") if async_mode else Mock(return_value=b"tx")
+    failure = (
+        NativeOracleError("transaction cleanup failed") if native_error else RuntimeError("transaction cleanup failed")
+    )
+    expected_error = SQLSpecError if native_error else RuntimeError
+    connection.rollback = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    connection.commit = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection.cursor.return_value = cursor
+    cursor.execute = AsyncMock() if async_mode else Mock()
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    pool.release = AsyncMock() if async_mode else Mock()
+    pool.drop = AsyncMock() if async_mode else Mock()
+    config_type = OracleAsyncConfig if async_mode else OracleSyncConfig
+    config = cast(
+        "Any",
+        config_type(
+            connection_instance=pool,
+            driver_features={"session_context_hook": OracleSessionContextConfig(clear_identifier=True)},
+        ),
+    )
+    body = ValueError("request failed")
+    with pytest.raises(expected_error, match="transaction cleanup failed"):
+        if async_mode:
+            async with config.provide_session() as session:
+                if operation == "rollback":
+                    with pytest.raises(ValueError) as captured:
+                        async with session.sessionless_transaction():
+                            raise body
+                    assert captured.value is body
+                    assert any("cleanup" in note for note in body.__notes__)
+                else:
+                    await session.begin_sessionless_transaction()
+                    with pytest.raises(expected_error):
+                        await session.commit()
+        else:
+            with config.provide_session() as session:
+                if operation == "rollback":
+                    with pytest.raises(ValueError) as captured:
+                        with session.sessionless_transaction():
+                            raise body
+                    assert captured.value is body
+                    assert any("cleanup" in note for note in body.__notes__)
+                else:
+                    session.begin_sessionless_transaction()
+                    with pytest.raises(expected_error):
+                        session.commit()
+    pool.drop.assert_called_once_with(connection)
+    pool.release.assert_not_called()
+    cursor.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_signature_namespace_includes_both_sessionless_contexts(config_type: Any) -> None:
+    from sqlspec.adapters.oracledb import (
+        OracleAsyncSessionlessTransactionContext,
+        OracleSyncSessionlessTransactionContext,
+    )
+
+    namespace = config_type().get_signature_namespace()
+    assert namespace["OracleSyncSessionlessTransactionContext"] is OracleSyncSessionlessTransactionContext
+    assert namespace["OracleAsyncSessionlessTransactionContext"] is OracleAsyncSessionlessTransactionContext

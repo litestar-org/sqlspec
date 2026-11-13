@@ -421,6 +421,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_otel_tracing_enabled",
         "_row_metadata_cache",
         "_session_tracing_enabled",
+        "_sessionless_cleanup_error",
         "_sessionless_transaction_id",
         "_transaction_active",
     )
@@ -452,6 +453,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
         self._sessionless_transaction_id: bytes | None = None
+        self._sessionless_cleanup_error: BaseException | None = None
         self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
@@ -837,11 +839,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         try:
             self.connection.commit()
-        except OracleError as e:
-            raise create_mapped_exception(e) from e
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
         finally:
             self._transaction_active = False
-            self._sessionless_transaction_id = None
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -852,11 +860,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         try:
             self.connection.rollback()
-        except OracleError as e:
-            raise create_mapped_exception(e) from e
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
         finally:
             self._transaction_active = False
-            self._sessionless_transaction_id = None
 
     def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
@@ -1542,6 +1556,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_pipeline_support_reason",
         "_row_metadata_cache",
         "_session_tracing_enabled",
+        "_sessionless_cleanup_error",
         "_sessionless_transaction_id",
         "_transaction_active",
     )
@@ -1568,6 +1583,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
         self._sessionless_transaction_id: bytes | None = None
+        self._sessionless_cleanup_error: BaseException | None = None
         self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
@@ -1957,11 +1973,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         try:
             await self.connection.commit()
-        except OracleError as e:
-            raise create_mapped_exception(e) from e
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
         finally:
             self._transaction_active = False
-            self._sessionless_transaction_id = None
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -1972,11 +1994,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         try:
             await self.connection.rollback()
-        except OracleError as e:
-            raise create_mapped_exception(e) from e
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
         finally:
             self._transaction_active = False
-            self._sessionless_transaction_id = None
 
     async def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""

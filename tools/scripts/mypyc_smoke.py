@@ -1946,6 +1946,14 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
         result["compiled"] = all(is_compiled_module(module) for module in (core, tenant, common))
         if require_compiled and not result["compiled"]:
             raise AssertionError("Oracle core, tenant strategies and observability helpers must be native")
+        for config_type in (oracle.OracleSyncConfig, oracle.OracleAsyncConfig):
+            namespace = config_type().get_signature_namespace()
+            assert (
+                namespace["OracleSyncSessionlessTransactionContext"] is oracle.OracleSyncSessionlessTransactionContext
+            )
+            assert (
+                namespace["OracleAsyncSessionlessTransactionContext"] is oracle.OracleAsyncSessionlessTransactionContext
+            )
         options = oracle.OracleAcquireOptions(sharding_key=("tenant",), purity="SELF")
         assert options.sharding_key == ["tenant"]
         assert options == core.OracleAcquireOptions(sharding_key=["tenant"], purity="SELF")

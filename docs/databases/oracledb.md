@@ -276,19 +276,19 @@ Cloud modules load when needed. Install the provider's SDK too. A missing SDK ra
 
 #### Acquire options, sharding, and state tags
 
-Use `OracleAcquireOptions` to select a shard or request a pool tag for one checkout:
+Pass acquire keywords to select a shard or request a pool tag for one checkout:
 
 ```python
-from sqlspec.adapters.oracledb import OracleAcquireOptions, OracleSyncConfig
+from sqlspec.adapters.oracledb import OracleSyncConfig
 
 config = OracleSyncConfig(
     connection_config={"dsn": "db.example.internal/app", "user": "app", "password": "secret"}
 )
-with config.provide_session(acquire_options=OracleAcquireOptions(sharding_key=["acme"])) as session:
+with config.provide_session(sharding_key=["acme"]) as session:
     tenant_name = session.select_value("SELECT SYS_CONTEXT('USERENV', 'SESSION_USER') FROM DUAL")
 ```
 
-The providers also accept `sharding_key` and `super_sharding_key` directly. Direct client routing needs Thick mode and a sharded database. Thin mode omits native shard-key arguments; use the configured routing endpoint. Tenant configs can derive keys from `sharding_key_variable`, `super_sharding_key_variable`, a `shard_resolver`, or `use_tenant_id_as_sharding_key=True`. Select one primary shard source. The resolver receives the captured tenant payload before acquisition.
+The providers accept `sharding_key` and `super_sharding_key` directly. Direct client routing needs Thick mode and a sharded database. Thin mode omits native shard-key arguments; use the configured routing endpoint. Tenant configs can derive keys from `sharding_key_variable`, `super_sharding_key_variable`, a `shard_resolver`, or `use_tenant_id_as_sharding_key=True`. Select one primary shard source. The resolver receives the captured tenant payload before acquisition.
 
 Thick pools reuse session state through generated tags (`enable_auto_state_tagging=True`). Explicit tags take precedence. Thin pools never read or release a socket's Thick-only tag. Use `pool_boundary="transaction"` with tenant or stateful session hooks. Statement-boundary DRCP release would lose their state. Put an edition in `OracleSessionContextConfig` when also using `cclass`. Connect-time `edition` and `cclass` are rejected together.
 

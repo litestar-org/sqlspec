@@ -215,4 +215,3 @@ def _oracle_adb_pool_params(
             "retry_delay": 1,
         },
     )
-

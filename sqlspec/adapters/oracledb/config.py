@@ -19,10 +19,12 @@ from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnectionPool,
     OracleAsyncCursor,
     OracleAsyncSessionContext,
+    OracleAsyncSessionlessTransactionContext,
     OracleSyncConnection,
     OracleSyncConnectionPool,
     OracleSyncCursor,
     OracleSyncSessionContext,
+    OracleSyncSessionlessTransactionContext,
 )
 from sqlspec.adapters.oracledb._typing import OracleAuthMode as AuthMode
 from sqlspec.adapters.oracledb._typing import OraclePoolGetMode as PoolGetMode
@@ -700,21 +702,26 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
     def release_connection(self, _conn: OracleSyncConnection, **kwargs: Any) -> None:
         driver, self._driver = self._driver, None
-        if driver is not None and driver.sessionless_transaction_id is not None:
+        cleanup_error = driver._sessionless_cleanup_error if driver is not None else None
+        if driver is not None:
+            driver._sessionless_cleanup_error = None
+        if cleanup_error is None and driver is not None and driver.sessionless_transaction_id is not None:
             try:
                 driver.rollback()
             except BaseException as exc:
-                self._ctx._conn = None
-                if self._tenant_lease is not None:
-                    self._tenant_lease._connection = None
-                    self._tenant_lease._state = None
-                try:
-                    forget_oracle_session_state(_conn)
-                    self._config.connection_instance.drop(_conn)
-                except BaseException as drop_error:
-                    exc.add_note(f"Oracle connection disposal failed: {drop_error}")
-                _oracle_cleanup_error(kwargs.get("exc_val"), exc)
-                return
+                cleanup_error = exc
+        if cleanup_error is not None:
+            self._ctx._conn = None
+            if self._tenant_lease is not None:
+                self._tenant_lease._connection = None
+                self._tenant_lease._state = None
+            try:
+                forget_oracle_session_state(_conn)
+                self._config.connection_instance.drop(_conn)
+            except BaseException as drop_error:
+                cleanup_error.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(kwargs.get("exc_val"), cleanup_error)
+            return
         self._ctx.release_connection(_conn, **kwargs)
 
 
@@ -1045,6 +1052,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
         namespace = super().get_signature_namespace()
         namespace.update({
+            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
+            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
             "OracleAsyncConnection": OracleAsyncConnection,
             "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
             "OracleAsyncCursor": OracleAsyncCursor,
@@ -1281,22 +1290,27 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
         driver, self._driver = self._driver, None
-        if driver is not None and driver.sessionless_transaction_id is not None:
+        cleanup_error = driver._sessionless_cleanup_error if driver is not None else None
+        if driver is not None:
+            driver._sessionless_cleanup_error = None
+        if cleanup_error is None and driver is not None and driver.sessionless_transaction_id is not None:
             try:
                 await driver.rollback()
             except BaseException as exc:
-                self._ctx._connection = None
-                self._ctx._pool = None
-                if self._tenant_lease is not None:
-                    self._tenant_lease._connection = None
-                    self._tenant_lease._state = None
-                try:
-                    forget_oracle_session_state(_conn)
-                    await self._config.connection_instance.drop(_conn)
-                except BaseException as drop_error:
-                    exc.add_note(f"Oracle connection disposal failed: {drop_error}")
-                _oracle_cleanup_error(kwargs.get("exc_val"), exc)
-                return
+                cleanup_error = exc
+        if cleanup_error is not None:
+            self._ctx._connection = None
+            self._ctx._pool = None
+            if self._tenant_lease is not None:
+                self._tenant_lease._connection = None
+                self._tenant_lease._state = None
+            try:
+                forget_oracle_session_state(_conn)
+                await self._config.connection_instance.drop(_conn)
+            except BaseException as drop_error:
+                cleanup_error.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(kwargs.get("exc_val"), cleanup_error)
+            return
         await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
@@ -1626,6 +1640,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """
         namespace = super().get_signature_namespace()
         namespace.update({
+            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
+            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
             "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
             "OracleAsyncConnection": OracleAsyncConnection,
             "OracleAsyncConnectionPool": OracleAsyncConnectionPool,

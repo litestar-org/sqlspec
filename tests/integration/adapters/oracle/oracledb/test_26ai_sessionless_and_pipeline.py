@@ -151,7 +151,7 @@ async def test_transaction_priority_checkout_and_driver(mode: str, oracle_26ai_s
 
 
 async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
-    oracle_async_config: OracleAsyncConfig, oracle_18c_async_session: Any
+    oracle_async_config: OracleAsyncConfig, oracle_18c_async_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from opentelemetry.sdk.trace import TracerProvider
 
@@ -162,9 +162,21 @@ async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
         ObservabilityConfig(telemetry=TelemetryConfig(enable_spans=True, provider_factory=lambda: provider))
     )
     config = oracle_async_config
+    calls: list[tuple[str | None, str]] = []
+    native_setter = oracledb.AsyncConnection.set_opentelemetry_trace_context
+
+    def observe(connection: Any, traceparent: str | None, tracestate: str = "") -> None:
+        calls.append((traceparent, tracestate))
+        if traceparent is None:
+            native_setter(connection, None)
+        else:
+            native_setter(connection, traceparent, tracestate)
+
+    monkeypatch.setattr(oracledb.AsyncConnection, "set_opentelemetry_trace_context", observe)
     try:
         with provider.get_tracer(__name__).start_as_current_span("oracle-acceptance"):
-            assert get_w3c_trace_context()[0] is not None
+            expected = get_w3c_trace_context()
+            assert expected[0] is not None
             oracle_18c_async_session.attach_observability(runtime)
             assert oracle_18c_async_session.connection.supports_opentelemetry_tracing is False
             assert await oracle_18c_async_session.select_value("SELECT 1 FROM DUAL") == 1
@@ -176,6 +188,8 @@ async def test_opentelemetry_trace_context_26ai_supported_vs_18c_unsupported(
                     assert supported is True, session.connection.version
                 elif not supported:
                     pytest.skip(f"Oracle {session.connection.version} does not advertise native OTel tracing")
+                assert expected in calls
+            assert calls[-1] == (None, "")
     finally:
         await _invoke(config.close_pool)
         provider.shutdown()

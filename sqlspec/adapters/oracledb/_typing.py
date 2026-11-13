@@ -361,11 +361,14 @@ class OracleSyncSessionlessTransactionContext:
         if exc_type is None:
             self._driver.suspend_sessionless_transaction()
         else:
-            with contextlib.suppress(Exception):
+            try:
                 if self._rollback_on_error:
                     self._driver.rollback()
                 else:
                     self._driver.suspend_sessionless_transaction()
+            except BaseException as cleanup_error:
+                if exc_val is not None:
+                    exc_val.add_note(f"Oracle sessionless transaction cleanup failed: {cleanup_error}")
         return False
 
 
@@ -418,9 +421,12 @@ class OracleAsyncSessionlessTransactionContext:
         if exc_type is None:
             await self._driver.suspend_sessionless_transaction()
         else:
-            with contextlib.suppress(Exception):
+            try:
                 if self._rollback_on_error:
                     await self._driver.rollback()
                 else:
                     await self._driver.suspend_sessionless_transaction()
+            except BaseException as cleanup_error:
+                if exc_val is not None:
+                    exc_val.add_note(f"Oracle sessionless transaction cleanup failed: {cleanup_error}")
         return False
