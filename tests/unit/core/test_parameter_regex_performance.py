@@ -5,6 +5,8 @@ Tests regex efficiency, order dependency, and edge cases across all SQL dialects
 
 import time
 
+import pytest
+
 from sqlspec.core.parameters import ParameterValidator
 
 
@@ -218,3 +220,26 @@ def test_snowflake_spaced_paths_keep_linear_scan_and_real_bind() -> None:
     elapsed = time.perf_counter() - started
     assert [parameter.name for parameter in parameters] == ["id"]
     assert elapsed < 0.6
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect"),
+    [
+        ("SELECT :p " + "/* a " * 8000, None),
+        ("SELECT :p " + "/* a " * 8000, "postgres"),
+        ("SELECT :p " + "/* a " * 8000, "mysql"),
+        ("SELECT :p " + "/* a " * 8000, "snowflake"),
+        ("SELECT :p " + "".join(f"$t{index}$ x " for index in range(5000)), "postgres"),
+        ("SELECT :p " + "q'[ a " * 6000, "oracle"),
+        ("SELECT " + "a ? 'x' " * 5000, "postgres"),
+    ],
+)
+def test_unterminated_spans_scan_in_linear_time(sql: str, dialect: "str | None") -> None:
+    """Repeated unterminated comment and literal openers do not rescan the remaining text."""
+    validator = ParameterValidator(cache_max_size=0)
+
+    start = time.perf_counter()
+    validator.extract_parameters(sql, dialect=dialect)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.5

@@ -40,7 +40,34 @@ _BINARY_LITERAL_TEMPLATES: Final[dict[str | None, str]] = {
     "bigquery": "FROM_HEX('{}')",
     "spanner": "FROM_HEX('{}')",
     "duckdb": "UNHEX('{}')",
+    "db2": "BX'{}'",
+    "teradata": "'{}'XB",
 }
+_DIALECT_LITERAL_ALIASES: Final[dict[str, str]] = {
+    "mariadb": "mysql",
+    "postgresql": "postgres",
+    "cockroach": "postgres",
+    "cockroachdb": "postgres",
+    "mssql": "tsql",
+    "sqlserver": "tsql",
+    "sybase": "tsql",
+    "ase": "tsql",
+    "sqlanywhere": "tsql",
+    "vantage": "teradata",
+}
+_ANSI_LITERAL_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "spangres",
+    "sqlite",
+    "duckdb",
+    "oracle",
+    "tsql",
+    "db2",
+    "teradata",
+})
 
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
@@ -539,7 +566,10 @@ class ParameterConverter:
     def _format_literal(param_value: object | None, dialect: "str | None" = None) -> str:
         """Render a literal for the server's default SQL mode.
 
-        MySQL NO_BACKSLASH_ESCAPES stores doubled backslashes as two characters.
+        Negative numbers are parenthesized so a preceding minus operator never
+        forms a ``--`` comment marker. MySQL NO_BACKSLASH_ESCAPES stores doubled
+        backslashes as two characters. Backslash handling differs between
+        engines, so a string containing a backslash requires a dialect.
         """
         if param_value is None:
             return "NULL"
@@ -550,16 +580,34 @@ class ParameterConverter:
             if not finite:
                 msg = "Cannot embed a non-finite number in statically compiled SQL"
                 raise SQLSpecError(msg)
-            return str(param_value)
+            rendered = str(param_value)
+            return f"({rendered})" if rendered.startswith("-") else rendered
         if isinstance(param_value, int):
-            return str(param_value)
+            return f"({param_value})" if param_value < 0 else str(param_value)
+        normalized = dialect.strip().lower() if dialect else None
+        literal_dialect = _DIALECT_LITERAL_ALIASES.get(normalized, normalized) if normalized else None
         if isinstance(param_value, (bytes, bytearray, memoryview)):
-            template = _BINARY_LITERAL_TEMPLATES.get(dialect.lower() if dialect else None)
+            template = _BINARY_LITERAL_TEMPLATES.get(literal_dialect)
             if template is None:
                 msg = f"Cannot embed a bytes value in statically compiled SQL for dialect '{dialect}'"
                 raise SQLSpecError(msg)
             return template.format(bytes(param_value).hex())
-        return exp.Literal.string(str(param_value)).sql(dialect=dialect)
+        text = str(param_value)
+        if "\x00" in text:
+            msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+            raise SQLSpecError(msg)
+        if literal_dialect is None:
+            if "\\" in text:
+                msg = "Cannot embed a string containing a backslash in statically compiled SQL without a dialect"
+                raise SQLSpecError(msg)
+            return "'" + text.replace("'", "''") + "'"
+        if literal_dialect in _ANSI_LITERAL_DIALECTS:
+            return "'" + text.replace("'", "''") + "'"
+        try:
+            return exp.Literal.string(text).sql(dialect=literal_dialect)
+        except ValueError as exc:
+            msg = f"Cannot embed a string value in statically compiled SQL for dialect '{dialect}'"
+            raise SQLSpecError(msg) from exc
 
     def _embed_static_parameters(
         self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]", dialect: "str | None" = None
