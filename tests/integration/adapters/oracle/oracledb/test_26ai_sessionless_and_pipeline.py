@@ -93,6 +93,46 @@ async def test_sessionless_transaction_suspend_resume_commit_and_rollback(
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_execute_many_batches_suspend_and_resume_across_checkouts(
+    mode: str, oracle_26ai_service: OracleService
+) -> None:
+    """Suspend batched DML without committing, then resume it on a later checkout."""
+    config = _config(mode, oracle_26ai_service)
+    table = f"sl_batch_{uuid4().hex[:12]}"
+    try:
+        async with _session(config) as session:
+            await _invoke(session.execute, f"CREATE TABLE {table} (id NUMBER PRIMARY KEY)")
+            transaction_id = await _invoke(session.begin_sessionless_transaction)
+            result = await _invoke(
+                session.execute_many, f"INSERT INTO {table} VALUES (:1)", [(1,), (2,), (3,)], batch_size=2
+            )
+            assert result.rows_affected == 3
+            assert session.sessionless_transaction_id == transaction_id
+            suspended = await _invoke(
+                session.execute_many, f"INSERT INTO {table} VALUES (:1)", [(4,), (5,)], suspend_on_success=True
+            )
+            assert suspended.rows_affected == 2
+            assert session.sessionless_transaction_id is None
+        async with _session(config) as observer:
+            assert await _invoke(observer.select_value, f"SELECT COUNT(*) FROM {table}") == 0
+        async with _session(config) as resumed:
+            assert await _invoke(resumed.resume_sessionless_transaction, transaction_id) == transaction_id
+            await _invoke(resumed.commit)
+        async with _session(config) as observer:
+            assert await _invoke(observer.select, f"SELECT id FROM {table} ORDER BY id") == [
+                {"id": 1},
+                {"id": 2},
+                {"id": 3},
+                {"id": 4},
+                {"id": 5},
+            ]
+    finally:
+        async with _session(config) as session:
+            await _invoke(session.execute, f"DROP TABLE {table} PURGE")
+        await _invoke(config.close_pool)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
 @pytest.mark.parametrize("priority_scope", ["default", "checkout", "driver", "hook"])
 async def test_priority_cleanup_rolls_back_uncommitted_work(
     mode: str, priority_scope: str, oracle_26ai_service: OracleService

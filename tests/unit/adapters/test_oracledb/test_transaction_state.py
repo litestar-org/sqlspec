@@ -256,3 +256,50 @@ async def test_sessionless_transaction_validates_before_native_call(
     driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", SimpleNamespace()))
     with pytest.raises(ImproperConfigurationError):
         driver.sessionless_transaction(transaction_id, resume=resume)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("operation", ["begin", "resume", "suspend"])
+@pytest.mark.parametrize("failure", ["absent", "non_callable", "native_error"])
+async def test_sessionless_native_api_failure_preserves_attached_transaction(
+    mode: str, operation: str, failure: str
+) -> None:
+    from inspect import isawaitable
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    import oracledb
+
+    from sqlspec.exceptions import DeadlockError
+
+    native = AsyncMock if mode == "async" else Mock
+    connection = SimpleNamespace(
+        transaction_in_progress=False,
+        begin_sessionless_transaction=native(return_value=b"attached"),
+        resume_sessionless_transaction=native(return_value=b"attached"),
+        suspend_sessionless_transaction=native(),
+    )
+    driver = (OracleAsyncDriver if mode == "async" else OracleSyncDriver)(cast("Any", connection))
+    attached = driver.begin_sessionless_transaction()
+    if isawaitable(attached):
+        attached = await attached
+    assert attached == b"attached"
+    method_name = f"{operation}_sessionless_transaction"
+    native_error = oracledb.DatabaseError("ORA-00060: deadlock detected while waiting for resource")
+    if failure == "absent":
+        delattr(connection, method_name)
+    elif failure == "non_callable":
+        setattr(connection, method_name, None)
+    else:
+        setattr(connection, method_name, native(side_effect=native_error))
+    expected_error = DeadlockError if failure == "native_error" else oracledb.NotSupportedError
+    with pytest.raises(expected_error) as caught:
+        method = getattr(driver, method_name)
+        result = method() if operation == "suspend" else method(b"replacement")
+        if isawaitable(result):
+            await result
+    assert driver.sessionless_transaction_id == b"attached"
+    if failure == "native_error":
+        assert caught.value.__cause__ is native_error
+    else:
+        assert "26.1" in str(caught.value)
