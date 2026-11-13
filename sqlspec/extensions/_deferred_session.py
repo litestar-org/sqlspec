@@ -42,7 +42,7 @@ class DeferredAsyncSession:
     Once the connection is open, every attribute is read from the real driver session.
     """
 
-    __slots__ = ("_accessor", "_config", "_current", "_open")
+    __slots__ = ("_accessor", "_config", "_current", "_open", "_target_type")
 
     def __init__(
         self,
@@ -50,6 +50,8 @@ class DeferredAsyncSession:
         open_session: "Callable[[], Awaitable[Any]]",
         current_session: "Callable[[], Any | None]",
         accessor: str,
+        *,
+        target_type: type[Any] | None = None,
     ) -> None:
         """Bind the deferred session to one request and configuration.
 
@@ -66,6 +68,7 @@ class DeferredAsyncSession:
         self._open = open_session
         self._current = current_session
         self._accessor = accessor
+        self._target_type = target_type or config.driver_type
 
     async def resolve(self) -> Any:
         """Return the real driver session, checking out the request connection when needed.
@@ -82,7 +85,7 @@ class DeferredAsyncSession:
         session = self._current()
         if session is not None:
             return getattr(session, name)
-        driver_type = self._config.driver_type
+        driver_type = self._target_type
         try:
             static = inspect.getattr_static(driver_type, name)
         except AttributeError:

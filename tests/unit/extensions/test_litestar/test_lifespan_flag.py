@@ -65,7 +65,11 @@ def test_disable_di_and_manage_lifespan_combinations(
 ) -> None:
     app_config = _init_app(settings)
     assert len(app_config.lifespan) == int(manages_lifespan)
-    assert set(app_config.dependencies) == ({"db_session_0", "db_connection_0", "db_pool_0"} if registers_di else set())
+    assert set(app_config.dependencies) == (
+        {"db_session_0", "db_connection_0", "db_pool_0", "db_session_0_read", "db_connection_0_read", "db_pool_0_read"}
+        if registers_di
+        else set()
+    )
     assert len(app_config.before_send) == int(registers_di)
 
 
@@ -80,6 +84,12 @@ async def test_manage_lifespan_applies_per_config() -> None:
         "db_session_2",
         "db_connection_2",
         "db_pool_2",
+        "db_session_1_read",
+        "db_connection_1_read",
+        "db_pool_1_read",
+        "db_session_2_read",
+        "db_connection_2_read",
+        "db_pool_2_read",
     }
 
 

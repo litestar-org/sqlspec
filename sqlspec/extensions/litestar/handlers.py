@@ -6,6 +6,7 @@ This module stays uncompiled under mypyc because session providers combine
 __signature__/__annotations__ at runtime for dependency injection.
 """
 
+import asyncio
 import contextlib
 import inspect
 from collections.abc import AsyncGenerator, Callable, Mapping
@@ -182,13 +183,14 @@ def autocommit_handler_maker(
 
 
 def lifespan_handler_maker(
-    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str
+    config: "DatabaseConfigProtocol[Any, Any, Any]", pool_key: str, *, read_pool_key: str | None = None
 ) -> "Callable[[Litestar], AbstractAsyncContextManager[None]]":
     """Create lifespan handler for managing database connection pool lifecycle.
 
     Args:
         config: The database configuration object.
         pool_key: The key under which the connection pool will be stored in `app.state`.
+        read_pool_key: Optional application state key for replica groups.
 
     Returns:
         The lifespan handler function.
@@ -206,10 +208,14 @@ def lifespan_handler_maker(
         """
         db_pool: Any = await ensure_async_(config.create_pool)()
         app.state.update({pool_key: db_pool})
+        if read_pool_key is not None and config.has_replicas:
+            app.state.update({read_pool_key: config.replica_groups.get("default", config.replica_groups)})
         try:
             yield
         finally:
             app.state.pop(pool_key, None)
+            if read_pool_key is not None:
+                app.state.pop(read_pool_key, None)
             try:
                 await ensure_async_(config.close_pool)()
             except Exception as e:
@@ -392,7 +398,13 @@ async def _capture_connection_tenant(
     Returns:
         The request tenant for a tenant-enabled configuration, otherwise None.
     """
-    payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
+    cache_key = f"_sqlspec_resolved_tenant_{id(config)}"
+    cached = get_sqlspec_scope_state(scope, cache_key)
+    if cached is None:
+        payload = await TenantContext.arequire(config) if has_tenant_strategy(config) else None
+        set_sqlspec_scope_state(scope, cache_key, (payload,))
+    else:
+        payload = cached[0]
     set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
     return payload
 
@@ -428,3 +440,113 @@ async def _exit_connection_context(
             await with_ensure_async_(connection_cm).__aexit__(*exit_args)
         else:
             await ensure_async_(connection.close)()
+
+
+def _capture_connection_tenant_sync(config: Any, scope: "Scope", connection_key: str) -> TenantContextPayload | None:
+    cache_key = f"_sqlspec_resolved_tenant_{id(config)}"
+    cached = get_sqlspec_scope_state(scope, cache_key)
+    if cached is None:
+        payload = TenantContext.require(config) if has_tenant_strategy(config) else None
+        set_sqlspec_scope_state(scope, cache_key, (payload,))
+    else:
+        payload = cached[0]
+    set_sqlspec_scope_state(scope, tenant_payload_key(connection_key), payload)
+    return payload
+
+
+def _open_request_resource_sync(config: Any, scope: "Scope", resource_key: str, kind: str) -> Any:
+    current = get_sqlspec_scope_state(scope, resource_key)
+    if current is not None:
+        return current
+    payload = _capture_connection_tenant_sync(config, scope, resource_key)
+    with TenantContext.bind(payload):
+        if kind == "routing":
+            context = config.provide_routing_session()
+        elif kind == "session":
+            context = config.provide_read_session()
+        else:
+            context = config.provide_read_connection()
+        value = context.__enter__()
+    set_sqlspec_scope_state(scope, f"{resource_key}_ctx", context)
+    set_sqlspec_scope_state(scope, resource_key, value)
+    return value
+
+
+async def _open_request_resource_async(config: Any, scope: "Scope", resource_key: str, kind: str) -> Any:
+    current = get_sqlspec_scope_state(scope, resource_key)
+    if current is not None:
+        return current
+    lock_key = f"{resource_key}_lock"
+    lock = get_sqlspec_scope_state(scope, lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        set_sqlspec_scope_state(scope, lock_key, lock)
+    async with lock:
+        current = get_sqlspec_scope_state(scope, resource_key)
+        if current is not None:
+            return current
+        payload = await _capture_connection_tenant(config, scope, resource_key)
+        with TenantContext.bind(payload):
+            if kind == "routing":
+                context = config.provide_routing_session()
+            elif kind == "session":
+                context = config.provide_read_session()
+            else:
+                context = config.provide_read_connection()
+            if isinstance(context, AbstractAsyncContextManager):
+                value = await context.__aenter__()
+            else:
+                value = context.__enter__()
+        set_sqlspec_scope_state(scope, f"{resource_key}_ctx", context)
+        set_sqlspec_scope_state(scope, resource_key, value)
+        return value
+
+
+def read_pool_provider_maker(
+    config: Any, pool_key: str, read_pool_key: str
+) -> "Callable[[State, Scope], Awaitable[Any]]":
+    """Build an explicitly typed DI provider for replica groups or the primary pool."""
+
+    async def provide_read_pool(state: "State", scope: "Scope") -> Any:
+        return state.get(read_pool_key, state.get(pool_key))
+
+    return provide_read_pool
+
+
+def read_connection_provider_maker(
+    config: Any, pool_key: str, read_pool_key: str, read_connection_key: str, *, tenant_settings: Any = None
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build a request-owned read connection provider with manual finalization."""
+
+    async def provide_read_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, read_connection_key, "connection")
+
+    return provide_read_connection
+
+
+def read_session_provider_maker(
+    config: Any,
+    pool_key: str,
+    read_pool_key: str,
+    read_connection_key: str,
+    read_session_key: str,
+    *,
+    tenant_settings: Any = None,
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build a request-owned read session provider using the adapter's read seam."""
+
+    async def provide_read_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, read_session_key, "session")
+
+    return provide_read_session
+
+
+def routing_session_provider_maker(
+    config: Any, pool_key: str, routing_session_key: str, *, tenant_settings: Any = None
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build an opt-in lazy routing facade provider with explicit DI parameters."""
+
+    async def provide_routing_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, routing_session_key, "routing")
+
+    return provide_routing_session

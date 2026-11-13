@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 
 from litestar.stores.base import Store
 
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.migrations.schema import (
     DropStatement,
@@ -75,26 +76,9 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
 
     adapter_name: ClassVar[str | None] = None
 
-    extension_config_options: ClassVar[frozenset[str]] = frozenset({
-        "auto_trace_headers",
-        "commit_mode",
-        "connection_key",
-        "correlation_header",
-        "correlation_headers",
-        "create_schema",
-        "disable_di",
-        "enable_correlation_middleware",
-        "enable_sqlcommenter_middleware",
-        "extra_commit_statuses",
-        "extra_rollback_statuses",
-        "manage_lifespan",
-        "manage_schema",
-        "migration_mode",
-        "migrations_path",
-        "pool_key",
-        "session_key",
-        "session_table",
-    })
+    extension_config_options: ClassVar[frozenset[str]] = frozenset(
+        LitestarConfig.__required_keys__ | LitestarConfig.__optional_keys__
+    )
 
     def __init__(self, config: ConfigT) -> None:
         """Initialize the session store.
