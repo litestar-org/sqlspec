@@ -3,6 +3,20 @@
 ```python
 from sqlspec.adapters.oracledb import (
     OracleAsyncConfig,
+    OracleAcquireOptions,
+    OracleAsyncClientContextStrategy,
+    OracleAsyncEndUserSecurityStrategy,
+    OracleAsyncSessionlessTransactionContext,
+    OracleEndUserSecurityConfig,
+    OraclePluginName,
+    OraclePoolBoundary,
+    OraclePurityInput,
+    OracleShardResolver,
+    OracleSyncClientContextStrategy,
+    OracleSyncEndUserSecurityStrategy,
+    OracleSyncSessionlessTransactionContext,
+    OracleTransactionPriority,
+
     OracleAsyncDriver,
     OracleAsyncExceptionHandler,
     OracleConnectionParams,
@@ -76,7 +90,7 @@ The [connection and pool parameter table](../../databases/oracledb.md#connection
 
 Set `tenant_strategy` to `"default"`, `"identifier"`, or `True` for client-identifier metadata. VPD requires an explicit mode-specific VPD strategy with trusted `set_procedure`, `clear_procedure`, `namespace`, and `attribute` names, plus an administrator-provisioned package and database policy. Confirm edition and licensing with your DBA. Identity alone does not enforce row access.
 
-The strategy composes existing session hooks (automatically binding `driver_features["session_context_hook"]` when no explicit strategy-level hook is passed, and rejecting mismatched explicit hooks), preserves NLS/edition/time-zone behavior, and verifies the server identifier and VPD context. Oracle identifiers must fit in 64 UTF-8 bytes. Cleanup failure physically drops pooled connections. Both providers require an explicit tenant or bypass; standalone `create_connection()` is rejected in tenant mode. Hook calls and server verification can require multiple round trips.
+The strategy composes existing session hooks (automatically binding `driver_features["session_context_hook"]` when no explicit strategy-level hook is passed, and rejecting mismatched explicit hooks), preserves NLS/edition/time-zone behavior, and verifies the server identifier and VPD context. Oracle identifiers must fit in 64 UTF-8 bytes. Cleanup failure physically drops pooled connections. Both providers require an explicit tenant or bypass; standalone `create_connection()` is rejected in tenant mode. Hook calls and server verification can require multiple round trips; supported async Thin paths can batch checkout and verification in a native pipeline. Native client-context and end-user security strategies are documented below.
 
 Missing tenant identity raises `TenantContextError` before acquisition. Failed cleanup raises `TenantCleanupError` when no body exception is pending; otherwise the body error keeps its identity and receives a cleanup note. See [Multi-Tenancy](../../learn/recipes/multi-tenancy.md) and [Tenant Operations](../../learn/recipes/multi-tenancy-operations.md).
 
@@ -219,6 +233,71 @@ Missing tenant identity raises `TenantContextError` before acquisition. Failed c
       members: false
 
 ::: sqlspec.adapters.oracledb.events.OracleAsyncTxEventQEventBackend
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleAcquireOptions
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleAsyncClientContextStrategy
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleAsyncEndUserSecurityStrategy
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleAsyncSessionlessTransactionContext
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleEndUserSecurityConfig
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OraclePluginName
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OraclePoolBoundary
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OraclePurityInput
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleShardResolver
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleSyncClientContextStrategy
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleSyncEndUserSecurityStrategy
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleSyncSessionlessTransactionContext
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.adapters.oracledb.OracleTransactionPriority
     options:
       heading_level: 4
       members: false
