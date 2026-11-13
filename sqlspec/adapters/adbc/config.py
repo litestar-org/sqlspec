@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from types import TracebackType
     from uuid import UUID
 
+    from sqlspec.config import MigrationConfig
     from sqlspec.observability import ObservabilityConfig
     from sqlspec.utils.tenant import TenantContextPayload
 
@@ -475,13 +476,72 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         """Drain an owned generation, retaining native cleanup failures for retry."""
         self._shutdown_pool(retire=True)
 
-    def derive_pool(self, **overrides: Any) -> Self:
-        """Derive independent ownership while preserving explicit pool settings."""
-        has_explicit_statement = overrides.get("statement_config") is not None
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("uri", "dsn", "url", "connection_string", "path")
+        inherited = dict(self.connection_config.get("db_kwargs") or {})
+        explicit_nested = dict(overrides.get("db_kwargs") or {})
+        seed: dict[str, Any] = {
+            key: config[key] for key in ("driver_name", "driver", "driver_path", "entrypoint") if key in config
+        }
+        if any(key in overrides for key in aliases):
+            inherited.pop("uri", None)
+            if "uri" not in overrides:
+                config.pop("uri", None)
+        else:
+            uri = config.get("uri") or inherited.get("uri")
+            if uri is not None:
+                seed["uri"] = uri
+        seed.update({key: value for key, value in overrides.items() if key != "db_kwargs"})
+        lifted = build_connection_config(seed).get("db_kwargs")
+        if isinstance(lifted, Mapping):
+            inherited.update(lifted)
+        inherited.update(explicit_nested)
+        if inherited:
+            config["db_kwargs"] = inherited
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"uri": spec_input}}
+        return super()._build_replica_spec_overrides(spec_input)
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: Mapping[str, Any] | None = None,
+        driver_features_overrides: Mapping[str, Any] | None = None,
+        statement_config: StatementConfig | None = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: str | None = None,
+        is_replica: bool = False,
+        **overrides: Any,
+    ) -> Self:
+        """Derive independent ownership while preserving native options and pool settings."""
         pool_config = overrides.pop("pool_config", self._pool_config)
-        derived = super().derive_pool(**overrides)
-        if not has_explicit_statement:
+        if "query_tag" in overrides:
+            connection_config_overrides = {**(connection_config_overrides or {}), "query_tag": overrides["query_tag"]}
+        derived = super().derive_pool(
+            connection_config_overrides=connection_config_overrides,
+            driver_features_overrides=driver_features_overrides,
+            statement_config=statement_config,
+            migration_config=migration_config,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            bind_key=bind_key,
+            is_replica=is_replica,
+            **overrides,
+        )
+        if statement_config is None:
             derived._explicit_statement_dialect = self._explicit_statement_dialect
+            if self._explicit_statement_dialect is None:
+                derived.statement_config, features = apply_driver_features(
+                    get_statement_config(derived._resolved_dialect), derived.driver_features
+                )
+                derived.driver_features.update(features)
         derived._pool_config = cast("AdbcPoolConfig", dict(pool_config)) if pool_config is not None else None
         derived._validate_pool_settings(None)
         return derived

@@ -44,6 +44,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -1977,6 +1978,8 @@ def _map_enterprise_exception(
 
 
 def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
+    if sqlstate == "25006":
+        return _create_adbc_error(error, ReadOnlyTransactionError, "read-only transaction")
     if sqlstate == "23505":
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
     if sqlstate == "23503":

@@ -1484,3 +1484,17 @@ def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
 
     assert "NULL" in compiled_sql.upper()
     assert list(parameters) == ["x"]
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from adbc_driver_manager import OperationalError
+
+    from sqlspec.adapters.adbc.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = OperationalError("cannot write", status_code=AdbcStatusCode.INVALID_STATE, sqlstate="25006")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()
