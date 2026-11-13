@@ -351,7 +351,7 @@ class ParameterProcessor:
         param_fingerprint: Any | None = None,
     ) -> "ParameterProcessingResult":
         cache_key = None
-        if self._cache_max_size > 0:
+        if self._cache_max_size > 0 and not (config.needs_static_script_compilation and parameters):
             cache_key = self._make_processor_cache_key(
                 sql,
                 parameters,

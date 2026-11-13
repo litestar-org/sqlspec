@@ -402,7 +402,11 @@ class SQLProcessor:
         Returns:
             CompiledSQL with execution information
         """
-        if not self._cache_enabled or self._parameter_config.ast_transformer is not None:
+        if (
+            not self._cache_enabled
+            or self._parameter_config.ast_transformer is not None
+            or (self._parameter_config.needs_static_script_compilation and parameters)
+        ):
             return self._apply_dynamic_sqlcommenter(
                 self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
             )
@@ -626,7 +630,11 @@ class SQLProcessor:
         return (cached_expression, cached_operation, operation_profile)
 
     def _resolve_expression(
-        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
+        self,
+        sqlglot_sql: str,
+        dialect_str: "str | None",
+        expression_override: "exp.Expr | None",
+        cache_parse: bool = True,
     ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None]":
         """Resolve an SQLGlot expression with caching.
 
@@ -634,13 +642,14 @@ class SQLProcessor:
             sqlglot_sql: SQL string for SQLGlot.
             dialect_str: Dialect name.
             expression_override: Pre-parsed SQLGlot expression.
+            cache_parse: Whether the parse result may be read from and stored in the parse cache.
 
         Returns:
             Expression metadata and parse cache information.
         """
         parse_cache_key = None
         parse_cache_entry = None
-        if self._parse_cache_max_size > 0 and expression_override is None:
+        if cache_parse and self._parse_cache_max_size > 0 and expression_override is None:
             parse_cache_key = SQLProcessor._make_parse_cache_key(sqlglot_sql, dialect_str)
             parse_cache_entry = self._parse_cache.get(parse_cache_key)
             if parse_cache_entry is not None:
@@ -826,6 +835,9 @@ class SQLProcessor:
     ) -> CompiledSQL:
         """Compile SQL without caching.
 
+        Scripts compiled with embedded parameter values also bypass the parse
+        cache, since each parameter set yields distinct SQL text.
+
         Args:
             sql: SQL string
             parameters: Parameter values
@@ -862,7 +874,10 @@ class SQLProcessor:
 
             if self._config.enable_parsing:
                 (expression, operation_type, operation_profile, parse_cache_key) = self._resolve_expression(
-                    process_result.sqlglot_sql, self._dialect_str, expression_override
+                    process_result.sqlglot_sql,
+                    self._dialect_str,
+                    expression_override,
+                    cache_parse=not (self._parameter_config.needs_static_script_compilation and parameters),
                 )
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(

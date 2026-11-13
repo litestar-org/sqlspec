@@ -24,7 +24,7 @@ PUBLIC_DIALECT_CONFIGS = (
 DIALECT_DEFAULTS: dict[type[Any], tuple[str, set[str], set[str], set[str], set[str], set[str]]] = {
     splitter_module.OracleDialectConfig: ("oracle", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), {"/"}),
     splitter_module.TSQLDialectConfig: ("tsql", {"BEGIN", "TRY"}, {"END", "CATCH"}, {";"}, {"GO"}, set()),
-    splitter_module.PostgreSQLDialectConfig: ("postgresql", {"DECLARE", "CASE", "DO"}, {"END"}, {";"}, set(), set()),
+    splitter_module.PostgreSQLDialectConfig: ("postgresql", {"CASE", "BEGIN ATOMIC"}, {"END"}, {";"}, set(), set()),
     splitter_module.GenericDialectConfig: ("generic", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), set()),
     splitter_module.MySQLDialectConfig: ("mysql", {"BEGIN", "DECLARE", "CASE"}, {"END"}, {";"}, set(), {"\\g", "\\G"}),
     splitter_module.SQLiteDialectConfig: ("sqlite", {"BEGIN", "CASE"}, {"END"}, {";"}, set(), set()),
@@ -50,6 +50,14 @@ def test_dialect_class_map_contains_expected_aliases() -> None:
         "pg_textsearch": splitter_module.PostgreSQLDialectConfig,
         "pgtextsearch": splitter_module.PostgreSQLDialectConfig,
         "mysql": splitter_module.MySQLDialectConfig,
+        "mariadb": splitter_module.MySQLDialectConfig,
+        "cockroach": splitter_module.PostgreSQLDialectConfig,
+        "cockroachdb": splitter_module.PostgreSQLDialectConfig,
+        "sybase": splitter_module.TSQLDialectConfig,
+        "ase": splitter_module.TSQLDialectConfig,
+        "sqlanywhere": splitter_module.TSQLDialectConfig,
+        "teradata": splitter_module.GenericDialectConfig,
+        "vantage": splitter_module.GenericDialectConfig,
         "sqlite": splitter_module.SQLiteDialectConfig,
         "duckdb": splitter_module.DuckDBDialectConfig,
         "bigquery": splitter_module.BigQueryDialectConfig,
@@ -94,7 +102,7 @@ def test_tokenize_returns_materialized_token_list() -> None:
     tokens = splitter._tokenize("SELECT 1;")
 
     assert isinstance(tokens, list)
-    assert [token.value for token in tokens] == ["S", "E", "L", "E", "C", "T", " ", "1", ";"]
+    assert [token.value for token in tokens] == ["SELECT", " ", "1", ";"]
 
 
 @pytest.mark.skipif(_SPLITTER_COMPILED, reason="compiled dialect classes do not expose Python source metadata")
@@ -382,3 +390,81 @@ def test_snowflake_splitter_control_enders_allow_comments(
         block,
         "SELECT 3",
     ]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "script", "expected"),
+    [
+        ("postgres", "BEGIN; INSERT INTO t VALUES (1); COMMIT;", ["BEGIN;", "INSERT INTO t VALUES (1);", "COMMIT;"]),
+        (
+            "postgres",
+            "CREATE FUNCTION f(x int) RETURNS int LANGUAGE sql BEGIN  ATOMIC SELECT x + 1; END; SELECT 2;",
+            ["CREATE FUNCTION f(x int) RETURNS int LANGUAGE sql BEGIN  ATOMIC SELECT x + 1; END;", "SELECT 2;"],
+        ),
+        ("postgres", "SELECT E'a\\';b'; SELECT 2;", ["SELECT E'a\\';b';", "SELECT 2;"]),
+        ("postgres", "DO $$ BEGIN PERFORM 1; END $$; SELECT 2;", ["DO $$ BEGIN PERFORM 1; END $$;", "SELECT 2;"]),
+        ("postgres", "DECLARE c CURSOR FOR SELECT 1; FETCH c;", ["DECLARE c CURSOR FOR SELECT 1;", "FETCH c;"]),
+        ("cockroachdb", "SELECT $x$ a;b $x$; SELECT 2;", ["SELECT $x$ a;b $x$;", "SELECT 2;"]),
+        ("postgres", "SELECT a[b[1]]; SELECT c[2];", ["SELECT a[b[1]];", "SELECT c[2];"]),
+        ("mysql", "SELECT 'a\\';b'; SELECT 2;", ["SELECT 'a\\';b';", "SELECT 2;"]),
+        ("mariadb", "SELECT 1; # it's a note ; here\nSELECT 2;", ["SELECT 1;", "# it's a note ; here\nSELECT 2;"]),
+        ("mysql", "BEGIN WORK; UPDATE t SET a = 1; COMMIT;", ["BEGIN WORK;", "UPDATE t SET a = 1;", "COMMIT;"]),
+        ("tsql", "SELECT [a]];b] FROM t; SELECT 2;", ["SELECT [a]];b] FROM t;", "SELECT 2;"]),
+        ("tsql", "BEGIN TRAN; UPDATE t SET a = 1; COMMIT;", ["BEGIN TRAN;", "UPDATE t SET a = 1;", "COMMIT;"]),
+        (
+            "duckdb",
+            "CREATE MACRO m() AS $$ SELECT 1; $$; SELECT 2;",
+            ["CREATE MACRO m() AS $$ SELECT 1; $$;", "SELECT 2;"],
+        ),
+        ("sqlite", "BEGIN; INSERT INTO t VALUES (1); COMMIT;", ["BEGIN;", "INSERT INTO t VALUES (1);", "COMMIT;"]),
+        (
+            "sqlite",
+            "BEGIN IMMEDIATE; CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET a = 1; END; COMMIT;",
+            ["BEGIN IMMEDIATE;", "CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET a = 1; END;", "COMMIT;"],
+        ),
+        (
+            "oracle",
+            "SELECT q'[a; it's b]', nq'{c;d}', Q'!e;f!' FROM dual; SELECT 2 FROM dual;",
+            ["SELECT q'[a; it's b]', nq'{c;d}', Q'!e;f!' FROM dual;", "SELECT 2 FROM dual;"],
+        ),
+        (
+            "oracle",
+            "BEGIN\n IF x THEN y := 1; END IF;\n FOR i IN 1..2 LOOP NULL; END LOOP;\nEND;\n/\nSELECT 1 FROM dual;",
+            ["BEGIN\n IF x THEN y := 1; END IF;\n FOR i IN 1..2 LOOP NULL; END LOOP;\nEND;\n/", "SELECT 1 FROM dual;"],
+        ),
+        (None, "SELECT 1; /* open ; SELECT 2;", ["SELECT 1;"]),
+    ],
+)
+def test_split_sql_script_dialect_lexing(dialect: "str | None", script: str, expected: "list[str]") -> None:
+    """Dialect comments, string escapes, quoted identifiers, and blocks keep statements intact."""
+    splitter_module.clear_splitter_caches()
+
+    assert split_sql_script(script, dialect=dialect) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "script"),
+    [
+        (None, "SELECT 1; " + "/* a " * 8000),
+        ("postgres", "SELECT 1; " + "".join(f"$t{index}$ x " for index in range(5000))),
+    ],
+)
+def test_split_sql_script_unterminated_spans_scan_once(dialect: "str | None", script: str) -> None:
+    """Unterminated comments and dollar-quoted literals extend to the end of the script."""
+    splitter_module.clear_splitter_caches()
+
+    assert len(split_sql_script(script, dialect=dialect)) <= 2
+
+
+def test_split_caches_only_scripts_within_size_bound() -> None:
+    """Scripts above the size bound are split without entering the result cache."""
+    splitter_module.clear_splitter_caches()
+    splitter = StatementSplitter(GenericDialectConfig())
+    small = "SELECT 1; SELECT 2;"
+    large = "SELECT 1;\n" * (splitter_module.MAX_CACHEABLE_SCRIPT_BYTES // 10 + 1)
+
+    assert splitter.split(small) is splitter.split(small)
+    first = splitter.split(large)
+    second = splitter.split(large)
+    assert first == second
+    assert first is not second
