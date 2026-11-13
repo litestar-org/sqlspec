@@ -11,11 +11,14 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -58,6 +61,7 @@ __all__ = (
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
+_MSSQL_REPLICA_UNAVAILABLE: Final[int] = 976
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08S01": (DatabaseConnectionError, "communication link failure"),
@@ -253,6 +257,12 @@ def extract_sqlstate(error: BaseException) -> str | None:
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
+    code = extract_error_number(error)
+    if getattr(error, "sqlstate", None) == "25006" or "25006" in str(error) or code in {3906, 3908, 978, 976}:
+        error_type = ReplicaUnavailableError if code == _MSSQL_REPLICA_UNAVAILABLE else ReadOnlyTransactionError
+        mapped_reader_error = error_type(str(error))
+        mapped_reader_error.__cause__ = error
+        return mapped_reader_error
     sqlstate = extract_sqlstate(error)
     if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
         error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
@@ -388,7 +398,13 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         for extra_key, extra_value in extra.items():
             if extra_value is not None:
                 config.setdefault(str(extra_key), extra_value)
-    config.setdefault("server", config.pop("host", "localhost"))
+    for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
+        present = [key for key in config if key in {canonical, alias}]
+        if present:
+            value = config[present[-1]]
+            config.pop(alias, None)
+            config[canonical] = value
+    config.setdefault("server", "localhost")
     config.setdefault("port", 1433)
     db_alias = config.pop("db", None)
     if "database" not in config and db_alias is not None:
@@ -396,6 +412,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     user_alias = config.pop("username", None)
     if "user" not in config and user_alias is not None:
         config["user"] = user_alias
+    if config.get("read_only") and not str(config.get("database") or "").strip():
+        msg = "SQL Server read-only intent requires a target database"
+        raise ImproperConfigurationError(msg)
     return config
 
 

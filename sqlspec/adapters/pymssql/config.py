@@ -4,7 +4,12 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor, PymssqlRawCursor, PymssqlSessionContext
-from sqlspec.adapters.pymssql.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.pymssql.core import (
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+)
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -13,6 +18,7 @@ from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import ImproperConfigurationError, ReadOnlyTransactionError, ReplicaUnavailableError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -36,6 +42,10 @@ class PymssqlConnectionParams(TypedDict):
     """SQL Server or Windows domain login (``DOMAIN\\user``)."""
     password: NotRequired[str]
     """Password for ``user``."""
+    db: NotRequired[str]
+    """Alias for the target database."""
+    username: NotRequired[str]
+    """Alias for the authentication user."""
     database: NotRequired[str]
     """Initial SQL Server database selected on connect."""
     port: NotRequired[int | str]
@@ -105,9 +115,27 @@ class PymssqlConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "PymssqlConnection":
+        try:
+            return cast("PymssqlConnection", super().__enter__())
+        except Exception as exc:
+            mapped = create_mapped_exception(exc)
+            if isinstance(mapped, (ReadOnlyTransactionError, ReplicaUnavailableError)):
+                raise mapped from exc
+            raise
+
 
 class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "PymssqlConnection":
+        try:
+            return cast("PymssqlConnection", super().acquire_connection())
+        except Exception as exc:
+            mapped = create_mapped_exception(exc)
+            if isinstance(mapped, (ReadOnlyTransactionError, ReplicaUnavailableError)):
+                raise mapped from exc
+            raise
 
 
 class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool, PymssqlDriver]):
@@ -171,6 +199,24 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             observability_config=observability_config,
             **kwargs,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
+            if alias in overrides and canonical not in overrides:
+                config.pop(canonical, None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"server": spec_input}}
+        if spec_input is True:
+            if not str(self.connection_config.get("database") or "").strip():
+                msg = "SQL Server read-only intent requires a target database"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"read_only": True}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def create_connection(self) -> "PymssqlConnection":
         """Open a standalone connection owned by the caller.

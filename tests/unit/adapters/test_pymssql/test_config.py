@@ -309,3 +309,48 @@ def test_tenant_connection_hook_failure_closes_acquired_connection(monkeypatch: 
     with TenantContext.scope("a"), pytest.raises(RuntimeError, match="hook"), config.provide_connection():
         pass
     assert calls == ["close"]
+
+
+def test_replica_derivation_resolves_aliases_and_read_intent() -> None:
+    def hook(connection: Any) -> None:
+        return None
+
+    primary = PymssqlConfig(
+        connection_config={"server": "writer", "database": "app", "user": "writer"},
+        driver_features={"on_connection_create": hook},
+    )
+    replica = primary.derive_pool(host="reader", db="reader_app", username="reader", read_only=True)
+    assert replica.connection_config["server"] == "reader"
+    assert replica.connection_config["database"] == "reader_app"
+    assert replica.connection_config["user"] == "reader"
+    assert replica.connection_config["read_only"] is True
+    assert replica._user_connection_hook is hook
+    assert primary.connection_config["server"] == "writer"
+
+
+def test_read_intent_shorthand_requires_target_database() -> None:
+    primary = PymssqlConfig(connection_config={"server": "listener", "database": "app"}, replicas=True)
+    assert primary.replica_groups["default"].configs[0].connection_config["read_only"] is True
+    with pytest.raises(ImproperConfigurationError):
+        PymssqlConfig(connection_config={"server": "listener"}, replicas=True)
+
+
+@pytest.mark.parametrize("provider", ("provide_connection", "provide_session"))
+@pytest.mark.parametrize("code", (976, 978, 3906, 3908))
+def test_replica_native_checkout_errors_are_mapped(monkeypatch: pytest.MonkeyPatch, provider: str, code: int) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    error = _pymssql_pool.pymssql.OperationalError(code, b"availability group error")
+
+    def connect(**kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(_pymssql_pool.pymssql, "connect", connect)
+    config = PymssqlConfig(connection_config={"server": "listener", "database": "app"})
+    expected = ReplicaUnavailableError if code == 976 else ReadOnlyTransactionError
+    try:
+        with pytest.raises(expected) as caught, getattr(config, provider)():
+            pass
+        assert caught.value.__cause__ is error
+    finally:
+        config.close_pool()
