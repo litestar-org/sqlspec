@@ -75,8 +75,10 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachAsyncpgConfig", *, read_config: "CockroachAsyncpgConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -154,7 +156,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=renew_for is not None) as conn:
                 row = await conn.fetchrow(sql, *params)
                 if row is None:
                     return None
@@ -216,7 +218,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         params: tuple[Any, ...] = tuple(values)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -358,7 +360,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []
@@ -582,8 +584,10 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachAsyncpgConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachAsyncpgConfig", *, read_config: "CockroachAsyncpgConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -741,7 +745,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             params = (*scope_params, f"%{query}%", effective_limit)
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 rows = await conn.fetch(sql, *params)
         except asyncpg.exceptions.UndefinedTableError:
             return []

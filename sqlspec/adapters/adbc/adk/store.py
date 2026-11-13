@@ -145,13 +145,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         return [_teradata_guarded_drop(table) for table in tables]
 
-    def __init__(self, config: "AdbcConfig") -> None:
+    def __init__(self, config: "AdbcConfig", *, read_config: "AdbcConfig | None" = None) -> None:
         """Initialize ADBC ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: AdbcConfig instance (any ADBC driver).
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._dialect = self._detect_dialect()
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
@@ -217,7 +218,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
@@ -235,7 +236,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     ) -> "list[StoredSession]":
         """List sessions for an app."""
         return self._list_sessions(
-            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
         )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -271,7 +272,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than a timestamp."""
@@ -1236,11 +1237,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         return result
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
         """Get session by ID.
 
         Args:
+            read: Whether this call permits offloading a pure read.
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier.
@@ -1268,7 +1276,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             select_after_update = False
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -1361,10 +1369,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user.
 
         Args:
+            read: Whether this call permits offloading a pure read.
             app_name: Application name.
             user_id: User identifier. If None, lists all sessions for the app.
             order_by: Timestamp column to sort on.
@@ -1382,7 +1392,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         sql, params = self._session_list_query(app_name, user_id, column, direction, page_limit, page_offset)
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -1587,10 +1597,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         """List events for a session ordered by timestamp.
 
         Args:
+            read: Whether this call permits offloading a pure read.
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier.
@@ -1633,7 +1646,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(cursor, sql, params)
@@ -1887,8 +1900,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return super().downgrade_drops()
         return [_teradata_guarded_drop(self._memory_table)]
 
-    def __init__(self, config: "AdbcConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "AdbcConfig", *, read_config: "AdbcConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         self._dialect = self._detect_dialect()
         self._sqlite_fts_enabled = (
             self._use_fts and self._dialect == DIALECT_SQLITE and is_sqlite_reconcile_target(config.connection_config)
@@ -2007,7 +2020,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query or vector embedding."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -2708,6 +2721,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         *,
         embedding: "Sequence[float] | None" = None,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2732,9 +2746,11 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     if callable(ensure_bm25) and getattr(self._config, "_pg_textsearch_available", None) is False:
                         ensure_bm25()
                     return self._search_entries_hybrid(
-                        query, app_name, user_id, effective_limit, scope_filter, embedding
+                        query, app_name, user_id, effective_limit, scope_filter, embedding, read=read
                     )
-                return self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+                return self._search_entries_vector(
+                    app_name, user_id, effective_limit, scope_filter, embedding, read=read
+                )
             except Exception as exc:
                 error_msg = str(exc).lower()
                 if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
@@ -2743,7 +2759,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         if self._sqlite_fts_enabled:
             try:
-                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter, read=read)
             except Exception as exc:
                 text = str(exc).lower()
                 if (
@@ -2789,7 +2805,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.cursor()
                 try:
                     self._execute(
@@ -2811,7 +2827,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return self._rows_to_records(rows)
 
     def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"]
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         """Search local SQLite memory entries via the external-content FTS5 virtual table."""
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
@@ -2825,7 +2848,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         ORDER BY m.timestamp DESC
         LIMIT ?
         """
-        with self._config.provide_connection() as conn:
+        with self._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, (*scope_params, query, limit))
@@ -2841,6 +2864,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
         vector_literal = format_pgvector_literal(embedding)
@@ -2854,7 +2879,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         LIMIT ?
         """
         params = (*scope_params, vector_literal, limit)
-        with self._config.provide_connection() as conn:
+        with self._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, params)
@@ -2871,6 +2896,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
         vector_literal = format_pgvector_literal(embedding)
@@ -2900,7 +2927,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         LIMIT ?
         """
         params = (vector_literal, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        with self._config.provide_connection() as conn:
+        with self._provide_read_connection(primary=not read) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, sql, params)

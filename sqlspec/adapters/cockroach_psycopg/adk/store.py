@@ -177,8 +177,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachPsycopgAsyncConfig", *, read_config: "CockroachPsycopgAsyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -259,7 +261,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             """
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_read_connection(primary=renew_for is not None) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(sql.encode(), (app_name, user_id, session_id))
                 row = await cur.fetchone()
                 if should_touch:
@@ -309,7 +314,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), params)
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
@@ -459,7 +464,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         """
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), tuple(params))
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
@@ -654,8 +659,10 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachPsycopgSyncConfig", *, read_config: "CockroachPsycopgSyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -739,7 +746,10 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with (
+                self._provide_read_connection(primary=renew_for is not None) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 cur.execute(sql.encode(), (app_name, user_id, session_id))
                 row = cur.fetchone()
                 if should_touch:
@@ -791,7 +801,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), params)
                 rows = cur.fetchall()
 
@@ -924,7 +934,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), tuple(params))
                 rows = cur.fetchall()
 
@@ -1152,8 +1162,10 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachPsycopgAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachPsycopgAsyncConfig", *, read_config: "CockroachPsycopgAsyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -1306,7 +1318,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             params = (*scope_params, search_param, effective_limit)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cur:
+            async with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
                 await cur.execute(sql.encode(), params)
                 rows = await cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
@@ -1376,8 +1388,10 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(
+        self, config: "CockroachPsycopgSyncConfig", *, read_config: "CockroachPsycopgSyncConfig | None" = None
+    ) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1533,7 +1547,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             params = (*scope_params, search_param, effective_limit)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cur:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
                 cur.execute(sql.encode(), params)
                 rows = cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
