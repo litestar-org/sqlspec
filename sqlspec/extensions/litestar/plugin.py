@@ -69,7 +69,14 @@ from sqlspec.extensions.litestar.tenant import (
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    apply_request_routing_hints,
+    extract_asgi_routing_headers,
+    validate_routing_middleware_settings,
+)
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantRequestBinding
@@ -313,10 +320,25 @@ class ConnectionCleanupMiddleware:
         if scope.get("type") not in {ScopeType.HTTP, ScopeType.WEBSOCKET} or not self._targets:
             await self._app(scope, receive, send)
             return
+        routing_targets = [target for target in self._targets if target.enable_routing_middleware]
+        if not routing_targets:
+            await self._run_request(scope, receive, send)
+            return
         payload = RoutingContext.current() or RoutingContextPayload()
-        for target in self._targets:
-            if target.default_routing_mode == "primary":
+        for target in routing_targets:
+            if target.default_routing_mode == "primary" and payload.get(target.bind_key) is None:
                 payload = payload.with_entry(target.bind_key, RoutingEntry("primary"))
+            cookie_header, routing_header_value = extract_asgi_routing_headers(
+                scope, target.routing_header_bytes, include_cookies=target.write_pin_cookie is not None
+            )
+            payload = apply_request_routing_hints(
+                payload,
+                bind_key=target.bind_key,
+                routing_header_value=routing_header_value,
+                cookie_header=cookie_header,
+                write_pin_cookie=target.write_pin_cookie,
+                routing_secret=target.routing_secret,
+            )
         async with RoutingContext.scope(payload):
             await self._run_request(scope, receive, send)
 
@@ -370,11 +392,15 @@ class ConnectionCleanupMiddleware:
                 ctx_scope_key = f"{target.connection_key}_ctx"
                 provider_owned_key = f"{target.connection_key}_provider_owned"
                 session_scope_key = f"{target.session_key}_instance"
+                deferred_scope_key = f"{target.connection_key}_deferred"
+                lock_scope_key = f"{target.connection_key}_lock"
                 connection = get_sqlspec_scope_state(scope, target.connection_key)
                 connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
 
                 if connection is None and connection_cm is None:
                     delete_sqlspec_scope_state(scope, session_scope_key)
+                    delete_sqlspec_scope_state(scope, deferred_scope_key)
+                    delete_sqlspec_scope_state(scope, lock_scope_key)
                     continue
 
                 if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
@@ -428,6 +454,8 @@ class ConnectionCleanupMiddleware:
                         delete_sqlspec_scope_state(scope, target.connection_key)
                         delete_sqlspec_scope_state(scope, provider_owned_key)
                         delete_sqlspec_scope_state(scope, session_scope_key)
+                        delete_sqlspec_scope_state(scope, deferred_scope_key)
+                        delete_sqlspec_scope_state(scope, lock_scope_key)
             except BaseException as exc:
                 primary_exc = _select_teardown_exception(primary_exc, exc)
 
@@ -458,6 +486,10 @@ class PluginConfigState:
     read_session_key: str = "read_session"
     routing_session_key: str | None = None
     default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = True
+    routing_header: str | None = None
+    write_pin_cookie: str | None = None
+    routing_secret: bytes | None = None
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
@@ -677,6 +709,12 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 commit_mode=state.commit_mode,
                 bind_key=state.config.bind_key,
                 default_routing_mode=state.default_routing_mode,
+                enable_routing_middleware=state.enable_routing_middleware,
+                routing_header_bytes=state.routing_header.lower().encode("ascii")
+                if state.routing_header is not None
+                else None,
+                write_pin_cookie=state.write_pin_cookie,
+                routing_secret=state.routing_secret,
                 extra_commit_statuses=frozenset(state.extra_commit_statuses or ()),
                 extra_rollback_statuses=frozenset(state.extra_rollback_statuses or ()),
             )
@@ -1236,13 +1274,23 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if selected.config.is_async:
             if kind == "connection":
                 raise_async_connection_required("await plugin.provide_request_read_connection_async(key, state, scope)")
-            return DeferredAsyncSession(
-                selected.config,
-                lambda: _open_request_resource_async(selected.config, scope, resource_key, kind),
-                lambda: get_sqlspec_scope_state(scope, resource_key),
-                "await plugin.provide_request_read_session_async(key, state, scope)",
-                target_type=AsyncRoutingSession if kind == "routing" else None,
-            )
+            deferred_key = f"{resource_key}_deferred"
+            deferred = get_sqlspec_scope_state(scope, deferred_key)
+            if deferred is None:
+                accessor = (
+                    "await plugin.provide_request_routing_session_async(key, state, scope)"
+                    if kind == "routing"
+                    else "await plugin.provide_request_read_session_async(key, state, scope)"
+                )
+                deferred = DeferredAsyncSession(
+                    selected.config,
+                    lambda: _open_request_resource_async(selected.config, scope, resource_key, kind),
+                    lambda: get_sqlspec_scope_state(scope, resource_key),
+                    accessor,
+                    target_type=AsyncRoutingSession if kind == "routing" else None,
+                )
+                set_sqlspec_scope_state(scope, deferred_key, deferred)
+            return deferred
         return _open_request_resource_sync(selected.config, scope, resource_key, kind)
 
     def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
@@ -1263,6 +1311,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         disable_di = litestar_config.get("disable_di", False)
 
+        enable_routing, routing_header, write_pin_cookie, routing_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=litestar_config.get("enable_routing_middleware", True),
+            routing_header=litestar_config.get("routing_header"),
+            write_pin_cookie=litestar_config.get("write_pin_cookie"),
+            routing_secret=litestar_config.get("routing_secret"),
+        )
+
         return {
             "tenant_settings": TenantResolutionSettings.from_extension_config(litestar_config),
             "connection_key": connection_key,
@@ -1280,6 +1335,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             ),
             "routing_session_key": litestar_config.get("routing_session_key"),
             "default_routing_mode": litestar_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": enable_routing,
+            "routing_header": routing_header,
+            "write_pin_cookie": write_pin_cookie,
+            "routing_secret": routing_secret,
             "commit_mode": commit_mode,
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
@@ -1314,6 +1373,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             read_session_key=settings["read_session_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
+            enable_routing_middleware=settings["enable_routing_middleware"],
+            routing_header=settings["routing_header"],
+            write_pin_cookie=settings["write_pin_cookie"],
+            routing_secret=settings["routing_secret"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
 
@@ -1646,6 +1709,10 @@ class _ConnectionCleanupTarget:
     extra_rollback_statuses: frozenset[int]
     bind_key: str | None = None
     default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = False
+    routing_header_bytes: bytes | None = None
+    write_pin_cookie: str | None = None
+    routing_secret: bytes | None = None
 
 
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):

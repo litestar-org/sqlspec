@@ -82,10 +82,11 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `read_session_key` | `str` | - | Request key for a read session. |
 | `read_connection_key` | `str` | - | Request key for a read connection. |
 | `routing_session_key` | `str` | - | Request key for a routing session. |
-| `default_routing_mode` | `Literal['primary', 'auto']` | - | Default request routing mode. |
-| `enable_routing_middleware` | `bool` | - | Install request-scoped routing middleware. |
-| `routing_header` | `str` | - | Trusted application routing header name. |
-| `write_pin_cookie` | `str or None` | - | Optional application write-pin cookie name. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
+| `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 

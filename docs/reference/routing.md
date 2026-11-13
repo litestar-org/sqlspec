@@ -14,6 +14,8 @@ from sqlspec.utils.routing import (
     RoutingEntry,
     RoutingScope,
     SQLSpecRoutingMiddleware,
+    sign_write_pin,
+    verify_write_pin,
 )
 ```
 
@@ -47,6 +49,14 @@ Use [Read Replicas](../learn/recipes/read-replicas.md) for setup and [Replica Op
     options:
       heading_level: 4
       members: false
+
+::: sqlspec.utils.routing.sign_write_pin
+    options:
+      heading_level: 4
+
+::: sqlspec.utils.routing.verify_write_pin
+    options:
+      heading_level: 4
 
 ## Replica Specifications, Circuit Breakers, and Selectors
 

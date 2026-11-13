@@ -7,6 +7,7 @@ from litestar import Request, get, post
 from litestar.di import NamedDependency
 from litestar.testing import create_test_client
 
+from sqlspec import sign_write_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.adapters.sqlite import SqliteConfig
@@ -16,7 +17,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions._deferred_session import DeferredAsyncSession
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.routing import RoutingContext
+from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 
 
@@ -165,3 +166,72 @@ def test_autocommit_skips_commit_and_rollback_on_unpinned_routing_session(
         assert client.post("/write").json() == {"status": "ok"}
         assert commits == [True]
         assert rollbacks == []
+
+
+def test_litestar_safe_default_routing_signed_cookie_and_deferred_cache(tmp_path: Any) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config = AiosqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={
+            "litestar": {"routing_session_key": "router", "write_pin_cookie": "wp", "routing_secret": "litestar-secret"}
+        },
+    )
+    plugin = SQLSpecPlugin(config)
+
+    @get("/inspect")
+    async def inspect_route(request: Request) -> dict[str, Any]:
+        first = plugin.get_routing_session(request, "router")
+        second = plugin.get_routing_session(request, "router")
+        assert isinstance(first, DeferredAsyncSession)
+        assert first is second
+        with pytest.raises(ImproperConfigurationError, match="provide_request_routing_session_async"):
+            _ = first.primary_session
+        origin = await first.select_value("SELECT origin FROM notes WHERE id=1")
+        entry = RoutingContext.get_entry("shop") or RoutingEntry()
+        return {"origin": origin, "token": entry.causal_token}
+
+    with create_test_client([inspect_route], plugins=[plugin]) as client:
+        assert client.get("/inspect", headers={"x-sqlspec-routing": "primary"}).json() == {
+            "origin": "replica",
+            "token": None,
+        }
+        assert client.get("/inspect", headers={"cookie": "wp=1"}).json() == {"origin": "replica", "token": None}
+        signed = sign_write_pin("litestar-secret", bind_key="shop", causal_token="lsn-9")
+        assert client.get("/inspect", headers={"cookie": f"wp={signed}"}).json() == {
+            "origin": "primary",
+            "token": "lsn-9",
+        }
+
+
+def test_litestar_disabled_routing_middleware_and_outer_context_precedence(tmp_path: Any) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    disabled_config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        extension_config={"litestar": {"enable_routing_middleware": False}},
+    )
+    default_primary_config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={"litestar": {"routing_session_key": "router", "default_routing_mode": "primary"}},
+    )
+
+    @get("/scope-active", sync_to_thread=False)
+    def scope_active() -> dict[str, bool]:
+        return {"has_scope": RoutingContext.current() is not None}
+
+    @get("/origin", sync_to_thread=False)
+    def origin(router: NamedDependency[Any]) -> dict[str, str]:
+        return {"origin": cast(str, router.select_value("SELECT origin FROM notes WHERE id=1"))}
+
+    with create_test_client([scope_active], plugins=[SQLSpecPlugin(disabled_config)]) as client:
+        assert client.get("/scope-active").json() == {"has_scope": False}
+
+    with (
+        RoutingContext.replica("shop"),
+        create_test_client([origin], plugins=[SQLSpecPlugin(default_primary_config)]) as client,
+    ):
+        assert client.get("/origin").json() == {"origin": "replica"}

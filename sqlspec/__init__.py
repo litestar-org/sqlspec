@@ -130,6 +130,8 @@ if TYPE_CHECKING:
         RoutingMode,
         RoutingScope,
         SQLSpecRoutingMiddleware,
+        sign_write_pin,
+        verify_write_pin,
     )
     from sqlspec.utils.tenant import TenantContext, TenantContextPayload
     from sqlspec.utils.uuids import nanoid, uuid4, uuid6, uuid7
@@ -234,12 +236,14 @@ __all__ = (
     "observability",
     "register_param_type",
     "resolve_param_type",
+    "sign_write_pin",
     "sql",
     "typing",
     "utils",
     "uuid4",
     "uuid6",
     "uuid7",
+    "verify_write_pin",
 )
 
 suppress_erroneous_sqlglot_log_messages()
@@ -259,6 +263,8 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "RoutingMode": ("sqlspec.utils.routing", "RoutingMode"),
     "RoutingScope": ("sqlspec.utils.routing", "RoutingScope"),
     "SQLSpecRoutingMiddleware": ("sqlspec.utils.routing", "SQLSpecRoutingMiddleware"),
+    "sign_write_pin": ("sqlspec.utils.routing", "sign_write_pin"),
+    "verify_write_pin": ("sqlspec.utils.routing", "verify_write_pin"),
     "ReadOnlyTransactionError": ("sqlspec.exceptions", "ReadOnlyTransactionError"),
     "ReplicaUnavailableError": ("sqlspec.exceptions", "ReplicaUnavailableError"),
     "RoutingContextError": ("sqlspec.exceptions", "RoutingContextError"),

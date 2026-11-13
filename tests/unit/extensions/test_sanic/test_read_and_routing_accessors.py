@@ -9,6 +9,7 @@ import pytest
 from sanic import Sanic
 from sanic.response import json
 
+from sqlspec import sign_write_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
@@ -93,3 +94,38 @@ def test_sanic_complete_signal_closes_residual_routing_lease(tmp_path: Path) -> 
     with sqlite3.connect(primary) as connection:
         assert connection.execute("SELECT count(*) FROM notes").fetchone() == (3,)
     assert RoutingContext.current() is None
+
+
+def test_sanic_safe_routing_defaults_and_deferred_routing_error(tmp_path: Path) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config = AiosqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={
+            "sanic": {"routing_session_key": "router", "write_pin_cookie": "wp", "routing_secret": "sanic-secret"}
+        },
+    )
+    app: Sanic[Any, Any] = Sanic("safe_routing_" + uuid4().hex)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/inspect")
+    async def inspect_route(request: Any) -> Any:
+        deferred = plugin.get_routing_session(request)
+        assert isinstance(deferred, DeferredAsyncSession)
+        with pytest.raises(ImproperConfigurationError, match="get_routing_session_async"):
+            _ = deferred.primary_session
+        origin = await deferred.select_value("SELECT origin FROM notes WHERE id=1")
+        entry = RoutingContext.get_entry("shop") or RoutingEntry()
+        return json({"origin": origin, "token": entry.causal_token})
+
+    assert app.test_client.get("/inspect", headers={"x-sqlspec-routing": "primary"})[1].json == {
+        "origin": "replica",
+        "token": None,
+    }
+    assert app.test_client.get("/inspect", headers={"cookie": "wp=1"})[1].json == {"origin": "replica", "token": None}
+    signed = sign_write_pin("sanic-secret", bind_key="shop", causal_token="lsn-sanic")
+    assert app.test_client.get("/inspect", headers={"cookie": f"wp={signed}"})[1].json == {
+        "origin": "primary",
+        "token": "lsn-sanic",
+    }

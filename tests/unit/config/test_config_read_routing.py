@@ -112,6 +112,7 @@ def test_extension_routing_options_are_documented_optional_fields() -> None:
         "enable_routing_middleware",
         "routing_header",
         "write_pin_cookie",
+        "routing_secret",
     }
     for schema in (FlaskConfig, LitestarConfig, StarletteConfig, FastAPIConfig, SanicConfig):
         assert fields <= schema.__optional_keys__

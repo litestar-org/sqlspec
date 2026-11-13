@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from flask import Flask
+from flask import Flask, Response
 
+from sqlspec import sign_write_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -148,3 +149,60 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
     finally:
         plugin.shutdown()
     assert RoutingContext.current() is None
+
+
+def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_path: Path) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={
+            "flask": {
+                "routing_session_key": "router",
+                "commit_mode": "autocommit_include_redirect",
+                "write_pin_cookie": "wp",
+                "routing_secret": "flask-secret",
+            }
+        },
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/inspect")
+    def inspect_route() -> dict[str, Any]:
+        router = plugin.get_routing_session()
+        entry = RoutingContext.get_entry("shop") or RoutingEntry()
+        return {"origin": router.select_value("SELECT origin FROM notes WHERE id=1"), "token": entry.causal_token}
+
+    @app.post("/redirect-write")
+    def redirect_write() -> Response:
+        router = plugin.get_routing_session()
+        router.execute("INSERT INTO notes VALUES (4,'redirected')")
+        return Response(status=302, headers={"Location": "/inspect"})
+
+    @app.post("/bad-write")
+    def bad_write() -> Response:
+        router = plugin.get_routing_session()
+        router.execute("INSERT INTO notes VALUES (5,'rolled-back')")
+        return Response(status=400)
+
+    try:
+        client = app.test_client()
+        assert client.get("/inspect", headers={"x-sqlspec-routing": "primary"}).json == {
+            "origin": "replica",
+            "token": None,
+        }
+        client.set_cookie("wp", "1")
+        assert client.get("/inspect").json == {"origin": "replica", "token": None}
+        signed = sign_write_pin("flask-secret", bind_key="shop", causal_token="lsn-flask")
+        client.set_cookie("wp", signed)
+        assert client.get("/inspect").json == {"origin": "primary", "token": "lsn-flask"}
+        assert client.post("/redirect-write").status_code == 302
+        assert client.post("/bad-write").status_code == 400
+        with config.provide_session() as verify:
+            assert verify.select_value("SELECT origin FROM notes WHERE id=4") == "redirected"
+            assert verify.select_value_or_none("SELECT origin FROM notes WHERE id=5") is None
+    finally:
+        plugin.shutdown()
+        config.close_pool()

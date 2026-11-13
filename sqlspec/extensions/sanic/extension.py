@@ -26,7 +26,7 @@ from sqlspec.extensions.sanic._utils import (
 )
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry
+from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
@@ -253,21 +253,6 @@ class SQLSpecPlugin:
             self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
-        """Return a session that opens the asynchronous request connection on its first awaited call."""
-
-        def current_session() -> Any:
-            if has_context_value(request.ctx, config_state.connection_key):
-                return get_or_create_session(request, config_state)
-            return None
-
-        return DeferredAsyncSession(
-            config_state.config,
-            lambda: self.get_session_async(request, config_state.config),
-            current_session,
-            "await plugin.get_session_async(request)",
-        )
-
     async def get_session_async(self, request: Any, key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
@@ -309,6 +294,45 @@ class SQLSpecPlugin:
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
 
+    def get_read_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read session."""
+        return self._read_routing_resource(request, key, "session")
+
+    async def get_read_session_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy read session."""
+        return await self._read_routing_resource_async(request, key, "session")
+
+    def get_read_connection(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read connection."""
+        return self._read_routing_resource(request, key, "connection")
+
+    async def get_read_connection_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy read connection."""
+        return await self._read_routing_resource_async(request, key, "connection")
+
+    def get_routing_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy routing session."""
+        return self._read_routing_resource(request, key, "routing")
+
+    async def get_routing_session_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy routing session."""
+        return await self._read_routing_resource_async(request, key, "routing")
+
+    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+        """Return a session that opens the asynchronous request connection on its first awaited call."""
+
+        def current_session() -> Any:
+            if has_context_value(request.ctx, config_state.connection_key):
+                return get_or_create_session(request, config_state)
+            return None
+
+        return DeferredAsyncSession(
+            config_state.config,
+            lambda: self.get_session_async(request, config_state.config),
+            current_session,
+            "await plugin.get_session_async(request)",
+        )
+
     def _resource_key(self, state: SanicConfigState, kind: str) -> str:
         key = (
             state.read_session_key
@@ -334,11 +358,16 @@ class SQLSpecPlugin:
             deferred_key = f"{resource_key}_deferred"
             current = get_context_value(request.ctx, deferred_key, None)
             if current is None:
+                accessor = (
+                    "await plugin.get_routing_session_async(request)"
+                    if kind == "routing"
+                    else "await plugin.get_read_session_async(request)"
+                )
                 current = DeferredAsyncSession(
                     state.config,
                     lambda: self._read_routing_resource_async(request, state.config, kind),
                     lambda: get_context_value(request.ctx, resource_key, None),
-                    "await plugin.get_read_session_async(request)",
+                    accessor,
                     target_type=AsyncRoutingSession if kind == "routing" else None,
                 )
                 set_context_value(request.ctx, deferred_key, current)
@@ -424,30 +453,6 @@ class SQLSpecPlugin:
         if primary_error is not None:
             raise primary_error
 
-    def get_read_session(self, request: Any, key: Any = None) -> Any:
-        """Return the request's lazy read session."""
-        return self._read_routing_resource(request, key, "session")
-
-    async def get_read_session_async(self, request: Any, key: Any = None) -> Any:
-        """Open and return the request's lazy read session."""
-        return await self._read_routing_resource_async(request, key, "session")
-
-    def get_read_connection(self, request: Any, key: Any = None) -> Any:
-        """Return the request's lazy read connection."""
-        return self._read_routing_resource(request, key, "connection")
-
-    async def get_read_connection_async(self, request: Any, key: Any = None) -> Any:
-        """Open and return the request's lazy read connection."""
-        return await self._read_routing_resource_async(request, key, "connection")
-
-    def get_routing_session(self, request: Any, key: Any = None) -> Any:
-        """Return the request's lazy routing session."""
-        return self._read_routing_resource(request, key, "routing")
-
-    async def get_routing_session_async(self, request: Any, key: Any = None) -> Any:
-        """Open and return the request's lazy routing session."""
-        return await self._read_routing_resource_async(request, key, "routing")
-
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
 
@@ -483,6 +488,10 @@ class SQLSpecPlugin:
             ),
             "routing_session_key": framework_config.get("routing_session_key"),
             "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
+            "routing_header": framework_config.get("routing_header"),
+            "write_pin_cookie": framework_config.get("write_pin_cookie"),
+            "routing_secret": framework_config.get("routing_secret"),
             "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
@@ -533,6 +542,10 @@ class SQLSpecPlugin:
             read_pool_key=settings["read_pool_key"],
             routing_session_key=settings["routing_session_key"],
             default_routing_mode=settings["default_routing_mode"],
+            enable_routing_middleware=settings["enable_routing_middleware"],
+            routing_header=settings["routing_header"],
+            write_pin_cookie=settings["write_pin_cookie"],
+            routing_secret=settings["routing_secret"],
         )
 
     def _tenant_state_for(self, key: Any) -> Any:
@@ -751,11 +764,24 @@ class SQLSpecPlugin:
             request: Sanic request instance.
         """
         self._bind_active_request(request)
-        if not has_context_value(request.ctx, _ROUTING_SCOPE_KEY):
+        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
+        if routing_states and not has_context_value(request.ctx, _ROUTING_SCOPE_KEY):
             payload = RoutingContext.current() or RoutingContextPayload()
-            for state in self._config_states:
-                if state.default_routing_mode == "primary":
+            for state in routing_states:
+                if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
                     payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+                payload = apply_request_routing_hints(
+                    payload,
+                    bind_key=state.config.bind_key,
+                    routing_header_value=request.headers.get(state.routing_header)
+                    if state.routing_header is not None
+                    else None,
+                    cookie_value=request.cookies.get(state.write_pin_cookie)
+                    if state.write_pin_cookie is not None
+                    else None,
+                    write_pin_cookie=state.write_pin_cookie,
+                    routing_secret=state.routing_secret,
+                )
             set_context_value(request.ctx, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
         self._set_observability_contexts(request)
         try:

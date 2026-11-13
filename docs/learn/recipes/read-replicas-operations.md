@@ -13,16 +13,18 @@ Use `RoutingContext.scope()` in workers. `mark_write()` outside a scope returns 
 `SQLSpecRoutingMiddleware` binds a routing scope for an ASGI request and restores it in `finally`. The default `x-sqlspec-routing` header accepts `auto`, `primary`, `replica`, or `replica:reporting`. A configured write-pin cookie can carry a primary pin or causal token. A custom extractor can return a `RoutingEntry` or `RoutingContextPayload`.
 
 ```python
-from sqlspec.utils.routing import SQLSpecRoutingMiddleware
+from sqlspec.utils.routing import SQLSpecRoutingMiddleware, sign_write_pin
 
 application = SQLSpecRoutingMiddleware(
     app,
-    routing_header="x-sqlspec-routing",
+    routing_header=None,
     write_pin_cookie="recent_write",
+    routing_secret=app_secret,
 )
+cookie_value = sign_write_pin(app_secret, ttl_seconds=5.0, causal_token="0/16B3748")
 ```
 
-Here `app` is the existing ASGI application. The middleware reads hints; the application chooses when to issue a response cookie or token. It stores no cross-request state. Treat client hints as read intent, never as permission to access a tenant. Use `strict_headers=True` if invalid header values should fail rather than be ignored.
+Here `app` is the existing ASGI application. In the built-in Litestar, Starlette, FastAPI, Flask, and Sanic extensions, `enable_routing_middleware` defaults to `True` with `routing_header=None` and `write_pin_cookie=None`, isolating each request's `RoutingContext` without trusting external client headers or cookies by default. For browser or public-client read-your-own-writes, configure `write_pin_cookie` alongside `routing_secret` and issue short-lived `HttpOnly` cookies via `sign_write_pin()`, which binds the expiration timestamp, `bind_key`, and optional `causal_token` under HMAC-SHA256. Enable `routing_header` only behind an ingress proxy or gateway that strips that header from untrusted external requests. Treat client hints as read intent, never as permission to access a tenant. Use `strict_headers=True` if invalid header values should fail rather than be ignored.
 
 ## Native Freshness Barriers
 

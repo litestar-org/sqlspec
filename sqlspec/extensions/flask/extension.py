@@ -25,7 +25,7 @@ from sqlspec.extensions.flask._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry
+from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
 from sqlspec.utils.tenant import (
     TenantContext,
     TenantContextPayload,
@@ -288,6 +288,46 @@ class SQLSpecPlugin:
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return self._ensure_request_connection(config_state)
 
+    def get_read_session(self, key: Any = None) -> Any:
+        """Return the request's read session, bridging async drivers through the portal."""
+        return self._get_read_routing_resource(key, "session")
+
+    def get_read_connection(self, key: Any = None) -> Any:
+        """Return the request-owned raw read connection."""
+        return self._get_read_routing_resource(key, "connection")
+
+    def get_routing_session(self, key: Any = None) -> Any:
+        """Return the request's lazy automatic routing facade."""
+        return self._get_read_routing_resource(key, "routing")
+
+    def shutdown(self) -> None:
+        """Dispose connection pools and stop async portal."""
+
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_complete = True
+
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                self._close_pool_state(config_state)
+
+        if self._portal is not None:
+            try:
+                self._portal.stop()
+            except Exception as exc:
+                log_with_context(
+                    logger,
+                    logging.ERROR,
+                    "extension.init",
+                    framework="flask",
+                    stage="shutdown",
+                    status="failed",
+                    error_type=type(exc).__name__,
+                )
+            finally:
+                self._portal = None
+
     def _call_portal(
         self,
         state: FlaskConfigState,
@@ -356,46 +396,6 @@ class SQLSpecPlugin:
         set_context_value(g, resource_key, current)
         return current
 
-    def get_read_session(self, key: Any = None) -> Any:
-        """Return the request's read session, bridging async drivers through the portal."""
-        return self._get_read_routing_resource(key, "session")
-
-    def get_read_connection(self, key: Any = None) -> Any:
-        """Return the request-owned raw read connection."""
-        return self._get_read_routing_resource(key, "connection")
-
-    def get_routing_session(self, key: Any = None) -> Any:
-        """Return the request's lazy automatic routing facade."""
-        return self._get_read_routing_resource(key, "routing")
-
-    def shutdown(self) -> None:
-        """Dispose connection pools and stop async portal."""
-
-        if self._shutdown_complete:
-            return
-
-        self._shutdown_complete = True
-
-        for config_state in self._config_states:
-            if config_state.config.supports_connection_pooling:
-                self._close_pool_state(config_state)
-
-        if self._portal is not None:
-            try:
-                self._portal.stop()
-            except Exception as exc:
-                log_with_context(
-                    logger,
-                    logging.ERROR,
-                    "extension.init",
-                    framework="flask",
-                    stage="shutdown",
-                    status="failed",
-                    error_type=type(exc).__name__,
-                )
-            finally:
-                self._portal = None
-
     def _config_state(self, config: Any) -> FlaskConfigState:
         """Create configuration state from database config.
 
@@ -451,6 +451,10 @@ class SQLSpecPlugin:
             ),
             routing_session_key=flask_config.get("routing_session_key"),
             default_routing_mode=flask_config.get("default_routing_mode", "auto"),
+            enable_routing_middleware=flask_config.get("enable_routing_middleware", True),
+            routing_header=flask_config.get("routing_header"),
+            write_pin_cookie=flask_config.get("write_pin_cookie"),
+            routing_secret=flask_config.get("routing_secret"),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -498,11 +502,24 @@ class SQLSpecPlugin:
         """
         from flask import g, request
 
-        if not has_context_value(g, _ROUTING_SCOPE_KEY):
+        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
+        if routing_states and not has_context_value(g, _ROUTING_SCOPE_KEY):
             payload = RoutingContext.current() or RoutingContextPayload()
-            for state in self._config_states:
-                if state.default_routing_mode == "primary":
+            for state in routing_states:
+                if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
                     payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+                payload = apply_request_routing_hints(
+                    payload,
+                    bind_key=state.config.bind_key,
+                    routing_header_value=request.headers.get(state.routing_header)
+                    if state.routing_header is not None
+                    else None,
+                    cookie_value=request.cookies.get(state.write_pin_cookie)
+                    if state.write_pin_cookie is not None
+                    else None,
+                    write_pin_cookie=state.write_pin_cookie,
+                    routing_secret=state.routing_secret,
+                )
             set_context_value(g, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
 
         if self._enable_correlation and self._extractor is not None:
@@ -576,7 +593,7 @@ class SQLSpecPlugin:
             if facade is not None and facade.pinned_to_primary:
                 if config_state.should_commit(response.status_code):
                     self._execute_commit(facade, config_state)
-                else:
+                elif config_state.should_rollback(response.status_code):
                     self._execute_rollback(facade, config_state)
         return response
 

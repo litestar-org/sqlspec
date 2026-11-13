@@ -2,7 +2,15 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager, AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
+from contextlib import (
+    AbstractContextManager,
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+    nullcontext,
+    suppress,
+)
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from anyio import CancelScope
@@ -24,7 +32,13 @@ from sqlspec.extensions.starlette._utils import (
     set_state_value,
 )
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    apply_request_routing_hints,
+    extract_asgi_routing_headers,
+)
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
@@ -46,6 +60,8 @@ __all__ = (
     "acquire_pending_connection_async",
     "acquire_pending_connection_sync",
     "deferred_request_session",
+    "get_request_resource",
+    "get_request_resource_async",
     "has_tenant_strategy",
 )
 
@@ -69,10 +85,22 @@ class SQLSpecRequestLeaseMiddleware:
             if scope["type"] == "http"
             else cast("Request", HTTPConnection(scope))
         )
+        routing_states = [state for state in self.config_states if state.enable_routing_middleware]
         payload = RoutingContext.current() or RoutingContextPayload()
-        for state in self.config_states:
-            if state.default_routing_mode == "primary":
+        for state in routing_states:
+            if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
                 payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+            cookie_header, routing_header_value = extract_asgi_routing_headers(
+                scope, state.routing_header_bytes, include_cookies=state.write_pin_cookie is not None
+            )
+            payload = apply_request_routing_hints(
+                payload,
+                bind_key=state.config.bind_key,
+                routing_header_value=routing_header_value,
+                cookie_header=cookie_header,
+                write_pin_cookie=state.write_pin_cookie,
+                routing_secret=state.routing_secret,
+            )
         status_code = 500
         response_complete = False
 
@@ -84,9 +112,11 @@ class SQLSpecRequestLeaseMiddleware:
             if _completes_response(message):
                 response_complete = True
 
-        async with RoutingContext.scope(payload), AsyncExitStack() as stack:
+        routing_scope: Any = RoutingContext.scope(payload) if routing_states else nullcontext()
+        async with routing_scope, AsyncExitStack() as stack:
             with ExitStack() as sync_stack:
                 for state in self.config_states:
+                    set_state_value(request.state, _response_owner_key(state.connection_key), True)
                     set_state_value(
                         request.state,
                         _pending_connection_key(state.connection_key),
@@ -117,10 +147,20 @@ class SQLSpecRequestLeaseMiddleware:
                                 )
                         raise
                     else:
+                        finalize_error: BaseException | None = None
                         for state in self.config_states:
-                            await self._finalize(request, state, response_complete and state.should_commit(status_code))
+                            try:
+                                await self._finalize(
+                                    request, state, response_complete and state.should_commit(status_code)
+                                )
+                            except BaseException as exc:
+                                if finalize_error is None:
+                                    finalize_error = exc
+                        if finalize_error is not None:
+                            raise finalize_error
                 finally:
                     for state in self.config_states:
+                        pop_state_value(request.state, _response_owner_key(state.connection_key))
                         pop_state_value(request.state, _pending_connection_key(state.connection_key))
                         for resource_key in (
                             state.read_connection_key,
@@ -137,11 +177,27 @@ class SQLSpecRequestLeaseMiddleware:
             return
         connection = get_state_value(request.state, state.connection_key, None)
         if connection is not None:
-            await _finalize_request_transaction(request, state, connection, commit=commit)
+            if commit:
+                try:
+                    await _finalize_request_transaction(request, state, connection, commit=True)
+                except BaseException:
+                    with suppress(Exception):
+                        await _finalize_request_transaction(request, state, connection, commit=False)
+                    raise
+            else:
+                await _finalize_request_transaction(request, state, connection, commit=False)
         if state.routing_session_key is not None:
             facade = get_state_value(request.state, state.routing_session_key, None)
             if facade is not None and facade.pinned_to_primary:
-                await ensure_async_(facade.commit if commit else facade.rollback)()
+                if commit:
+                    try:
+                        await ensure_async_(facade.commit)()
+                    except BaseException:
+                        with suppress(Exception):
+                            await ensure_async_(facade.rollback)()
+                        raise
+                else:
+                    await ensure_async_(facade.rollback)()
 
 
 class SQLSpecManualMiddleware(SQLSpecRequestLeaseMiddleware):
@@ -469,21 +525,6 @@ class SQLSpecTenantRequestMiddleware:
         return None
 
 
-def _reject_missing_tenant(scope: "Scope") -> NoReturn:
-    """Raise the Starlette response for a request without an authorized tenant."""
-    from starlette.exceptions import HTTPException, WebSocketException
-
-    user = scope.get("user")
-    authenticated = user is not None and bool(getattr(user, "is_authenticated", True))
-    if scope.get("type") == "websocket":
-        if authenticated:
-            raise WebSocketException(code=4003, reason="An authorized tenant is required")
-        raise WebSocketException(code=4001, reason="Authentication required")
-    if authenticated:
-        raise HTTPException(status_code=403, detail="An authorized tenant is required")
-    raise HTTPException(status_code=401, detail="Authentication required")
-
-
 async def acquire_pending_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Acquire the deferred request connection asynchronously if not yet checked out."""
     if has_state_value(request.state, config_state.connection_key):
@@ -579,6 +620,65 @@ def deferred_request_session(request: "Request", config_state: "SQLSpecConfigSta
     )
 
 
+def has_tenant_strategy(config: Any) -> bool:
+    """Return whether a configuration enables an active tenant strategy."""
+    features = getattr(config, "driver_features", None)
+    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
+
+
+def get_request_resource(request: "Request", config_state: "SQLSpecConfigState", key: str, kind: str) -> Any:
+    """Return a lazy read or routing resource owned by the request lease stack."""
+    current = get_state_value(request.state, key, None)
+    if current is not None:
+        return current
+    slot = get_state_value(request.state, _resource_slot_key(key), None)
+    if slot is None:
+        msg = "Request lease middleware is required before accessing database resources"
+        raise ImproperConfigurationError(msg)
+    if config_state.config.is_async:
+        if kind == "connection":
+            raise_async_connection_required("await plugin.get_read_connection_async(request)")
+        deferred_key = f"{key}_deferred"
+        current = get_state_value(request.state, deferred_key, None)
+        if current is None:
+            accessor = (
+                "await plugin.get_routing_session_async(request)"
+                if kind == "routing"
+                else "await plugin.get_read_session_async(request)"
+            )
+            current = DeferredAsyncSession(
+                config_state.config,
+                lambda: get_request_resource_async(request, config_state, key, kind),
+                lambda: get_state_value(request.state, key, None),
+                accessor,
+                target_type=AsyncRoutingSession if kind == "routing" else None,
+            )
+            set_state_value(request.state, deferred_key, current)
+        return current
+    current = slot.sync_stack.enter_context(_captured_sync_resource(slot))
+    set_state_value(request.state, key, current)
+    return current
+
+
+async def get_request_resource_async(
+    request: "Request", config_state: "SQLSpecConfigState", key: str, kind: str
+) -> Any:
+    """Acquire one request-owned resource under its per-slot asynchronous lock."""
+    current = get_state_value(request.state, key, None)
+    if current is not None:
+        return current
+    slot = get_state_value(request.state, _resource_slot_key(key), None)
+    if slot is None:
+        msg = "Request lease middleware is required before accessing database resources"
+        raise ImproperConfigurationError(msg)
+    async with slot.lock:
+        current = get_state_value(request.state, key, None)
+        if current is None:
+            current = await slot.stack.enter_async_context(_captured_async_resource(slot))
+            set_state_value(request.state, key, current)
+        return current
+
+
 class _PendingConnection:
     """Deferred request-scoped connection slot checked out on first access."""
 
@@ -597,12 +697,6 @@ def _response_owner_key(connection_key: str) -> str:
 
 def _pending_connection_key(connection_key: str) -> str:
     return f"sqlspec_pending_connection_{connection_key}"
-
-
-def has_tenant_strategy(config: Any) -> bool:
-    """Return whether a configuration enables an active tenant strategy."""
-    features = getattr(config, "driver_features", None)
-    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
 def _completes_response(message: "Message") -> bool:
@@ -766,49 +860,16 @@ async def _captured_async_resource(slot: _RequestResourceSlot) -> "AsyncGenerato
             await context.__aexit__(None, None, None)
 
 
-def get_request_resource(request: "Request", config_state: "SQLSpecConfigState", key: str, kind: str) -> Any:
-    """Return a lazy read or routing resource owned by the request lease stack."""
-    current = get_state_value(request.state, key, None)
-    if current is not None:
-        return current
-    slot = get_state_value(request.state, _resource_slot_key(key), None)
-    if slot is None:
-        msg = "Request lease middleware is required before accessing database resources"
-        raise ImproperConfigurationError(msg)
-    if config_state.config.is_async:
-        if kind == "connection":
-            raise_async_connection_required("await plugin.get_read_connection_async(request)")
-        deferred_key = f"{key}_deferred"
-        current = get_state_value(request.state, deferred_key, None)
-        if current is None:
-            current = DeferredAsyncSession(
-                config_state.config,
-                lambda: get_request_resource_async(request, config_state, key, kind),
-                lambda: get_state_value(request.state, key, None),
-                "await plugin.get_read_session_async(request)",
-                target_type=AsyncRoutingSession if kind == "routing" else None,
-            )
-            set_state_value(request.state, deferred_key, current)
-        return current
-    current = slot.sync_stack.enter_context(_captured_sync_resource(slot))
-    set_state_value(request.state, key, current)
-    return current
+def _reject_missing_tenant(scope: "Scope") -> NoReturn:
+    """Raise the Starlette response for a request without an authorized tenant."""
+    from starlette.exceptions import HTTPException, WebSocketException
 
-
-async def get_request_resource_async(
-    request: "Request", config_state: "SQLSpecConfigState", key: str, kind: str
-) -> Any:
-    """Acquire one request-owned resource under its per-slot asynchronous lock."""
-    current = get_state_value(request.state, key, None)
-    if current is not None:
-        return current
-    slot = get_state_value(request.state, _resource_slot_key(key), None)
-    if slot is None:
-        msg = "Request lease middleware is required before accessing database resources"
-        raise ImproperConfigurationError(msg)
-    async with slot.lock:
-        current = get_state_value(request.state, key, None)
-        if current is None:
-            current = await slot.stack.enter_async_context(_captured_async_resource(slot))
-            set_state_value(request.state, key, current)
-        return current
+    user = scope.get("user")
+    authenticated = user is not None and bool(getattr(user, "is_authenticated", True))
+    if scope.get("type") == "websocket":
+        if authenticated:
+            raise WebSocketException(code=4003, reason="An authorized tenant is required")
+        raise WebSocketException(code=4001, reason="Authentication required")
+    if authenticated:
+        raise HTTPException(status_code=403, detail="An authorized tenant is required")
+    raise HTTPException(status_code=401, detail="Authentication required")

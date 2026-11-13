@@ -6,7 +6,8 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.exceptions import RoutingContextError
+from sqlspec import sign_write_pin, verify_write_pin
+from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError
 from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, SQLSpecRoutingMiddleware
 
 
@@ -141,3 +142,69 @@ async def test_middleware_async_extractor_exception_reset_and_lifespan() -> None
     with pytest.raises(RuntimeError):
         await middleware({"type": "lifespan"}, receive, send)
     assert seen[1] is None
+
+
+def test_signed_write_pin_roundtrip_expiry_and_bind_isolation() -> None:
+    now = 1_700_000_000.0
+    signed = sign_write_pin("top-secret", ttl_seconds=5.0, bind_key="orders", causal_token="lsn-42", clock=lambda: now)
+    assert verify_write_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 4.9) == (True, "lsn-42")
+    assert verify_write_pin(signed, "top-secret", bind_key="orders", clock=lambda: now + 5.1) == (False, None)
+    assert verify_write_pin(signed, "wrong-secret", bind_key="orders", clock=lambda: now) == (False, None)
+    assert verify_write_pin(signed, "top-secret", bind_key="billing", clock=lambda: now) == (False, None)
+    assert verify_write_pin(signed, "top-secret", bind_key=None, clock=lambda: now) == (False, None)
+
+    plain_pin = sign_write_pin(b"bytes-secret", ttl_seconds=2.0, clock=lambda: now)
+    assert verify_write_pin(plain_pin, b"bytes-secret", clock=lambda: now + 1.0) == (True, None)
+    assert verify_write_pin("1", "top-secret", clock=lambda: now) == (False, None)
+    assert verify_write_pin("x" * 1025, "top-secret", clock=lambda: now) == (False, None)
+
+
+@pytest.mark.parametrize(
+    ("secret", "kwargs", "exc_type"),
+    [
+        ("", {}, ImproperConfigurationError),
+        ("ok", {"ttl_seconds": 0.0}, ImproperConfigurationError),
+        ("ok", {"ttl_seconds": float("nan")}, ImproperConfigurationError),
+        ("ok", {"causal_token": "bad\r\ntoken"}, RoutingContextError),
+        ("ok", {"bind_key": "bad\x00bind"}, RoutingContextError),
+    ],
+)
+def test_sign_write_pin_rejects_invalid_inputs(secret: str, kwargs: dict[str, Any], exc_type: type[Exception]) -> None:
+    with pytest.raises(exc_type):
+        sign_write_pin(secret, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("routing_header", "headers", "expected"),
+    [
+        (None, [(b"x-sqlspec-routing", b"primary")], ("auto", None, None)),
+        (None, [(b"cookie", b"wp=1")], ("auto", None, None)),
+        (None, [(b"cookie", b"wp=lsn-unsigned")], ("auto", None, None)),
+        ("x-sqlspec-routing", [(b"x-sqlspec-routing", b"replica:analytics")], ("replica", "analytics", None)),
+    ],
+)
+async def test_middleware_signed_cookie_and_disabled_header(
+    routing_header: str | None, headers: list[tuple[bytes, bytes]], expected: tuple[str, str | None, str | None]
+) -> None:
+    observed: list[tuple[str, str | None, str | None]] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        entry = RoutingContext.get_entry("orders") or RoutingEntry()
+        observed.append((entry.mode, entry.bind_group, entry.causal_token))
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def send(message: Any) -> None:
+        pass
+
+    middleware = SQLSpecRoutingMiddleware(
+        app, bind_key="orders", routing_header=routing_header, write_pin_cookie="wp", routing_secret="cookie-secret"
+    )
+    await middleware({"type": "http", "headers": headers}, receive, send)
+    assert observed == [expected]
+
+    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
+    observed.clear()
+    await middleware({"type": "http", "headers": [(b"cookie", f"wp={signed}".encode("ascii"))]}, receive, send)
+    assert observed == [("primary", None, "lsn-77")]

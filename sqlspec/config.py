@@ -405,13 +405,15 @@ class FlaskConfig(TypedDict):
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
-    """Default request routing mode."""
+    """Default request routing mode. Default: ``'auto'``."""
     enable_routing_middleware: NotRequired[bool]
-    """Install request-scoped routing middleware."""
-    routing_header: NotRequired[str]
-    """Trusted application routing header name."""
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
     write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name."""
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
 
 
 class LitestarConfig(TypedDict):
@@ -534,13 +536,15 @@ class LitestarConfig(TypedDict):
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
-    """Default request routing mode."""
+    """Default request routing mode. Default: ``'auto'``."""
     enable_routing_middleware: NotRequired[bool]
-    """Install request-scoped routing middleware."""
-    routing_header: NotRequired[str]
-    """Trusted application routing header name."""
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
     write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name."""
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
 
@@ -615,13 +619,15 @@ class StarletteConfig(TypedDict):
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
-    """Default request routing mode."""
+    """Default request routing mode. Default: ``'auto'``."""
     enable_routing_middleware: NotRequired[bool]
-    """Install request-scoped routing middleware."""
-    routing_header: NotRequired[str]
-    """Trusted application routing header name."""
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
     write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name."""
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
 
@@ -702,13 +708,15 @@ class SanicConfig(TypedDict):
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
-    """Default request routing mode."""
+    """Default request routing mode. Default: ``'auto'``."""
     enable_routing_middleware: NotRequired[bool]
-    """Install request-scoped routing middleware."""
-    routing_header: NotRequired[str]
-    """Trusted application routing header name."""
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
     write_pin_cookie: NotRequired[str | None]
-    """Optional application write-pin cookie name."""
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
 
@@ -1031,6 +1039,56 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     observability_config: "ObservabilityConfig | None"
     _observability_runtime: "ObservabilityRuntime | None"
 
+    @property
+    def is_replica(self) -> bool:
+        """Whether this configuration represents a read replica."""
+        return self._is_replica
+
+    @property
+    def has_replicas(self) -> bool:
+        """Whether this configuration owns any replica groups."""
+        return bool(self._replica_groups)
+
+    @property
+    def supports_read_routing(self) -> bool:
+        """Whether replica pools or an adapter-specific read provider are available."""
+        return self.has_replicas or type(self).provide_read_session not in {
+            DatabaseConfigProtocol.provide_read_session,
+            NoPoolSyncConfig.provide_read_session,
+            NoPoolAsyncConfig.provide_read_session,
+            SyncDatabaseConfig.provide_read_session,
+            AsyncDatabaseConfig.provide_read_session,
+        }
+
+    @property
+    def replica_groups(self) -> "Mapping[str, ReadReplicaGroup[Any]]":
+        """Return a read-only view of named replica groups."""
+        return MappingProxyType(self._replica_groups)
+
+    @property
+    def migration_config(self) -> "dict[str, Any] | MigrationConfig":
+        """Return the current migration configuration."""
+        return self._migration_config
+
+    @migration_config.setter
+    def migration_config(self, value: "dict[str, Any] | MigrationConfig | None") -> None:
+        """Store migration configuration and refresh derived migration helpers."""
+        resolved = dict(cast("dict[str, Any]", value) or {})
+        validate_migration_config_keys(resolved)
+        Path(resolved.get("script_location", "migrations"))
+        if "project_root" in resolved:
+            Path(resolved["project_root"])
+        if any(key in resolved for key in ("templates", "title", "default_format")):
+            from sqlspec.migrations.templates import build_template_settings
+
+            build_template_settings(resolved)
+        with self._migration_lock:
+            object.__setattr__(self, "_migration_config", resolved)
+            self._migration_loader = None
+            self._migration_commands = None
+            if self._has_initialized_attribute("extension_config"):
+                self._ensure_extension_migrations()
+
     def derive_pool(
         self,
         *,
@@ -1087,125 +1145,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         if bind_key is None or bind_key == self.bind_key:
             derived._tenant_key = self._tenant_key
         return derived
-
-    def _allow_replica_fallback(self, _error: Exception) -> bool:
-        """Return whether a failed reader checkout may fall back to this primary."""
-        return True
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        """Normalize merged clone options while preserving explicit overrides."""
-        return config
-
-    @property
-    def is_replica(self) -> bool:
-        """Whether this configuration represents a read replica."""
-        return self._is_replica
-
-    @property
-    def has_replicas(self) -> bool:
-        """Whether this configuration owns any replica groups."""
-        return bool(self._replica_groups)
-
-    @property
-    def supports_read_routing(self) -> bool:
-        """Whether replica pools or an adapter-specific read provider are available."""
-        return self.has_replicas or type(self).provide_read_session not in {
-            DatabaseConfigProtocol.provide_read_session,
-            NoPoolSyncConfig.provide_read_session,
-            NoPoolAsyncConfig.provide_read_session,
-            SyncDatabaseConfig.provide_read_session,
-            AsyncDatabaseConfig.provide_read_session,
-        }
-
-    @property
-    def replica_groups(self) -> "Mapping[str, ReadReplicaGroup[Any]]":
-        """Return a read-only view of named replica groups."""
-        return MappingProxyType(self._replica_groups)
-
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, bool):
-            msg = f"{type(self).__name__} does not support replicas=True shorthand; pass explicit replica endpoints or overrides"
-            raise ImproperConfigurationError(msg)
-        if isinstance(spec_input, str):
-            key = next(
-                (
-                    key
-                    for key in ("dsn", "conninfo", "uri", "url", "database")
-                    if isinstance(self.connection_config.get(key), str)
-                ),
-                "dsn",
-            )
-            return {"connection_config_overrides": {key: spec_input}}
-        return dict(spec_input)
-
-    def _normalize_replica(self, item: ReplicaItemInput) -> ReplicaSpec:
-        spec = item if isinstance(item, ReplicaSpec) else ReplicaSpec(item)
-        config = spec.config
-        if not isinstance(config, DatabaseConfigProtocol):
-            config = self.derive_pool(is_replica=True, **self._build_replica_spec_overrides(config))
-        if config is self or config.has_replicas or config.is_async != self.is_async:
-            msg = "Replica configurations must be distinct, unnested, and use the primary execution mode"
-            raise ImproperConfigurationError(msg)
-        config._is_replica = True
-        if config.bind_key is None or config.bind_key == self.bind_key:
-            config._tenant_key = self._tenant_key
-        return ReplicaSpec(config, weight=spec.weight, name=spec.name, max_staleness_seconds=spec.max_staleness_seconds)
-
-    def _normalize_replicas(self, replicas: "ReplicasInput | None") -> "dict[str, ReadReplicaGroup[Any]]":
-        if not replicas:
-            return {}
-        if self._is_replica:
-            msg = "A replica configuration cannot declare nested replicas"
-            raise ImproperConfigurationError(msg)
-        groups: Mapping[Any, Any]
-        if isinstance(replicas, Mapping):
-            grouped = all(
-                isinstance(value, ReadReplicaGroup)
-                or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping)))
-                for value in replicas.values()
-            )
-            if grouped:
-                groups = replicas
-            elif any(isinstance(value, ReadReplicaGroup) for value in replicas.values()):
-                msg = "Cannot mix ReadReplicaGroup entries with scalar connection override keys in replicas mapping"
-                raise ImproperConfigurationError(msg)
-            else:
-                groups = {"default": [replicas]}
-        elif isinstance(replicas, ReadReplicaGroup) or (
-            isinstance(replicas, Sequence) and not isinstance(replicas, (str, bytes))
-        ):
-            groups = {"default": replicas}
-        else:
-            groups = {"default": [replicas]}
-        result: dict[str, ReadReplicaGroup[Any]] = {}
-        for name, items in groups.items():
-            if not isinstance(name, str) or not name:
-                msg = "Replica group names must be nonempty strings"
-                raise ImproperConfigurationError(msg)
-            if isinstance(items, ReadReplicaGroup):
-                for spec in items.specs:
-                    self._normalize_replica(spec)
-                result[name] = items
-            else:
-                result[name] = ReadReplicaGroup([self._normalize_replica(item) for item in items], name=name)
-        return result
-
-    def _resolve_read_group(self, bind_group: str | None) -> "tuple[ReadReplicaGroup[Any] | None, RoutingEntry | None]":
-        entry = RoutingContext.get_entry(self.bind_key)
-        if bind_group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
-            return None, entry
-        effective_group = bind_group if bind_group is not None else entry.bind_group if entry is not None else None
-        if not self._replica_groups and effective_group is None:
-            return None, entry
-        group_key = effective_group if effective_group is not None else "default"
-        if group_key in self._replica_groups:
-            return self._replica_groups[group_key], entry
-        if effective_group is None and (entry is None or entry.mode != "replica"):
-            return None, entry
-        msg = f"Unknown replica bind_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
-        raise RoutingContextError(msg)
 
     def provide_routing_session(
         self,
@@ -1271,87 +1210,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             self._provide_read(True, args, kwargs, bind_group),
         )
 
-    def _provide_read(
-        self, session: bool, args: tuple[Any, ...], kwargs: dict[str, Any], bind_group: str | None
-    ) -> Any:
-        group, entry = self._resolve_read_group(bind_group)
-        if group is not None:
-            provider = group.provide_session if session else group.provide_connection
-            return provider(
-                *args,
-                primary=None if entry is not None and entry.mode == "replica" else self,
-                causal_token=None if entry is None else entry.causal_token,
-                max_staleness_seconds=None if entry is None else entry.max_staleness_seconds,
-                **kwargs,
-            )
-        if entry is not None and entry.mode == "replica":
-            msg = "No read replica is configured for the requested bind"
-            raise ReplicaUnavailableError(msg)
-        receipt = _ReadSelectionReceipt()
-        provider = self.provide_session if session else self.provide_connection
-        context = provider(*args, **kwargs)
-        if self.is_async:
-            return _ReadAsyncContext(
-                self._primary_read_async(cast("AbstractAsyncContextManager[Any]", context), receipt), receipt
-            )
-        return _ReadSyncContext(self._primary_read_sync(cast("AbstractContextManager[Any]", context), receipt), receipt)
-
-    @contextmanager
-    def _primary_read_sync(
-        self, context: "AbstractContextManager[Any]", receipt: "_ReadSelectionReceipt"
-    ) -> "Generator[Any]":
-        with context as value:
-            receipt.config = self
-            yield value
-
-    @asynccontextmanager
-    async def _primary_read_async(
-        self, context: "AbstractAsyncContextManager[Any]", receipt: "_ReadSelectionReceipt"
-    ) -> "AsyncGenerator[Any]":
-        async with context as value:
-            receipt.config = self
-            yield value
-
-    def _create_replica_pools_sync(self) -> None:
-        for group in self._replica_groups.values():
-            group.create_pools()
-
-    async def _create_replica_pools_async(self) -> None:
-        for group in self._replica_groups.values():
-            await cast("Awaitable[list[Any]]", group.create_pools())
-
-    def _close_pools_sync(self, close_primary: Callable[[], None] | None = None) -> None:
-        error: BaseException | None = None
-        try:
-            if close_primary is not None:
-                close_primary()
-            self.connection_instance = None
-        except BaseException as exc:
-            error = exc
-        for group in self._replica_groups.values():
-            try:
-                group.close_pools()
-            except BaseException as exc:
-                error = error or exc
-        if error is not None:
-            raise error
-
-    async def _close_pools_async(self, close_primary: "Callable[[], Awaitable[None]] | None" = None) -> None:
-        error: BaseException | None = None
-        try:
-            if close_primary is not None:
-                await close_primary()
-            self.connection_instance = None
-        except BaseException as exc:
-            error = exc
-        for group in self._replica_groups.values():
-            try:
-                await cast("Awaitable[None]", group.close_pools())
-            except BaseException as exc:
-                error = error or exc
-        if error is not None:
-            raise error
-
     def __hash__(self) -> int:
         return id(self)
 
@@ -1364,30 +1222,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             f"migration_config={self.migration_config!r}",
         ])
         return f"{type(self).__name__}({parts})"
-
-    @property
-    def migration_config(self) -> "dict[str, Any] | MigrationConfig":
-        """Return the current migration configuration."""
-        return self._migration_config
-
-    @migration_config.setter
-    def migration_config(self, value: "dict[str, Any] | MigrationConfig | None") -> None:
-        """Store migration configuration and refresh derived migration helpers."""
-        resolved = dict(cast("dict[str, Any]", value) or {})
-        validate_migration_config_keys(resolved)
-        Path(resolved.get("script_location", "migrations"))
-        if "project_root" in resolved:
-            Path(resolved["project_root"])
-        if any(key in resolved for key in ("templates", "title", "default_format")):
-            from sqlspec.migrations.templates import build_template_settings
-
-            build_template_settings(resolved)
-        with self._migration_lock:
-            object.__setattr__(self, "_migration_config", resolved)
-            self._migration_loader = None
-            self._migration_commands = None
-            if self._has_initialized_attribute("extension_config"):
-                self._ensure_extension_migrations()
 
     def set_migration_config(self, config: "dict[str, Any] | MigrationConfig") -> None:
         """Attach migration configuration after initial config creation.
@@ -1709,6 +1543,180 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             yes: Skip confirmation prompt. Defaults to False.
         """
         raise NotImplementedError
+
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        """Return whether a failed reader checkout may fall back to this primary."""
+        return True
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Normalize merged clone options while preserving explicit overrides."""
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            msg = f"{type(self).__name__} does not support replicas=True shorthand; pass explicit replica endpoints or overrides"
+            raise ImproperConfigurationError(msg)
+        if isinstance(spec_input, str):
+            key = next(
+                (
+                    key
+                    for key in ("dsn", "conninfo", "uri", "url", "database")
+                    if isinstance(self.connection_config.get(key), str)
+                ),
+                "dsn",
+            )
+            return {"connection_config_overrides": {key: spec_input}}
+        return dict(spec_input)
+
+    def _normalize_replica(self, item: ReplicaItemInput) -> ReplicaSpec:
+        spec = item if isinstance(item, ReplicaSpec) else ReplicaSpec(item)
+        config = spec.config
+        if not isinstance(config, DatabaseConfigProtocol):
+            config = self.derive_pool(is_replica=True, **self._build_replica_spec_overrides(config))
+        if config is self or config.has_replicas or config.is_async != self.is_async:
+            msg = "Replica configurations must be distinct, unnested, and use the primary execution mode"
+            raise ImproperConfigurationError(msg)
+        config._is_replica = True
+        if config.bind_key is None or config.bind_key == self.bind_key:
+            config._tenant_key = self._tenant_key
+        return ReplicaSpec(config, weight=spec.weight, name=spec.name, max_staleness_seconds=spec.max_staleness_seconds)
+
+    def _normalize_replicas(self, replicas: "ReplicasInput | None") -> "dict[str, ReadReplicaGroup[Any]]":
+        if not replicas:
+            return {}
+        if self._is_replica:
+            msg = "A replica configuration cannot declare nested replicas"
+            raise ImproperConfigurationError(msg)
+        groups: Mapping[Any, Any]
+        if isinstance(replicas, Mapping):
+            grouped = all(
+                isinstance(value, ReadReplicaGroup)
+                or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping)))
+                for value in replicas.values()
+            )
+            if grouped:
+                groups = replicas
+            elif any(isinstance(value, ReadReplicaGroup) for value in replicas.values()):
+                msg = "Cannot mix ReadReplicaGroup entries with scalar connection override keys in replicas mapping"
+                raise ImproperConfigurationError(msg)
+            else:
+                groups = {"default": [replicas]}
+        elif isinstance(replicas, ReadReplicaGroup) or (
+            isinstance(replicas, Sequence) and not isinstance(replicas, (str, bytes))
+        ):
+            groups = {"default": replicas}
+        else:
+            groups = {"default": [replicas]}
+        result: dict[str, ReadReplicaGroup[Any]] = {}
+        for name, items in groups.items():
+            if not isinstance(name, str) or not name:
+                msg = "Replica group names must be nonempty strings"
+                raise ImproperConfigurationError(msg)
+            if isinstance(items, ReadReplicaGroup):
+                for spec in items.specs:
+                    self._normalize_replica(spec)
+                result[name] = items
+            else:
+                result[name] = ReadReplicaGroup([self._normalize_replica(item) for item in items], name=name)
+        return result
+
+    def _resolve_read_group(self, bind_group: str | None) -> "tuple[ReadReplicaGroup[Any] | None, RoutingEntry | None]":
+        entry = RoutingContext.get_entry(self.bind_key)
+        if bind_group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+            return None, entry
+        effective_group = bind_group if bind_group is not None else entry.bind_group if entry is not None else None
+        if not self._replica_groups and effective_group is None:
+            return None, entry
+        group_key = effective_group if effective_group is not None else "default"
+        if group_key in self._replica_groups:
+            return self._replica_groups[group_key], entry
+        if effective_group is None and (entry is None or entry.mode != "replica"):
+            return None, entry
+        msg = f"Unknown replica bind_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
+        raise RoutingContextError(msg)
+
+    def _provide_read(
+        self, session: bool, args: tuple[Any, ...], kwargs: dict[str, Any], bind_group: str | None
+    ) -> Any:
+        group, entry = self._resolve_read_group(bind_group)
+        if group is not None:
+            provider = group.provide_session if session else group.provide_connection
+            return provider(
+                *args,
+                primary=None if entry is not None and entry.mode == "replica" else self,
+                causal_token=None if entry is None else entry.causal_token,
+                max_staleness_seconds=None if entry is None else entry.max_staleness_seconds,
+                **kwargs,
+            )
+        if entry is not None and entry.mode == "replica":
+            msg = "No read replica is configured for the requested bind"
+            raise ReplicaUnavailableError(msg)
+        receipt = _ReadSelectionReceipt()
+        provider = self.provide_session if session else self.provide_connection
+        context = provider(*args, **kwargs)
+        if self.is_async:
+            return _ReadAsyncContext(
+                self._primary_read_async(cast("AbstractAsyncContextManager[Any]", context), receipt), receipt
+            )
+        return _ReadSyncContext(self._primary_read_sync(cast("AbstractContextManager[Any]", context), receipt), receipt)
+
+    @contextmanager
+    def _primary_read_sync(
+        self, context: "AbstractContextManager[Any]", receipt: "_ReadSelectionReceipt"
+    ) -> "Generator[Any]":
+        with context as value:
+            receipt.config = self
+            yield value
+
+    @asynccontextmanager
+    async def _primary_read_async(
+        self, context: "AbstractAsyncContextManager[Any]", receipt: "_ReadSelectionReceipt"
+    ) -> "AsyncGenerator[Any]":
+        async with context as value:
+            receipt.config = self
+            yield value
+
+    def _create_replica_pools_sync(self) -> None:
+        for group in self._replica_groups.values():
+            group.create_pools()
+
+    async def _create_replica_pools_async(self) -> None:
+        for group in self._replica_groups.values():
+            await cast("Awaitable[list[Any]]", group.create_pools())
+
+    def _close_pools_sync(self, close_primary: Callable[[], None] | None = None) -> None:
+        error: BaseException | None = None
+        try:
+            if close_primary is not None:
+                close_primary()
+            self.connection_instance = None
+        except BaseException as exc:
+            error = exc
+        for group in self._replica_groups.values():
+            try:
+                group.close_pools()
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
+
+    async def _close_pools_async(self, close_primary: "Callable[[], Awaitable[None]] | None" = None) -> None:
+        error: BaseException | None = None
+        try:
+            if close_primary is not None:
+                await close_primary()
+            self.connection_instance = None
+        except BaseException as exc:
+            error = exc
+        for group in self._replica_groups.values():
+            try:
+                await cast("Awaitable[None]", group.close_pools())
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
 
     def _has_initialized_attribute(self, attribute_name: str) -> bool:
         """Return whether a slot-backed attribute has been initialized."""
@@ -2987,9 +2995,6 @@ class ReadReplicaGroup(Generic[ConfigT]):
             return self._create_async_pools()
         return [config.create_pool() for config in self._configs]
 
-    async def _create_async_pools(self) -> list[Any]:
-        return [await cast("Awaitable[Any]", config.create_pool()) for config in self._configs]
-
     def close_pools(self) -> "Awaitable[None] | None":
         """Close every pool before propagating the first close error."""
         if self._is_async:
@@ -3003,16 +3008,6 @@ class ReadReplicaGroup(Generic[ConfigT]):
         if error is not None:
             raise error
         return None
-
-    async def _close_async_pools(self) -> None:
-        error: BaseException | None = None
-        for config in self._configs:
-            try:
-                await cast("Awaitable[None]", config.close_pool())
-            except BaseException as exc:
-                error = error or exc
-        if error is not None:
-            raise error
 
     def attach_observability(self, registry_config: ObservabilityConfig | None) -> None:
         """Attach the registry settings to each replica's own runtime."""
@@ -3044,6 +3039,19 @@ class ReadReplicaGroup(Generic[ConfigT]):
         """Acquire a tenant-aware session with failover limited to checkout."""
         kwargs.update(statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant)
         return self._provide(True, args, kwargs, primary, causal_token, max_staleness_seconds)
+
+    async def _create_async_pools(self) -> list[Any]:
+        return [await cast("Awaitable[Any]", config.create_pool()) for config in self._configs]
+
+    async def _close_async_pools(self) -> None:
+        error: BaseException | None = None
+        for config in self._configs:
+            try:
+                await cast("Awaitable[None]", config.close_pool())
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
 
     def _provide(
         self,

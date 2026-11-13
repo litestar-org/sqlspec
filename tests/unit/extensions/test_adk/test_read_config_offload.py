@@ -106,3 +106,38 @@ async def test_adk_primary_scope_isolated_between_concurrent_tasks(tmp_path: Pat
     assert (primary_label, replica_label) == ("writer", "reader")
     await writer.close_pool()
     await reader.close_pool()
+
+
+@pytest.mark.parametrize("store_type", [_SessionProbe, _MemoryProbe, _ArtifactProbe])
+def test_adk_read_bind_group_routes_replica_group_and_respects_context_override(
+    tmp_path: Path, store_type: type[_SessionProbe] | type[_MemoryProbe] | type[_ArtifactProbe]
+) -> None:
+    default_reader = SqliteConfig(connection_config={"database": str(tmp_path / "default.db")})
+    analytics_reader = SqliteConfig(connection_config={"database": str(tmp_path / "analytics.db")})
+    writer = SqliteConfig(
+        connection_config={"database": str(tmp_path / "writer.db")},
+        bind_key="agents",
+        replicas={"default": [default_reader], "analytics": [analytics_reader]},
+        extension_config={"adk": {"read_bind_group": "analytics"}},
+    )
+    for config, label in ((writer, "writer"), (default_reader, "default"), (analytics_reader, "analytics")):
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE sources (origin TEXT)")
+            session.execute("INSERT INTO sources VALUES (:origin)", {"origin": label})
+    try:
+        store = store_type(writer)
+        assert store.read_bind_group == "analytics"
+        assert store.read_label() == "analytics"
+        with RoutingContext.replica("agents", bind_group="default"):
+            assert store.read_label() == "default"
+        with RoutingContext.primary("agents"):
+            assert store.read_label() == "writer"
+    finally:
+        writer.close_pool()
+
+
+@pytest.mark.parametrize("invalid_group", ["", "bad\r\ngroup", 123])
+def test_adk_rejects_invalid_read_bind_group(invalid_group: Any) -> None:
+    config = SqliteConfig(extension_config={"adk": cast("Any", {"read_bind_group": invalid_group})})
+    with pytest.raises(ImproperConfigurationError, match="read_bind_group"):
+        _SessionProbe(config)

@@ -518,10 +518,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise oracledb_module.NotSupportedError(msg)
         try:
             method()
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
-        self._sessionless_transaction_id = None
-        self._transaction_active = False
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
+        finally:
+            self._transaction_active = False
 
     def sessionless_transaction(
         self,
@@ -1652,10 +1659,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise oracledb_module.NotSupportedError(msg)
         try:
             await cast("Any", method)()
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
-        self._sessionless_transaction_id = None
-        self._transaction_active = False
+        except BaseException as exc:
+            pending = create_mapped_exception(exc) if isinstance(exc, OracleError) else exc
+            if self._sessionless_transaction_id is not None:
+                self._sessionless_cleanup_error = pending
+            if pending is not exc:
+                raise pending from exc
+            raise
+        else:
+            self._sessionless_transaction_id = None
+        finally:
+            self._transaction_active = False
 
     def sessionless_transaction(
         self,

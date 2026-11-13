@@ -37,6 +37,8 @@ from oracledb import SparseVector as OracleSparseVector
 from oracledb import create_pipeline as oracledb_create_pipeline
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
+from sqlspec.exceptions import ImproperConfigurationError
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
@@ -297,21 +299,6 @@ class OracleAsyncSessionContext:
         return None
 
 
-def _resolve_sync_driver_type() -> "Callable[..., OracleSyncDriver]":
-    """Resolve OracleSyncDriver without a function-scoped import."""
-    return cast(
-        "Callable[..., OracleSyncDriver]", importlib.import_module("sqlspec.adapters.oracledb.driver").OracleSyncDriver
-    )
-
-
-def _resolve_async_driver_type() -> "Callable[..., OracleAsyncDriver]":
-    """Resolve OracleAsyncDriver without a function-scoped import."""
-    return cast(
-        "Callable[..., OracleAsyncDriver]",
-        importlib.import_module("sqlspec.adapters.oracledb.driver").OracleAsyncDriver,
-    )
-
-
 class OracleSyncSessionlessTransactionContext:
     """Begin or resume a transaction and suspend it when its request scope exits."""
 
@@ -328,7 +315,6 @@ class OracleSyncSessionlessTransactionContext:
         rollback_on_error: bool = True,
     ) -> None:
         from sqlspec.adapters.oracledb.core import validate_sessionless_transaction_args
-        from sqlspec.exceptions import ImproperConfigurationError
 
         if not isinstance(resume, bool) or not isinstance(rollback_on_error, bool):
             msg = "resume and rollback_on_error must be bool"
@@ -388,7 +374,6 @@ class OracleAsyncSessionlessTransactionContext:
         rollback_on_error: bool = True,
     ) -> None:
         from sqlspec.adapters.oracledb.core import validate_sessionless_transaction_args
-        from sqlspec.exceptions import ImproperConfigurationError
 
         if not isinstance(resume, bool) or not isinstance(rollback_on_error, bool):
             msg = "resume and rollback_on_error must be bool"
@@ -430,3 +415,18 @@ class OracleAsyncSessionlessTransactionContext:
                 if exc_val is not None:
                     exc_val.add_note(f"Oracle sessionless transaction cleanup failed: {cleanup_error}")
         return False
+
+
+def _resolve_sync_driver_type() -> "Callable[..., OracleSyncDriver]":
+    """Resolve OracleSyncDriver without a function-scoped import."""
+    return cast(
+        "Callable[..., OracleSyncDriver]", importlib.import_module("sqlspec.adapters.oracledb.driver").OracleSyncDriver
+    )
+
+
+def _resolve_async_driver_type() -> "Callable[..., OracleAsyncDriver]":
+    """Resolve OracleAsyncDriver without a function-scoped import."""
+    return cast(
+        "Callable[..., OracleAsyncDriver]",
+        importlib.import_module("sqlspec.adapters.oracledb.driver").OracleAsyncDriver,
+    )

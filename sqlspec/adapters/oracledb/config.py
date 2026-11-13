@@ -499,12 +499,18 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
                 cleanup_error = exc
         if cleanup_error is not None:
             self._ctx._conn = None
+            pool = self._config.connection_instance
             if self._tenant_lease is not None:
+                if self._tenant_lease._pool is not None:
+                    pool = self._tenant_lease._pool
                 self._tenant_lease._connection = None
                 self._tenant_lease._state = None
+                self._tenant_lease._pool = None
+                self._tenant_lease._bypass_hook = None
             try:
                 forget_oracle_session_state(_conn)
-                self._config.connection_instance.drop(_conn)
+                if pool is not None:
+                    pool.drop(_conn)
             except BaseException as drop_error:
                 cleanup_error.add_note(f"Oracle connection disposal failed: {drop_error}")
             _oracle_cleanup_error(kwargs.get("exc_val"), cleanup_error)
@@ -1090,14 +1096,20 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
             except BaseException as exc:
                 cleanup_error = exc
         if cleanup_error is not None:
+            pool = self._ctx._pool or self._config.connection_instance
             self._ctx._connection = None
             self._ctx._pool = None
             if self._tenant_lease is not None:
+                if self._tenant_lease._pool is not None:
+                    pool = self._tenant_lease._pool
                 self._tenant_lease._connection = None
                 self._tenant_lease._state = None
+                self._tenant_lease._pool = None
+                self._tenant_lease._bypass_hook = None
             try:
                 forget_oracle_session_state(_conn)
-                await self._config.connection_instance.drop(_conn)
+                if pool is not None:
+                    await pool.drop(_conn)
             except BaseException as drop_error:
                 cleanup_error.add_note(f"Oracle connection disposal failed: {drop_error}")
             _oracle_cleanup_error(kwargs.get("exc_val"), cleanup_error)

@@ -40,6 +40,7 @@ from sqlspec.adapters.oracledb.config import (
     OracleSyncConfig,
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.utils.tenant import TenantContext
 
 
 class _StubConnection:
@@ -1962,10 +1963,11 @@ async def test_oracle_query_time_standby_error_never_replays_on_primary(async_mo
 
 
 @pytest.mark.parametrize("async_mode", [False, True])
-@pytest.mark.parametrize("operation", ["rollback", "commit"])
+@pytest.mark.parametrize("operation", ["rollback", "commit", "suspend"])
 @pytest.mark.parametrize("native_error", [False, True])
+@pytest.mark.parametrize("tenant_scoped", [False, True])
 async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
-    async_mode: bool, operation: str, native_error: bool
+    async_mode: bool, operation: str, native_error: bool, tenant_scoped: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     connection = MagicMock()
     connection.thin = True
@@ -1976,6 +1978,9 @@ async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
     expected_error = SQLSpecError if native_error else RuntimeError
     connection.rollback = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
     connection.commit = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    connection.suspend_sessionless_transaction = (
+        AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    )
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
     connection.cursor.return_value = cursor
@@ -1986,20 +1991,22 @@ async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
     pool.release = AsyncMock() if async_mode else Mock()
     pool.drop = AsyncMock() if async_mode else Mock()
     config_type = OracleAsyncConfig if async_mode else OracleSyncConfig
-    config = cast(
-        "Any",
-        config_type(
-            connection_instance=pool,
-            driver_features={"session_context_hook": OracleSessionContextConfig(clear_identifier=True)},
-        ),
-    )
+    features: dict[str, Any] = {"session_context_hook": OracleSessionContextConfig(clear_identifier=True)}
+    if tenant_scoped:
+        features["tenant_strategy"] = "client_context"
+    config = cast("Any", config_type(connection_instance=None if tenant_scoped else pool, driver_features=features))
+    if tenant_scoped:
+        monkeypatch.setattr(
+            config_type, "provide_pool", AsyncMock(return_value=pool) if async_mode else Mock(return_value=pool)
+        )
     body = ValueError("request failed")
-    with pytest.raises(expected_error, match="transaction cleanup failed"):
+    scope = TenantContext.scope("acme") if tenant_scoped else TenantContext.bypass()
+    with scope, pytest.raises(expected_error, match="transaction cleanup failed"):
         if async_mode:
             async with config.provide_session() as session:
-                if operation == "rollback":
+                if operation in {"rollback", "suspend"}:
                     with pytest.raises(ValueError) as captured:
-                        async with session.sessionless_transaction():
+                        async with session.sessionless_transaction(rollback_on_error=operation == "rollback"):
                             raise body
                     assert captured.value is body
                     assert any("cleanup" in note for note in body.__notes__)
@@ -2009,9 +2016,9 @@ async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
                         await session.commit()
         else:
             with config.provide_session() as session:
-                if operation == "rollback":
+                if operation in {"rollback", "suspend"}:
                     with pytest.raises(ValueError) as captured:
-                        with session.sessionless_transaction():
+                        with session.sessionless_transaction(rollback_on_error=operation == "rollback"):
                             raise body
                     assert captured.value is body
                     assert any("cleanup" in note for note in body.__notes__)

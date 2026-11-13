@@ -1,18 +1,26 @@
 """Synchronous routing behavior through real SQLite sessions."""
 
+import asyncio
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from sqlspec import sql
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import SQL, StatementConfig, StatementStack
 from sqlspec.driver._routing import SyncRoutingSession
-from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError, SQLSpecError, TransactionError
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    ReplicaUnavailableError,
+    RoutingContextError,
+    SQLSpecError,
+    TransactionError,
+)
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 
 
@@ -513,6 +521,58 @@ async def test_replica_policy_change_releases_finished_lease_and_protects_stream
                 with RoutingContext.replica(causal_token="second"):
                     assert session.select_value("SELECT 3") == 3
                 assert session.replica_session is not first
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_promoted_fallback_writer_survives_conflicting_replica_scope(tmp_path: Path, async_mode: bool) -> None:
+    writer_db = str(tmp_path / "writer.db")
+    with sqlite3.connect(writer_db) as connection:
+        connection.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, origin TEXT)")
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(
+        connection_config={"database": writer_db, **({"pool_size": 1} if async_mode else {})},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+    )
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                assert await session.select_value("SELECT count(*) FROM notes") == 0
+                shared = session.replica_session
+                assert shared is not None
+                await session.execute("INSERT INTO notes VALUES (7, 'pending')")
+                await session.commit()
+                assert session.primary_session is shared
+                assert session.pinned_to_primary
+                with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                    await asyncio.wait_for(session.select_value("SELECT count(*) FROM notes"), timeout=2)
+                assert session.primary_session is shared
+                assert session.replica_session is None
+                await session.execute("INSERT INTO notes VALUES (8, 'after_replica')")
+                await session.commit()
+            async with primary.provide_session() as verify:
+                assert await verify.select_value("SELECT count(*) FROM notes") == 2
+        else:
+            with primary.provide_routing_session() as session:
+                assert session.select_value("SELECT count(*) FROM notes") == 0
+                shared = session.replica_session
+                assert shared is not None
+                session.execute("INSERT INTO notes VALUES (7, 'pending')")
+                session.commit()
+                assert session.primary_session is shared
+                assert session.pinned_to_primary
+                with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                    session.select_value("SELECT count(*) FROM notes")
+                assert session.primary_session is shared
+                assert session.replica_session is None
+                session.execute("INSERT INTO notes VALUES (8, 'after_replica')")
+                session.commit()
+            with primary.provide_session() as verify:
+                assert verify.select_value("SELECT count(*) FROM notes") == 2
     finally:
         if async_mode:
             await primary.close_pool()

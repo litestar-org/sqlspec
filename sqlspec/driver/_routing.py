@@ -844,6 +844,11 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             if self._replica_streams:
                 msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
                 raise RoutingContextError(msg)
+            if self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction()):
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+                return
             try:
                 self._replica_stack.close()
             finally:
@@ -1522,6 +1527,11 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             if self._replica_streams:
                 msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
                 raise RoutingContextError(msg)
+            if self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction()):
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+                return
             try:
                 await self._replica_stack.aclose()
             finally:
