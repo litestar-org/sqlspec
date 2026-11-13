@@ -108,7 +108,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 else:
                     data_value, expires_at = row
 
-                if renew_for is not None and expires_at is not None:
+                if self._should_renew(renew_for) and expires_at is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
                     if new_expires_at is not None:
                         naive_expires_at = new_expires_at.replace(tzinfo=None)

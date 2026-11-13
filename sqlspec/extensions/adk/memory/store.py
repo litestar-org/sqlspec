@@ -5,7 +5,12 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
-from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
+from sqlspec.extensions.adk._table_utils import (
+    ensure_table_name,
+    owner_id_column_name,
+    unique_statements,
+    validate_owner_id_column_ddl,
+)
 from sqlspec.extensions.adk.store import _reconcile_adk_schema_sync
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
@@ -72,9 +77,12 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._enable_bm25: bool = bool(store_config.get("enable_bm25", False))
         self._scann_num_leaves: int = store_config.get("scann_num_leaves", 100)
         self._scann_quantizer: str = store_config.get("scann_quantizer", "SQ8")
-        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        raw_owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_ddl: str | None = (
+            validate_owner_id_column_ddl(raw_owner_id_column_ddl) if raw_owner_id_column_ddl is not None else None
+        )
         self._owner_id_column_name: str | None = (
-            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl is not None else None
         )
 
     @property
@@ -143,6 +151,10 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
 
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the memory table."""
+        return [DropStatement(statement) for statement in self._drop_memory_table_sql()]
+
     def _store_config_from_extension(self) -> _ADKMemoryStoreConfig:
         return _adk_memory_store_config(self._config)
 
@@ -156,10 +168,6 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
-
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops for the memory table."""
-        return [DropStatement(statement) for statement in self._drop_memory_table_sql()]
 
     def _drop_sql_for_table(self, table_name: str) -> list[str]:
         current_table = self._memory_table
@@ -267,16 +275,6 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             db_system=resolve_db_system(type(self).__name__),
         )
 
-    async def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
-        if not self._enabled:
-            return []
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        ddl = await self._memory_table_ddl()
-        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
-        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
-
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive ADK memory table changes from canonical adapter DDL."""
         manage_schema, create_schema = self._schema_management_flags()
@@ -335,11 +333,15 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session.
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner.
 
         Args:
             session_id: Session ID to delete entries for.
+            app_name: Optional application name owner filter.
+            user_id: Optional user identifier owner filter.
 
         Returns:
             Number of entries deleted.
@@ -361,6 +363,16 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             Number of entries deleted.
         """
         raise NotImplementedError
+
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl = await self._memory_table_ddl()
+        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
+        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
 
     @abstractmethod
     async def _memory_table_ddl(self) -> "str | list[str]":
@@ -440,16 +452,6 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
             db_system=resolve_db_system(type(self).__name__),
         )
 
-    def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
-        if not self._enabled:
-            return []
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        ddl = self._memory_table_ddl()
-        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
-        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
-
     def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive ADK memory table changes from canonical adapter DDL."""
         manage_schema, create_schema = self._schema_management_flags()
@@ -479,14 +481,35 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner.
+
+        Args:
+            session_id: Session ID to delete entries for.
+            app_name: Optional application name owner filter.
+            user_id: Optional user identifier owner filter.
+
+        Returns:
+            Number of entries deleted.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         raise NotImplementedError
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl = self._memory_table_ddl()
+        ddl_str = ddl if isinstance(ddl, str) else ";\n".join(ddl)
+        return [SchemaTarget.from_ddl(self._memory_table, ddl_str, dialect=dialect)]
 
     @abstractmethod
     def _memory_table_ddl(self) -> "str | list[str]":

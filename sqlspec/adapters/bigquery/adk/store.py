@@ -223,6 +223,11 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered BigQuery ADK SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
     def _qualified(self, table: str) -> str:
         """Return the dataset-qualified table identifier when available."""
         if "." in table:
@@ -303,7 +308,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     def _get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             self._update_session_touch(app_name, user_id, session_id)
 
         sql = f"""
@@ -405,7 +410,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         self._run_query(events_sql, params)
         self._run_query(sessions_sql, params)
 
-    def _append_event(self, event_record: StoredEvent) -> None:
+    def _insert_event_row(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._qualified(self._events_table)}
             (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -422,6 +427,29 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         ]
         self._run_query(sql, params)
 
+    def _append_event(self, event_record: StoredEvent) -> None:
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = f"""
+        SELECT 1
+        FROM {self._qualified(self._session_table)}
+        WHERE id = @id AND app_name = @app_name AND user_id = @user_id{self._partition_filter("create_time")}
+        LIMIT 1
+        """
+        ownership_rows = self._run_query(
+            ownership_sql,
+            [
+                self._query_param("id", session_id),
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+            ],
+        )
+        if not ownership_rows:
+            msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+            raise ValueError(msg)
+        self._insert_event_row(event_record)
+
     def _append_event_and_update_state(
         self,
         event_record: StoredEvent,
@@ -433,17 +461,18 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        self._append_event(event_record)
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         self._update_session_state(app_name, user_id, session_id, state)
-        if app_state is not None:
-            self._upsert_app_state(app_name, app_state)
-        if user_state is not None:
-            self._upsert_user_state(app_name, user_id, user_state)
-
         record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
+
+        self._insert_event_row(event_record)
+        if app_state is not None:
+            self._upsert_app_state(app_name, app_state)
+        if user_state is not None:
+            self._upsert_user_state(app_name, user_id, user_state)
         return record
 
     def _get_events(
@@ -454,11 +483,17 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
+            return []
         sql = f"""
         SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
         FROM {self._qualified(self._events_table)} e
-        WHERE e.app_name = @app_name AND e.user_id = @user_id AND e.session_id = @session_id
-          {self._partition_filter("timestamp", alias="e").strip()}
+        JOIN {self._qualified(self._session_table)} s
+            ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+        WHERE s.app_name = @app_name AND s.user_id = @user_id AND s.id = @session_id{self._partition_filter("timestamp", alias="e")}{self._partition_filter("create_time", alias="s")}
         """
         params = [
             self._query_param("app_name", app_name),
@@ -678,11 +713,6 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             for table, ddl in ddl_targets
         ]
 
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return ordered BigQuery ADK SchemaTarget definitions."""
-        del driver
-        return self._schema_targets()
-
     @staticmethod
     def _decode_json(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> "dict[str, Any] | None":
         if value is None:
@@ -695,6 +725,14 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             return cast("dict[str, Any]", deserializer(value))
         msg = f"Unsupported JSON column representation from BigQuery: {type(value).__name__}"
         raise TypeError(msg)
+
+
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)
 
 
 def _resolve_config_dataset_id(config: BigQueryConfig) -> str | None:

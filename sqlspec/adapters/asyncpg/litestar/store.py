@@ -82,7 +82,7 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             Session data as bytes if found and not expired, None otherwise.
         """
         try:
-            if renew_for is not None:
+            if self._should_renew(renew_for):
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     update_sql = f"""

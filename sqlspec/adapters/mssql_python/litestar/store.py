@@ -29,51 +29,6 @@ _MAX_TABLE_NAME_PARTS: Final = 2
 _MIN_QUOTED_SEGMENT_LENGTH: Final = 2
 
 
-def _unwrap_tsql_segment(segment: str) -> str | None:
-    if not segment or segment != segment.strip():
-        return None
-    if segment.startswith("["):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith("]"):
-            return None
-        inner = segment[1:-1]
-        if "[" in inner or "]" in inner.replace("]]", ""):
-            return None
-        return inner.replace("]]", "]")
-    if segment.startswith('"'):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith('"'):
-            return None
-        inner = segment[1:-1]
-        if '"' in inner.replace('""', ""):
-            return None
-        return inner.replace('""', '"')
-    return segment
-
-
-def _validate_session_table_name(table_name: str) -> None:
-    """Raise ValueError unless table_name is a valid 1- or 2-part T-SQL table name."""
-    if not table_name or not table_name.strip():
-        msg = "Table name must not be empty"
-        raise ValueError(msg)
-    if table_name != table_name.strip():
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    raw_segments = table_name.split(".")
-    if len(raw_segments) > _MAX_TABLE_NAME_PARTS:
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    unwrapped: list[str] = []
-    for raw_segment in raw_segments:
-        segment = _unwrap_tsql_segment(raw_segment)
-        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
-            msg = f"Invalid table name: {table_name!r}"
-            raise ValueError(msg)
-        unwrapped.append(segment)
-    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
-    if parts != tuple(unwrapped):
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-
-
 class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     """SQL Server-backed session store using mssql-python sync sessions."""
 
@@ -81,11 +36,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
-
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate 1- or 2-part T-SQL session table name."""
-        _validate_session_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -123,11 +73,6 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
-    def _schema_target(self) -> SchemaTarget:
-        """Build the SQL Server session SchemaTarget scoped to dbo or explicit schema."""
-        schema_name, bare_table = split_schema_and_table(self._table_name)
-        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="tsql")
-
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the filtered SQL Server session expiry index metadata and guarded DDL."""
         schema_name, bare_table = split_schema_and_table(self._table_name)
@@ -148,6 +93,16 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         END;
         """
         return [CompanionIndex(name=raw_index_name, table=bare_table, schema=schema_name, ddl=ddl)]
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part T-SQL session table name."""
+        _validate_session_table_name(table_name)
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the SQL Server session SchemaTarget scoped to dbo or explicit schema."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="tsql")
 
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
@@ -203,7 +158,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if renew_for is not None and expires_at is not None:
+            if self._should_renew(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     with MssqlPythonCursor(conn) as update_cursor:
@@ -293,6 +248,51 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         if count > 0:
             self._log_delete_expired(count)
         return count
+
+
+def _unwrap_tsql_segment(segment: str) -> str | None:
+    if not segment or segment != segment.strip():
+        return None
+    if segment.startswith("["):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith("]"):
+            return None
+        inner = segment[1:-1]
+        if "[" in inner or "]" in inner.replace("]]", ""):
+            return None
+        return inner.replace("]]", "]")
+    if segment.startswith('"'):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LENGTH or not segment.endswith('"'):
+            return None
+        inner = segment[1:-1]
+        if '"' in inner.replace('""', ""):
+            return None
+        return inner.replace('""', '"')
+    return segment
+
+
+def _validate_session_table_name(table_name: str) -> None:
+    """Raise ValueError unless table_name is a valid 1- or 2-part T-SQL table name."""
+    if not table_name or not table_name.strip():
+        msg = "Table name must not be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    raw_segments = table_name.split(".")
+    if len(raw_segments) > _MAX_TABLE_NAME_PARTS:
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    unwrapped: list[str] = []
+    for raw_segment in raw_segments:
+        segment = _unwrap_tsql_segment(raw_segment)
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
+            msg = f"Invalid table name: {table_name!r}"
+            raise ValueError(msg)
+        unwrapped.append(segment)
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
+    if parts != tuple(unwrapped):
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
 
 
 def _table_ref(table_name: str) -> str:

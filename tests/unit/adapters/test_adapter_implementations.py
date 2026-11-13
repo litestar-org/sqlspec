@@ -1,12 +1,17 @@
 """Parameterized tests for real adapter implementations."""
 
+import base64
 import importlib
 import inspect
 import operator
 import sqlite3
 import types
+from collections.abc import AsyncIterator, Generator, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Self
 
 import pytest
 
@@ -46,13 +51,10 @@ ADAPTER_CONFIGS = [
     },
     {
         "name": "MySQL",
-        # MySQL uses QMARK for sqlglot parsing (supported_parameter_styles)
-        # but POSITIONAL_PYFORMAT for execution (supported_execution_parameter_styles)
         "parameter_style": ParameterStyle.QMARK,
         "execution_style": ParameterStyle.POSITIONAL_PYFORMAT,
         "dialect": "mysql",
         "example_queries": {
-            # Use QMARK in examples since that's what sqlglot can parse
             "select": "SELECT * FROM users WHERE id = ?",
             "insert": "INSERT INTO users (name) VALUES (?)",
             "update": "UPDATE users SET name = ? WHERE id = ?",
@@ -100,9 +102,7 @@ def adapter_config(request: pytest.FixtureRequest) -> "dict[str, Any]":
 
 @pytest.fixture
 def statement_config_for_adapter(adapter_config: "dict[str, Any]") -> StatementConfig:
-    """Create statement config for specific adapter."""
-    # parameter_style is for sqlglot parsing (supported_parameter_styles)
-    # execution_style (if different) is for driver execution (supported_execution_parameter_styles)
+    """Create statement config separating parse and execution parameter styles."""
     parse_style = adapter_config["parameter_style"]
     exec_style = adapter_config.get("execution_style", parse_style)
 
@@ -617,3 +617,283 @@ def test_litestar_session_migration_resolves_store_class(adapter: str, config_na
     store_module = importlib.import_module(f"sqlspec.adapters.{adapter}.litestar.store")
 
     assert hasattr(store_module, store_name), f"{adapter}: expected {store_name} in litestar/store.py"
+
+
+LITESTAR_RENEWAL_STORE_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("sqlspec.adapters.asyncpg.litestar.store", "AsyncpgStore", "async_fetch"),
+    ("sqlspec.adapters.psycopg.litestar.store", "PsycopgAsyncStore", "async_dict_cursor"),
+    ("sqlspec.adapters.psycopg.litestar.store", "PsycopgSyncStore", "sync_dict_cursor"),
+    ("sqlspec.adapters.psqlpy.litestar.store", "PsqlpyStore", "async_fetch"),
+    ("sqlspec.adapters.cockroach_asyncpg.litestar.store", "CockroachAsyncpgStore", "async_fetch"),
+    ("sqlspec.adapters.cockroach_psycopg.litestar.store", "CockroachPsycopgAsyncStore", "async_dict_cursor"),
+    ("sqlspec.adapters.cockroach_psycopg.litestar.store", "CockroachPsycopgSyncStore", "sync_dict_cursor"),
+    ("sqlspec.adapters.sqlite.litestar.store", "SqliteStore", "sqlite_conn"),
+    ("sqlspec.adapters.aiosqlite.litestar.store", "AiosqliteStore", "aiosqlite_conn"),
+    ("sqlspec.adapters.aiomysql.litestar.store", "AiomysqlStore", "async_tuple_cursor"),
+    ("sqlspec.adapters.asyncmy.litestar.store", "AsyncmyStore", "async_tuple_cursor"),
+    ("sqlspec.adapters.pymysql.litestar.store", "PyMysqlStore", "sync_dict_cursor"),
+    ("sqlspec.adapters.mysqlconnector.litestar.store", "MysqlConnectorAsyncStore", "async_tuple_cursor"),
+    ("sqlspec.adapters.mysqlconnector.litestar.store", "MysqlConnectorSyncStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.mssql_python.litestar.store", "MssqlPythonStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.pymssql.litestar.store", "PymssqlStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.sybase.litestar.store", "SybaseStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.sqlanywhere.litestar.store", "SqlanywhereStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.oracledb.litestar.store", "OracleAsyncStore", "async_tuple_cursor"),
+    ("sqlspec.adapters.oracledb.litestar.store", "OracleSyncStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.db2.litestar.store", "Db2SyncStore", "sync_session"),
+    ("sqlspec.adapters.db2.litestar.store", "Db2AsyncStore", "async_session"),
+    ("sqlspec.adapters.bigquery.litestar.store", "BigQueryStore", "sync_session"),
+    ("sqlspec.adapters.snowflake.litestar.store", "SnowflakeStore", "sync_session"),
+    ("sqlspec.adapters.teradata.litestar.store", "TeradataStore", "sync_tuple_cursor"),
+    ("sqlspec.adapters.duckdb.litestar.store", "DuckDBStore", "duckdb_conn"),
+    ("sqlspec.adapters.arrow_odbc.litestar.store", "ArrowOdbcStore", "arrow_odbc_session"),
+)
+
+
+def _decode_sql(sql: object) -> str:
+    return sql.decode("utf-8") if isinstance(sql, bytes) else str(sql)
+
+
+class _RecordingSyncCursor:
+    def __init__(self, executed: "list[str]", row: Any) -> None:
+        self._executed = executed
+        self._row = row
+
+    def execute(self, sql: object, *_args: Any, **_kwargs: Any) -> Self:
+        self._executed.append(_decode_sql(sql))
+        return self
+
+    def fetchone(self) -> Any:
+        return self._row
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+class _RecordingAsyncCursor:
+    def __init__(self, executed: "list[str]", row: Any, *, record_on_init_sql: "str | None" = None) -> None:
+        self._executed = executed
+        self._row = row
+        if record_on_init_sql is not None:
+            self._executed.append(record_on_init_sql)
+
+    def __await__(self) -> Generator[Any, None, Self]:
+        async def _coro() -> Self:
+            return self
+
+        return _coro().__await__()
+
+    async def execute(self, sql: object, *_args: Any, **_kwargs: Any) -> Self:
+        self._executed.append(_decode_sql(sql))
+        return self
+
+    async def fetchone(self) -> Any:
+        return self._row
+
+    async def close(self) -> None:
+        return None
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+def _build_litestar_renewal_config(mode: str, executed: "list[str]") -> Any:
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    dict_row = {"data": b"payload", "expires_at": future}
+    tuple_row = (b"payload", future)
+
+    if mode == "async_fetch":
+
+        class _AsyncFetchConn:
+            async def fetchrow(self, sql: object, *_args: Any) -> dict[str, Any]:
+                executed.append(_decode_sql(sql))
+                return dict_row
+
+            async def fetch(self, sql: object, *_args: Any) -> Any:
+                executed.append(_decode_sql(sql))
+                return SimpleNamespace(result=lambda: [dict_row])
+
+            async def execute(self, sql: object, *_args: Any) -> None:
+                executed.append(_decode_sql(sql))
+
+        @asynccontextmanager
+        async def provide_async_fetch(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+            yield _AsyncFetchConn()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_async_fetch)
+
+    if mode in {"async_dict_cursor", "async_tuple_cursor"}:
+        row = dict_row if mode == "async_dict_cursor" else tuple_row
+
+        class _AsyncCursorConn:
+            def cursor(self, *_args: Any, **_kwargs: Any) -> _RecordingAsyncCursor:
+                return _RecordingAsyncCursor(executed, row)
+
+            async def execute(self, sql: object, *_args: Any) -> None:
+                executed.append(_decode_sql(sql))
+
+            async def commit(self) -> None:
+                return None
+
+            async def rollback(self) -> None:
+                return None
+
+        @asynccontextmanager
+        async def provide_async_cursor(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+            yield _AsyncCursorConn()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_async_cursor)
+
+    if mode in {"sync_dict_cursor", "sync_tuple_cursor"}:
+        row = dict_row if mode == "sync_dict_cursor" else tuple_row
+
+        class _SyncCursorConn:
+            autocommit = False
+
+            def cursor(self, *_args: Any, **_kwargs: Any) -> _RecordingSyncCursor:
+                return _RecordingSyncCursor(executed, row)
+
+            def execute(self, sql: object, *_args: Any) -> _RecordingSyncCursor:
+                executed.append(_decode_sql(sql))
+                return _RecordingSyncCursor(executed, row)
+
+            def commit(self) -> None:
+                return None
+
+            def rollback(self) -> None:
+                return None
+
+        @contextmanager
+        def provide_sync_cursor(*_a: Any, **_kw: Any) -> Iterator[Any]:
+            yield _SyncCursorConn()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_sync_cursor)
+
+    if mode in {"sqlite_conn", "duckdb_conn"}:
+        direct_row = (b"payload", 2461500.5) if mode == "sqlite_conn" else (b"payload", future.isoformat())
+
+        class _DirectSyncConn:
+            in_transaction = False
+
+            def execute(self, sql: object, *_args: Any) -> _RecordingSyncCursor:
+                executed.append(_decode_sql(sql))
+                return _RecordingSyncCursor(executed, direct_row)
+
+            def commit(self) -> None:
+                return None
+
+        @contextmanager
+        def provide_direct_sync(*_a: Any, **_kw: Any) -> Iterator[Any]:
+            yield _DirectSyncConn()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_direct_sync)
+
+    if mode == "aiosqlite_conn":
+
+        class _AiosqliteConn:
+            in_transaction = False
+
+            def execute(self, sql: object, *_args: Any) -> _RecordingAsyncCursor:
+                return _RecordingAsyncCursor(executed, (b"payload", 2461500.5), record_on_init_sql=_decode_sql(sql))
+
+            async def commit(self) -> None:
+                return None
+
+        @asynccontextmanager
+        async def provide_aiosqlite(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+            yield _AiosqliteConn()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_connection=provide_aiosqlite)
+
+    if mode == "async_session":
+
+        class _AsyncDriver:
+            async def select_one_or_none(self, sql: object, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+                executed.append(_decode_sql(sql))
+                return dict_row
+
+            async def execute(self, sql: object, *_args: Any, **_kwargs: Any) -> None:
+                executed.append(_decode_sql(sql))
+
+            async def commit(self) -> None:
+                return None
+
+        @asynccontextmanager
+        async def provide_async_session(*_a: Any, **_kw: Any) -> AsyncIterator[Any]:
+            yield _AsyncDriver()
+
+        return SimpleNamespace(extension_config={"litestar": {}}, provide_session=provide_async_session)
+
+    session_row = (
+        {"data": base64.b64encode(b"payload").decode("ascii"), "expires_at": future}
+        if mode == "arrow_odbc_session"
+        else dict_row
+    )
+
+    class _SyncDriver:
+        def select_one_or_none(self, sql: object, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            executed.append(_decode_sql(sql))
+            return session_row
+
+        def select_one(self, sql: object, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            executed.append(_decode_sql(sql))
+            return session_row
+
+        def execute(self, sql: object, *_args: Any, **_kwargs: Any) -> None:
+            executed.append(_decode_sql(sql))
+
+        def commit(self) -> None:
+            return None
+
+    @contextmanager
+    def provide_sync_session(*_a: Any, **_kw: Any) -> Iterator[Any]:
+        yield _SyncDriver()
+
+    return SimpleNamespace(
+        extension_config={"litestar": {}},
+        statement_config=SimpleNamespace(dialect="mssql"),
+        provide_session=provide_sync_session,
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("module_name", "class_name", "mode"), LITESTAR_RENEWAL_STORE_SPECS)
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(0, False, id="zero"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_litestar_stores_renew_only_for_positive_duration(
+    module_name: str, class_name: str, mode: str, renew_for: "int | timedelta", expect_renew: bool
+) -> None:
+    """Every Litestar session store executes a renewal UPDATE only when renew_for is positive."""
+    module = pytest.importorskip(module_name)
+    store_cls = getattr(module, class_name)
+    executed: list[str] = []
+    config = _build_litestar_renewal_config(mode, executed)
+    store = store_cls(config)
+
+    result = await store.get("session-1", renew_for=renew_for)
+
+    assert result == b"payload"
+    update_count = sum(1 for sql in executed if sql.lstrip().upper().startswith("UPDATE"))
+    assert update_count == (1 if expect_renew else 0)

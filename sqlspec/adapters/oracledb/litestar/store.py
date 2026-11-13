@@ -28,26 +28,6 @@ _MAX_ORACLE_TABLE_PARTS: Final = 2
 _ORACLE_LEGACY_IDENTIFIER_MAX_LENGTH: Final = 30
 
 
-def _split_and_validate_oracle_table_name(table_name: str) -> tuple[str | None, str]:
-    """Validate a 1- or 2-part Oracle table name and return (schema_name, bare_table)."""
-    if not table_name or not table_name.strip():
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-    if table_name != table_name.strip():
-        msg = f"Invalid Oracle table name: {table_name!r}"
-        raise ValueError(msg)
-    parts = table_name.split(".")
-    if len(parts) > _MAX_ORACLE_TABLE_PARTS:
-        msg = f"Invalid Oracle table name: {table_name!r}"
-        raise ValueError(msg)
-    for part in parts:
-        if len(part) > MAX_TABLE_NAME_LENGTH:
-            msg = f"Table name too long: {len(part)} chars (max {MAX_TABLE_NAME_LENGTH})"
-            raise ValueError(msg)
-        validate_oracle_identifier(part, "table name")
-    return (parts[0], parts[1]) if len(parts) == _MAX_ORACLE_TABLE_PARTS else (None, parts[0])
-
-
 class OracleLitestarCompressionConfig(TypedDict):
     """Oracle session table compression settings."""
 
@@ -136,11 +116,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
 
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate 1- or 2-part Oracle session table name."""
-        _split_and_validate_oracle_table_name(table_name)
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
@@ -180,7 +155,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
                 data_blob, expires_at = row
 
-                if renew_for is not None and expires_at is not None:
+                if self._should_renew(renew_for) and expires_at is not None:
                     expires_in_seconds = _oracle_expiry_seconds(renew_for)
                     if expires_in_seconds is not None:
                         update_sql = f"""
@@ -371,6 +346,15 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                     await conn.rollback()
                 raise
 
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Oracle session expiry companion index definition."""
+        return [_build_session_companion_index(self._table_name)]
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part Oracle session table name."""
+        _split_and_validate_oracle_table_name(table_name)
+
     def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema."""
         return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
@@ -379,10 +363,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """Build the Oracle session table SchemaTarget."""
         schema_name, bare_table = _split_and_validate_oracle_table_name(self._table_name)
         return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="oracle")
-
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the Oracle session expiry companion index definition."""
-        return [_build_session_companion_index(self._table_name)]
 
     def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
@@ -425,11 +405,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         litestar_config = config.extension_config.get("litestar", {})
         self._in_memory = bool(litestar_config.get("in_memory", False))
-
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate 1- or 2-part Oracle session table name."""
-        _split_and_validate_oracle_table_name(table_name)
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -503,6 +478,15 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """
         return await async_(self._delete_expired)()
 
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Oracle session expiry companion index definition."""
+        return [_build_session_companion_index(self._table_name)]
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part Oracle session table name."""
+        _split_and_validate_oracle_table_name(table_name)
+
     def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema."""
         return _build_session_table_ddl(self._table_name, self._config, self._in_memory)
@@ -511,10 +495,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Build the Oracle session table SchemaTarget."""
         schema_name, bare_table = _split_and_validate_oracle_table_name(self._table_name)
         return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect="oracle")
-
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the Oracle session expiry companion index definition."""
-        return [_build_session_companion_index(self._table_name)]
 
     def _drop_table_sql(self) -> "list[str]":
         """Get Oracle DROP TABLE SQL with PL/SQL error handling."""
@@ -545,7 +525,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
             data_blob, expires_at = row
 
-            if renew_for is not None and expires_at is not None:
+            if self._should_renew(renew_for) and expires_at is not None:
                 expires_in_seconds = _oracle_expiry_seconds(renew_for)
                 if expires_in_seconds is not None:
                     update_sql = f"""
@@ -699,14 +679,34 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                 raise
 
 
-def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "int | None":
-    """Convert a session TTL value to whole seconds for Oracle interval binds."""
+def _split_and_validate_oracle_table_name(table_name: str) -> tuple[str | None, str]:
+    """Validate a 1- or 2-part Oracle table name and return (schema_name, bare_table)."""
+    if not table_name or not table_name.strip():
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid Oracle table name: {table_name!r}"
+        raise ValueError(msg)
+    parts = table_name.split(".")
+    if len(parts) > _MAX_ORACLE_TABLE_PARTS:
+        msg = f"Invalid Oracle table name: {table_name!r}"
+        raise ValueError(msg)
+    for part in parts:
+        if len(part) > MAX_TABLE_NAME_LENGTH:
+            msg = f"Table name too long: {len(part)} chars (max {MAX_TABLE_NAME_LENGTH})"
+            raise ValueError(msg)
+        validate_oracle_identifier(part, "table name")
+    return (parts[0], parts[1]) if len(parts) == _MAX_ORACLE_TABLE_PARTS else (None, parts[0])
+
+
+def _oracle_expiry_seconds(expires_in: "int | timedelta | None") -> "float | None":
+    """Convert a session TTL value to seconds for Oracle interval binds."""
     if expires_in is None:
         return None
 
-    expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else int(expires_in)
+    expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
     if expires_in_seconds <= 0:
-        return None
+        return -0.000001
     return expires_in_seconds
 
 

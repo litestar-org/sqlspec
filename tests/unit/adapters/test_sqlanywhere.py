@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -55,6 +55,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
 from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
@@ -534,6 +535,7 @@ def test_sqlanywhere_migration_tracker_and_extension_stores() -> None:
     assert "CREATE TABLE IF NOT EXISTS" in memory_ddl
     assert "LONG VARCHAR" in memory_ddl
     assert "TIMESTAMP" in memory_ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in memory_ddl
 
 
 @pytest.mark.anyio
@@ -648,6 +650,7 @@ def test_sqlanywhere_adk_memory_store_insert_sql_contains_from_sys_dummy(monkeyp
     assert len(executed_statements) == 1
     assert "FROM SYS.DUMMY" in executed_statements[0]
     assert "WHERE NOT EXISTS" in executed_statements[0]
+    assert "WHERE app_name = ? AND user_id = ? AND event_id = ?" in " ".join(executed_statements[0].split())
 
 
 def test_sqlanywhere_adk_memory_store_handles_native_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1110,3 +1113,228 @@ def test_sqlanywhere_pool_checkin_rolls_back_and_retires_on_hook_or_rollback_fai
             assert cast("object", fresh) is c2
     finally:
         pool.close()
+
+
+def _sqlanywhere_event_fixture(**overrides: Any) -> StoredEvent:
+    payload: dict[str, Any] = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "event_data": {"text": "hello"},
+    }
+    payload.update(overrides)
+    return cast("StoredEvent", payload)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_sqlanywhere_adk_get_session_renews_only_for_positive_duration(
+    monkeypatch: pytest.MonkeyPatch, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """SqlanywhereADKStore.get_session executes UPDATE only when renew_for is positive."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    writes: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_execute(_self: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        writes.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute", capture_execute)
+    monkeypatch.setattr(
+        SqlanywhereADKStore, "_execute_fetchone", lambda *_a, **_kw: ("s1", "app", "u1", '{"step":1}', now, now)
+    )
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    session = SqlanywhereADKStore(config).get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    assert session["id"] == "s1"
+    if expect_renew:
+        assert writes == [
+            (
+                (
+                    'UPDATE "DBA"."adk_session" SET update_time = CURRENT UTC TIMESTAMP '
+                    "WHERE app_name = ? AND user_id = ? AND id = ?"
+                ),
+                ("app", "u1", "s1"),
+            )
+        ]
+    else:
+        assert writes == []
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-or-unowned"])
+def test_sqlanywhere_adk_append_event_verifies_session_ownership(
+    monkeypatch: pytest.MonkeyPatch, session_exists: bool
+) -> None:
+    """SqlanywhereADKStore.append_event probes session ownership before inserting and rolls back when unowned."""
+    cursor = FakeCursor(rows=[(1,)] if session_exists else [])
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    if session_exists:
+        store.append_event(_sqlanywhere_event_fixture())
+        assert len(cursor.calls) == 2
+        ownership_sql, ownership_params = cursor.calls[0]
+        insert_sql, _ = cursor.calls[1]
+        assert " ".join(ownership_sql.split()) == (
+            'SELECT TOP 1 1 FROM "DBA"."adk_session" WHERE id = ? AND app_name = ? AND user_id = ?'
+        )
+        assert ownership_params == ("s1", "app", "u1")
+        assert " ".join(insert_sql.split()).startswith('INSERT INTO "DBA"."adk_event"')
+        assert conn.commits == 1
+        assert conn.rollbacks == 0
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            store.append_event(_sqlanywhere_event_fixture())
+        assert len(cursor.calls) == 1
+        assert conn.rollbacks == 1
+        assert conn.commits == 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"app_name": "other"}, id="app-mismatch"),
+        pytest.param({"user_id": "other"}, id="user-mismatch"),
+        pytest.param({"session_id": "other"}, id="session-mismatch"),
+    ],
+)
+def test_sqlanywhere_adk_append_event_and_update_state_rejects_mismatched_scope(
+    monkeypatch: pytest.MonkeyPatch, overrides: "dict[str, str]"
+) -> None:
+    """Mismatched event scope fails before acquiring a SQL Anywhere connection."""
+    opened = False
+
+    def fail_connect(_self: Any) -> Any:
+        nonlocal opened
+        opened = True
+        return nullcontext(FakeConnection())
+
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", fail_connect)
+    store = SqlanywhereADKStore(
+        SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state(_sqlanywhere_event_fixture(**overrides), "app", "u1", "s1", {"step": 2})
+
+    assert opened is False
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-session"])
+def test_sqlanywhere_adk_append_event_and_update_state_orders_update_before_insert(
+    monkeypatch: pytest.MonkeyPatch, session_exists: bool
+) -> None:
+    """SqlanywhereADKStore.append_event_and_update_state updates and checks session row before inserting event."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [("s1", "app", "u1", '{"step":2}', now, now)] if session_exists else []
+    cursor = FakeCursor(rows=rows)
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    store = SqlanywhereADKStore(
+        SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    )
+
+    if session_exists:
+        session = store.append_event_and_update_state(_sqlanywhere_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert session["state"] == {"step": 2}
+        executed_sql = [" ".join(sql.split()) for sql, _ in cursor.calls]
+        assert len(executed_sql) == 3
+        assert executed_sql[0].startswith('UPDATE "DBA"."adk_session"')
+        assert executed_sql[1].startswith("SELECT TOP 1 id, app_name")
+        assert executed_sql[2].startswith('INSERT INTO "DBA"."adk_event"')
+        assert conn.commits == 1
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            store.append_event_and_update_state(_sqlanywhere_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert len(cursor.calls) == 2
+        assert conn.rollbacks == 1
+        assert conn.commits == 0
+
+
+def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_events joins on (session_id, app_name, user_id) and delete_session scopes event deletes."""
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+    after = datetime(2026, 1, 1, tzinfo=UTC)
+    events_sql, events_params = store._events_query("app", "u1", "s1", after_timestamp=after, limit=5)
+
+    assert (
+        'FROM "DBA"."adk_event" e JOIN "DBA"."adk_session" s '
+        "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+        "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ? "
+        "ORDER BY e.timestamp ASC LIMIT ?"
+    ) in " ".join(events_sql.split())
+    assert events_params == ("app", "u1", "s1", after, 5)
+
+    cursor = FakeCursor()
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    store.delete_session("app", "u1", "s1")
+    executed = [(" ".join(sql.split()), params) for sql, params in cursor.calls]
+    assert executed == [
+        ('DELETE FROM "DBA"."adk_event" WHERE app_name = ? AND user_id = ? AND session_id = ?', ("app", "u1", "s1")),
+        ('DELETE FROM "DBA"."adk_session" WHERE app_name = ? AND user_id = ? AND id = ?', ("app", "u1", "s1")),
+    ]
+    assert conn.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(None, None, 'DELETE FROM "DBA"."adk_memory" WHERE session_id = ?', ("s1",), id="session-only"),
+        pytest.param(
+            "app",
+            None,
+            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND app_name = ?',
+            ("s1", "app"),
+            id="session-and-app",
+        ),
+        pytest.param(
+            None,
+            "u1",
+            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND user_id = ?',
+            ("s1", "u1"),
+            id="session-and-user",
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND app_name = ? AND user_id = ?',
+            ("s1", "app", "u1"),
+            id="session-app-and-user",
+        ),
+    ],
+)
+def test_sqlanywhere_adk_memory_delete_entries_by_session_owner_filters(
+    monkeypatch: pytest.MonkeyPatch,
+    app_name: "str | None",
+    user_id: "str | None",
+    expected_sql: str,
+    expected_params: "tuple[str, ...]",
+) -> None:
+    """SqlanywhereADKMemoryStore.delete_entries_by_session appends owner predicates when provided."""
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_delete(_self: SqlanywhereADKMemoryStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        calls.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SqlanywhereADKMemoryStore, "_execute", capture_delete)
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    assert SqlanywhereADKMemoryStore(config).delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
+    assert calls == [(expected_sql, expected_params)]

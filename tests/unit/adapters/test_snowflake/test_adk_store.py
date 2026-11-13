@@ -1,6 +1,6 @@
 """Snowflake ADK session, state, event, and memory store behavior."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -301,6 +301,7 @@ def test_adk_create_tables_append_event_and_event_hydration(monkeypatch: pytest.
     store.create_tables()
     assert driver.execute.call_count == 5
     assert all("CREATE TABLE IF NOT EXISTS" in _sql(call) for call in driver.execute.call_args_list)
+    driver.select_one_or_none.return_value = {"1": 1}
     store.append_event(_event())
     assert driver.execute.call_args.args[1][-1] == '{"text":"budget review"}'
     row: dict[str, Any] = dict(_event())
@@ -309,7 +310,8 @@ def test_adk_create_tables_append_event_and_event_hydration(monkeypatch: pytest.
     driver.select.return_value = [row]
     assert store.get_events("app", "u1", "s1", datetime(2026, 11, 10, tzinfo=UTC), 5) == [_event()]
     sql, parameters = driver.select.call_args.args
-    assert "timestamp > ? ORDER BY timestamp ASC, id ASC LIMIT ?" in sql
+    assert "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in sql
+    assert "e.timestamp > ? ORDER BY e.timestamp ASC, e.id ASC LIMIT ?" in sql
     assert parameters[-1] == 5
     assert store.get_events("app", "u1", "s1", limit=0) == []
     with pytest.raises(ValueError, match="non-negative"):
@@ -347,7 +349,10 @@ def test_memory_merges_by_event_id_and_counts_new_entries(monkeypatch: pytest.Mo
     store = SnowflakeADKMemoryStore(config)
     assert store.insert_memory_entries([_memory(), _memory()]) == 1
     sql, parameters = driver.execute.call_args.args
-    assert "ON t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT" in sql
+    assert (
+        "ON t.app_name = s.app_name AND t.user_id = s.user_id AND t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT"
+        in sql
+    )
     assert "PARSE_JSON(?) AS content_json" in sql
     assert '{"text":"budget"}' in parameters
     assert store.insert_memory_entries([]) == 0
@@ -460,3 +465,90 @@ def test_adk_and_memory_create_tables_honor_schema_lifecycle(
 
     assert driver.execute.call_count == (6 if creates_tables else 0)
     assert reconcile_calls == [("session", expected_assume_existing), ("memory", expected_assume_existing)]
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expects_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-1, False, id="negative-int"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(60, True, id="positive-int"),
+    ],
+)
+def test_adk_get_session_renews_only_for_positive_duration(
+    monkeypatch: pytest.MonkeyPatch, renew_for: int | timedelta | None, expects_update: bool
+) -> None:
+    """get_session updates update_time only when renew_for is strictly positive."""
+    config, driver = store_config(monkeypatch)
+    now = datetime(2026, 11, 11, tzinfo=UTC)
+    driver.select_one_or_none.return_value = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": '{"k":1}',
+        "create_time": now,
+        "update_time": now,
+    }
+    session = SnowflakeADKStore(config).get_session("app", "u1", "s1", renew_for=renew_for)
+    assert session is not None
+    assert (driver.execute.call_count == 1) is expects_update
+
+
+def test_adk_append_event_requires_session_ownership_and_mismatch_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """append_event rejects unowned sessions and append_event_and_update_state rejects mismatched records."""
+    config, driver = store_config(monkeypatch)
+    store = SnowflakeADKStore(config)
+    driver.select_one_or_none.return_value = None
+    with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+        store.append_event(_event())
+    driver.execute.assert_not_called()
+    assert driver.select_one_or_none.call_args.args == (
+        "SELECT 1 FROM adk_session WHERE id = ? AND app_name = ? AND user_id = ? LIMIT 1",
+        ("s1", "app", "u1"),
+    )
+
+    driver.select_one_or_none.reset_mock()
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state(_event("other-session"), "app", "u1", "s1", {})
+    driver.select_one_or_none.assert_not_called()
+    driver.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(
+            "app", None, "DELETE FROM adk_memory WHERE session_id = ? AND app_name = ?", ["s1", "app"], id="app"
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            "DELETE FROM adk_memory WHERE session_id = ? AND app_name = ? AND user_id = ?",
+            ["s1", "app", "u1"],
+            id="both",
+        ),
+        pytest.param(
+            None, "u1", "DELETE FROM adk_memory WHERE session_id = ? AND user_id = ?", ["s1", "u1"], id="user"
+        ),
+        pytest.param(None, None, "DELETE FROM adk_memory WHERE session_id = ?", ["s1"], id="session"),
+    ],
+)
+def test_memory_delete_entries_by_session_scopes_owner_predicates_and_composite_ddl(
+    monkeypatch: pytest.MonkeyPatch,
+    app_name: str | None,
+    user_id: str | None,
+    expected_sql: str,
+    expected_params: list[str],
+) -> None:
+    """delete_entries_by_session appends owner predicates and DDL declares composite UNIQUE."""
+    config, driver = store_config(monkeypatch)
+    store = SnowflakeADKMemoryStore(config)
+    ddl = store._memory_table_ddl()
+    assert "event_id VARCHAR(128) NOT NULL," in ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in ddl
+
+    assert store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
+    assert driver.execute.call_args.args == (expected_sql, expected_params)

@@ -1,5 +1,6 @@
 """Regression tests for common ADK store state mixins."""
 
+import inspect
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -262,3 +263,44 @@ def test_adk_store_common_should_renew_requires_positive_duration(
 ) -> None:
     store = SqliteADKStore(_sqlite_config())
     assert store._should_renew(renew_for) is expected
+
+
+@pytest.mark.parametrize(
+    "base_cls",
+    [
+        pytest.param(BaseAsyncADKMemoryStore, id="async-memory-base"),
+        pytest.param(BaseSyncADKMemoryStore, id="sync-memory-base"),
+    ],
+)
+def test_memory_store_base_delete_entries_by_session_signature(base_cls: type) -> None:
+    """Both abstract memory bases expose optional app_name and user_id owner filters."""
+    params = inspect.signature(base_cls.delete_entries_by_session).parameters
+    assert list(params) == ["self", "session_id", "app_name", "user_id"]
+    assert params["app_name"].default is None
+    assert params["user_id"].default is None
+
+
+def test_concrete_memory_store_accepts_owner_filters_through_base_reference() -> None:
+    """A concrete memory store called via a BaseSyncADKMemoryStore reference accepts owner filters."""
+    config = SqliteConfig(connection_config={"database": ":memory:"}, extension_config={"adk": {"enable_memory": True}})
+    base_ref: BaseSyncADKMemoryStore[SqliteConfig] = SqliteADKMemoryStore(config)
+    base_ref.create_tables()
+    assert base_ref.delete_entries_by_session("missing-session", app_name="app", user_id="user") == 0
+
+
+@pytest.mark.parametrize(
+    "invalid_ddl",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param("owner_id TEXT DEFAULT 'anon'", id="single-quoted-literal"),
+    ],
+)
+def test_standalone_memory_store_validates_owner_id_column_ddl(invalid_ddl: str) -> None:
+    """Standalone memory stores normalize and validate owner_id_column identically to session stores."""
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"adk": {"enable_memory": True, "owner_id_column": invalid_ddl}},
+    )
+    with pytest.raises(ValueError, match="owner_id_column"):
+        SqliteADKMemoryStore(config)

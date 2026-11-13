@@ -316,3 +316,30 @@ async def test_mssql_python_store_qualified_crud_uses_bracketed_table_ref() -> N
     executed_sql = [sql for sql, _ in connection.executed]
     assert len(executed_sql) == 3
     assert all("[auth].[user_sessions]" in sql for sql in executed_sql)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_mssql_python_store_get_renews_only_for_positive_duration(
+    renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """get renews unexpired sessions only when renew_for is strictly positive."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    connection = FakeConnection(rows=[{"data": b"payload", "expires_at": future}])
+    store = MssqlPythonStore(cast("Any", FakeConfig(connection=connection)))
+
+    data = await store.get("session-1", renew_for=renew_for)
+
+    assert data == b"payload"
+    has_update = any("UPDATE [dbo].[mssql_sessions]" in sql for sql, _ in connection.executed)
+    assert has_update is expect_renew
+    assert connection.commits == (1 if expect_renew else 0)
