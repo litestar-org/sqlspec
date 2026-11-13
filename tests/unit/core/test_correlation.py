@@ -1,5 +1,9 @@
 """Unit tests for CorrelationExtractor."""
 
+import uuid
+
+import pytest
+
 from sqlspec.core import CorrelationExtractor
 
 
@@ -190,3 +194,38 @@ def test_correlation_extractor_equality_hash_is_supported() -> None:
     extractor = CorrelationExtractor()
     h = hash(extractor)
     assert isinstance(h, int)
+
+
+@pytest.mark.parametrize(
+    "valid_value",
+    [
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "105445aa7843bc8bf206b12000100000/1;o=1",
+        "Root=1-5759e988-bd862e3fe1be46a994272793;Parent=53995c3f42cd8ad8;Sampled=1",
+        "req_123:abc.def+45/6",
+    ],
+)
+def test_correlation_extractor_preserves_standard_trace_headers(valid_value: str) -> None:
+    """W3C, Cloud Trace, and AWS X-Ray trace formats pass allowlist validation unchanged."""
+    extractor = CorrelationExtractor()
+    headers = {"traceparent": valid_value}
+    assert extractor.extract(headers.get) == valid_value
+
+
+def test_correlation_extractor_truncates_at_line_break() -> None:
+    """Values containing CR or LF are truncated before the first line break."""
+    extractor = CorrelationExtractor()
+    headers = {"x-request-id": "abc\r\nX-Other: 1"}
+    assert extractor.extract(headers.get) == "abc"
+
+
+@pytest.mark.parametrize("invalid_value", ["abc';--", "a b", "caf\xe9", "\r\nleading-newline"])
+def test_correlation_extractor_falls_through_on_disallowed_characters(invalid_value: str) -> None:
+    """Invalid characters advance to the next configured header or fall back to a generated UUID."""
+    extractor = CorrelationExtractor()
+    with_fallback = {"x-request-id": invalid_value, "x-correlation-id": "fallback-id-123"}
+    assert extractor.extract(with_fallback.get) == "fallback-id-123"
+
+    only_invalid = {"x-request-id": invalid_value}
+    generated = extractor.extract(only_invalid.get)
+    assert str(uuid.UUID(generated)) == generated

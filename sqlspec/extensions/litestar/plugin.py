@@ -175,21 +175,20 @@ def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityErr
 class CorrelationMiddleware:
     """ASGI middleware that binds a correlation ID to each HTTP request.
 
-    The first non-empty value among ``headers``, checked in order, becomes the
-    correlation ID after surrounding whitespace is trimmed and the value is
-    truncated to 128 characters; when no header has a value, or the trimmed
-    value is empty, a new ID is generated. The ID is set on
-    :class:`~sqlspec.utils.correlation.CorrelationContext` and in the request scope
-    for the duration of the request, then the previous ID is restored. Non-HTTP
-    scopes, and instances created with an empty ``headers`` tuple, pass through
-    unchanged.
+    Only headers matching the configured ``headers`` allowlist are decoded from
+    the ASGI header list (using ``latin-1`` over precomputed lowercase ``bytes``
+    names). Checked in priority order, the first header whose bounded, single-line
+    ASCII trace value passes validation becomes the correlation ID; invalid values
+    fall through to subsequent headers, or to a newly generated ID when none
+    qualify. Non-HTTP scopes, and instances created with an empty ``headers``
+    tuple, pass through unchanged.
 
     Args:
         app: The downstream ASGI application.
         headers: Request header names to check, in priority order.
     """
 
-    __slots__ = ("_app", "_extractor", "_headers")
+    __slots__ = ("_app", "_extractor", "_header_bytes", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
         self._app = app
@@ -203,6 +202,11 @@ class CorrelationMiddleware:
             if headers
             else None
         )
+        self._header_bytes: frozenset[bytes] = (
+            frozenset(header.lower().encode("latin-1") for header in self._extractor.headers)
+            if self._extractor is not None
+            else frozenset()
+        )
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         scope_type = scope.get("type")
@@ -211,8 +215,12 @@ class CorrelationMiddleware:
             return
 
         raw_headers = scope.get("headers") or []
-        header_dict = {name.decode().lower(): value.decode() for name, value in raw_headers}
-        header_value = self._extractor.extract(lambda header: header_dict.get(header))
+        matched_headers: dict[str, str] = {}
+        for raw_name, raw_value in raw_headers:
+            lowered = raw_name.lower()
+            if lowered in self._header_bytes:
+                matched_headers.setdefault(lowered.decode("latin-1"), raw_value.decode("latin-1"))
+        header_value = self._extractor.extract(matched_headers.get)
 
         previous_correlation_id = CorrelationContext.get()
         CorrelationContext.set(header_value)

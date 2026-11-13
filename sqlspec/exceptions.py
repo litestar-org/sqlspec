@@ -250,9 +250,17 @@ class StackExecutionError(SQLSpecError):
         native_pipeline: bool | None = None,
         downgrade_reason: str | None = None,
     ) -> None:
+        """Initialize the stack execution error with a literal-redacted SQL preview.
+
+        Imports ``redact_sql_literals`` at call time because ``sqlspec.exceptions`` is
+        loaded while ``sqlspec.observability`` dependencies are still initializing.
+        """
+        from sqlspec.observability._common import redact_sql_literals
+
         pipeline_state = "enabled" if native_pipeline else "disabled"
         adapter_label = adapter or "unknown-adapter"
-        preview = " ".join(sql.strip().split())
+        redacted_sql = redact_sql_literals(sql)
+        preview = " ".join(redacted_sql.strip().split())
         if len(preview) > STACK_SQL_PREVIEW_LIMIT:
             preview = f"{preview[: STACK_SQL_PREVIEW_LIMIT - 3]}..."
         detail = (

@@ -1402,6 +1402,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             console.print("[yellow]No ADK configurations found.[/]")
             return
 
+        failed_configs: list[str] = []
         for cfg in configs:
             config_name = cfg.bind_key or "default"
             if not _is_adk_memory_enabled(cfg):
@@ -1429,6 +1430,11 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[green]✓[/] {config_name}: memory table reachable")
             except Exception as exc:
                 console.print(f"[red]✗[/] {config_name}: {exc}")
+                failed_configs.append(config_name)
+
+        if failed_configs:
+            msg = f"Memory table verification failed for: {', '.join(failed_configs)}"
+            raise click.ClickException(msg)
 
     return database_group
 

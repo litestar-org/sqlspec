@@ -12,7 +12,13 @@ from sqlspec.adapters.psqlpy.core import create_mapped_exception as map_psqlpy_e
 from sqlspec.adapters.psycopg.core import create_mapped_exception as map_psycopg_error
 from sqlspec.adapters.spanner.core import create_mapped_exception as map_spanner_error
 from sqlspec.adapters.sqlite.core import create_mapped_exception as map_sqlite_error
-from sqlspec.exceptions import OperationalError, OperationCancelledError, QueryTimeoutError, map_sqlstate_to_exception
+from sqlspec.exceptions import (
+    OperationalError,
+    OperationCancelledError,
+    QueryTimeoutError,
+    StackExecutionError,
+    map_sqlstate_to_exception,
+)
 
 
 def test_cancellation_and_timeout_are_sibling_operational_errors() -> None:
@@ -66,3 +72,15 @@ def test_bigquery_errors_distinguish_native_cancellation_and_timeout() -> None:
 def test_spanner_errors_distinguish_native_cancellation_and_deadline() -> None:
     assert isinstance(map_spanner_error(api_exceptions.Cancelled("cancelled")), OperationCancelledError)  # type: ignore[no-untyped-call]
     assert isinstance(map_spanner_error(api_exceptions.DeadlineExceeded("deadline exceeded")), QueryTimeoutError)  # type: ignore[no-untyped-call]
+
+
+def test_stack_execution_error_redacts_sql_literals_in_message_while_preserving_raw_sql() -> None:
+    """StackExecutionError masks single and dollar-quoted literals in messages while keeping raw self.sql."""
+    raw_sql = "INSERT INTO users (secret, note) VALUES ('top-secret-token', $tag$private$tag$)"
+    err = StackExecutionError(0, raw_sql, RuntimeError("boom"), adapter="sqlite")
+
+    assert err.sql == raw_sql
+    assert "top-secret-token" not in str(err)
+    assert "private" not in str(err)
+    assert "'***'" in str(err)
+    assert "top-secret-token" not in err.args[0]

@@ -1,14 +1,21 @@
 """Unit tests for migration tracker behavior."""
 
 import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
+from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import StatementConfig
+from sqlspec.core.result import SQLResult
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
@@ -595,3 +602,263 @@ async def test_tracker_schema_output_initializes_console_on_demand(
     else:
         assert output.count("Migration tracking table schema updated successfully") == 2
         assert "adding columns: checksum" in output
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("dialect", "expects_single_insert"),
+    [("postgres", True), ("mysql", True), ("sqlite", True), ("duckdb", True), ("oracle", False), ("snowflake", False)],
+)
+async def test_tracker_sequenced_insert_vs_two_statement_path(
+    is_async: bool, dialect: str, expects_single_insert: bool
+) -> None:
+    """Stock trackers use one INSERT ... SELECT for supported dialects and two statements outside the set."""
+    recorded_sql: list[str] = []
+
+    def _run(stmt: Any) -> Any:
+        rendered = stmt.build(dialect=dialect).sql if hasattr(stmt, "build") else str(stmt)
+        recorded_sql.append(rendered)
+        result = Mock()
+        result.data = [{"next_seq": 3}]
+        result.get_data.return_value = [{"next_seq": 3}]
+        return result
+
+    async def _run_async(stmt: Any) -> Any:
+        return _run(stmt)
+
+    driver = Mock()
+    driver.dialect = dialect
+    driver.driver_features = {"autocommit": False}
+    driver.execute = _run_async if is_async else _run
+    driver.commit = AsyncMock() if is_async else Mock()
+
+    checksum = "a" * 64
+    if is_async:
+        tracker = AsyncMigrationTracker()
+        await tracker.record_migration(driver, "0003", "add items", 15, checksum)
+        await tracker.replace_with_squash(driver, "0003", ["0001", "0002"], "squash", checksum)
+    else:
+        sync_tracker = SyncMigrationTracker()
+        sync_tracker.record_migration(driver, "0003", "add items", 15, checksum)
+        sync_tracker.replace_with_squash(driver, "0003", ["0001", "0002"], "squash", checksum)
+
+    if expects_single_insert:
+        assert len(recorded_sql) == 3
+        record_sql = recorded_sql[0]
+        squash_insert_sql = recorded_sql[2]
+        assert "INSERT INTO" in record_sql
+        assert "seq_src" in record_sql
+        assert "COALESCE(MAX(" in record_sql
+        assert "INSERT INTO" in squash_insert_sql
+        assert "seq_src" in squash_insert_sql
+    else:
+        assert len(recorded_sql) == 5
+        assert "SELECT" in recorded_sql[0]
+        assert "COALESCE(MAX(" in recorded_sql[0]
+        assert "SELECT" in recorded_sql[3]
+        assert "COALESCE(MAX(" in recorded_sql[3]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_tracker_real_sqlite_sequenced_insert_increments_execution_sequence(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """Single-statement INSERT ... SELECT increments execution_sequence cleanly on SQLite."""
+    db_path = tmp_path / "seq.db"
+    checksum = "b" * 64
+    if is_async:
+        cfg_async = AiosqliteConfig(connection_config={"database": str(db_path)})
+        tracker_async = AsyncMigrationTracker()
+        try:
+            async with cfg_async.provide_session() as driver:
+                await tracker_async.ensure_tracking_table(driver)
+                await tracker_async.record_migration(driver, "0001", "first", 5, checksum)
+                await tracker_async.record_migration(driver, "0002", "second", 7, checksum)
+                rows = await tracker_async.get_applied_migrations(driver)
+            assert [row["execution_sequence"] for row in rows] == [1, 2]
+        finally:
+            await cfg_async.close_pool()
+        return
+
+    cfg_sync = SqliteConfig(connection_config={"database": str(db_path)})
+    tracker_sync = SyncMigrationTracker()
+    try:
+        with cfg_sync.provide_session() as driver:
+            tracker_sync.ensure_tracking_table(driver)
+            tracker_sync.record_migration(driver, "0001", "first", 5, checksum)
+            tracker_sync.record_migration(driver, "0002", "second", 7, checksum)
+            rows = tracker_sync.get_applied_migrations(driver)
+        assert [row["execution_sequence"] for row in rows] == [1, 2]
+    finally:
+        cfg_sync.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("dialect", "expected_enter_fragment", "expected_exit_fragment"),
+    [
+        ("postgres", "pg_advisory_lock", "pg_advisory_unlock"),
+        ("mysql", "GET_LOCK", "RELEASE_LOCK"),
+        ("tsql", "sp_getapplock", "sp_releaseapplock"),
+        ("sqlite", "BEGIN IMMEDIATE", None),
+        ("duckdb", None, None),
+    ],
+)
+async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
+    is_async: bool, dialect: str, expected_enter_fragment: str | None, expected_exit_fragment: str | None
+) -> None:
+    """acquire_lock issues dialect-appropriate lock acquire and release statements even when the body raises."""
+    executed: list[tuple[str, Any]] = []
+    lifecycle: list[str] = []
+    tx_state = {"active": False}
+
+    def _exec(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        sql_text = str(stmt)
+        executed.append((sql_text, params))
+        if sql_text == "BEGIN IMMEDIATE":
+            tx_state["active"] = True
+        if "sp_getapplock" in sql_text:
+            return SQLResult(data=[{"res": 0}])
+        return SQLResult()
+
+    async def _exec_async(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        return _exec(_self, stmt, params)
+
+    def _select_value(_self: Any, stmt: Any, params: Any = None) -> int:
+        executed.append((str(stmt), params))
+        return 1
+
+    async def _select_value_async(_self: Any, stmt: Any, params: Any = None) -> int:
+        return _select_value(_self, stmt, params)
+
+    def _commit(_self: Any) -> None:
+        tx_state["active"] = False
+        lifecycle.append("commit")
+
+    async def _commit_async(_self: Any) -> None:
+        _commit(_self)
+
+    def _rollback(_self: Any) -> None:
+        tx_state["active"] = False
+        lifecycle.append("rollback")
+
+    async def _rollback_async(_self: Any) -> None:
+        _rollback(_self)
+
+    attrs: dict[str, Any] = {
+        "dialect": dialect,
+        "execute": _exec_async if is_async else _exec,
+        "select_value": _select_value_async if is_async else _select_value,
+        "commit": _commit_async if is_async else _commit,
+        "rollback": _rollback_async if is_async else _rollback,
+        "_connection_in_transaction": lambda _self: tx_state["active"],
+    }
+    driver_cls = type(f"_Fake{dialect.title()}Driver", (), attrs)
+    driver: Any = driver_cls()
+
+    if is_async:
+        tracker_async = AsyncMigrationTracker(version_table_name="ddl_migrations")
+        async with tracker_async.acquire_lock(driver):
+            pass
+        if dialect == "sqlite":
+            assert lifecycle == ["commit"]
+        executed.clear()
+        lifecycle.clear()
+        with pytest.raises(RuntimeError, match="step failed"):
+            async with tracker_async.acquire_lock(driver):
+                raise RuntimeError("step failed")
+    else:
+        tracker_sync = SyncMigrationTracker(version_table_name="ddl_migrations")
+        with tracker_sync.acquire_lock(driver):
+            pass
+        if dialect == "sqlite":
+            assert lifecycle == ["commit"]
+        executed.clear()
+        lifecycle.clear()
+        with pytest.raises(RuntimeError, match="step failed"):
+            with tracker_sync.acquire_lock(driver):
+                raise RuntimeError("step failed")
+
+    if expected_enter_fragment is None:
+        assert executed == []
+    else:
+        assert expected_enter_fragment in executed[0][0]
+    if expected_exit_fragment is not None:
+        assert expected_exit_fragment in executed[-1][0]
+    elif dialect == "sqlite":
+        assert lifecycle == ["rollback"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_tracker_acquire_lock_skips_cockroachdb_and_raises_on_lock_timeout(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    """CockroachDB drivers emit no advisory lock statements; MySQL and SQL Server timeouts raise MigrationError."""
+    cockroach_calls: list[str] = []
+
+    if is_async:
+
+        async def _cr_exec_async(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
+            cockroach_calls.append(str(stmt))
+            return SQLResult()
+
+        monkeypatch.setattr(CockroachAsyncpgDriver, "execute", _cr_exec_async)
+        cr_driver_async = CockroachAsyncpgDriver(MagicMock())
+        async with AsyncMigrationTracker().acquire_lock(cr_driver_async):
+            pass
+    else:
+
+        def _cr_exec_sync(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
+            cockroach_calls.append(str(stmt))
+            return SQLResult()
+
+        monkeypatch.setattr(CockroachPsycopgSyncDriver, "execute", _cr_exec_sync)
+        cr_driver_sync = CockroachPsycopgSyncDriver(MagicMock())
+        with SyncMigrationTracker().acquire_lock(cr_driver_sync):
+            pass
+    assert cockroach_calls == []
+
+    async def _mysql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> int:
+        return 0
+
+    mysql_cls = type(
+        "_TimeoutMySQLDriver",
+        (),
+        {
+            "dialect": "mysql",
+            "select_value": _mysql_timeout_async if is_async else (lambda _self, _s, _p=None: 0),
+            "execute": AsyncMock() if is_async else Mock(),
+        },
+    )
+    mysql_driver: Any = mysql_cls()
+    with pytest.raises(MigrationError, match="Failed to acquire MySQL migration lock"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(mysql_driver, timeout_seconds=1):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(mysql_driver, timeout_seconds=1):
+                pass
+
+    async def _mssql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        return SQLResult(data=[{"res": -1}])
+
+    mssql_cls = type(
+        "_TimeoutMssqlDriver",
+        (),
+        {
+            "dialect": "tsql",
+            "execute": _mssql_timeout_async if is_async else (lambda _self, _s, _p=None: SQLResult(data=[{"res": -1}])),
+        },
+    )
+    mssql_driver: Any = mssql_cls()
+    with pytest.raises(MigrationError, match="Failed to acquire SQL Server migration lock"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(mssql_driver, timeout_seconds=1):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(mssql_driver, timeout_seconds=1):
+                pass

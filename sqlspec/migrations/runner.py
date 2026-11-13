@@ -4,13 +4,14 @@ import ast
 import contextlib
 import copy
 import hashlib
+import hmac
 import inspect
 import logging
 import re
 import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.core import SQL
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -38,12 +39,19 @@ if TYPE_CHECKING:
     from sqlspec.migrations.base import ExtensionReconcilerDescriptor, LoadedMigrationMetadata
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner", "extract_replaces_versions")
+__all__ = (
+    "AsyncMigrationRunner",
+    "BaseMigrationRunner",
+    "SyncMigrationRunner",
+    "create_migration_runner",
+    "extract_replaces_versions",
+)
 
 logger = get_logger("sqlspec.migrations.runner")
 
 _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_MD5_HEX_LENGTH: Final[int] = 32
 
 
 class BaseMigrationRunner:
@@ -116,8 +124,30 @@ class BaseMigrationRunner:
             extension_loader.clear_cache()
         self._metadata_cache.clear()
 
+    @staticmethod
+    def verify_migration_checksum(content: str, recorded_checksum: str) -> bool:
+        """Verify migration content against a stored SHA-256 or legacy MD5 checksum.
+
+        Args:
+            content: The migration file content.
+            recorded_checksum: Hex digest recorded in the migration tracking table.
+
+        Returns:
+            True when the canonicalized content digest matches ``recorded_checksum``.
+        """
+        if not recorded_checksum:
+            return False
+        canonical_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
+        if len(recorded_checksum) == _MD5_HEX_LENGTH and all(
+            ch in "0123456789abcdefABCDEF" for ch in recorded_checksum
+        ):
+            expected = hashlib.md5(canonical_bytes, usedforsecurity=False).hexdigest()
+        else:
+            expected = hashlib.sha256(canonical_bytes).hexdigest()
+        return hmac.compare_digest(expected, recorded_checksum.lower())
+
     def calculate_checksum(self, content: str) -> str:
-        """Calculate MD5 checksum of migration content.
+        """Calculate SHA-256 checksum of migration content.
 
         Canonicalizes content by excluding query name headers and version comment
         lines that change during the fix command. This ensures checksums remain
@@ -127,16 +157,10 @@ class BaseMigrationRunner:
             content: The migration file content.
 
         Returns:
-            MD5 checksum hex string.
+            SHA-256 checksum hex string.
         """
-        canonical_content = re.sub(
-            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
-            "",
-            content,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
-
-        return hashlib.md5(canonical_content.encode(), usedforsecurity=False).hexdigest()
+        canonical_content = self._canonicalize_migration_content(content)
+        return hashlib.sha256(canonical_content.encode("utf-8")).hexdigest()
 
     @abstractmethod
     def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
@@ -178,6 +202,16 @@ class BaseMigrationRunner:
 
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
+
+    @staticmethod
+    def _canonicalize_migration_content(content: str) -> str:
+        """Strip version-dependent headers before computing or checking a digest."""
+        return re.sub(
+            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
+            "",
+            content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""

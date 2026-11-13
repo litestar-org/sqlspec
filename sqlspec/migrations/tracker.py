@@ -5,19 +5,19 @@ This module provides functionality to track applied migrations in the database.
 
 import importlib
 import logging
-from contextlib import suppress
-from typing import TYPE_CHECKING, Any, cast
+from contextlib import asynccontextmanager, contextmanager, suppress
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SQLSpecError
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Iterator, Sequence
 
     from rich.console import Console
 
@@ -25,6 +25,16 @@ if TYPE_CHECKING:
     from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
+
+_POSTGRES_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+})
+_MYSQL_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
+_MSSQL_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"mssql", "tsql"})
 
 logger = get_logger("sqlspec.migrations.tracker")
 _console: "Console | None" = None
@@ -92,18 +102,30 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             version: Version number of the migration.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             commit: Whether to commit immediately after recording.
             replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
         version_type = self._derive_version_type(version)
+        replaces_csv = ",".join(replaces) if replaces else None
+        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+            statement: Any = self._record_migration_sequenced_statement(
+                version, version_type, description, execution_time_ms, checksum, self._applied_by(), replaces_csv
+            )
+        else:
+            seq_result = driver.execute(self._next_execution_sequence_query())
+            next_sequence = self._extract_next_sequence(seq_result)
 
-        seq_result = driver.execute(self._next_execution_sequence_query())
-        next_sequence = self._extract_next_sequence(seq_result)
-
-        statement = self._record_statement(
-            version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by(), replaces
-        )
+            statement = self._record_statement(
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                self._applied_by(),
+                replaces,
+            )
         driver.execute(statement)
         if commit:
             self._safe_commit(driver)
@@ -178,16 +200,20 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             squashed_version: Version number of the squashed migration.
             replaced_versions: List of version strings being replaced.
             description: Description of the squashed migration.
-            checksum: MD5 checksum of the squashed migration content.
+            checksum: SHA-256 checksum hex string of the squashed migration content.
         """
         driver.execute(self._delete_versions_statement(replaced_versions))
 
-        seq_result = driver.execute(self._next_execution_sequence_query())
-        next_sequence = self._extract_next_sequence(seq_result)
-
         version_type = self._derive_version_type(squashed_version)
-        driver.execute(
-            self._record_statement(
+        replaces_csv = ",".join(replaced_versions) if replaced_versions else None
+        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+            statement: Any = self._record_migration_sequenced_statement(
+                squashed_version, version_type, description, 0, checksum, self._applied_by(), replaces_csv
+            )
+        else:
+            seq_result = driver.execute(self._next_execution_sequence_query())
+            next_sequence = self._extract_next_sequence(seq_result)
+            statement = self._record_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -197,7 +223,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 self._applied_by(),
                 replaced_versions,
             )
-        )
+        driver.execute(statement)
 
         self._safe_commit(driver)
         _log_squash_recorded(driver, squashed_version, len(replaced_versions))
@@ -223,6 +249,99 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         """
         result = driver.execute(self._check_versions_query(replaced_versions))
         return _validate_squash_applied_state(result, squashed_version, replaced_versions)
+
+    @contextmanager
+    def acquire_lock(self, driver: "SyncDriverAdapterBase", *, timeout_seconds: int = 30) -> "Iterator[None]":
+        """Serialize mutating migration sessions using a dialect-appropriate lock.
+
+        PostgreSQL uses session advisory locks (skipped for CockroachDB drivers), MySQL and
+        MariaDB use ``GET_LOCK`` / ``RELEASE_LOCK``, SQL Server uses ``sp_getapplock`` /
+        ``sp_releaseapplock``, and SQLite takes an immediate transaction lock when no
+        transaction is already open. Unsupported backends yield directly.
+
+        Args:
+            driver: Active session driver.
+            timeout_seconds: Lock acquisition timeout for timed lock backends.
+
+        Yields:
+            Control to the caller while the migration lock is held.
+
+        Raises:
+            MigrationError: When MySQL or SQL Server lock acquisition fails or times out.
+        """
+        raw_dialect = getattr(type(driver), "dialect", None)
+        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+            yield
+            return
+
+        lock_name, lock_id = self._migration_lock_key()
+        if dialect in _POSTGRES_LOCK_DIALECTS:
+            driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": lock_id})
+            try:
+                yield
+            finally:
+                driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+            return
+
+        if dialect in _MYSQL_LOCK_DIALECTS:
+            lock_result = driver.select_value(
+                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
+            )
+            if lock_result != 1:
+                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+                raise MigrationError(msg)
+            try:
+                yield
+            finally:
+                driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+            return
+
+        if dialect in _MSSQL_LOCK_DIALECTS:
+            timeout_ms = max(timeout_seconds, 0) * 1000
+            try:
+                ms_result = driver.execute(
+                    "DECLARE @sqlspec_res INT; "
+                    "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
+                    "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
+                    "SELECT @sqlspec_res",
+                    {"lock_name": lock_name, "timeout_ms": timeout_ms},
+                )
+            except SQLSpecError as exc:
+                if "Migration lock acquisition failed" in str(exc):
+                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
+                    raise MigrationError(msg) from exc
+                raise
+            if ms_result.data:
+                lock_code = ms_result.scalar()
+                if isinstance(lock_code, int) and lock_code < 0:
+                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
+                    raise MigrationError(msg)
+            try:
+                yield
+            finally:
+                driver.execute("EXEC sp_releaseapplock :lock_name, 'Session'", {"lock_name": lock_name})
+            return
+
+        if dialect == "sqlite":
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                yield
+                return
+            driver.execute("BEGIN IMMEDIATE")
+            lock_error: BaseException | None = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                    driver.rollback()
+                raise lock_error
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                driver.commit()
+            return
+
+        yield
 
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.
@@ -354,18 +473,30 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             version: Version number of the migration.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             commit: Whether to commit immediately after recording.
             replaces: Optional sequence of replaced migration versions for squashed migrations.
         """
         version_type = self._derive_version_type(version)
+        replaces_csv = ",".join(replaces) if replaces else None
+        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+            statement: Any = self._record_migration_sequenced_statement(
+                version, version_type, description, execution_time_ms, checksum, self._applied_by(), replaces_csv
+            )
+        else:
+            seq_result = await driver.execute(self._next_execution_sequence_query())
+            next_sequence = self._extract_next_sequence(seq_result)
 
-        seq_result = await driver.execute(self._next_execution_sequence_query())
-        next_sequence = self._extract_next_sequence(seq_result)
-
-        statement = self._record_statement(
-            version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by(), replaces
-        )
+            statement = self._record_statement(
+                version,
+                version_type,
+                next_sequence,
+                description,
+                execution_time_ms,
+                checksum,
+                self._applied_by(),
+                replaces,
+            )
         await driver.execute(statement)
         if commit:
             await self._safe_commit(driver)
@@ -440,16 +571,20 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             squashed_version: Version number of the squashed migration.
             replaced_versions: List of version strings being replaced.
             description: Description of the squashed migration.
-            checksum: MD5 checksum of the squashed migration content.
+            checksum: SHA-256 checksum hex string of the squashed migration content.
         """
         await driver.execute(self._delete_versions_statement(replaced_versions))
 
-        seq_result = await driver.execute(self._next_execution_sequence_query())
-        next_sequence = self._extract_next_sequence(seq_result)
-
         version_type = self._derive_version_type(squashed_version)
-        await driver.execute(
-            self._record_statement(
+        replaces_csv = ",".join(replaced_versions) if replaced_versions else None
+        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+            statement: Any = self._record_migration_sequenced_statement(
+                squashed_version, version_type, description, 0, checksum, self._applied_by(), replaces_csv
+            )
+        else:
+            seq_result = await driver.execute(self._next_execution_sequence_query())
+            next_sequence = self._extract_next_sequence(seq_result)
+            statement = self._record_statement(
                 squashed_version,
                 version_type,
                 next_sequence,
@@ -459,7 +594,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 self._applied_by(),
                 replaced_versions,
             )
-        )
+        await driver.execute(statement)
 
         await self._safe_commit(driver)
         _log_squash_recorded(driver, squashed_version, len(replaced_versions))
@@ -485,6 +620,101 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         result = await driver.execute(self._check_versions_query(replaced_versions))
         return _validate_squash_applied_state(result, squashed_version, replaced_versions)
+
+    @asynccontextmanager
+    async def acquire_lock(
+        self, driver: "AsyncDriverAdapterBase", *, timeout_seconds: int = 30
+    ) -> "AsyncIterator[None]":
+        """Serialize mutating migration sessions using a dialect-appropriate lock.
+
+        PostgreSQL uses session advisory locks (skipped for CockroachDB drivers), MySQL and
+        MariaDB use ``GET_LOCK`` / ``RELEASE_LOCK``, SQL Server uses ``sp_getapplock`` /
+        ``sp_releaseapplock``, and SQLite takes an immediate transaction lock when no
+        transaction is already open. Unsupported backends yield directly.
+
+        Args:
+            driver: Active async session driver.
+            timeout_seconds: Lock acquisition timeout for timed lock backends.
+
+        Yields:
+            Control to the caller while the migration lock is held.
+
+        Raises:
+            MigrationError: When MySQL or SQL Server lock acquisition fails or times out.
+        """
+        raw_dialect = getattr(type(driver), "dialect", None)
+        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+            yield
+            return
+
+        lock_name, lock_id = self._migration_lock_key()
+        if dialect in _POSTGRES_LOCK_DIALECTS:
+            await driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": lock_id})
+            try:
+                yield
+            finally:
+                await driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+            return
+
+        if dialect in _MYSQL_LOCK_DIALECTS:
+            lock_result = await driver.select_value(
+                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
+            )
+            if lock_result != 1:
+                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+                raise MigrationError(msg)
+            try:
+                yield
+            finally:
+                await driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+            return
+
+        if dialect in _MSSQL_LOCK_DIALECTS:
+            timeout_ms = max(timeout_seconds, 0) * 1000
+            try:
+                ms_result = await driver.execute(
+                    "DECLARE @sqlspec_res INT; "
+                    "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
+                    "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
+                    "SELECT @sqlspec_res",
+                    {"lock_name": lock_name, "timeout_ms": timeout_ms},
+                )
+            except SQLSpecError as exc:
+                if "Migration lock acquisition failed" in str(exc):
+                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
+                    raise MigrationError(msg) from exc
+                raise
+            if ms_result.data:
+                lock_code = ms_result.scalar()
+                if isinstance(lock_code, int) and lock_code < 0:
+                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
+                    raise MigrationError(msg)
+            try:
+                yield
+            finally:
+                await driver.execute("EXEC sp_releaseapplock :lock_name, 'Session'", {"lock_name": lock_name})
+            return
+
+        if dialect == "sqlite":
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                yield
+                return
+            await driver.execute("BEGIN IMMEDIATE")
+            lock_error: BaseException | None = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                    await driver.rollback()
+                raise lock_error
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                await driver.commit()
+            return
+
+        yield
 
     async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.

@@ -3,7 +3,7 @@
 import functools
 import hashlib
 import re
-from typing import Any
+from typing import Any, Final
 
 __all__ = (
     "compute_sql_hash",
@@ -13,7 +13,12 @@ __all__ = (
     "resolve_effective_db_system",
 )
 
-_LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
+_SQL_REDACT_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
+    r"|(?P<dquote>\"(?:\"\"|[^\"])*(?:\"|\Z))"
+    r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
+    r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?:''|\\.|[^'\\])*(?:'|\Z))"
+)
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("sqlanywhere", "sqlanywhere"),
@@ -118,5 +123,12 @@ def compute_sql_hash(sql: str) -> str:
 
 
 def redact_sql_literals(sql: str) -> str:
-    """Mask single-quoted (including backslash escapes) and dollar-quoted SQL literals."""
-    return _LITERAL_PATTERN.sub("'***'", sql)
+    """Mask single-quoted and dollar-quoted SQL literals while keeping comments and quoted identifiers."""
+    return _SQL_REDACT_TOKEN_PATTERN.sub(_replace_sql_token, sql)
+
+
+def _replace_sql_token(match: re.Match[str]) -> str:
+    """Preserve comments and double-quoted identifiers while masking SQL literals."""
+    if match.lastgroup in {"comment", "dquote"}:
+        return match.group(0)
+    return "'***'"

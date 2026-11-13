@@ -1,11 +1,12 @@
 """Base classes for SQLSpec migrations."""
 
+import hashlib
 import importlib
 import os
 from abc import abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, NotRequired, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NotRequired, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -112,6 +113,18 @@ class AppliedMigrationRecord(TypedDict):
 @mypyc_attr(allow_interpreted_subclasses=True)
 class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
+
+    _SEQUENCED_INSERT_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        "postgres",
+        "postgresql",
+        "pgvector",
+        "paradedb",
+        "pg_textsearch",
+        "mysql",
+        "mariadb",
+        "sqlite",
+        "duckdb",
+    })
 
     def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
@@ -253,7 +266,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             - description: Human-readable migration description
             - applied_at: Timestamp when migration was applied
             - execution_time_ms: Migration execution duration
-            - checksum: MD5 hash for content verification
+            - checksum: SHA-256 hex digest for content verification
             - applied_by: User who applied the migration
 
         Returns:
@@ -322,7 +335,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
 
         Returns:
@@ -418,7 +431,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
             replaces: Comma-separated list of replaced versions.
 
@@ -448,6 +461,56 @@ class BaseMigrationTracker(Generic[DriverT]):
                 replaces,
             )
         )
+
+    def _record_migration_sequenced_statement(
+        self,
+        version: str,
+        version_type: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: str | None = None,
+    ) -> "Insert":
+        """Get SQL builder for atomically inserting a migration record with next sequence."""
+        columns: list[str] = [
+            "version_num",
+            "version_type",
+            "execution_sequence",
+            "description",
+            "execution_time_ms",
+            "checksum",
+            "applied_by",
+        ]
+        select_query = Select()
+        _, version_param = select_query.add_parameter(version, name="version_num")
+        _, type_param = select_query.add_parameter(version_type, name="version_type")
+        _, desc_param = select_query.add_parameter(description, name="description")
+        _, duration_param = select_query.add_parameter(execution_time_ms, name="execution_time_ms")
+        _, checksum_param = select_query.add_parameter(checksum, name="checksum")
+        _, actor_param = select_query.add_parameter(applied_by, name="applied_by")
+        projections: list[exp.Expr] = [
+            exp.Placeholder(this=version_param),
+            exp.Placeholder(this=type_param),
+            exp.column("next_seq", table="seq_src"),
+            exp.Placeholder(this=desc_param),
+            exp.Placeholder(this=duration_param),
+            exp.Placeholder(this=checksum_param),
+            exp.Placeholder(this=actor_param),
+        ]
+        if replaces is not None:
+            columns.append("replaces")
+            _, replaces_param = select_query.add_parameter(replaces, name="replaces")
+            projections.append(exp.Placeholder(this=replaces_param))
+        next_seq_subquery = Select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
+        select_query = select_query.select(*projections).from_(next_seq_subquery, alias="seq_src")
+        return Insert(self.version_table).columns(*columns).from_select(select_query)
+
+    def _migration_lock_key(self) -> "tuple[str, int]":
+        """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
+        lock_name = f"sqlspec_mig_{self.version_table}"[:64]
+        lock_id = int.from_bytes(hashlib.sha256(lock_name.encode("utf-8")).digest()[:8], "big", signed=True)
+        return lock_name, lock_id
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.

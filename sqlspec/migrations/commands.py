@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NamedTuple, NoReturn, ParamSpec, TypeVar, cast, overload
 
@@ -27,7 +28,7 @@ from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, Sq
 from sqlspec.migrations.base import BaseMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
-from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.runner import AsyncMigrationRunner, BaseMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.squash import MigrationSquasher, schema_ddl_statements
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
@@ -40,11 +41,11 @@ from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import Set as AbstractSet
+    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, SyncConfigT
     from sqlspec.data_dictionary import TableMetadata
     from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
-    from sqlspec.migrations.runner import BaseMigrationRunner
     from sqlspec.migrations.squash import SquashPlan
 
 __all__ = (
@@ -617,7 +618,8 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         Args:
             applied_migrations: Records from the tracking table (empty when it does not exist).
             loaded_files: Loaded migration metadata keyed by version.
-            strict: Raise on checksum drift, orphaned records, or partially applied squashes.
+            strict: Raise on checksum drift, orphaned records, partially applied squashes, or unrecorded
+                squash replacements.
             fail_on_pending: Raise when migrations are pending.
             use_logger: Whether logger output is enabled.
             echo: Whether console output is enabled.
@@ -625,7 +627,7 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
 
         Returns:
             Verification report with ``valid``, ``checksum_mismatches``, ``orphaned_records``,
-            ``pending_versions``, and ``partial_squash_errors``.
+            ``pending_versions``, ``partial_squash_errors``, and ``unrecorded_replaces``.
 
         Raises:
             MigrationError: When ``strict`` and the report is invalid, or ``fail_on_pending`` and migrations are
@@ -642,6 +644,9 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         if report["partial_squash_errors"]:
             partials = ", ".join(item["version"] for item in report["partial_squash_errors"])
             problems.append(f"partially applied squash in [{partials}]")
+        if report["unrecorded_replaces"]:
+            unrecorded = ", ".join(item["version"] for item in report["unrecorded_replaces"])
+            problems.append(f"unrecorded squash replacements in [{unrecorded}]")
         pending_failure = fail_on_pending and bool(report["pending_versions"])
         if pending_failure:
             problems.append(f"pending migrations [{', '.join(report['pending_versions'])}]")
@@ -754,7 +759,9 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             if renamed_migration is None:
                 continue
             reconciled_old_versions.add(old_version)
-            if renamed_migration["checksum"] != applied_map[old_version]["checksum"]:
+            if not BaseMigrationRunner.verify_migration_checksum(
+                renamed_migration["content"], str(applied_map[old_version].get("checksum") or "")
+            ):
                 checksum_mismatches.append((old_version, new_version))
                 continue
             renames.append(VersionRename(old_version, new_version, frozenset(claimed_versions)))
@@ -773,7 +780,9 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
                 file_migration = loaded_files.get(file_version)
                 if file_migration is None or file_version in claimed_versions:
                     continue
-                if applied_record["checksum"] == file_migration["checksum"]:
+                if BaseMigrationRunner.verify_migration_checksum(
+                    file_migration["content"], str(applied_record.get("checksum") or "")
+                ):
                     renames.append(VersionRename(applied_version, file_version, frozenset(claimed_versions)))
                     claimed_versions.discard(applied_version)
                     claimed_versions.add(file_version)
@@ -987,6 +996,7 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         orphaned_records: list[str] = []
         pending_versions: list[str] = []
         partial_squash_errors: list[dict[str, Any]] = []
+        unrecorded_replaces: list[dict[str, Any]] = []
         covered_applied_versions: set[str] = set()
 
         for version, migration in loaded_files.items():
@@ -1001,6 +1011,8 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
                         "applied_replaces": applied_replaces,
                         "missing_replaces": missing_replaces,
                     })
+                else:
+                    unrecorded_replaces.append({"version": version, "replaces": applied_replaces})
                 continue
             if state == "already_reconciled":
                 covered_applied_versions.update(applied_replaces)
@@ -1008,11 +1020,11 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
                 pending_versions.append(version)
                 continue
             covered_applied_versions.add(version)
-            if version.startswith("ext_"):
+            if version in retained_versions:
                 continue
             applied_checksum = str(applied_map[version].get("checksum") or "")
             file_checksum = str(migration.get("checksum") or "")
-            if applied_checksum != file_checksum:
+            if not BaseMigrationRunner.verify_migration_checksum(migration["content"], applied_checksum):
                 checksum_mismatches.append({"version": version, "expected": applied_checksum, "actual": file_checksum})
 
         orphaned_records.extend(
@@ -1021,11 +1033,12 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             if record["version_num"] not in covered_applied_versions and record["version_num"] not in retained_versions
         )
         return {
-            "valid": not (checksum_mismatches or orphaned_records or partial_squash_errors),
+            "valid": not (checksum_mismatches or orphaned_records or partial_squash_errors or unrecorded_replaces),
             "checksum_mismatches": checksum_mismatches,
             "orphaned_records": orphaned_records,
             "pending_versions": pending_versions,
             "partial_squash_errors": partial_squash_errors,
+            "unrecorded_replaces": unrecorded_replaces,
         }
 
     @staticmethod
@@ -1055,8 +1068,9 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
             and (
                 target_version not in replaces
                 or bool(target_record.get("replaces"))
-                or target_record.get("checksum") == migration.get("checksum")
-                or len(replaces) == 1
+                or BaseMigrationRunner.verify_migration_checksum(
+                    migration["content"], str(target_record.get("checksum") or "")
+                )
             )
         ):
             return "already_reconciled", replaces, []
@@ -1344,7 +1358,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            with self.config.provide_session() as driver:
+            with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
@@ -1418,7 +1432,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
                     result = self._apply_single_migration(driver, migration, version, ul, echo_value, summary_value)
                     if result is None:
-                        return
+                        break
                     applied_count += 1
 
         except Exception as exc:  # pragma: no cover
@@ -1448,6 +1462,10 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 auto_sync=auto_sync,
                 reconcilers_invoked=len(reconcilers_invoked) if has_reconcilers else None,
             )
+
+        recorded_error = self._last_command_error
+        if recorded_error is not None:
+            _raise_recorded_command_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -1507,7 +1525,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            with self.config.provide_session() as driver:
+            with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 self._validate_migration_schema(driver)
@@ -1517,14 +1535,12 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 active_applied = [m for m in applied if m["version_num"] not in retained_reconcile]
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(active_applied)))
-                if not active_applied and not (revision in {"base", "-1"} and has_reconcilers):
+                if not active_applied and not (revision == "base" and has_reconcilers):
                     output_info("No migrations to downgrade", rich_message="[yellow]No migrations to downgrade[/]")
                     return
 
                 to_revert = self._collect_revert_migrations(active_applied, revision) if active_applied else []
-                reaches_base = revision == "base" or (
-                    bool(active_applied or revision in {"base", "-1"}) and len(to_revert) == len(active_applied)
-                )
+                reaches_base = revision == "base"
                 pending_count = len(to_revert)
 
                 if runtime is not None:
@@ -1553,7 +1569,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                             if runtime is not None:
                                 runtime.increment_metric("migrations.command.downgrade.missing_files")
                             self._last_command_error = MigrationError(f"Migration file not found for {version}")
-                            return
+                            break
 
                         migration = self.runner.load_migration(all_files[version], version)
                         action_verb = "Would revert" if dry_run else "Reverting"
@@ -1577,10 +1593,10 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                             driver, migration, version, ul, echo_value, summary_value
                         )
                         if result is None:
-                            return
+                            break
                         reverted_count += 1
 
-                if reaches_base and has_reconcilers:
+                if reaches_base and has_reconcilers and self._last_command_error is None:
                     if dry_run:
                         self.report_reconciler_downgrade_preview(
                             use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -1621,6 +1637,10 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 reconcilers_invoked=len(reconcilers_invoked) if (reaches_base and has_reconcilers) else None,
             )
 
+        recorded_error = self._last_command_error
+        if recorded_error is not None:
+            _raise_recorded_command_error(recorded_error)
+
         if dry_run:
             output_info(
                 "Dry run complete. No changes were made to the database.",
@@ -1633,7 +1653,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         Args:
             revision: The revision to stamp.
         """
-        with self.config.provide_session() as driver:
+        with self.config.provide_session() as driver, self._lock_context(driver):
             self.tracker.ensure_tracking_table(driver)
             applied = self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
             retained = self._retained_reconcile_versions(applied)
@@ -1669,8 +1689,8 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                         continue
 
             if target_version is None:
-                console.print(f"[red]Unknown revision: {revision}[/]")
-                return
+                msg = f"Unknown revision: {revision}"
+                raise MigrationError(msg)
 
             target_parsed = parse_version(target_version) if parsed_target is not None else None
             clear_sql = (
@@ -1927,7 +1947,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
 
         try:
             if update_database:
-                with self.config.provide_session() as driver:
+                with self.config.provide_session() as driver, self._lock_context(driver):
                     self.tracker.ensure_tracking_table(driver)
                     applied_plans = [
                         plan
@@ -2002,7 +2022,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
-                with self.config.provide_session() as driver:
+                with self.config.provide_session() as driver, self._lock_context(driver):
                     self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
@@ -2104,6 +2124,15 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             )
         for version_num in sorted(retained_reconcile):
             self.tracker.remove_migration(driver, version_num)
+
+    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AbstractContextManager[None]":
+        """Return a tracker lock context for mutating commands or a no-op context."""
+        if dry_run:
+            return nullcontext()
+        acquire_lock = getattr(self.tracker, "acquire_lock", None)
+        if callable(acquire_lock):
+            return cast("AbstractContextManager[None]", acquire_lock(driver))
+        return nullcontext()
 
     def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""
@@ -2498,7 +2527,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            async with self.config.provide_session() as driver:
+            async with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
@@ -2574,7 +2603,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         driver, migration, version, ul, echo_value, summary_value
                     )
                     if result is None:
-                        return
+                        break
                     applied_count += 1
 
         except Exception as exc:  # pragma: no cover
@@ -2604,6 +2633,10 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 auto_sync=auto_sync,
                 reconcilers_invoked=len(reconcilers_invoked) if has_reconcilers else None,
             )
+
+        recorded_error = self._last_command_error
+        if recorded_error is not None:
+            _raise_recorded_command_error(recorded_error)
 
         if dry_run:
             output_info(
@@ -2663,7 +2696,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     rich_message="[bold yellow]DRY RUN MODE:[/] No database changes will be applied\n",
                 )
 
-            async with self.config.provide_session() as driver:
+            async with self.config.provide_session() as driver, self._lock_context(driver, dry_run=dry_run):
                 db_system = resolve_db_system(type(driver).__name__)
                 self.runner.set_driver(driver)
                 await self._validate_migration_schema(driver)
@@ -2674,14 +2707,12 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 active_applied = [m for m in applied if m["version_num"] not in retained_reconcile]
                 if runtime is not None:
                     runtime.increment_metric("migrations.command.downgrade.available", float(len(active_applied)))
-                if not active_applied and not (revision in {"base", "-1"} and has_reconcilers):
+                if not active_applied and not (revision == "base" and has_reconcilers):
                     output_info("No migrations to downgrade", rich_message="[yellow]No migrations to downgrade[/]")
                     return
 
                 to_revert = self._collect_revert_migrations(active_applied, revision) if active_applied else []
-                reaches_base = revision == "base" or (
-                    bool(active_applied or revision in {"base", "-1"}) and len(to_revert) == len(active_applied)
-                )
+                reaches_base = revision == "base"
                 pending_count = len(to_revert)
 
                 if runtime is not None:
@@ -2710,7 +2741,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                             if runtime is not None:
                                 runtime.increment_metric("migrations.command.downgrade.missing_files")
                             self._last_command_error = MigrationError(f"Migration file not found for {version}")
-                            return
+                            break
 
                         migration = await self.runner.load_migration(all_files[version], version)
                         action_verb = "Would revert" if dry_run else "Reverting"
@@ -2734,10 +2765,10 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                             driver, migration, version, ul, echo_value, summary_value
                         )
                         if result is None:
-                            return
+                            break
                         reverted_count += 1
 
-                if reaches_base and has_reconcilers:
+                if reaches_base and has_reconcilers and self._last_command_error is None:
                     if dry_run:
                         self.report_reconciler_downgrade_preview(
                             use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -2778,6 +2809,10 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 reconcilers_invoked=len(reconcilers_invoked) if (reaches_base and has_reconcilers) else None,
             )
 
+        recorded_error = self._last_command_error
+        if recorded_error is not None:
+            _raise_recorded_command_error(recorded_error)
+
         if dry_run:
             output_info(
                 "Dry run complete. No changes were made to the database.",
@@ -2790,7 +2825,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         Args:
             revision: The revision to stamp.
         """
-        async with self.config.provide_session() as driver:
+        async with self.config.provide_session() as driver, self._lock_context(driver):
             await self.tracker.ensure_tracking_table(driver)
             applied = await self.tracker.get_applied_migrations(driver) if self.extension_reconcilers else []
             retained = self._retained_reconcile_versions(applied)
@@ -2827,8 +2862,8 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                         continue
 
             if target_version is None:
-                console.print(f"[red]Unknown revision: {revision}[/]")
-                return
+                msg = f"Unknown revision: {revision}"
+                raise MigrationError(msg)
 
             target_parsed = parse_version(target_version) if parsed_target is not None else None
             clear_sql = (
@@ -3088,7 +3123,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
 
         try:
             if update_database:
-                async with self.config.provide_session() as driver:
+                async with self.config.provide_session() as driver, self._lock_context(driver):
                     await self.tracker.ensure_tracking_table(driver)
                     applied_plans = [
                         plan
@@ -3165,7 +3200,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                 console.print(f"[green]✓ Renamed {rename.old_path.name} → {rename.new_path.name}[/]")
 
             if update_database:
-                async with self.config.provide_session() as driver:
+                async with self.config.provide_session() as driver, self._lock_context(driver):
                     await self.tracker.ensure_tracking_table(driver)
                     applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
                     applied_versions = {m["version_num"] for m in applied_migrations}
@@ -3267,6 +3302,15 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             )
         for version_num in sorted(retained_reconcile):
             await self.tracker.remove_migration(driver, version_num)
+
+    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AbstractAsyncContextManager[None]":
+        """Return an async tracker lock context for mutating commands or a no-op context."""
+        if dry_run:
+            return nullcontext()
+        acquire_lock = getattr(self.tracker, "acquire_lock", None)
+        if callable(acquire_lock):
+            return cast("AbstractAsyncContextManager[None]", acquire_lock(driver))
+        return nullcontext()
 
     async def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""
@@ -3651,3 +3695,11 @@ def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs:
     arguments = dict(bound.arguments)
     arguments.pop("self", None)
     return arguments
+
+
+def _raise_recorded_command_error(error: Exception) -> NoReturn:
+    """Raise a recorded command error directly when already a ``MigrationError``."""
+    if isinstance(error, MigrationError):
+        raise error
+    msg = f"Migration command failed: {error}"
+    raise MigrationError(msg) from error

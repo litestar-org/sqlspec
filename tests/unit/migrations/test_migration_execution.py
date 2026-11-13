@@ -795,7 +795,8 @@ def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None
     )
     commands.tracker.remove_migration = MagicMock()
 
-    commands.downgrade(revision="base", echo=False)
+    with pytest.raises(MigrationError):
+        commands.downgrade(revision="base", echo=False)
     commands.tracker.remove_migration.assert_not_called()
 
 
@@ -843,7 +844,8 @@ def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_pat
     commands.runner.execute_upgrade = MagicMock(side_effect=RuntimeError("boom"))
 
     with patch("sqlspec.migrations.commands._log_command_summary") as mock_summary:
-        commands.upgrade(echo=False)
+        with pytest.raises(MigrationError, match="boom"):
+            commands.upgrade(echo=False)
         assert mock_summary.call_args.kwargs["status"] == "failed"
         assert isinstance(mock_summary.call_args.kwargs["error"], RuntimeError)
 

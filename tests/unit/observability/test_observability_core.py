@@ -5,6 +5,7 @@ import builtins
 import hashlib
 import logging
 import sys
+import time
 import zlib
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -33,7 +34,7 @@ from sqlspec.observability import (
     get_trace_context,
     resolve_db_system,
 )
-from sqlspec.observability._common import resolve_effective_db_system
+from sqlspec.observability._common import redact_sql_literals, resolve_effective_db_system
 from sqlspec.observability._diagnostics import collect_diagnostics
 from sqlspec.observability._observer import _maybe_truncate_parameters
 from sqlspec.storage import StorageTelemetry
@@ -1338,3 +1339,37 @@ def test_statement_event_profile_and_script_index_fields(caplog: Any) -> None:
 def test_resolve_db_system_snowflake(name: str, expected: str) -> None:
     """Snowflake identity takes precedence over the ADBC transport name."""
     assert resolve_db_system(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_sql", "expected_sql"),
+    [
+        (
+            "-- user's note\nSELECT * FROM t WHERE token = 's3cr3t'",
+            "-- user's note\nSELECT * FROM t WHERE token = '***'",
+        ),
+        ("/* block's note */\nSELECT 'secret'", "/* block's note */\nSELECT '***'"),
+        ("SELECT \"col's_name\", 'secret' FROM t", "SELECT \"col's_name\", '***' FROM t"),
+        ("SELECT $tag$secret 'nested'$tag$ FROM t", "SELECT '***' FROM t"),
+        ("SELECT $$dollar$$ FROM t", "SELECT '***' FROM t"),
+        ("SELECT $1, $2 FROM t WHERE name = 'alice'", "SELECT $1, $2 FROM t WHERE name = '***'"),
+        ("SELECT * FROM t WHERE name LIKE'a%'", "SELECT * FROM t WHERE name LIKE'***'"),
+        ("SELECT E'it\\'s', N'uni', B'101', X'ff'", "SELECT '***', '***', '***', '***'"),
+        ("SELECT * FROM t WHERE token = 'unclosed", "SELECT * FROM t WHERE token = '***'"),
+        ("SELECT $tag$unclosed payload", "SELECT '***'"),
+    ],
+)
+def test_redact_sql_literals_preserves_comments_and_identifiers(raw_sql: str, expected_sql: str) -> None:
+    """redact_sql_literals masks single and dollar literals without desynchronizing on comments or quotes."""
+    assert redact_sql_literals(raw_sql) == expected_sql
+
+
+@pytest.mark.parametrize("unclosed_prefix", ["'", "$tag$"])
+def test_redact_sql_literals_linear_time_on_large_unclosed_literals(unclosed_prefix: str) -> None:
+    """redact_sql_literals finishes in linear time on large unclosed literals."""
+    payload = "SELECT " + unclosed_prefix + ("a" * 50_000)
+    start = time.perf_counter()
+    result = redact_sql_literals(payload)
+    elapsed = time.perf_counter() - start
+    assert result == "SELECT '***'"
+    assert elapsed < 0.5
