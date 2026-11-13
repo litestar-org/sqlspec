@@ -41,6 +41,7 @@ from sqlspec.adapters.oracledb.core import (
     apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
     build_connection_config,
+    clear_oracle_otel_trace_context,
     default_statement_config,
     execute_session_checkout_async,
     execute_session_checkout_sync,
@@ -68,11 +69,17 @@ from sqlspec.adapters.oracledb.driver import (
 )
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.adapters.oracledb.tenant import (
+    OracleAsyncClientContextStrategy,
+    OracleAsyncEndUserSecurityStrategy,
     OracleAsyncIdentifierStrategy,
     OracleAsyncTenantLease,
+    OracleShardResolver,
+    OracleSyncClientContextStrategy,
+    OracleSyncEndUserSecurityStrategy,
     OracleSyncIdentifierStrategy,
     OracleSyncTenantLease,
     bind_oracle_tenant_hook,
+    validate_oracle_tenant_shard_features,
 )
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -117,6 +124,7 @@ OracleServerType = Literal["dedicated", "shared", "pooled"]
 OraclePoolBoundary = Literal["statement", "transaction"]
 OracleVectorReturnFormat = Literal["array", "list", "numpy"]
 OracleEventsBackend = Literal["aq", "poll_queue", "txeventq"]
+OracleTenantStrategyShorthand: TypeAlias = TenantStrategyShorthand | Literal["client_context"]
 OraclePurityInput: TypeAlias = Purity | Literal["DEFAULT", "NEW", "SELF"] | int
 OracleTransactionPriority: TypeAlias = Literal["DEFAULT", "LOW", "MEDIUM", "HIGH"]
 _ORACLE_VECTOR_MIN_MAJOR = 23
@@ -335,10 +343,20 @@ class OracleDriverFeatures(TypedDict):
     """Event queue backend (``'poll_queue'`` default, ``'aq'``, or ``'txeventq'``)."""
     enable_direct_path_load: NotRequired[bool]
     """Route ``load_from_arrow`` through Thin-mode ``Connection.direct_path_load`` with ``executemany`` fallback (defaults to ``True``)."""
-    tenant_strategy: NotRequired[TenantStrategy | TenantStrategyShorthand | None]
+    tenant_strategy: NotRequired[TenantStrategy | OracleTenantStrategyShorthand | None]
     """Opt-in tenant strategy, or the ``"identifier"`` shorthand, applied to every session and connection lease."""
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
     """Declarative ``DBMS_SESSION`` / ``CLIENT_IDENTIFIER`` context applied on checkout and cleared on release."""
+    sharding_key_variable: NotRequired[str]
+    """Tenant variable carrying the primary shard key."""
+    super_sharding_key_variable: NotRequired[str]
+    """Tenant variable carrying the super-shard key."""
+    shard_resolver: NotRequired[OracleShardResolver]
+    """Resolve primary and super-shard keys from the captured tenant payload."""
+    use_tenant_id_as_sharding_key: NotRequired[bool]
+    """Route directly by captured tenant identity in Thick mode."""
+    enable_otel_trace_context: NotRequired[bool]
+    """Piggyback W3C trace headers on supported Oracle connections."""
     enable_session_tracing: NotRequired[bool]
     """Piggyback active correlation and trace identifiers onto ``module``, ``action``, ``client_identifier``, and ``econtext_id`` in zero extra RTTs."""
     dbms_cloud_credential: NotRequired[str | None]
@@ -524,6 +542,8 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         self._desired_tag: str | None = None
         self._priority_baseline: Any = None
         self._acquire_options = acquire_options or OracleAcquireOptions()
+        if self._tenant_lease is not None:
+            self._tenant_lease._acquire_options = self._acquire_options
 
     def acquire_connection(self) -> OracleSyncConnection:
         if self._tenant_lease is not None:
@@ -566,6 +586,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
                 execute_session_release_sync(conn, hook)
             if self._priority_baseline is not None:
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
+            clear_oracle_otel_trace_context(conn)
         except BaseException as exc:
             if kwargs.get("exc_type") is None:
                 try:
@@ -631,7 +652,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     connection_type: "ClassVar[type[OracleSyncConnection]]" = OracleSyncConnection
     migration_tracker_type: "ClassVar[type[OracleSyncMigrationTracker]]" = OracleSyncMigrationTracker
     supports_tenant_strategy: ClassVar[bool] = True
-    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "identifier"})
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"client_context", "default", "identifier"})
     tenant_strategy_type: "ClassVar[type[Any] | None]" = OracleSyncIdentifierStrategy
     tenant_lease_type: "ClassVar[type[Any] | None]" = OracleSyncTenantLease
     supports_transactional_ddl: ClassVar[bool] = False
@@ -715,6 +736,21 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             self.connection_config = validate_oracle_drcp_and_mode_constraints(
                 self.connection_config, self.driver_features
             )
+            validate_oracle_tenant_shard_features(self.driver_features)
+            if isinstance(
+                self.driver_features.get("tenant_strategy"),
+                (OracleSyncEndUserSecurityStrategy, OracleAsyncEndUserSecurityStrategy),
+            ):
+                strategy = self.driver_features["tenant_strategy"]
+                validate_oracle_drcp_and_mode_constraints(
+                    self.connection_config,
+                    {
+                        **self.driver_features,
+                        "session_context_hook": OracleSessionContextConfig(
+                            end_user_security=OracleEndUserSecurityConfig(strategy._database_access_token)
+                        ),
+                    },
+                )
             if pending_wallet_dir is not None:
                 self._extracted_wallet_dir = pending_wallet_dir
                 retain_extracted_wallet_dir(pending_wallet_dir)
@@ -828,6 +864,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             prepare_driver=self._prepare_driver,
         )
 
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy == "client_context":
+            return OracleSyncClientContextStrategy(hook=self._tenant_source_hook)
+        return super()._resolve_tenant_strategy(strategy)
+
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleSyncIdentifierStrategy(self._tenant_source_hook)
 
@@ -915,6 +956,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
             "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
+            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
+            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
+            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
+            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
+            "OracleShardResolver": OracleShardResolver,
             "OracleAcquireOptions": OracleAcquireOptions,
             "OraclePluginName": OraclePluginName,
             "OraclePoolBoundary": OraclePoolBoundary,
@@ -1038,6 +1084,8 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         if tenant_lease is not None:
             self._tenant_lease = tenant_lease
         self._acquire_options = acquire_options or OracleAcquireOptions()
+        if self._tenant_lease is not None:
+            self._tenant_lease._acquire_options = self._acquire_options
         self._desired_tag: str | None = None
         self._priority_baseline: Any = None
 
@@ -1083,6 +1131,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
                 await execute_session_release_async(conn, hook)
             if self._priority_baseline is not None:
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
+            clear_oracle_otel_trace_context(conn)
         except BaseException as exc:
             if exc_type is None:
                 try:
@@ -1137,7 +1186,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     driver_type: ClassVar[type[OracleAsyncDriver]] = OracleAsyncDriver
     migration_tracker_type: "ClassVar[type[OracleAsyncMigrationTracker]]" = OracleAsyncMigrationTracker
     supports_tenant_strategy: ClassVar[bool] = True
-    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"default", "identifier"})
+    tenant_strategy_shorthands: "ClassVar[frozenset[str]]" = frozenset({"client_context", "default", "identifier"})
     tenant_strategy_type: "ClassVar[type[Any] | None]" = OracleAsyncIdentifierStrategy
     tenant_lease_type: "ClassVar[type[Any] | None]" = OracleAsyncTenantLease
     supports_transactional_ddl: ClassVar[bool] = False
@@ -1224,6 +1273,21 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             self.connection_config = validate_oracle_drcp_and_mode_constraints(
                 self.connection_config, self.driver_features
             )
+            validate_oracle_tenant_shard_features(self.driver_features)
+            if isinstance(
+                self.driver_features.get("tenant_strategy"),
+                (OracleSyncEndUserSecurityStrategy, OracleAsyncEndUserSecurityStrategy),
+            ):
+                strategy = self.driver_features["tenant_strategy"]
+                validate_oracle_drcp_and_mode_constraints(
+                    self.connection_config,
+                    {
+                        **self.driver_features,
+                        "session_context_hook": OracleSessionContextConfig(
+                            end_user_security=OracleEndUserSecurityConfig(strategy._database_access_token)
+                        ),
+                    },
+                )
             if pending_wallet_dir is not None:
                 self._extracted_wallet_dir = pending_wallet_dir
                 retain_extracted_wallet_dir(pending_wallet_dir)
@@ -1337,6 +1401,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             prepare_driver=self._prepare_driver,
         )
 
+    def _resolve_tenant_strategy(self, strategy: Any) -> Any:
+        if strategy == "client_context":
+            return OracleAsyncClientContextStrategy(hook=self._tenant_source_hook)
+        return super()._resolve_tenant_strategy(strategy)
+
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
 
@@ -1422,6 +1491,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
             "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
+            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
+            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
+            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
+            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
+            "OracleShardResolver": OracleShardResolver,
             "OracleAcquireOptions": OracleAcquireOptions,
             "OraclePluginName": OraclePluginName,
             "OraclePoolBoundary": OraclePoolBoundary,

@@ -1064,6 +1064,7 @@ def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123", *, is_ca: bool 
 
 def _tenant_oracle_pool(mode: str) -> tuple[Any, Any]:
     conn = MagicMock()
+    conn.run_pipeline = None
     conn.client_identifier = None
     conn.transaction_in_progress = False
     conn.version = "23.5.0.0.0"
@@ -1640,7 +1641,7 @@ async def test_older_sdk_default_checkout_and_explicit_priority_refusal(
     else:
         with config.provide_connection() as acquired:
             assert acquired is connection
-    with pytest.raises(oracle_config_module.oracledb.NotSupportedError, match="26.1"):
+    with pytest.raises(oracle_config_module.oracledb.NotSupportedError, match=r"26\.1"):
         config.provide_connection(transaction_priority="HIGH")
     pool.acquire.assert_called_once_with()
     pool.release.assert_called_once_with(connection)
