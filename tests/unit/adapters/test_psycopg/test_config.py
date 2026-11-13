@@ -1093,15 +1093,15 @@ async def test_tenant_prepare_failure_releases_native_context(
 @pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
 @pytest.mark.parametrize("explicit_threshold", (False, True))
 def test_replica_derivation_preserves_explicit_prepare_threshold(config_type: Any, explicit_threshold: bool) -> None:
-    connection: dict[str, Any] = {"conninfo": "postgresql://writer/app"}
+    connection: dict[str, Any] = {"conninfo": "postgresql://app:secret@writer/orders?sslmode=require"}
     if explicit_threshold:
         connection["prepare_threshold"] = None
     primary = config_type(connection_config=connection, driver_features={"pooler_mode": "transaction"})
     replica = primary.derive_pool(host="reader-a,reader-b", port="5432,5433", pooler_mode="session")
-    assert replica.connection_config.get("conninfo") is None
+    assert replica.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
     assert ("prepare_threshold" in replica.connection_config) is explicit_threshold
     assert replica.connection_config["host"] == "reader-a,reader-b"
-    assert primary.connection_config["conninfo"] == "postgresql://writer/app"
+    assert primary.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
 
 
 @pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
@@ -1145,3 +1145,12 @@ async def test_wal_helpers_handle_row_factories_validate_and_map_errors(async_mo
     cursor.execute.side_effect = InvalidTextRepresentation("invalid WAL location")
     with pytest.raises(DataError):
         await invoke(driver.has_replayed_wal_lsn, "bad-lsn")
+
+
+def test_derived_host_allows_explicit_connection_identity_overrides() -> None:
+    primary = PsycopgSyncConfig(connection_config={"conninfo": "postgresql://app:secret@writer/orders?sslmode=require"})
+    reader = primary.derive_pool(host="reader", user="reporter", password="reader-secret", database="reports")
+    assert reader.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
+    assert reader.connection_config["user"] == "reporter"
+    assert reader.connection_config["password"] == "reader-secret"
+    assert reader.connection_config["dbname"] == "reports"

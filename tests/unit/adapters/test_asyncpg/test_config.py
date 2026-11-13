@@ -633,16 +633,16 @@ async def test_tenant_failed_restore_terminates_before_release() -> None:
 
 
 @pytest.mark.parametrize("explicit_cache", (False, True))
-def test_replica_derivation_preserves_explicit_cache_and_clears_primary_dsn(explicit_cache: bool) -> None:
-    connection: dict[str, Any] = {"dsn": "postgresql://writer/app"}
+def test_replica_derivation_preserves_explicit_cache_and_primary_dsn(explicit_cache: bool) -> None:
+    connection: dict[str, Any] = {"dsn": "postgresql://app:secret@writer/orders?sslmode=require"}
     if explicit_cache:
         connection["statement_cache_size"] = 0
     primary = AsyncpgConfig(connection_config=connection, driver_features={"pooler_mode": "transaction"})
     replica = primary.derive_pool(host=["reader-a", "reader-b"], port=[5432, 5433], pooler_mode="session")
-    assert replica.connection_config.get("dsn") is None
+    assert replica.connection_config["dsn"] == "postgresql://app:secret@writer/orders?sslmode=require"
     assert replica.connection_config["host"] == ["reader-a", "reader-b"]
     assert replica.connection_config.get("statement_cache_size") == (0 if explicit_cache else None)
-    assert primary.connection_config["dsn"] == "postgresql://writer/app"
+    assert primary.connection_config["dsn"] == "postgresql://app:secret@writer/orders?sslmode=require"
 
 
 @pytest.mark.parametrize("alias", ("url", "conninfo"))
@@ -700,3 +700,12 @@ def test_replica_derivation_distinguishes_explicit_and_injected_server_settings(
     )
     replica = explicit.derive_pool(pooler_mode="transaction")
     assert replica.connection_config["server_settings"] == {"application_name": "explicit"}
+
+
+def test_derived_host_allows_explicit_connection_identity_overrides() -> None:
+    primary = AsyncpgConfig(connection_config={"dsn": "postgresql://app:secret@writer/orders?sslmode=require"})
+    reader = primary.derive_pool(host="reader", user="reporter", password="reader-secret", database="reports")
+    assert reader.connection_config["dsn"] == "postgresql://app:secret@writer/orders?sslmode=require"
+    assert reader.connection_config["user"] == "reporter"
+    assert reader.connection_config["password"] == "reader-secret"
+    assert reader.connection_config["database"] == "reports"

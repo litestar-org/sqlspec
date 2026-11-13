@@ -169,3 +169,25 @@ async def test_native_adk_offloads_list_reads_and_keeps_append_event_on_primary(
                 await driver.execute("DROP TABLE IF EXISTS " + quote_identifier(table) + " CASCADE")
         await primary.close_pool()
         await replica.close_pool()
+
+
+@pytest.mark.parametrize("adapter", ["asyncpg", "psycopg", "psqlpy"])
+async def test_derived_host_retains_dsn_connection_identity(adapter: str, postgres_service: Any) -> None:
+    from sqlspec.adapters.psqlpy import PsqlpyConfig
+    from sqlspec.adapters.psycopg import PsycopgAsyncConfig
+
+    config_type = {"asyncpg": AsyncpgConfig, "psycopg": PsycopgAsyncConfig, "psqlpy": PsqlpyConfig}[adapter]
+    service = postgres_service
+    dsn = (
+        f"postgresql://{service.user}:{service.password}@writer.invalid:{service.port}/{service.database}"
+        "?sslmode=disable&application_name=derived_dsn_identity"
+    )
+    primary = config_type(connection_config={"dsn": dsn})
+    reader = primary.derive_pool(host=service.host, port=service.port)
+    try:
+        async with reader.provide_session() as session:
+            assert await session.select_value("SELECT current_user") == service.user
+            assert await session.select_value("SELECT current_database()") == service.database
+            assert await session.select_value("SHOW application_name") == "derived_dsn_identity"
+    finally:
+        await reader.close_pool()

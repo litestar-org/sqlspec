@@ -664,8 +664,13 @@ def test_replica_derivation_normalizes_native_session_enums(session: str) -> Non
         if session == "any"
         else (TargetSessionAttrs.ReadWrite if session in {"read-write", "primary"} else TargetSessionAttrs.ReadOnly)
     )
-    assert replica.connection_config.get("dsn") is None
+    assert "dbname='app'" in replica.connection_config["dsn"]
+    assert "host='reader-a,reader-b'" in replica.connection_config["dsn"]
     assert replica.connection_config["target_session_attrs"] == expected
+    expected_attr = (
+        "any" if session == "any" else ("read-write" if session in {"primary", "read-write"} else "read-only")
+    )
+    assert f"target_session_attrs='{expected_attr}'" in replica.connection_config["dsn"]
     assert replica.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
     assert primary.connection_config["dsn"] == "postgresql://writer/app"
 
@@ -680,7 +685,8 @@ def test_invalid_replica_enum_options_fail_configuration(field: str, value: Any)
 def test_replica_alias_overrides_replace_primary_values() -> None:
     primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app", "db_name": "app", "username": "writer"})
     replica = primary.derive_pool(host="reader", database="reader_app", user="reader")
-    assert replica.connection_config.get("dsn") is None
+    assert "dbname='reader_app'" in replica.connection_config["dsn"]
+    assert "host='reader'" in replica.connection_config["dsn"]
     assert replica.connection_config["db_name"] == "reader_app"
     assert replica.connection_config["username"] == "reader"
 
@@ -710,7 +716,48 @@ def test_replica_session_attributes_preserve_inherited_endpoint() -> None:
             "load_balance_hosts": "random",
         }
     )
-    assert reader.connection_config["dsn"] == "postgresql://writer/app"
+    assert "host='writer'" in reader.connection_config["dsn"]
+    assert "dbname='app'" in reader.connection_config["dsn"]
+    assert "target_session_attrs='read-only'" in reader.connection_config["dsn"]
     assert reader.connection_config["target_session_attrs"] == TargetSessionAttrs.ReadOnly
     assert reader.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
     assert reader.connection_config["options"] == "-c default_transaction_read_only=on"
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://app:sec%27ret@writer/orders?sslmode=require&application_name=reports",
+        "postgresql://app:sec%27ret@[::1]:5433,writer:5434/orders?sslmode=require&application_name=reports",
+        "host=writer user=app password='sec\\'ret' dbname=orders sslmode=require application_name=reports",
+    ],
+)
+def test_derived_host_preserves_dsn_credentials_database_and_tls(dsn: str) -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": dsn})
+    reader = primary.derive_pool(host="reader", port=6432)
+    merged = reader.connection_config["dsn"]
+    assert "host='reader'" in merged
+    assert "port='6432'" in merged
+    assert "user='app'" in merged
+    assert "password='sec\\'ret'" in merged
+    assert "dbname='orders'" in merged
+    assert "sslmode='require'" in merged
+    assert "application_name='reports'" in merged
+    assert primary.connection_config["dsn"] == dsn
+    alternate = primary.derive_pool(host="reader", user="reporter", password="new-secret", database="reports")
+    assert "user='reporter'" in alternate.connection_config["dsn"]
+    assert "password='new-secret'" in alternate.connection_config["dsn"]
+    assert "dbname='reports'" in alternate.connection_config["dsn"]
+
+
+@pytest.mark.parametrize("dsn", ["host=writer invalid", "invalid host=writer", "postgresql://writer:invalid/orders"])
+def test_invalid_dsn_host_derivation_fails_before_pool_creation(dsn: str) -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": dsn})
+    with pytest.raises(ImproperConfigurationError, match="Invalid PostgreSQL"):
+        primary.derive_pool(host="reader")
+
+
+def test_derived_dsn_preserves_literal_plus_in_security_paths() -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://app@writer/orders?sslrootcert=/keys/ca+extra.pem"})
+    reader = primary.derive_pool(host="reader")
+    assert "sslrootcert='/keys/ca+extra.pem'" in reader.connection_config["dsn"]

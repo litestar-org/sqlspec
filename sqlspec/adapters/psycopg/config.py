@@ -428,7 +428,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             config.pop("prepare_threshold", None)
         aliases = ("conninfo", "dsn", "url", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases) or "host" in overrides:
+        if any(key in overrides for key in aliases):
             for key in aliases:
                 config.pop(key, None)
             if explicit_dsn is not None:
@@ -969,7 +969,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             config.pop("prepare_threshold", None)
         aliases = ("conninfo", "dsn", "url", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases) or "host" in overrides:
+        if any(key in overrides for key in aliases):
             for key in aliases:
                 config.pop(key, None)
             if explicit_dsn is not None:

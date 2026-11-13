@@ -412,7 +412,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 config["server_settings"] = dict(self._explicit_server_settings)
         aliases = ("dsn", "url", "conninfo", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases) or "host" in overrides:
+        if any(key in overrides for key in aliases):
             for key in aliases:
                 config.pop(key, None)
             if explicit_dsn is not None:
