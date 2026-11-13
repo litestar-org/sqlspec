@@ -287,14 +287,15 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     def _acquire_primary(self) -> SyncDriverT:
         self._ensure_open()
         if self._primary_driver is None:
-            context = self._config.provide_session(
-                statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
-            )
-            if self._registry_lifecycle:
-                from sqlspec.base import _RuntimeSyncContext
+            with RoutingContext.primary(self._config.bind_key):
+                context = self._config.provide_session(
+                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
+                )
+                if self._registry_lifecycle:
+                    from sqlspec.base import _RuntimeSyncContext
 
-                context = _RuntimeSyncContext(context, self._config.get_observability_runtime(), self._config)
-            self._primary_driver = self._stack.enter_context(context)
+                    context = _RuntimeSyncContext(context, self._config.get_observability_runtime(), self._config)
+                self._primary_driver = self._stack.enter_context(context)
         return cast("SyncDriverT", self._primary_driver)
 
     def _acquire_replica(self) -> SyncDriverT:
@@ -927,14 +928,15 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     async def _acquire_primary(self) -> AsyncDriverT:
         self._ensure_open()
         if self._primary_driver is None:
-            context = self._config.provide_session(
-                statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
-            )
-            if self._registry_lifecycle:
-                from sqlspec.base import _RuntimeAsyncContext
+            with RoutingContext.primary(self._config.bind_key):
+                context = self._config.provide_session(
+                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
+                )
+                if self._registry_lifecycle:
+                    from sqlspec.base import _RuntimeAsyncContext
 
-                context = _RuntimeAsyncContext(context, self._config.get_observability_runtime(), self._config)
-            self._primary_driver = await self._stack.enter_async_context(context)
+                    context = _RuntimeAsyncContext(context, self._config.get_observability_runtime(), self._config)
+                self._primary_driver = await self._stack.enter_async_context(context)
         return cast("AsyncDriverT", self._primary_driver)
 
     async def _acquire_replica(self) -> AsyncDriverT:

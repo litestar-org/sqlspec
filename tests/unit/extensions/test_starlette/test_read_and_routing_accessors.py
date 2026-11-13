@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from starlette.applications import Starlette

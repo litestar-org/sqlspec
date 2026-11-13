@@ -78,3 +78,68 @@ def test_sync_follower_snapshot_and_strong_primary_override(cockroach_psycopg_sy
             session.execute(f"DROP TABLE IF EXISTS {table}")
             session.commit()
         config.close_pool()
+
+
+@pytest.mark.parametrize("adapter", ["asyncpg", "psycopg"])
+@pytest.mark.parametrize("transaction", [False, True])
+async def test_async_routing_facade_primary_checkout_disables_global_follower_mode(
+    adapter: str, transaction: bool, cockroach_asyncpg_config: Any, cockroach_psycopg_async_config: Any
+) -> None:
+    base = cockroach_asyncpg_config if adapter == "asyncpg" else cockroach_psycopg_async_config
+    config = type(base)(connection_config=dict(base.connection_config), replicas=True)
+    table = quote_identifier("facade_writer_" + uuid4().hex)
+    token = RoutingContext.set(None)
+    try:
+        async with base.provide_session() as writer:
+            await writer.execute(f"CREATE TABLE {table} (id integer PRIMARY KEY)")
+            await writer.commit()
+        async with config.provide_routing_session() as facade:
+            assert await facade.select_value("SELECT 1") == 1
+            if transaction:
+                async with facade.transaction():
+                    await facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
+            else:
+                await facade.begin()
+                await facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
+                await facade.commit()
+        assert RoutingContext.current() is None
+        async with base.provide_session() as writer:
+            assert await writer.select_value(f"SELECT count(*) FROM {table}") == 1
+    finally:
+        async with base.provide_session() as writer:
+            await writer.execute(f"DROP TABLE IF EXISTS {table}")
+            await writer.commit()
+        await config.close_pool()
+        RoutingContext.reset(token)
+
+
+@pytest.mark.parametrize("transaction", [False, True])
+def test_sync_routing_facade_primary_checkout_disables_global_follower_mode(
+    transaction: bool, cockroach_psycopg_sync_config: Any
+) -> None:
+    base = cockroach_psycopg_sync_config
+    config = type(base)(connection_config=dict(base.connection_config), replicas=True)
+    table = quote_identifier("facade_sync_writer_" + uuid4().hex)
+    token = RoutingContext.set(None)
+    try:
+        with base.provide_session() as writer:
+            writer.execute(f"CREATE TABLE {table} (id integer PRIMARY KEY)")
+            writer.commit()
+        with config.provide_routing_session() as facade:
+            assert facade.select_value("SELECT 1") == 1
+            if transaction:
+                with facade.transaction():
+                    facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
+            else:
+                facade.begin()
+                facade.execute(f"INSERT INTO {table} (id) VALUES (:id)", {"id": 1})
+                facade.commit()
+        assert RoutingContext.current() is None
+        with base.provide_session() as writer:
+            assert writer.select_value(f"SELECT count(*) FROM {table}") == 1
+    finally:
+        with base.provide_session() as writer:
+            writer.execute(f"DROP TABLE IF EXISTS {table}")
+            writer.commit()
+        config.close_pool()
+        RoutingContext.reset(token)
