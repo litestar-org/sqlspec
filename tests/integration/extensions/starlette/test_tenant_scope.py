@@ -1,7 +1,7 @@
 """Native PostgreSQL RLS request and streaming lease acceptance."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 from uuid import uuid4
 
@@ -10,7 +10,7 @@ import pytest
 from pytest_databases.docker.postgres import PostgresService
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
@@ -131,6 +131,7 @@ async def test_tenant_request_isolation_missing_identity_and_worker(tenant_datab
 async def test_tenant_streaming_real_driver_and_slot_ownership(
     tenant_database: Any, framework: str, mode: str, failure: str | None
 ) -> None:
+    """Prove lease cleanup before closing generators suspended by failed ASGI sends."""
     credentials, table = tenant_database
     first_sent = asyncio.Event()
     gate = asyncio.Event()
@@ -138,12 +139,13 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
     finish = asyncio.Event()
     competitor_acquired = asyncio.Event()
     events: list[str] = []
+    streams: list[AsyncGenerator[bytes, None]] = []
     plugin: Any = None
 
     async def endpoint(request: Request) -> StreamingResponse:
         session = await plugin.get_session_async(request)
 
-        async def body() -> AsyncIterator[bytes]:
+        async def body() -> AsyncGenerator[bytes, None]:
             try:
                 yield b"first"
                 await gate.wait()
@@ -165,7 +167,9 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
             if failure == "background":
                 raise ValueError("background failure")
 
-        return StreamingResponse(body(), background=BackgroundTask(background))
+        stream = body()
+        streams.append(stream)
+        return StreamingResponse(stream, background=BackgroundTask(background))
 
     app, plugin, config = _tenant_app(credentials, framework, mode, endpoint)
     scope = {
@@ -225,15 +229,22 @@ async def test_tenant_streaming_real_driver_and_slot_ownership(
                 finish.set()
                 if failure is None:
                     await asyncio.wait_for(task, 5)
+                elif failure == "send":
+                    with pytest.raises(ClientDisconnect) as disconnected:
+                        await asyncio.wait_for(task, 5)
+                    assert isinstance(disconnected.value.__context__, OSError)
+                    assert str(disconnected.value.__context__) == "send failure"
                 else:
-                    with pytest.raises((ValueError, OSError), match=f"{failure} failure"):
+                    with pytest.raises(ValueError, match=f"{failure} failure"):
                         await asyncio.wait_for(task, 5)
             await asyncio.wait_for(waiter, 5)
             assert TenantContext.get_tenant_id() == "outer"
-        assert events.count("generator_exit") == 1
         if failure is None:
             assert events.index("final_sent") < events.index("background_query")
         async with TenantContext.scope("a"), config.provide_session() as session:
             expected = 1 if failure is None and mode == "autocommit" else 0
             assert await session.select_value(f"SELECT count(*) FROM {table} WHERE value = $1", (99,)) == expected
         assert (await config.provide_pool()).get_idle_size() == 1
+        if failure == "send":
+            await streams[0].aclose()
+        assert events.count("generator_exit") == 1
