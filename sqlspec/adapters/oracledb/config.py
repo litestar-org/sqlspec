@@ -49,6 +49,7 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_sync,
     extract_oracle_wallet_zip,
     extract_static_alter_session_config,
+    forget_oracle_session_state,
     has_callable_alter_session_fields,
     release_extracted_wallet_dir,
     retain_extracted_wallet_dir,
@@ -563,6 +564,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         except BaseException as exc:
             self._conn = None
             try:
+                forget_oracle_session_state(conn)
                 pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -594,6 +596,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
                 except BaseException as rollback_error:
                     exc.add_note(f"Oracle rollback failed: {rollback_error}")
             try:
+                forget_oracle_session_state(conn)
                 pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -606,6 +609,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             pool.release(conn, **release_kwargs)
         except BaseException as exc:
             try:
+                forget_oracle_session_state(conn)
                 pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -621,16 +625,37 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
 
 
 class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_driver",)
 
     def __init__(self, config: "OracleSyncConfig", acquire_options: OracleAcquireOptions | None = None) -> None:
         super().__init__(config)
         self._ctx = OracleSyncConnectionContext(config, self._tenant_lease, acquire_options)
+        self._driver: OracleSyncDriver | None = None
+
+    def prepare_driver(self, driver: OracleSyncDriver) -> None:
+        """Capture session ownership for forgotten sessionless transaction cleanup."""
+        self._driver = driver
 
     def acquire_connection(self) -> OracleSyncConnection:
         return cast("OracleSyncConnection", self._ctx.acquire_connection())
 
     def release_connection(self, _conn: OracleSyncConnection, **kwargs: Any) -> None:
+        driver, self._driver = self._driver, None
+        if driver is not None and driver.sessionless_transaction_id is not None:
+            try:
+                driver.rollback()
+            except BaseException as exc:
+                self._ctx._conn = None
+                if self._tenant_lease is not None:
+                    self._tenant_lease._connection = None
+                    self._tenant_lease._state = None
+                try:
+                    forget_oracle_session_state(_conn)
+                    self._config.connection_instance.drop(_conn)
+                except BaseException as drop_error:
+                    exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+                _oracle_cleanup_error(kwargs.get("exc_val"), exc)
+                return
         self._ctx.release_connection(_conn, **kwargs)
 
 
@@ -1109,6 +1134,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             self._connection = None
             self._pool = None
             try:
+                forget_oracle_session_state(conn)
                 await pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -1139,6 +1165,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
                 except BaseException as rollback_error:
                     exc.add_note(f"Oracle rollback failed: {rollback_error}")
             try:
+                forget_oracle_session_state(conn)
                 await pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -1148,6 +1175,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             await pool.release(conn)
         except BaseException as exc:
             try:
+                forget_oracle_session_state(conn)
                 await pool.drop(conn)
             except BaseException as drop_error:
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
@@ -1155,16 +1183,38 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
 
 
 class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ("_ctx",)
+    __slots__ = ("_ctx", "_driver")
 
     def __init__(self, config: "OracleAsyncConfig", acquire_options: OracleAcquireOptions | None = None) -> None:
         super().__init__(config)
         self._ctx = OracleAsyncConnectionContext(config, acquire_options, self._tenant_lease)
+        self._driver: OracleAsyncDriver | None = None
+
+    def prepare_driver(self, driver: OracleAsyncDriver) -> None:
+        """Capture session ownership for forgotten sessionless transaction cleanup."""
+        self._driver = driver
 
     async def acquire_connection(self) -> Any:
         return await self._ctx.__aenter__()
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
+        driver, self._driver = self._driver, None
+        if driver is not None and driver.sessionless_transaction_id is not None:
+            try:
+                await driver.rollback()
+            except BaseException as exc:
+                self._ctx._connection = None
+                self._ctx._pool = None
+                if self._tenant_lease is not None:
+                    self._tenant_lease._connection = None
+                    self._tenant_lease._state = None
+                try:
+                    forget_oracle_session_state(_conn)
+                    await self._config.connection_instance.drop(_conn)
+                except BaseException as drop_error:
+                    exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+                _oracle_cleanup_error(kwargs.get("exc_val"), exc)
+                return
         await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 

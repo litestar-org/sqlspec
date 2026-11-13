@@ -20,6 +20,7 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_async,
     execute_session_release_sync,
     extract_pipeline_single_row,
+    forget_oracle_session_state,
     prepare_session_checkout_pipeline,
     prepare_session_release_pipeline,
     synthesize_session_state_tag,
@@ -657,6 +658,7 @@ class OracleSyncTenantLease(SyncTenantLease):
             self._pool.release(connection)
 
     def _invalidate(self, connection: Any) -> None:
+        forget_oracle_session_state(connection)
         self._pool.drop(connection)
 
     def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
@@ -733,6 +735,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
             await self._pool.release(connection)
 
     async def _invalidate(self, connection: Any) -> None:
+        forget_oracle_session_state(connection)
         await self._pool.drop(connection)
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:

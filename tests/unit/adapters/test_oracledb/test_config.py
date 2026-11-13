@@ -1671,3 +1671,68 @@ def test_owned_thin_static_alter_session_applies_once(monkeypatch: pytest.Monkey
         pass
     assert cursor.execute.call_count == 1
     assert "ALTER SESSION" in cursor.execute.call_args.args[0]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("rollback_fails", [False, True])
+@pytest.mark.parametrize("body_fails", [False, True])
+async def test_session_release_rolls_back_forgotten_sessionless_before_hooks(
+    async_mode: bool, rollback_fails: bool, body_fails: bool
+) -> None:
+    events: list[str] = []
+    connection = MagicMock()
+    connection.thin = True
+    connection.begin_sessionless_transaction = AsyncMock(return_value=b"tx") if async_mode else Mock(return_value=b"tx")
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+
+    def execute(sql: str, *args: Any) -> None:
+        if "CLEAR_IDENTIFIER" in sql:
+            events.append("clear")
+
+    def rollback() -> None:
+        events.append("rollback")
+        if rollback_fails:
+            msg = "rollback failed"
+            raise RuntimeError(msg)
+
+    cursor.execute = AsyncMock(side_effect=execute) if async_mode else Mock(side_effect=execute)
+    connection.cursor.return_value = cursor
+    connection.rollback = AsyncMock(side_effect=rollback) if async_mode else Mock(side_effect=rollback)
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    pool.release = AsyncMock() if async_mode else Mock()
+    pool.drop = AsyncMock() if async_mode else Mock()
+    config_type = OracleAsyncConfig if async_mode else OracleSyncConfig
+    config = config_type(
+        connection_instance=pool,
+        driver_features={"session_context_hook": OracleSessionContextConfig(clear_identifier=True)},
+    )
+
+    async def exercise() -> None:
+        if async_mode:
+            async with config.provide_session() as session:
+                await session.begin_sessionless_transaction()
+                if body_fails:
+                    raise ValueError("body failure")
+        else:
+            with config.provide_session() as session:
+                session.begin_sessionless_transaction()
+                if body_fails:
+                    raise ValueError("body failure")
+
+    if body_fails or rollback_fails:
+        error = ValueError if body_fails else RuntimeError
+        with pytest.raises(error):
+            await exercise()
+    else:
+        await exercise()
+    assert events[0] == "rollback"
+    if rollback_fails:
+        assert events == ["rollback"]
+        pool.drop.assert_called_once_with(connection)
+        pool.release.assert_not_called()
+    else:
+        assert events[-1] == "clear"
+        pool.release.assert_called_once_with(connection)
