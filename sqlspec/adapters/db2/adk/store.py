@@ -157,7 +157,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
     ) -> StoredSession | None:
         """Return a scoped session or None if absent."""
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=renew_for is not None) as driver:
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     driver.execute(_touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id))
                 row = driver.select_one_or_none(
@@ -198,7 +198,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -254,7 +254,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -367,9 +367,9 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         with self._config.provide_session() as driver:
             return driver.select_one_or_none(sql, params)
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
+        with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
@@ -424,7 +424,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
     ) -> StoredSession | None:
         """Return a scoped session or None if absent."""
         try:
-            async with self._config.provide_session() as driver:
+            async with self._provide_read_session(primary=renew_for is not None) as driver:
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     await driver.execute(
                         _touch_session_sql(self._session_table), (utc_now(), app_name, user_id, session_id)
@@ -467,7 +467,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -525,7 +525,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -635,9 +635,11 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             raise
         return max(count, 0)
 
-    async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        async with self._config.provide_session() as driver:
-            return await driver.select(sql, params)
+    async def _execute_fetchall(
+        self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         async with self._config.provide_session() as driver:
@@ -744,7 +746,7 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -793,9 +795,9 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             return
         _reconcile_db2_indexes_sync(driver, self._memory_index_specs())
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False) -> list[dict[str, Any]]:
+        with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
@@ -881,7 +883,7 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
         try:
-            rows = await self._execute_fetchall(sql, params)
+            rows = await self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return []
@@ -930,9 +932,11 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             return
         await _reconcile_db2_indexes_async(driver, self._memory_index_specs())
 
-    async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        async with self._config.provide_session() as driver:
-            return await driver.select(sql, params)
+    async def _execute_fetchall(
+        self, sql: str, params: tuple[Any, ...] = (), *, read: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", await driver.select(sql, params))
 
     async def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
         async with self._config.provide_session() as driver:

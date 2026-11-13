@@ -29,6 +29,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -498,10 +499,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
     __slots__ = ("_in_memory",)
 
-    def __init__(self, config: "OracleAsyncConfig") -> None:
+    def __init__(self, config: "OracleAsyncConfig", *, read_config: "OracleAsyncConfig | None" = None) -> None:
         """Initialize Oracle ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: OracleAsyncConfig instance.
 
         Notes:
@@ -511,7 +513,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         _configure_oracle_adk_session_tables(self, config)
 
         adk_config = _adk_config(config)
@@ -597,7 +599,8 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 await _rollback_async(conn)
                 raise
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -623,7 +626,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=renew_for is not None) as conn:
                 with conn.cursor() as cursor:
                     if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                         await cursor.execute(
@@ -729,7 +732,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
@@ -970,7 +973,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, params)
                     rows = await cursor.fetchall()
@@ -1536,10 +1539,11 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     __slots__ = ("_in_memory",)
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
+    def __init__(self, config: "OracleSyncConfig", *, read_config: "OracleSyncConfig | None" = None) -> None:
         """Initialize Oracle synchronous ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: OracleSyncConfig instance.
 
         Notes:
@@ -1549,7 +1553,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             - owner_id_column: Optional owner FK column DDL (default: None)
             - in_memory: Enable INMEMORY PRIORITY HIGH clause (default: False)
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         _configure_oracle_adk_session_tables(self, config)
 
         adk_config = _adk_config(config)
@@ -1630,7 +1634,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             cursor.execute(sql, coerced_params)
             conn.commit()
 
-        result = self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -1662,7 +1667,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            with self._provide_read_connection(primary=renew_for is not None) as conn, conn.cursor() as cursor:
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     cursor.execute(
                         f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
@@ -1759,7 +1764,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -1982,7 +1987,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -2512,8 +2517,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
     __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
-    def __init__(self, config: "OracleAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "OracleAsyncConfig", *, read_config: "OracleAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
@@ -2643,12 +2648,13 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                     scope_filter,
                     fts_operator=self._fts_operator,
                     approximate=self._approximate,
+                    read=True,
                 )
             if self._use_fts:
                 return await self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator, read=True
                 )
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -2858,6 +2864,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         *,
         fts_operator: str = "ACCUM",
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
@@ -2881,7 +2888,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -2901,6 +2908,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         metric: str = "COSINE",
         fts_operator: str = "ACCUM",
         approximate: bool = True,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -2953,14 +2961,21 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return await self._rows_to_records(rows)
 
     async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         embedding_column = (
@@ -2981,7 +2996,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
@@ -3020,8 +3035,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     __slots__ = ("_approximate", "_fts_operator", "_in_memory")
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "OracleSyncConfig", *, read_config: "OracleSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
@@ -3154,12 +3169,13 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     scope_filter,
                     fts_operator=self._fts_operator,
                     approximate=self._approximate,
+                    read=True,
                 )
             if self._use_fts:
                 return self._search_entries_fts(
-                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator
+                    query, app_name, user_id, effective_limit, scope_filter, fts_operator=self._fts_operator, read=True
                 )
-            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except OracleDatabaseError as exc:
             error_obj = exc.args[0] if exc.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -3367,6 +3383,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         *,
         fts_operator: str = "ACCUM",
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         if not sanitized_query:
@@ -3388,7 +3405,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": sanitized_query, "limit": limit}
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
@@ -3407,6 +3424,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         metric: str = "COSINE",
         fts_operator: str = "ACCUM",
         approximate: bool = True,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         sanitized_query = sanitize_oracle_text_query(query, operator=fts_operator)
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
@@ -3459,13 +3477,20 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 "top_k": limit,
                 "rrf_k": rrf_k,
             }
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)
 
     def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         embedding_column = "embedding" if _memory_supports_vectors(self._get_version_info()) else "NULL AS embedding"
@@ -3484,7 +3509,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
             return self._rows_to_records(rows)

@@ -37,8 +37,8 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SqlanywhereConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SqlanywhereConfig", *, read_config: "SqlanywhereConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create ADK tables and indexes using SQL Anywhere ``IF NOT EXISTS`` DDL."""
@@ -100,6 +100,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -108,6 +109,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
                 WHERE app_name = ? AND user_id = ? AND id = ?
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except SqlanywhereError as exc:
             if _is_sqlanywhere_table_missing(exc):
@@ -146,7 +148,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SqlanywhereError as exc:
             if _is_sqlanywhere_table_missing(exc):
                 return []
@@ -225,7 +227,7 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SqlanywhereError as exc:
             if _is_sqlanywhere_table_missing(exc):
                 return []
@@ -408,21 +410,23 @@ class SqlanywhereADKStore(BaseSyncADKStore["SqlanywhereConfig"]):
     ) -> "tuple[str, tuple[Any, ...]]":
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, SqlanywhereCursor(conn) as cursor:
+    def _execute_fetchone(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
+    ) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             if commit:
                 conn.commit()
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SqlanywhereCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, SqlanywhereCursor(conn) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -437,8 +441,8 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SqlanywhereConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SqlanywhereConfig", *, read_config: "SqlanywhereConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create the memory table and indexes using SQL Anywhere ``IF NOT EXISTS`` DDL."""
@@ -531,7 +535,7 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
         LIMIT ?
         """
         try:
-            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value))
+            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%", limit_value), read=True)
         except SqlanywhereError as exc:
             if _is_sqlanywhere_table_missing(exc):
                 return []
@@ -612,8 +616,8 @@ class SqlanywhereADKMemoryStore(BaseSyncADKMemoryStore["SqlanywhereConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SqlanywhereCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SqlanywhereCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 

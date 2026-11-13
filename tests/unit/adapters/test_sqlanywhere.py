@@ -556,11 +556,17 @@ async def test_sqlanywhere_litestar_and_adk_stores_roundtrip_with_mocked_connect
 
     captured: list[tuple[str, tuple[Any, ...]]] = []
 
-    def _capture(_self: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+    def _capture(_self: Any, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         captured.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchall", _capture)
+    connection = MagicMock()
+    cursor = connection.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): _capture(None, sql, params)
+    cursor.fetchall.return_value = []
+    provider = MagicMock()
+    provider.return_value.__enter__.return_value = connection
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", provider)
     adk_store = SqlanywhereADKStore(config)
     adk_store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
     sql, params = captured[0]
