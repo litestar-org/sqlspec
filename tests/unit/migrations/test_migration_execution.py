@@ -694,7 +694,7 @@ def test_squash_update_database_reads_target_file_and_retains_backup_until_commi
     f2 = tmp_path / "0002_second.sql"
     f2.write_text("-- name: migrate-0002-up\nSELECT 2;\n-- name: migrate-0002-down\nSELECT 2;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -723,7 +723,7 @@ def test_stamp_records_all_ancestor_migrations_and_supports_base(tmp_path: Path)
     f3 = tmp_path / "0003_third.sql"
     f3.write_text("-- name: migrate-0003-up\nSELECT 3;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -778,7 +778,7 @@ def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None
     f2 = tmp_path / "0002_second.sql"
     f2.write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);\n")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -801,7 +801,7 @@ def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None
 
 def test_execute_migration_sql_resets_session_schema_before_on_success(tmp_path: Path) -> None:
     """Verify _execute_migration_sql resets session schema before invoking on_success."""
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.supports_migration_schemas = True
     runner = SyncMigrationRunner(tmp_path, context=MigrationContext(config=config))
     driver = MagicMock()
@@ -827,7 +827,7 @@ def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_pat
     f1 = tmp_path / "0001_first.sql"
     f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -855,7 +855,7 @@ def test_synchronize_version_records_reconciles_with_pending_timestamp_present(t
     f2 = tmp_path / "20251011150000_new.sql"
     f2.write_text("-- name: migrate-20251011150000-up\nCREATE TABLE t2 (id INT);\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -896,7 +896,7 @@ def test_squash_when_target_filename_matches_first_source_file(tmp_path: Path) -
 
 def test_downgrade_to_core_revision_does_not_revert_extension_migrations(tmp_path: Path) -> None:
     """Verify _collect_revert_migrations('0001') ignores applied ext_* migrations."""
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None
@@ -1029,7 +1029,7 @@ def test_downgrade_records_reverted_metric(tmp_path: Path) -> None:
     f1 = tmp_path / "0001_first.sql"
     f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n-- name: migrate-0001-down\nSELECT 1;\n", encoding="utf-8")
 
-    config = MagicMock(driver_features={})
+    config = MagicMock(driver_features={}, is_replica=False)
     config.migration_config = {"script_location": str(tmp_path)}
     config.extension_config = {}
     config.get_observability_runtime.return_value = None

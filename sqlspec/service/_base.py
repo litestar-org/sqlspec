@@ -166,6 +166,8 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         active = _transaction_session(self._transaction_key)
         if active is not None:
             return nullcontext(cast("AsyncDriverT", active))
+        if self._session is not None and self._config is None and self._read_config is None:
+            return nullcontext(self._session)
         if self._session is not None and (
             self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
         ):
@@ -669,6 +671,8 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         active = _transaction_session(self._transaction_key)
         if active is not None:
             return nullcontext(cast("SyncDriverT", active))
+        if self._session is not None and self._config is None and self._read_config is None:
+            return nullcontext(self._session)
         if self._session is not None and (
             self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
         ):
