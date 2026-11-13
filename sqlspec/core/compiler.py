@@ -1157,6 +1157,15 @@ class SQLProcessor:
         for node in expression.walk():
             if isinstance(node, (exp.Lock, exp.Into, exp.NextValueFor, exp.Insert, exp.Update, exp.Delete, exp.Merge)):
                 return False
+            if isinstance(node, exp.Column) and node.table and node.name.upper() in {"NEXTVAL", "CURRVAL"}:
+                identifier = node.this
+                if isinstance(identifier, exp.Identifier) and not identifier.args.get("quoted"):
+                    return False
+            if isinstance(node, exp.WithTableHint) and any(
+                not isinstance(hint, exp.Var) or hint.name.upper() not in {"NOLOCK", "READUNCOMMITTED"}
+                for hint in node.expressions
+            ):
+                return False
             if isinstance(node, exp.Func):
                 name = node.name.upper() if isinstance(node, exp.Anonymous) else node.sql_name().upper()
                 if name in VOLATILE_FUNCTIONS or name.startswith(("PG_ADVISORY_", "PG_TRY_ADVISORY_")):
