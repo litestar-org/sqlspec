@@ -15,6 +15,7 @@ from sqlspec.config import (
     NoPoolSyncConfig,
     OpenTelemetryConfig,
     PrometheusConfig,
+    ReadReplicaGroup,
     PythonTemplateOverride,
     SanicConfig,
     SQLTemplateOverride,
@@ -35,6 +36,10 @@ Base configuration protocols, pooled and non-pooled database config classes, lif
         - create_connection
         - provide_connection
         - provide_session
+        - provide_read_connection
+        - provide_read_session
+        - provide_routing_session
+        - derive_pool
         - create_pool
         - close_pool
         - provide_pool
@@ -54,12 +59,12 @@ Base configuration protocols, pooled and non-pooled database config classes, lif
 ::: sqlspec.config.NoPoolSyncConfig
     options:
       heading_level: 3
-      members: false
+      members: [derive_pool]
 
 ::: sqlspec.config.NoPoolAsyncConfig
     options:
       heading_level: 3
-      members: false
+      members: [derive_pool]
 
 ## Lifecycle & Migration Settings
 
@@ -148,3 +153,10 @@ Top-level `extension_config` mapping passed to any database configuration class.
       heading_level: 4
       separate_signature: false
       show_signature_annotations: true
+
+## Read Replica Topology
+
+::: sqlspec.config.ReadReplicaGroup
+    options:
+      heading_level: 4
+      members: false

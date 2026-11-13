@@ -56,8 +56,8 @@ Pass `AsyncpgConnectionConfig` and `AsyncpgPoolConfig` keys inside `connection_c
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `dsn` | `str` | - | PostgreSQL connection URI (`postgresql://user:pass@host:port/dbname`). |
-| `host` | `str` | - | Database server hostname or Unix domain socket directory. |
-| `port` | `int` | `5432` | Database server TCP port (defaults to `5432`). |
+| `host` | `str or Sequence[str]` | - | Database hostname, socket directory, or sequence of failover hosts. |
+| `port` | `int or Sequence[int]` | `5432` | Server port or sequence of ports matching the hosts (defaults to `5432`). |
 | `user` | `str` | - | PostgreSQL role name used for authentication. |
 | `password` | `str` | - | Password or dynamic token for `user`. |
 | `auth_token_provider` | `Callable[[], str] or Callable[[], Awaitable[str]]` | - | Callable or async callable returning a fresh password or IAM token for each new connection. |
@@ -141,6 +141,12 @@ Pass `AsyncpgDriverFeatures` keys inside `driver_features={...}` on `AsyncpgConf
 - **Binding JSON String Primitives**: When `enable_json_codecs=True`, Python `dict`, `list`, `int`, and `bool` values serialize via `json_serializer`, while bare `str` values are treated as pre-serialized JSON text. Pass `to_json("value")` when inserting a scalar JSON string literal into a `jsonb` column.
 - **Binary COPY and Arrow Ingest**: `session.load_from_arrow(...)` streams Arrow batches into PostgreSQL via binary `COPY ... FROM STDIN` for high-throughput bulk loads, and `LISTEN/NOTIFY` channels integrate directly with `EventChannel`.
 - **Sequential StatementStack Execution**: `asyncpg`'s binary protocol forbids overlapping operations on a single connection, so `session.execute_stack(stack)` runs each step in order against native prepared statements instead of pipelining them.
+
+## Read Replicas and WAL Positions
+
+Pass a reader DSN or sequence through `replicas=`. A reader override can also use `host: Sequence[str]` with matching `port` values and `target_session_attrs="prefer-standby"`. Derivation keeps hooks, tenant setup, and explicit connection overrides. Open the reader with `provide_read_session()`; use ordinary `provide_session()` for writes.
+
+`current_wal_lsn()` captures a writer position. `has_replayed_wal_lsn(lsn)` checks whether a reader has reached it; `wait_for_wal_lsn(lsn, timeout=...)` bounds the wait. Capture after commit when the next read must include that write. Empty or malformed positions fail rather than being inserted into SQL text. Native read-only failures map to `ReadOnlyTransactionError` (`25006`). See [Replica Operations](../../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

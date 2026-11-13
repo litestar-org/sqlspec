@@ -11,6 +11,8 @@ important operational fixes.
 
 **Added:**
 
+* Reader pools now work across all 24 adapters, with native follower reads, local WAL readers, and separate read compute. Services can send pure reads to them by default. An opt-in routing session keeps writes and transactions on primary. Each request can carry read intent and write pins without a global stickiness cache. All five web plugins expose these paths, and ADK stores can offload pure reads. See [Read Replicas](learn/recipes/read-replicas.md).
+
 * Oracle pools can now read cloud or file configs and route each checkout by shard key. New APIs set tenant and trace state on the next wire request and reuse Thick-mode state tags. Apps can suspend a transaction, release the socket, and resume it on another checkout. Native stacks stop on the first error when requested and read LOB data before release. Failed cleanup drops the socket. See the [Oracle guide](databases/oracledb.md#oracle-26ai-session-workflows) for server and SDK limits.
 
 

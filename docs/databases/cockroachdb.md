@@ -224,6 +224,7 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `retry_delay_max_ms` | `float` | - | Upper bound in milliseconds on exponential backoff delay between retries. |
     | `enable_retry_logging` | `bool` | - | Emit structured debug/warning logs when serialization retries occur. |
     | `enable_follower_reads` | `bool` | - | Allow `AS OF SYSTEM TIME` follower-read clauses on read queries. |
+    | `statement_timeout_ms` | `int` | - | Statement execution timeout forwarded to the managed libpq session option. |
     | `default_staleness` | `str` | - | Default `AS OF SYSTEM TIME` staleness expression (such as `'-5s'` or `follower_read_timestamp()`). |
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to statement parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer retained alongside `json_serializer` (defaults to `from_json`). |
@@ -247,6 +248,12 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
 - **Follower Reads (`AS OF SYSTEM TIME`)**: When `enable_follower_reads=True`, read-only queries execute inside an explicit read-only transaction with `SET TRANSACTION AS OF SYSTEM TIME <default_staleness>` (such as `"-10s"` or `"follower_read_timestamp()"`) and commit cleanly afterward so pooled connections never leak stale-read state.
 - **Distributed Primary Keys**: Prefer `UUID DEFAULT gen_random_uuid()` over monotonic `SERIAL` sequences on write-heavy tables to avoid single-range hotspotting across CockroachDB nodes.
 - **Transactional Event Queue**: Because CockroachDB does not implement PostgreSQL `LISTEN/NOTIFY`, `EventChannel` uses SQLSpec's transactional table-backed queue store (`CockroachAsyncpgEventQueueStore`, `CockroachPsycopgSyncEventQueueStore`, `CockroachPsycopgAsyncEventQueueStore`) automatically.
+
+## Follower Reads and Read-Only Sessions
+
+`CockroachAsyncpgConfig`, `CockroachPsycopgSyncConfig`, and `CockroachPsycopgAsyncConfig` can serve follower reads from one shared pool. `provide_read_session()` defaults to `staleness="follower_read_timestamp()"` and applies a native `AS OF SYSTEM TIME` read. A supported bounded-staleness interval can choose an older timestamp explicitly.
+
+Follower reads can be stale; they are not read-after-write primary reads. Their driver rejects writes with `ReadOnlyTransactionError`. A primary routing scope bypasses the follower path. Use separate endpoint pools only when your topology needs them. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

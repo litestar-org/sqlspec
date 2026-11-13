@@ -54,6 +54,68 @@ The adapter supplies Litestar session, event queue, and Google ADK session and m
 
 For native Arrow access through Columnar `dbc` or Flight SQL, see [ADBC Teradata connections](adbc.md#teradata). Native `teradatasql` and ADBC use separate drivers and installation paths.
 
+## Read Workload Pools and Fallback Nodes
+
+`TeradataConfig(replicas=...)` selects a COP/reader host and a separate workload account. Use server roles and TASM rules to bound reads. Another pool does not by itself stop writes or copy a dataset. Native read-only failures map to `ReadOnlyTransactionError`.
+
+Derived readers keep native aliases, hooks, query bands, and pool bounds. Each session keeps its own lease and the same cleanup rules. See [Read Replicas](../learn/recipes/read-replicas.md) for named groups and [Replica Operations](../learn/recipes/read-replicas-operations.md) for failure policy.
+
+## Configuration Reference
+
+### Connection and Pool Parameters
+
+<!-- GENERATED:START config-table:sqlspec.adapters.teradata.config.TeradataConnectionParams,sqlspec.adapters.teradata.config.TeradataPoolParams -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `host` | `str` | - | Teradata server hostname. |
+| `user` | `str` | - | Native authentication user. |
+| `username` | `str` | - | Friendly authentication user alias. |
+| `password` | `str` | - | Authentication password. |
+| `database` | `str` | - | Default database. |
+| `dbs_port` | `str` | - | Native server port. |
+| `port` | `int or str` | - | Friendly server port alias. |
+| `autocommit` | `bool` | - | Initial transaction autocommit state. |
+| `logmech` | `TeradataLogMech` | - | Authentication mechanism. |
+| `tmode` | `TeradataTransactionMode` | - | Transaction mode. |
+| `sslmode` | `TeradataSSLMode` | - | TLS verification mode. |
+| `encryptdata` | `bool or str` | - | Enable encrypted data transport. |
+| `account` | `str` | - | Teradata workload management account string. |
+| `logdata` | `str` | - | Mechanism-specific authentication payload. |
+| `charset` | `str` | - | Session character set. |
+| `sslca` | `str` | - | Path to CA certificate bundle file. |
+| `sslcapath` | `str` | - | Path to CA certificate directory. |
+| `lob_support` | `bool or str` | - | Enable LOB streaming support. |
+| `connect_timeout` | `int or float or str` | - | Connection establishment timeout. |
+| `request_timeout` | `int or float or str` | - | Statement request timeout. |
+| `sJson` | `str` | - | Raw teradatasql JSON connection payload. |
+| `cop` | `bool or str` | - | Enable COP discovery. |
+| `coplast` | `bool or str` | - | Retry last COP entry. |
+| `https_port` | `int or str` | - | HTTPS port for TLS/OAuth connections. |
+| `extra` | `dict[str, Any]` | - | Additional vendor options. |
+| `pool_min_size` | `int` | - | Minimum number of connections maintained in the pool. |
+| `pool_max_size` | `int` | - | Maximum number of connections allowed in the pool. |
+| `pool_timeout` | `float` | - | Seconds to wait for a connection before timing out. |
+| `pool_recycle_seconds` | `int` | - | Maximum age in seconds before a connection is recycled. |
+| `health_check_interval` | `float` | - | Interval in seconds between background health checks. |
+<!-- GENERATED:END config-table:sqlspec.adapters.teradata.config.TeradataConnectionParams,sqlspec.adapters.teradata.config.TeradataPoolParams -->
+
+### Driver Features
+
+<!-- GENERATED:START config-table:sqlspec.adapters.teradata.config.TeradataDriverFeatures -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `json_serializer` | `Callable[[Any], str]` | - | Custom callable for serializing objects to JSON strings. |
+| `json_deserializer` | `Callable[[str], Any]` | - | Custom callable for deserializing JSON strings. |
+| `on_connection_create` | `Callable[[TeradataConnection], None]` | - | Callback invoked immediately when a new connection is established. |
+| `arraysize` | `int` | - | DB-API row fetch chunk size. |
+| `enable_lowercase_column_names` | `bool` | - | Fold implicit uppercase column names. |
+| `enable_fastexport` | `bool` | - | Attempt native FastExport for reads. |
+| `enable_fastload` | `bool` | - | Attempt native FastLoad for inserts. |
+| `query_band` | `Mapping[str, str] or str` | - | Session query-band metadata. |
+| `enable_events` | `bool` | - | Enable database event listening. |
+| `events_backend` | `Literal['poll_queue']` | - | Backend mechanism used for dispatching events. |
+<!-- GENERATED:END config-table:sqlspec.adapters.teradata.config.TeradataDriverFeatures -->
+
 ## Live verification
 
 Set `TERADATA_HOST`, `TERADATA_USER`, and `TERADATA_PASSWORD`, then run:

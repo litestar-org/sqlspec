@@ -420,6 +420,16 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 - **Placeholder Compilation and utf8mb4**: Write `:named` or `?` parameters in SQLSpec; all MySQL adapters compile placeholders to `%s` automatically while preserving literal `%` signs in `LIKE '100%'` expressions. Always use `utf8mb4` so 4-byte UTF-8 characters never truncate.
 - **Implicit DDL Commits**: MySQL and MariaDB issue an implicit `COMMIT` before and after `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, and `TRUNCATE TABLE`. Keep schema migrations separate from transactional application tests that rely on rollback isolation.
 
+## Read Replicas and GTID Waits
+
+All four MySQL/MariaDB adapters accept reader endpoints through `replicas=`. Point them at MySQL Router, ProxySQL, an Aurora/RDS reader endpoint, or a server you already replicate. `True` is rejected because it cannot identify that endpoint.
+
+Derived reader configs append `SET SESSION TRANSACTION READ ONLY` to `init_command` once. Pass `read_only=False` explicitly to opt out. Alias overrides replace inherited values, and connection hooks remain attached. Sync mysql-connector readers get a distinct pool name and default `pool_reset_session=False`, so reset does not erase their read-only state.
+
+`wait_for_gtid_set(gtid_set, timeout=2.0, mariadb=False)` returns whether the requested position is applied. It binds the GTID and timeout to `WAIT_FOR_EXECUTED_GTID_SET`; `mariadb=True` selects `MASTER_GTID_WAIT`. Await it on async drivers. Empty GTIDs, negative or nonfinite timeouts, and boolean timeout values fail before a query. Keep a positive timeout for a bounded MySQL wait: MySQL treats `0` as unlimited, while MariaDB treats `0` as a nonblocking check.
+
+Errnos `1792`, `1836`, and SQLSTATE `25006` map to `ReadOnlyTransactionError`. Errno `1290` does so only if its message names read-only mode; another option error keeps its existing category. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
+
 ## See Also
 
 - [AsyncMy API Reference](/reference/adapters/asyncmy/)

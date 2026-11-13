@@ -47,6 +47,7 @@ nav = [
     { "Recipes" = [
       "learn/recipes/index.md",
       { "Service Layer" = "learn/recipes/service-layer.md" },
+      { "Read Replicas" = [ "learn/recipes/read-replicas.md", { "Operations" = "learn/recipes/read-replicas-operations.md" } ] },
       { "Multi-Tenancy" = [
         "learn/recipes/multi-tenancy.md",
         { "Request Contract" = "learn/recipes/multi-tenancy-frameworks.md" },
@@ -160,6 +161,7 @@ nav = [
       { "Dialects" = "reference/dialects.md" },
       { "Utilities" = "reference/utils.md" },
       { "Tenant APIs" = "reference/tenant.md" },
+      { "Routing APIs" = "reference/routing.md" },
     ] },
     { "Extensions" = [
       "reference/extensions/index.md",

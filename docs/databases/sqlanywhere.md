@@ -69,6 +69,7 @@ Pass `SqlanywhereConnectionParams` and `SqlanywherePoolParams` keys inside `conn
 <!-- GENERATED:START config-table:sqlspec.adapters.sqlanywhere.config.SqlanywhereConnectionParams,sqlspec.adapters.sqlanywhere.config.SqlanywherePoolParams -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `nodetype` | `str` | - | SQL Anywhere mirror node role, including READONLY. |
 | `uid` | `str` | - | User ID / login name for authentication. |
 | `user` | `str` | - | Alias for `uid`. |
 | `username` | `str` | - | Alias for `uid`. |
@@ -126,6 +127,12 @@ Pass `SqlanywhereDriverFeatures` keys inside `driver_features={...}` on `Sqlanyw
 - **Arrow Schema Inference and Staged Storage Loads**: `CreateTable.from_arrow_schema()` maps string primary keys to `VARCHAR(255)` and raises `SQLBuilderError` when decimal precision exceeds `127`. Staged storage loads use native `MERGE` statements over `conflict_keys` (supporting `on_conflict="nothing"`, `exclude_update_columns`, and `drop_indexes=True` secondary index rebuilds).
 - **System Catalog Introspection**: Schema discovery queries `SYS.SYSTAB`, `SYS.SYSTABCOL`, `SYS.SYSIDX`, `SYS.SYSIDXCOL`, `SYS.SYSFKEY`, and `SYS.SYSDOMAIN`, and fixture seeding resets identity sequences via `CALL sa_reset_identity('<table>', '<schema>', <max_id>)`.
 - **Migration Schemas**: The SQL Anywhere driver cannot switch schemas during a migration, so `-- schema:` directives, `default_schema`, and `version_table_schema` raise `MigrationError`. Qualify objects in migration SQL, and set `version_table_name` to `"<schema>.ddl_migrations"` to place the tracking table.
+
+## Read-Only Mirror Connections
+
+`SqlanywhereConfig(replicas=True)` sets `NodeType=READONLY` for a mirror or read-scale node. Pass explicit `replicas=` overrides to choose a different connection string. Derived configs keep native aliases and user hooks.
+
+SQLCODE `-757` maps to `ReadOnlyTransactionError`. The server must supply the read-only node; this option does not create one. Use `provide_read_session()` for a reader and ordinary sessions for primary work. See [Read Replicas](../learn/recipes/read-replicas.md).
 
 ## See Also
 

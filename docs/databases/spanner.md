@@ -142,6 +142,7 @@ Pass `SpannerDriverFeatures` keys inside `driver_features={...}` on `SpannerSync
 <!-- GENERATED:START config-table:sqlspec.adapters.spanner.config.SpannerDriverFeatures -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `default_staleness` | `Mapping[str, Any]` | - | Default timestamp bound for read-only snapshot providers. |
 | `enable_uuid_conversion` | `bool` | `True` | Automatically coerce `UUID` parameters to strings (defaults to `True`). |
 | `json_serializer` | `Callable[[Any], str]` | - | Custom JSON serializer for `JSON` parameter payloads. |
 | `json_deserializer` | `Callable[[str], Any]` | - | Custom JSON deserializer for `JSON` column values. |
@@ -173,6 +174,12 @@ Pass `SpannerDriverFeatures` keys inside `driver_features={...}` on `SpannerSync
 - **Direct Mutation Batching and Partitioned DML**: For high-throughput key-value writes that bypass SQL parsing, call `session.write_insert(table, data)`, `session.write_update(table, data)`, `session.write_upsert(table, data)`, or `session.write_delete(table, keys)` (automatically chunked to stay under Spanner's per-commit mutation limit). For large bulk updates or deletes across an entire table, call `session.execute_partitioned_dml(sql, params)` or `config.execute_partitioned_dml(sql, params)`.
 - **THEN RETURN DML and Dual Dialects**: Both sync and async drivers return projected rows and `rows_affected` on `INSERT ... THEN RETURN`, `UPDATE ... THEN RETURN`, and `DELETE ... THEN RETURN` statements across both GoogleSQL (`dialect="spanner"`, supporting `INTERLEAVE IN PARENT`, `ROW DELETION POLICY`, and `GRAPH_TABLE`) and PostgreSQL (`dialect="spangres"`, supporting `TTL INTERVAL` and `$1` placeholders).
 - **ADK Vector, Hybrid RRF, and Artifact Stores**: `SpannerSyncADKMemoryStore` and `SpannerAsyncADKMemoryStore` support `ARRAY<FLOAT32>` embeddings with `APPROX_COSINE_DISTANCE`, FTS `SCORE`, and single-round-trip Hybrid RRF (`k=60`), alongside `SpannerSyncADKArtifactStore` and `SpannerAsyncADKArtifactStore`.
+
+## Read-Only Snapshots and Staleness Bounds
+
+Sync and async `provide_read_session()` use a native Spanner snapshot over the same database pool. Choose one bound: `exact_staleness`, `max_staleness`, `read_timestamp`, or `min_read_timestamp`. The `default_staleness` driver feature supplies a default when no explicit bound is passed. `max_staleness` and `min_read_timestamp` require a single-use snapshot, so the adapter sets `multi_use=False`.
+
+Native directed-read options select where supported reads run; they do not create a replica pool. Snapshot writes fail with `ReadOnlyTransactionError`. Strong or primary work stays on ordinary sessions. Test the chosen bound against your actual regional deployment; see [Replica Operations](../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

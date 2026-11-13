@@ -35,6 +35,10 @@ Reusable helpers for runtime type narrowing, JSON serialization, schema model co
 
 See [Tenant APIs](tenant.md) for immutable payloads, restoring scopes, bypass, request extraction, strategy contracts, and Litestar guards. See [Multi-Tenancy](../learn/recipes/multi-tenancy.md) for database policy setup.
 
+## Routing Context
+
+See [Routing APIs](routing.md) for scoped intent, primary write pins, and request middleware. [Read Replicas](../learn/recipes/read-replicas.md) covers setup and selection.
+
 ## Schema, Serialization & Identifiers
 
 ::: sqlspec.utils.schema.to_schema

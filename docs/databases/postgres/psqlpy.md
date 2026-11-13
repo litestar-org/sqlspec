@@ -86,7 +86,7 @@ Pass `PsqlpyConnectionParams` and `PsqlpyPoolParams` keys inside `connection_con
 | `keepalives_retries` | `int` | - | Maximum unacknowledged TCP keepalive probes before dropping the connection. |
 | `ssl_mode` | `str` | - | TLS negotiation policy (`disable`, `prefer`, `require`, `verify-ca`, or `verify-full`). |
 | `ca_file` | `str` | - | Path to a PEM root CA bundle used to verify server certificates. |
-| `target_session_attrs` | `str` | - | Required server session state for multi-host routing (such as `read-write`). |
+| `target_session_attrs` | `Literal['any', 'read-write', 'read-only', 'primary', 'standby', 'prefer-standby'] or TargetSessionAttrs` | - | Required server session state for multi-host routing (such as `read-write`). |
 | `options` | `str` | - | Command-line startup GUC options sent to the PostgreSQL backend. |
 | `application_name` | `str` | - | Application identifier reported in `pg_stat_activity`. |
 | `client_encoding` | `str` | `UTF8` | Client character set encoding (defaults to `UTF8`). |
@@ -104,7 +104,7 @@ Pass `PsqlpyConnectionParams` and `PsqlpyPoolParams` keys inside `connection_con
 | `gsslib` | `str` | - | GSSAPI library implementation selector. |
 | `gssdelegation` | `str` | - | Whether to delegate GSSAPI credentials to the PostgreSQL server. |
 | `service` | `str` | - | Service profile name defined in `pg_service.conf`. |
-| `load_balance_hosts` | `str` | - | Host ordering policy across multi-host configurations (`disable` or `random`). |
+| `load_balance_hosts` | `Literal['disable', 'random'] or LoadBalanceHosts` | - | Host ordering policy across multi-host configurations (`disable` or `random`). |
 | `hosts` | `list[str]` | - | Ordered list of PostgreSQL hostnames for multi-host failover or load balancing. |
 | `ports` | `list[int]` | - | Port numbers corresponding to `hosts`. |
 | `conn_recycling_method` | `str` | - | Pool connection reset strategy (such as `fast` or `verified`). |
@@ -152,6 +152,12 @@ Pass `PsqlpyDriverFeatures` keys inside `driver_features={...}` on `PsqlpyConfig
 - **StatementStack Execution**: `psqlpy` has no native pipeline override, so `session.execute_stack(stack)` uses the shared sequential execution path and runs each step in order.
 - **Bulk COPY and Arrow Ingest**: `session.load_from_arrow(...)` streams Arrow batches into PostgreSQL via `binary_copy_to_table`, avoiding intermediate row-by-row INSERT overhead.
 - **Rust Extension Object Semantics**: `psqlpy.Connection` is a slotted Rust PyO3 type without a Python `__dict__`; avoid attaching ad-hoc attributes to `session.connection` inside custom `on_connection_create` hooks.
+
+## Read Replicas and Host Load Balancing
+
+Pass reader endpoints or explicit overrides through `PsqlpyConfig(replicas=...)`. Derived pools keep driver hooks and tenant leases. The adapter converts string `target_session_attrs` and `load_balance_hosts` values to the SDK's `TargetSessionAttrs` and `LoadBalanceHosts` enums before pool startup. A new DSN replaces inherited host fields.
+
+Use `provide_read_session()` for a reader. Native read-only errors map to `ReadOnlyTransactionError`. Use WAL-position helpers or `RoutingContext.primary()` when a read must include a recent write. See [Replica Operations](../../learn/recipes/read-replicas-operations.md).
 
 ## See Also
 

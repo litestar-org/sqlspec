@@ -333,6 +333,14 @@ With spans enabled, SQLSpec checks the socket's `supports_opentelemetry_tracing`
 - **Oracle 26ai VECTOR HNSW and Hybrid RRF**: `sqlspec.builder` exposes `build_oracle_hnsw_subquery` and `build_oracle_hybrid_rrf_sql` (used by `OracleSyncADKMemoryStore` and `OracleAsyncADKMemoryStore`) to isolate `VECTOR_DISTANCE(..., COSINE)` inside an inline view so the Oracle Cost-Based Optimizer uses HNSW/IVF vector indexes alongside Oracle Text `CONTAINS` scores in a single-round-trip Reciprocal Rank Fusion query.
 - **Oracle AQ Events**: `EventChannel` supports both transactional table queues and native Oracle Advanced Queuing (`DBMS_AQ`) via `driver_features={"events_backend": "aq"}`.
 
+## Standby and Read-Service Pools
+
+Use `replicas={"service_name": "app_ro"}` for an Active Data Guard reader service or a supported True Cache read service. A reader override inherits credentials, tenant setup, and checkout hygiene. Direct reads use `provide_read_session()`; writes use the primary pool.
+
+`OracleTopologyConfig(address_lists=..., connect_timeout=...)` can describe several site address lists, and `with_service_name()` changes the service without losing that topology. `OracleSessionContextConfig` supports `standby_max_data_delay`, `sync_with_primary`, and `adg_redirect_dml`. These controls need the corresponding Oracle server features and privileges. They do not turn an ordinary database into a standby or enable True Cache.
+
+`retry_on_standby_lag=True` can choose primary after a standby-lag failure during checkout, before the session is yielded. It never replays caller SQL. Native read-only errors such as `ORA-16000`, `ORA-01456`, `ORA-16397`, and `ORA-00372` map to `ReadOnlyTransactionError`. Standby/unavailable errors (`ORA-03172`, `ORA-16456`, `ORA-12757`, `ORA-01033`, `DPY-4005`, `DPY-4033`) map to `ReplicaUnavailableError`; `ORA-03173` maps to `ImproperConfigurationError`. Validate ADG, True Cache, role, and licensing on your own deployment. See [Replica Operations](../learn/recipes/read-replicas-operations.md).
+
 ## See Also
 
 - [OracleDB API Reference](/reference/adapters/oracledb/)

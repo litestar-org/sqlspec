@@ -13,6 +13,8 @@ Slotted, high-throughput service base classes wrapping `SyncDriverAdapterBase` a
       heading_level: 3
       members:
         - provide_session
+        - provide_read_session
+        - read_config
         - paginate
         - get_one
         - exists
@@ -22,6 +24,8 @@ Slotted, high-throughput service base classes wrapping `SyncDriverAdapterBase` a
       heading_level: 3
       members:
         - provide_session
+        - provide_read_session
+        - read_config
         - paginate
         - get_one
         - exists
