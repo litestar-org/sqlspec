@@ -62,7 +62,9 @@ class _RoutingSessionState:
         "_primary_driver",
         "_registry_lifecycle",
         "_replica_bind_group",
+        "_replica_causal_token",
         "_replica_driver",
+        "_replica_max_staleness",
         "_statement_config",
         "_tenant",
     )
@@ -89,6 +91,8 @@ class _RoutingSessionState:
         self._primary_driver: Any = None
         self._replica_driver: Any = None
         self._replica_bind_group: str | None = None
+        self._replica_causal_token: str | None = None
+        self._replica_max_staleness: float | None = None
         self._preparer = CommonDriverAttributesMixin(None, self._statement_config, config.driver_features)
 
     @property
@@ -297,19 +301,31 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         self._ensure_open()
         entry = RoutingContext.get_entry(self._config.bind_key)
         bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
-        if self._replica_driver is None or bind_group != self._replica_bind_group:
+        causal_token = entry.causal_token if entry is not None else None
+        max_staleness = entry.max_staleness_seconds if entry is not None else None
+        if (
+            self._replica_driver is None
+            or bind_group != self._replica_bind_group
+            or causal_token != self._replica_causal_token
+            or max_staleness != self._replica_max_staleness
+        ):
             context = self._config.provide_read_session(
                 bind_group=bind_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,
                 bypass_tenant=self._bypass_tenant,
             )
+            selection_receipt = getattr(context, "_selection_receipt", None)
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadSyncContext
 
                 context = _RuntimeReadSyncContext(context, session=True)
             self._replica_driver = self._stack.enter_context(context)
+            if self._config.has_replicas and getattr(selection_receipt, "config", None) is self._config:
+                self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
+            self._replica_causal_token = causal_token
+            self._replica_max_staleness = max_staleness
         return cast("SyncDriverT", self._replica_driver)
 
     def _resolve_driver(
@@ -925,19 +941,31 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         self._ensure_open()
         entry = RoutingContext.get_entry(self._config.bind_key)
         bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
-        if self._replica_driver is None or bind_group != self._replica_bind_group:
+        causal_token = entry.causal_token if entry is not None else None
+        max_staleness = entry.max_staleness_seconds if entry is not None else None
+        if (
+            self._replica_driver is None
+            or bind_group != self._replica_bind_group
+            or causal_token != self._replica_causal_token
+            or max_staleness != self._replica_max_staleness
+        ):
             context = self._config.provide_read_session(
                 bind_group=bind_group,
                 statement_config=self._statement_config,
                 tenant=self._tenant,
                 bypass_tenant=self._bypass_tenant,
             )
+            selection_receipt = getattr(context, "_selection_receipt", None)
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadAsyncContext
 
                 context = _RuntimeReadAsyncContext(context, session=True)
             self._replica_driver = await self._stack.enter_async_context(context)
+            if self._config.has_replicas and getattr(selection_receipt, "config", None) is self._config:
+                self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
+            self._replica_causal_token = causal_token
+            self._replica_max_staleness = max_staleness
         return cast("AsyncDriverT", self._replica_driver)
 
     async def _resolve_driver(

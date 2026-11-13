@@ -190,3 +190,112 @@ def test_registry_primary_scope_helpers_and_schema_mapping(routing_config: Sqlit
         session.commit()
         assert session.select_value("SELECT count(*) FROM notes") == 6
         session.close()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("policy", ["causal", "staleness"])
+async def test_nested_read_policy_revalidates_cached_replica(tmp_path: Path, async_mode: bool, policy: str) -> None:
+    import sqlite3
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.config import ReadReplicaGroup
+    from sqlspec.core.routing import ReplicaSpec
+
+    databases = [tmp_path / "writer.db", tmp_path / "old.db", tmp_path / "fresh.db"]
+    for version, database in enumerate(databases):
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE progress (version INTEGER)")
+            connection.execute("INSERT INTO progress VALUES (?)", (version,))
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    old = config_type(connection_config={"database": str(databases[1])})
+    fresh = config_type(connection_config={"database": str(databases[2])})
+    checked: list[str] = []
+
+    def sync_caught_up(session: Any, token: str) -> bool:
+        checked.append(token)
+        return int(session.select_value("SELECT version FROM progress")) >= int(token)
+
+    async def async_caught_up(session: Any, token: str) -> bool:
+        checked.append(token)
+        return int(await session.select_value("SELECT version FROM progress")) >= int(token)
+
+    group: ReadReplicaGroup[Any] = ReadReplicaGroup(
+        [ReplicaSpec(old, max_staleness_seconds=10), ReplicaSpec(fresh, max_staleness_seconds=1)],
+        causal_validator=async_caught_up if async_mode else sync_caught_up,
+        fallback_to_primary=False,
+    )
+    primary = config_type(
+        connection_config={"database": str(databases[0])}, bind_key="progress", replicas={"default": group}
+    )
+    initial: dict[str, Any] = {"causal_token": "1"} if policy == "causal" else {"max_staleness_seconds": 10.0}
+    stronger: dict[str, Any] = {"causal_token": "2"} if policy == "causal" else {"max_staleness_seconds": 1.0}
+    with RoutingContext.scope():
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                with RoutingContext.replica("progress", **initial):
+                    assert await session.select_value("SELECT version FROM progress") == 1
+                with RoutingContext.replica("progress", **stronger):
+                    assert await session.select_value("SELECT version FROM progress") == 2
+        else:
+            with primary.provide_routing_session() as session:
+                with RoutingContext.replica("progress", **initial):
+                    assert session.select_value("SELECT version FROM progress") == 1
+                with RoutingContext.replica("progress", **stronger):
+                    assert session.select_value("SELECT version FROM progress") == 2
+    if policy == "causal":
+        assert "2" in checked
+    if async_mode:
+        await primary.close_pool()
+    else:
+        primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_managed_primary_fallback_is_reused_for_subsequent_write(tmp_path: Path, async_mode: bool) -> None:
+    import asyncio
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    connections: list[Any] = []
+
+    def connection_created(connection: Any) -> None:
+        connections.append(connection)
+
+    async def async_connection_created(connection: Any) -> None:
+        connections.append(connection)
+
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+
+    def reader_unavailable(_connection: Any) -> None:
+        msg = "reader initialization is offline"
+        raise OSError(msg)
+
+    reader = config_type(
+        connection_config={"database": str(tmp_path / "reader.db")},
+        driver_features={"on_connection_create": reader_unavailable},
+    )
+    connection_config = {"database": str(tmp_path / "writer.db"), **({"pool_size": 1} if async_mode else {})}
+    primary = config_type(
+        connection_config=connection_config,
+        replicas=[reader],
+        driver_features={"on_connection_create": async_connection_created if async_mode else connection_created},
+    )
+    if async_mode:
+        async with primary.provide_routing_session() as session:
+            assert await session.select_value("SELECT 1") == 1
+            fallback = session.replica_session
+            assert session.primary_session is fallback
+            await asyncio.wait_for(session.execute("CREATE TABLE items (id INTEGER)"), timeout=2)
+            assert session.primary_session is fallback
+        await primary.close_pool()
+    else:
+        with primary.provide_routing_session() as session:
+            assert session.select_value("SELECT 1") == 1
+            fallback = session.replica_session
+            assert session.primary_session is fallback
+            session.execute("CREATE TABLE items (id INTEGER)")
+            assert session.primary_session is fallback
+        primary.close_pool()
+    assert len(connections) == 1
