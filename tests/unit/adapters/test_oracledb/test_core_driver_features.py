@@ -772,3 +772,20 @@ async def test_oracle_adg_checkout_maps_native_lag_and_does_not_skip_safety_sett
         else:
             execute_session_checkout_sync(connection, config)
     assert caught.value.__cause__ is native
+
+
+def test_unchanged_transaction_priority_does_not_assign_native_property() -> None:
+    from oracledb import TransactionPriority
+
+    from sqlspec.adapters.oracledb.core import apply_oracle_transaction_priority
+
+    class Connection:
+        @property
+        def transaction_priority(self) -> object:
+            return TransactionPriority.HIGH
+
+        @transaction_priority.setter
+        def transaction_priority(self, value: object) -> None:
+            raise RuntimeError("priority assignment rejected during active transaction")
+
+    apply_oracle_transaction_priority(Connection(), TransactionPriority.HIGH)

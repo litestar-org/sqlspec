@@ -2792,9 +2792,19 @@ def execute_session_checkout_sync(
         raise create_mapped_exception(exc) from exc
 
 
+def _session_release_needs_priority_rollback(
+    connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
+) -> bool:
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    baseline = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
+    return resolved.reset_on_release and baseline is not None and connection.transaction_priority != baseline
+
+
 def execute_session_release_sync(connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]) -> None:
     """Clear checkout state before making a connection available for reuse."""
     try:
+        if _session_release_needs_priority_rollback(connection, config):
+            connection.rollback()
         plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
         if plsql is not None:
             with connection.cursor() as cursor:
@@ -2823,6 +2833,8 @@ async def execute_session_release_async(
 ) -> None:
     """Clear asynchronous session state before pool return."""
     try:
+        if _session_release_needs_priority_rollback(connection, config):
+            await connection.rollback()
         plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
         if plsql is not None:
             with connection.cursor() as cursor:
@@ -3073,7 +3085,8 @@ def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
     resolved = normalize_oracle_transaction_priority(priority)
     if resolved is not None:
         try:
-            connection.transaction_priority = resolved
+            if connection.transaction_priority != resolved:
+                connection.transaction_priority = resolved
         except oracledb_module.Error as exc:
             raise create_mapped_exception(exc) from exc
 

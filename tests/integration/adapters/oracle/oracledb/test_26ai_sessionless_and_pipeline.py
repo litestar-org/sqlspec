@@ -92,6 +92,38 @@ async def test_sessionless_transaction_suspend_resume_commit_and_rollback(
         await _invoke(config.close_pool)
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("priority_scope", ["default", "checkout", "driver", "hook"])
+async def test_priority_cleanup_rolls_back_uncommitted_work(
+    mode: str, priority_scope: str, oracle_26ai_service: OracleService
+) -> None:
+    """Return ordinary transactions safely when priority is unchanged or overridden."""
+    from sqlspec.adapters.oracledb import OracleSessionContextConfig
+
+    config = _config(mode, oracle_26ai_service)
+    table = f"priority_{uuid4().hex[:12]}"
+    try:
+        async with _session(config) as session:
+            baseline = session.connection.transaction_priority
+            await _invoke(session.execute, f"CREATE TABLE {table} (id NUMBER)")
+        if priority_scope == "hook":
+            config.driver_features["session_context_hook"] = OracleSessionContextConfig(transaction_priority="LOW")
+        options = {"transaction_priority": "LOW"} if priority_scope == "checkout" else {}
+        async with _session(config, **options) as session:
+            if priority_scope == "driver":
+                session.set_transaction_priority("LOW")
+            await _invoke(session.execute, f"INSERT INTO {table} VALUES (1)")
+        config.driver_features.pop("session_context_hook", None)
+        async with _session(config) as session:
+            assert session.connection.transaction_priority == baseline
+            assert await _invoke(session.select_value, f"SELECT COUNT(*) FROM {table}") == 0
+    finally:
+        config.driver_features.pop("session_context_hook", None)
+        async with _session(config) as session:
+            await _invoke(session.execute, f"DROP TABLE {table} PURGE")
+        await _invoke(config.close_pool)
+
+
 async def test_native_pipeline_stops_before_nontransactional_sequence(oracle_26ai_service: OracleService) -> None:
     config = _config("async", oracle_26ai_service)
     table, sequence = f"pipe_{uuid4().hex[:12]}", f"seq_{uuid4().hex[:12]}"
