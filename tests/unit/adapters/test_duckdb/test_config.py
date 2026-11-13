@@ -5,6 +5,7 @@ from unittest.mock import patch
 from uuid import UUID
 
 import duckdb
+import pytest
 
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
@@ -247,3 +248,38 @@ def test_version_tuple_parsing() -> None:
     assert _parse_duckdb_version("2.0.0rc1") == (2, 0, 0)
     assert _parse_duckdb_version("v0.9.2") == (0, 9, 2)
     assert duckdb_version_tuple() >= (0, 0, 0)
+
+
+def test_duckdb_replica_paths_reject_writer_file_and_memory(tmp_path) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    database = str(tmp_path / "writer.duckdb")
+    for replica in (True, database, ":memory:"):
+        with pytest.raises(ImproperConfigurationError):
+            DuckDBConfig(connection_config={"database": database}, replicas=replica)
+    primary = DuckDBConfig(connection_config={"database": database}, replicas=str(tmp_path / "snapshot.duckdb"))
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config["read_only"] is True
+    assert primary.connection_config.get("read_only", False) is False
+    shared_reader = DuckDBConfig(connection_config={"database": database, "read_only": True}, replicas=database)
+    assert shared_reader.replica_groups["default"].configs[0].connection_config["read_only"] is True
+
+
+def test_duckdb_snapshot_reader_enforces_native_read_only(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    snapshot_path = str(tmp_path / "snapshot.duckdb")
+    snapshot = DuckDBConfig(connection_config={"database": snapshot_path})
+    with snapshot.provide_session() as session:
+        session.execute("CREATE TABLE entries (id INTEGER)")
+        session.execute("INSERT INTO entries VALUES (1)")
+    snapshot.close_pool()
+    primary = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "writer.duckdb")},
+        replicas=snapshot_path,
+    )
+    with primary.provide_read_session() as reader:
+        assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            reader.execute("INSERT INTO entries VALUES (2)")
+    primary.close_pool()

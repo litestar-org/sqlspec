@@ -4,6 +4,7 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
@@ -210,3 +211,39 @@ def test_native_job_resource_controls_are_forwarded() -> None:
     assert job_config.priority == "BATCH"
     assert job_config.reservation == "projects/p/locations/us/reservations/r"
     assert job_config.max_slots == 25
+
+
+def test_bigquery_replica_aliases_isolate_job_options_and_client_provider() -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    primary = BigQueryConfig(connection_config={"project": "writer", "dataset_id": "raw"})
+    reader = primary.derive_pool(project_id="reader", dataset="mart")
+    assert reader.connection_config["project"] == "reader"
+    assert reader.connection_config["dataset_id"] == "mart"
+    assert (
+        reader.connection_config["default_query_job_config"]
+        is not primary.connection_config["default_query_job_config"]
+    )
+    assert (
+        reader.driver_features["_storage_write_client_provider"]
+        != primary.driver_features["_storage_write_client_provider"]
+    )
+    shorthand = BigQueryConfig(connection_config={"project": "writer"}, replicas="bigquery://reader/mart")
+    replica = shorthand.replica_groups["default"].configs[0]
+    assert replica.connection_config["project"] == "reader"
+    assert replica.connection_config["dataset_id"] == "mart"
+    with pytest.raises(ImproperConfigurationError):
+        BigQueryConfig(replicas=True)
+
+
+def test_bigquery_replica_preserves_explicit_storage_client_provider() -> None:
+    def client_provider() -> object:
+        return object()
+
+    primary = BigQueryConfig(
+        connection_config={"project": "writer"},
+        driver_features={"_storage_write_client_provider": client_provider},
+    )
+    replica = primary.derive_pool(project="reader")
+    assert replica.driver_features["_storage_write_client_provider"] is client_provider
+    assert primary.driver_features["_storage_write_client_provider"] is client_provider
