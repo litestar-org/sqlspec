@@ -566,10 +566,11 @@ class ParameterConverter:
     def _format_literal(param_value: object | None, dialect: "str | None" = None) -> str:
         """Render a literal for the server's default SQL mode.
 
-        Negative numbers are parenthesized so a preceding minus operator never
-        forms a ``--`` comment marker. MySQL NO_BACKSLASH_ESCAPES stores doubled
-        backslashes as two characters. Backslash handling differs between
-        engines, so a string containing a backslash requires a dialect.
+        Negative numbers are separated from a preceding minus operator during
+        embedding so they never form a ``--`` comment marker. MySQL
+        NO_BACKSLASH_ESCAPES stores doubled backslashes as two characters.
+        Backslash handling differs between engines, so a string containing a
+        backslash requires a dialect.
         """
         if param_value is None:
             return "NULL"
@@ -580,10 +581,9 @@ class ParameterConverter:
             if not finite:
                 msg = "Cannot embed a non-finite number in statically compiled SQL"
                 raise SQLSpecError(msg)
-            rendered = str(param_value)
-            return f"({rendered})" if rendered.startswith("-") else rendered
+            return str(param_value)
         if isinstance(param_value, int):
-            return f"({param_value})" if param_value < 0 else str(param_value)
+            return str(param_value)
         normalized = dialect.strip().lower() if dialect else None
         literal_dialect = _DIALECT_LITERAL_ALIASES.get(normalized, normalized) if normalized else None
         if isinstance(param_value, (bytes, bytearray, memoryview)):
@@ -593,21 +593,28 @@ class ParameterConverter:
                 raise SQLSpecError(msg)
             return template.format(bytes(param_value).hex())
         text = str(param_value)
-        if "\x00" in text:
-            msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
-            raise SQLSpecError(msg)
         if literal_dialect is None:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
             if "\\" in text:
                 msg = "Cannot embed a string containing a backslash in statically compiled SQL without a dialect"
                 raise SQLSpecError(msg)
             return "'" + text.replace("'", "''") + "'"
         if literal_dialect in _ANSI_LITERAL_DIALECTS:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
             return "'" + text.replace("'", "''") + "'"
         try:
-            return exp.Literal.string(text).sql(dialect=literal_dialect)
+            rendered = exp.Literal.string(text).sql(dialect=literal_dialect)
         except ValueError as exc:
             msg = f"Cannot embed a string value in statically compiled SQL for dialect '{dialect}'"
             raise SQLSpecError(msg) from exc
+        if "\x00" in rendered:
+            msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+            raise SQLSpecError(msg)
+        return rendered
 
     def _embed_static_parameters(
         self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]", dialect: "str | None" = None
@@ -637,6 +644,8 @@ class ParameterConverter:
         for param in param_info[::-1]:
             param_value = self._parameter_value(parameters, param, unique_params, explicit_indexes)
             literal = self._format_literal(param_value, dialect)
+            if literal.startswith("-") and param.position > 0 and sql[param.position - 1] == "-":
+                literal = f" {literal}"
             segments.extend((sql[param.position + len(param.placeholder_text) : last_start], literal))
             last_start = param.position
         segments.append(sql[:last_start])

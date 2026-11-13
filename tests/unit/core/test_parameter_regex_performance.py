@@ -233,6 +233,15 @@ def test_snowflake_spaced_paths_keep_linear_scan_and_real_bind() -> None:
         ("SELECT :p " + "q'[ a " * 6000, "oracle"),
         ("SELECT " + "a ? 'x' " * 5000, "postgres"),
     ],
+    ids=[
+        "unclosed_comment_default",
+        "unclosed_comment_pg",
+        "unclosed_comment_mysql",
+        "unclosed_comment_sf",
+        "unclosed_dollar_pg",
+        "unclosed_q_oracle",
+        "qmark_operands_pg",
+    ],
 )
 def test_unterminated_spans_scan_in_linear_time(sql: str, dialect: "str | None") -> None:
     """Repeated unterminated comment and literal openers do not rescan the remaining text."""

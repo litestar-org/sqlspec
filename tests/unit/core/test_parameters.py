@@ -3409,19 +3409,21 @@ def test_unescape_qmark_operator_shifts_positions_past_each_escape(dialect: "str
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("sql_template", "value", "expected"),
     [
-        (-1, "SELECT 0-(-1)"),
-        (-1.5, "SELECT 0-(-1.5)"),
-        (Decimal(-2), "SELECT 0-(-2)"),
-        (-0.0, "SELECT 0-(-0.0)"),
-        (3, "SELECT 0-3"),
-        (True, "SELECT 0-TRUE"),
+        ("SELECT 0-:t", -1, "SELECT 0- -1"),
+        ("SELECT 0-:t", -1.5, "SELECT 0- -1.5"),
+        ("SELECT 0-:t", Decimal(-2), "SELECT 0- -2"),
+        ("SELECT 0-:t", -0.0, "SELECT 0- -0.0"),
+        ("SELECT 0-:t", 3, "SELECT 0-3"),
+        ("SELECT 0-:t", True, "SELECT 0-TRUE"),
+        ("PRAGMA cache_size = :t", -2000, "PRAGMA cache_size = -2000"),
+        ("ALTER SEQUENCE s INCREMENT BY :t", -1, "ALTER SEQUENCE s INCREMENT BY -1"),
     ],
 )
-def test_static_literal_parenthesizes_negative_numbers(value: object, expected: str) -> None:
-    """A negative literal after a minus operator never forms a comment marker."""
-    sql, _ = ParameterConverter().convert_placeholder_style("SELECT 0-:t", {"t": value}, ParameterStyle.STATIC)
+def test_static_literal_separates_negative_numbers_after_minus(sql_template: str, value: object, expected: str) -> None:
+    """A negative literal after a minus operator gets a separating space without parenthesizing standalone values."""
+    sql, _ = ParameterConverter().convert_placeholder_style(sql_template, {"t": value}, ParameterStyle.STATIC)
 
     assert sql == expected
 
@@ -3467,6 +3469,46 @@ def test_static_literal_binary_dialect_aliases(dialect: str, expected: str) -> N
 def test_static_literal_rejects_nul_characters() -> None:
     with pytest.raises(SQLSpecError, match="NUL"):
         ParameterConverter._format_literal("a\x00b", "postgres")
+    with pytest.raises(SQLSpecError, match="NUL"):
+        ParameterConverter._format_literal("a\x00b", None)
+    assert ParameterConverter._format_literal("a\x00b", "mysql") == "'a\\0b'"
+
+
+@pytest.mark.parametrize(
+    ("adapter", "sql", "params", "expected"),
+    [
+        ("psycopg", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("pymssql", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("sybase", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        (
+            "pymysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "aiomysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "asyncmy",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+    ],
+)
+def test_adapter_escape_literal_percent_uses_adapter_dialect(
+    adapter: str, sql: str, params: "tuple[str, ...]", expected: str
+) -> None:
+    """Adapter percent-escaping helpers scan with the same dialect grammar as the parameter processor."""
+    import importlib
+
+    module = importlib.import_module(f"sqlspec.adapters.{adapter}.core")
+    escaped = module.escape_literal_percent(sql, params, ParameterValidator())
+    assert escaped == expected
 
 
 def test_static_literal_requires_dialect_for_backslashes() -> None:

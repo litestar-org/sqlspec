@@ -432,6 +432,24 @@ def test_snowflake_splitter_control_enders_allow_comments(
             "BEGIN\n IF x THEN y := 1; END IF;\n FOR i IN 1..2 LOOP NULL; END LOOP;\nEND;\n/\nSELECT 1 FROM dual;",
             ["BEGIN\n IF x THEN y := 1; END IF;\n FOR i IN 1..2 LOOP NULL; END LOOP;\nEND;\n/", "SELECT 1 FROM dual;"],
         ),
+        (
+            "oracle",
+            "BEGIN\n  work.do_it;\nEND;\n/\nSELECT 1 FROM dual;",
+            ["BEGIN\n  work.do_it;\nEND;\n/", "SELECT 1 FROM dual;"],
+        ),
+        (
+            "oracle",
+            "BEGIN work := 1; immediate := 2; END;\n/\nSELECT 1 FROM dual;",
+            ["BEGIN work := 1; immediate := 2; END;\n/", "SELECT 1 FROM dual;"],
+        ),
+        (
+            "postgres",
+            "CREATE RULE r AS ON UPDATE TO t DO ALSO (INSERT INTO a VALUES (1); INSERT INTO b VALUES (2)); SELECT 1;",
+            [
+                "CREATE RULE r AS ON UPDATE TO t DO ALSO (INSERT INTO a VALUES (1); INSERT INTO b VALUES (2));",
+                "SELECT 1;",
+            ],
+        ),
         (None, "SELECT 1; /* open ; SELECT 2;", ["SELECT 1;"]),
     ],
 )

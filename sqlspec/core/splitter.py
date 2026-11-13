@@ -37,6 +37,7 @@ __all__ = (
     "TSQLDialectConfig",
     "Token",
     "TokenType",
+    "contains_statement_terminator",
     "split_sql_script",
 )
 
@@ -54,7 +55,7 @@ DEFAULT_CACHE_TTL: Final = 3600
 MAX_CACHEABLE_SCRIPT_BYTES: Final[int] = 8192
 
 _TRANSACTION_BEGIN_PATTERN: Final[str] = (
-    r"\bBEGIN\b(?=\s*(?:;|\Z|(?:TRANSACTION|TRAN|WORK|DEFERRED|IMMEDIATE|EXCLUSIVE|DISTRIBUTED)\b))"
+    r"\bBEGIN\b(?=\s*(?:;|\Z|(?:TRANSACTION|TRAN|WORK|DEFERRED|IMMEDIATE|EXCLUSIVE|DISTRIBUTED)\b(?!\s*(?:\.|:=|\())))"
 )
 _WORD_PATTERN: Final[str] = r"[A-Za-z_][A-Za-z0-9_$]*"
 _BACKSLASH_STRING_PATTERN: Final[str] = r"'(?:''|\\.|[^'\\])*'"
@@ -212,7 +213,7 @@ class DialectConfig:
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
             (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]|`(?:[^`]|``)*`'),
         ])
-        if _BEGIN_BLOCK_KEYWORD in self.block_starters:
+        if _BEGIN_BLOCK_KEYWORD in self.block_starters and self.name != "oracle":
             patterns.append((TokenType.OTHER, _TRANSACTION_BEGIN_PATTERN))
 
         all_keywords = self.block_starters | self.block_enders | self.batch_separators
@@ -515,6 +516,15 @@ class GenericDialectConfig(_EagerDialectConfig):
     _DIALECT_NAME = "generic"
     _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
 
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get generic token patterns covering common quote extensions."""
+        return [
+            (TokenType.STRING_LITERAL, _dollar_quoted_token),
+            (TokenType.STRING_LITERAL, _ESCAPE_STRING_PATTERN),
+            (TokenType.STRING_LITERAL, _BACKSLASH_STRING_PATTERN),
+            (TokenType.STRING_LITERAL, _BACKSLASH_DOUBLE_QUOTED_PATTERN),
+        ]
+
 
 @final
 class MySQLDialectConfig(_EagerDialectConfig):
@@ -805,15 +815,14 @@ class StatementSplitter:
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0
         block_stack: list[str] = []
+        paren_depth = 0
         dialect = self._dialect
         block_starters = dialect.block_starters
         block_enders = dialect.block_enders
-        statement_terminators = dialect.statement_terminators
         special_terminators = dialect.special_terminators
         batch_separators = dialect.batch_separators
         max_nesting_depth = dialect.max_nesting_depth
         is_real_block_ender = dialect.is_real_block_ender
-        should_delay_semicolon_termination = dialect.should_delay_semicolon_termination
         is_snowflake = dialect.name == "snowflake"
 
         all_tokens = self._tokenize(sql)
@@ -851,22 +860,17 @@ class StatementSplitter:
                     token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)
                 ):
                     block_stack.pop()
+            elif token.type == TokenType.OTHER:
+                if token.value == "(":
+                    paren_depth += 1
+                elif token.value == ")" and paren_depth > 0:
+                    paren_depth -= 1
 
-            is_terminator = False
-            if not block_stack:
-                if token.type == TokenType.TERMINATOR:
-                    if token.value in statement_terminators:
-                        should_delay = should_delay_semicolon_termination(all_tokens, token_idx)
-
-                        if not should_delay:
-                            is_terminator = True
-                    elif token.value in special_terminators:
-                        handler = special_terminators[token.value]
-                        if handler(all_tokens, token_idx):
-                            is_terminator = True
-
-                elif token.type == TokenType.KEYWORD and token_upper in batch_separators:
-                    is_terminator = True
+            is_terminator = (
+                not block_stack
+                and paren_depth == 0
+                and self._is_top_level_terminator(token, token_upper, all_tokens, token_idx)
+            )
 
             if is_terminator:
                 if token.type == TokenType.KEYWORD and token_upper in batch_separators:
@@ -893,6 +897,7 @@ class StatementSplitter:
                 current_statement_writer = string_writer_type() if string_writer_type is not None else None
                 current_statement_chars = []
                 current_statement_fragment_count = 0
+                paren_depth = 0
 
         if current_statement_fragment_count:
             if current_statement_writer is None:
@@ -903,6 +908,18 @@ class StatementSplitter:
                 statements.append(statement)
 
         return statements
+
+    def _is_top_level_terminator(
+        self, token: Token, token_upper: str, all_tokens: "list[Token]", token_idx: int
+    ) -> bool:
+        """Return whether ``token`` ends the current statement at top level."""
+        dialect = self._dialect
+        if token.type == TokenType.TERMINATOR:
+            if token.value in dialect.statement_terminators:
+                return not dialect.should_delay_semicolon_termination(all_tokens, token_idx)
+            handler = dialect.special_terminators.get(token.value)
+            return bool(handler and handler(all_tokens, token_idx))
+        return token.type == TokenType.KEYWORD and token_upper in dialect.batch_separators
 
     @staticmethod
     def _is_plsql_block(tokens: "list[Token]") -> bool:
@@ -949,22 +966,16 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
     Returns:
         List of individual SQL statements
     """
-    dialect_key = "generic" if dialect is None else dialect.lower()
-
-    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
-    if config_class is None:
-        _warn_unknown_dialect_once(dialect)
-        config_class = GenericDialectConfig
-
-    cache_key = (dialect_key, strip_trailing_terminator)
-    splitter = _splitter_cache.get(cache_key)
-    if splitter is None:
-        with _splitter_cache_lock:
-            splitter = _splitter_cache.get(cache_key)
-            if splitter is None:
-                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
-                _splitter_cache[cache_key] = splitter
+    splitter = _get_cached_splitter(dialect, strip_trailing_terminator=strip_trailing_terminator)
     return splitter.split(script)
+
+
+def contains_statement_terminator(fragment: str, dialect: str | None = None) -> bool:
+    """Return whether a SQL fragment contains a semicolon terminator outside comments, strings, and quoted identifiers."""
+    if ";" not in fragment:
+        return False
+    splitter = _get_cached_splitter(dialect, strip_trailing_terminator=False)
+    return any(token.type == TokenType.TERMINATOR and token.value == ";" for token in splitter._tokenize(fragment))
 
 
 def clear_splitter_caches() -> None:
@@ -980,6 +991,26 @@ def clear_splitter_caches() -> None:
         _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
+
+
+def _get_cached_splitter(dialect: str | None, *, strip_trailing_terminator: bool) -> StatementSplitter:
+    """Return a cached StatementSplitter for a dialect and semicolon-stripping mode."""
+    dialect_key = "generic" if dialect is None else dialect.lower()
+
+    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
+    if config_class is None:
+        _warn_unknown_dialect_once(dialect)
+        config_class = GenericDialectConfig
+
+    cache_key = (dialect_key, strip_trailing_terminator)
+    splitter = _splitter_cache.get(cache_key)
+    if splitter is None:
+        with _splitter_cache_lock:
+            splitter = _splitter_cache.get(cache_key)
+            if splitter is None:
+                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
+                _splitter_cache[cache_key] = splitter
+    return splitter
 
 
 def _librt_string_writer_type() -> "type[Any] | None":

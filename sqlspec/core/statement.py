@@ -1,13 +1,14 @@
 """SQL statement and configuration management."""
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
@@ -55,6 +56,7 @@ from sqlspec.core.query_modifiers import (
     sanitize_parameter_name,
     wrap_as_subquery,
 )
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
 from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
@@ -86,6 +88,10 @@ RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA"})
 MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
+_STATEMENT_START_RE: Final = re.compile(
+    r"^\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COMMIT|ROLLBACK|EXEC|EXECUTE|CALL|COPY|MERGE)\b",
+    re.IGNORECASE,
+)
 
 
 SQL_CONFIG_SLOTS: Final = (
@@ -753,19 +759,22 @@ class SQL:
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
-            if not condition.strip() or "\x00" in condition:
-                msg = "WHERE condition must be nonempty and must not contain NUL characters"
+            if not condition.strip() or "\x00" in condition or _has_unquoted_semicolon(condition, self._dialect):
+                msg = "WHERE condition must be a single expression without NUL characters or statement separators"
                 raise sqlspec.exceptions.SQLParsingError(msg)
             if not self._statement_config.enable_parsing:
-                condition_expr = _raw_condition(condition)
+                condition_expr = _raw_condition(condition, self._dialect)
             else:
                 try:
-                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
-                except ParseError:
-                    condition_expr = _raw_condition(condition)
+                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect)
+                except (ParseError, TokenError):
+                    condition_expr = _raw_condition(condition, self._dialect)
         else:
             condition_expr = condition
-        if isinstance(condition_expr, (exp.Block, exp.Command, exp.DDL, exp.DML)):
+        if (
+            not isinstance(condition_expr, exp.Condition)
+            or condition_expr.find(exp.Command, exp.DDL, exp.DML, exp.Drop, exp.Alter, exp.TruncateTable) is not None
+        ):
             msg = f"WHERE condition must be an expression, got {type(condition_expr).__name__}"
             raise sqlspec.exceptions.SQLParsingError(msg)
 
@@ -2117,8 +2126,8 @@ def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
     """Parse a single ORDER BY item string into a SQLGlot expression."""
-    if "\x00" in order_item:
-        msg = "ORDER BY item must not contain NUL characters"
+    if "\x00" in order_item or _has_unquoted_semicolon(order_item, dialect):
+        msg = "ORDER BY item must not contain NUL characters or statement separators"
         raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
     if not normalized:
@@ -2127,9 +2136,12 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
     if enable_parsing:
         try:
             parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
-        except ParseError:
+        except (ParseError, TokenError):
             parsed = None
         if parsed is not None:
+            if parsed.find(exp.Command, exp.DDL, exp.DML, exp.Transaction) is not None:
+                msg = "ORDER BY item must be an ordering expression"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             return default_nulls(parsed, normalized, dialect)
 
     parts = normalized.rsplit(None, 1)
@@ -2140,25 +2152,14 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
     return exp.column(normalized)
 
 
-def _raw_condition(condition: str) -> exp.Expr:
+def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
     """Wrap an unparsed condition fragment, requiring it to be a single expression."""
-    if _has_unquoted_semicolon(condition):
+    if _has_unquoted_semicolon(condition, dialect) or _STATEMENT_START_RE.match(condition) is not None:
         msg = "WHERE condition must be a single expression without statement separators"
         raise sqlspec.exceptions.SQLParsingError(msg)
     return exp.Paren(this=exp.Var(this=condition))
 
 
-def _has_unquoted_semicolon(fragment: str) -> bool:
-    """Return whether a SQL fragment contains a statement separator outside quoted text."""
-    if ";" not in fragment:
-        return False
-    quote = ""
-    for char in fragment:
-        if quote:
-            if char == quote:
-                quote = ""
-        elif char in {"'", '"', "`"}:
-            quote = char
-        elif char == ";":
-            return True
-    return False
+def _has_unquoted_semicolon(fragment: str, dialect: "str | None" = None) -> bool:
+    """Return whether a SQL fragment contains a statement separator outside comments and quoted literals."""
+    return contains_statement_terminator(fragment, dialect)

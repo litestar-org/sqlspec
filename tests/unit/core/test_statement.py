@@ -1903,18 +1903,33 @@ def test_sql_where_eq_binds_non_identifier_column_names(column: str, value: Any,
     assert tuple(parameters) == (value,)
 
 
-@pytest.mark.parametrize("condition", ["", "   ", "id = 1\x00", "id !!~ 1; DELETE FROM t"])
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "",
+        "   ",
+        "id = 1\x00",
+        "id !!~ 1; DELETE FROM t",
+        "a = 1 /* ' */ ; DROP TABLE t",
+        "a = 1 -- it's\n; DROP TABLE t",
+        "DROP TABLE t",
+        "DELETE FROM t",
+    ],
+)
 def test_sql_where_rejects_conditions_that_are_not_single_expressions(condition: str) -> None:
-    """Empty conditions and unparsed fragments holding a statement separator are rejected."""
+    """Empty conditions, statements, and fragments holding a statement separator are rejected."""
     with pytest.raises(SQLParsingError):
         SQL("SELECT * FROM t").where(condition)
 
 
-def test_sql_where_keeps_separator_inside_quoted_text_of_unparsed_condition() -> None:
-    """A separator inside a quoted value does not split an unparsed condition."""
-    stmt = SQL("SELECT * FROM t").where("note !!~ 'a;b'")
+@pytest.mark.parametrize(
+    "condition", ["note !!~ 'a;b'", "[a;b] = 1", "a = 1 /* ; */", "a = 1 -- note; fine", "a = $$;$$", "a = 'it\\'s; x'"]
+)
+def test_sql_where_keeps_separator_inside_comments_and_quotes_of_unparsed_condition(condition: str) -> None:
+    """A separator inside a comment, quote, dollar quote, or bracket identifier does not split a condition."""
+    stmt = SQL("SELECT * FROM t", statement_config=StatementConfig(enable_parsing=False)).where(condition)
 
-    assert "note !!~ 'a;b'" in stmt.sql
+    assert condition in stmt.sql
 
 
 def test_sql_where_rejects_statement_expressions() -> None:
