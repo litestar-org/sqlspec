@@ -80,11 +80,10 @@ def _adk_read_provider(
     session: bool,
     kwargs: dict[str, Any],
 ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+    if primary or not enabled or _ADK_PRIMARY_READ.get():
+        return config.provide_session(**kwargs) if session else config.provide_connection(**kwargs)
     entry = RoutingContext.get_entry(config.bind_key)
-    force_primary = (
-        primary or _ADK_PRIMARY_READ.get() or (entry is not None and (entry.mode == "primary" or entry.pinned_by_write))
-    )
-    if force_primary or not enabled:
+    if entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
         return config.provide_session(**kwargs) if session else config.provide_connection(**kwargs)
     if read_config is not None:
         return read_config.provide_session(**kwargs) if session else read_config.provide_connection(**kwargs)
