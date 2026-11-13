@@ -1853,13 +1853,16 @@ def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
     "dsn",
     [
         "writer:1521/APP_RW",
+        "//writer:1521/APP_RW",
+        "tcp://writer:1521/APP_RW",
+        "tcps://writer:1522/APP_RW?ssl_server_dn_match=yes",
         "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=writer)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=APP_RW)))",
     ],
 )
 def test_oracle_replica_derivation_rewrites_service_without_native_conflicts(config_type, dsn: str) -> None:
     primary = config_type(connection_config={"dsn": dsn, "user": "app"})
     reader = primary.derive_pool(service_name="APP_RO", is_replica=True)
-    assert "APP_RO" in reader.connection_config["dsn"]
+    assert reader.connection_config["dsn"] == dsn.replace("APP_RW", "APP_RO")
     assert reader.is_replica is True
     assert "APP_RW" in primary.connection_config["dsn"]
     host_reader = primary.derive_pool(host="standby", service_name="APP_TC")

@@ -2416,11 +2416,13 @@ def rewrite_oracle_dsn_service_name(dsn: str, service_name: str) -> str:
             dsn,
             flags=re.IGNORECASE,
         )
-    target, separator, service = dsn.partition("/")
     prefix = ""
-    if dsn.startswith("//"):
-        target, separator, service = dsn[2:].partition("/")
-        prefix = "//"
+    endpoint = dsn
+    scheme = re.match(r"(?i)(?:tcps?://|//)", dsn)
+    if scheme is not None:
+        prefix = scheme.group(0)
+        endpoint = dsn[len(prefix) :]
+    target, separator, service = endpoint.partition("/")
     if not separator or not target or "(" in target:
         msg = "Cannot replace service_name in an opaque Oracle TNS alias"
         raise ImproperConfigurationError(msg)
