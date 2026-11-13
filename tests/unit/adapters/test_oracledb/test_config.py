@@ -1453,10 +1453,10 @@ async def test_oracle_checkout_forwards_options_and_restores_priority(async_mode
         transaction_priority="HIGH",
     )
     if async_mode:
-        async with context:
+        async with cast("Any", context):
             assert connection.transaction_priority == TransactionPriority.HIGH
     else:
-        with context:
+        with cast("Any", context):
             assert connection.transaction_priority == TransactionPriority.HIGH
     pool.acquire.assert_called_once_with(
         shardingkey=["tenant"], supershardingkey=["region"], cclass="APP", purity=Purity.SELF
@@ -1490,10 +1490,10 @@ async def test_oracle_cleanup_failure_drops_and_preserves_body_exception(async_m
     context = (config.provide_session if session_mode else config.provide_connection)()
     with pytest.raises(ValueError, match="body failed") as raised:
         if async_mode:
-            async with context:
+            async with cast("Any", context):
                 raise ValueError("body failed")
         else:
-            with context:
+            with cast("Any", context):
                 raise ValueError("body failed")
     assert "reset failed" in raised.value.__notes__[0]
     connection.rollback.assert_called_once_with()
@@ -1636,10 +1636,10 @@ async def test_older_sdk_default_checkout_and_explicit_priority_refusal(
         config = OracleSyncConfig(connection_instance=pool)
     monkeypatch.delattr(oracle_config_module.oracledb, "TransactionPriority")
     if async_mode:
-        async with config.provide_connection() as acquired:
+        async with cast("Any", config.provide_connection()) as acquired:
             assert acquired is connection
     else:
-        with config.provide_connection() as acquired:
+        with cast("Any", config.provide_connection()) as acquired:
             assert acquired is connection
     with pytest.raises(oracle_config_module.oracledb.NotSupportedError, match=r"26\.1"):
         config.provide_connection(transaction_priority="HIGH")
@@ -1712,12 +1712,12 @@ async def test_session_release_rolls_back_forgotten_sessionless_before_hooks(
 
     async def exercise() -> None:
         if async_mode:
-            async with config.provide_session() as session:
+            async with cast("Any", config.provide_session()) as session:
                 await session.begin_sessionless_transaction()
                 if body_fails:
                     raise ValueError("body failure")
         else:
-            with config.provide_session() as session:
+            with cast("Any", config.provide_session()) as session:
                 session.begin_sessionless_transaction()
                 if body_fails:
                     raise ValueError("body failure")
