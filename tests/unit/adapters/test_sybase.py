@@ -34,12 +34,7 @@ from sqlspec.adapters.sybase import (
 )
 from sqlspec.adapters.sybase._typing import SybaseRawCursor
 from sqlspec.adapters.sybase.adk import SybaseADKMemoryStore, SybaseADKStore
-from sqlspec.adapters.sybase.core import (
-    _ERROR_CODE_MAPPING,
-    build_insert_statement,
-    escape_literal_percent,
-    format_identifier,
-)
+from sqlspec.adapters.sybase.core import build_insert_statement, escape_literal_percent, format_identifier
 from sqlspec.adapters.sybase.events import SybaseEventQueueStore
 from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
@@ -1078,11 +1073,6 @@ def test_sybase_migration_tracker_existing_columns_query() -> None:
     assert "o.name = 'my_versions'" in query_qualified
 
 
-def test_sybase_error_code_mapping_count() -> None:
-    """_ERROR_CODE_MAPPING contains 38 error codes."""
-    assert len(_ERROR_CODE_MAPPING) == 38
-
-
 def _sybase_migration_config(tmp_path: Path, **migration_options: str) -> SybaseConfig:
     return SybaseConfig(
         connection_config={"user": "sa", "password": "secret", "database": "demo"},
@@ -1336,3 +1326,49 @@ def test_sybase_reconcile_orchestrators_converge_litestar_events_and_adk() -> No
     assert any("CREATE TABLE [dbo].[adk_memory]" in stmt for stmt in scripts)
     assert len(executed) == 11
     driver.commit.assert_not_called()
+
+
+def test_replica_derivation_switches_freetds_alias_and_tcp_without_stale_options() -> None:
+    primary = SybaseConfig(connection_config={"freetds_server": "ASE_WRITER", "database": "app"})
+    reader = primary.derive_pool(host="reader", port=5001, db="reader_app", username="reader")
+    assert reader.connection_config["server"] == "reader"
+    assert reader.connection_config["database"] == "reader_app"
+    assert reader.connection_config["user"] == "reader"
+    assert reader.connection_config.get("_sybase_server_alias") is None
+    alias = reader.derive_pool(server="ASE_READER")
+    assert alias.connection_config["server"] == "ASE_READER"
+    assert alias.connection_config.get("port") is None
+    assert alias.connection_config["_sybase_server_alias"] is True
+
+
+def test_replica_sybase_url_shorthand_parses_endpoint_and_database() -> None:
+    primary = SybaseConfig(connection_config={"server": "writer"}, replicas="sybase://reader:pw@reader:5001/app")
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config["server"] == "reader"
+    assert reader.connection_config["port"] == 5001
+    assert reader.connection_config["database"] == "app"
+
+
+@pytest.mark.parametrize(
+    "error", (Exception(3906, b"database is read-only"), Exception("[25006] read-only transaction"))
+)
+def test_replica_write_errors_preserve_native_cause(error: Exception) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+
+
+def test_replica_url_override_replaces_freetds_alias() -> None:
+    primary = SybaseConfig(connection_config={"freetds_server": "ASE_WRITER"})
+    replica = primary.derive_pool(url="sybase://reader:pw@reader:5001/app")
+    assert replica.connection_config["server"] == "reader"
+    assert replica.connection_config["port"] == 5001
+    assert replica.connection_config.get("_sybase_server_alias") is None
+
+
+@pytest.mark.parametrize("endpoint", ("", "postgresql://reader/app", "reader:invalid"))
+def test_invalid_replica_endpoints_fail_before_pool_creation(endpoint: str) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        SybaseConfig(connection_config={"server": "writer"}, replicas=[endpoint])

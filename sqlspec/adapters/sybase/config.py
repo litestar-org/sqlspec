@@ -4,7 +4,13 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.sybase._typing import SybaseConnection, SybaseCursor, SybaseRawCursor, SybaseSessionContext
-from sqlspec.adapters.sybase.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sybase.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    merge_sybase_derive_overrides,
+    parse_sybase_replica_endpoint,
+)
 from sqlspec.adapters.sybase.driver import SybaseDriver, SybaseExceptionHandler
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.adapters.sybase.pool import SybaseConnectionPool
@@ -173,6 +179,16 @@ class SybaseConfig(SyncDatabaseConfig[SybaseConnection, SybaseConnectionPool, Sy
             observability_config=observability_config,
             **kwargs,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_sybase_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": parse_sybase_replica_endpoint(spec_input)}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def create_connection(self) -> "SybaseConnection":
         """Open a standalone Sybase ASE connection owned by the caller."""

@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.dialects.sybase import Sybase as _SybaseDialect
@@ -12,12 +13,14 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -65,8 +68,10 @@ DEFAULT_SYBASE_TDS_VERSION: Final[str] = "5.0"
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _SYBASE_CONSTRAINT_547: Final[int] = 547
+_SYBASE_READ_ONLY: Final[int] = 3906
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    3906: (ReadOnlyTransactionError, "read-only database"),
     2601: (UniqueViolationError, "unique index violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
     546: (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -228,6 +233,14 @@ def apply_driver_features(
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a Sybase ASE exception to SQLSpec's exception hierarchy."""
+    if (
+        getattr(error, "sqlstate", None) == "25006"
+        or "25006" in str(error)
+        or extract_error_number(error) == _SYBASE_READ_ONLY
+    ):
+        mapped_readonly = ReadOnlyTransactionError(str(error))
+        mapped_readonly.__cause__ = error
+        return mapped_readonly
     error_number = extract_error_number(error)
 
     if error_number == _SYBASE_CONSTRAINT_547:
@@ -421,3 +434,50 @@ def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
 _ = _SybaseDialect
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
+
+
+def merge_sybase_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve explicit endpoint aliases in a fresh derivation mapping."""
+    config = dict(base_config)
+    config.update(overrides)
+    explicit = dict(overrides)
+    if "url" in explicit:
+        explicit.update(parse_sybase_replica_endpoint(str(explicit.pop("url"))))
+        config.update(explicit)
+        config.pop("url", None)
+    for canonical, alias in (("user", "username"), ("database", "db")):
+        if alias in explicit and canonical not in explicit:
+            config[canonical] = explicit[alias]
+            config.pop(alias, None)
+    if "host" in explicit or "port" in explicit:
+        config.pop("_sybase_server_alias", None)
+        if "host" in explicit and "server" not in explicit:
+            config["server"] = explicit["host"]
+            config.pop("host", None)
+    elif "server" in explicit:
+        config.pop("port", None)
+        config["_sybase_server_alias"] = True
+    return config
+
+
+def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
+    """Parse a reader URL or host endpoint without connecting."""
+    try:
+        parsed = urlsplit(endpoint if "://" in endpoint else "//" + endpoint)
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg) from exc
+    if not hostname or (parsed.scheme and parsed.scheme != "sybase"):
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg)
+    config: dict[str, Any] = {"host": hostname}
+    if port is not None:
+        config["port"] = port
+    if parsed.username is not None:
+        config["user"] = unquote(parsed.username)
+    if parsed.password is not None:
+        config["password"] = unquote(parsed.password)
+    if parsed.path.strip("/"):
+        config["database"] = unquote(parsed.path.strip("/"))
+    return config
