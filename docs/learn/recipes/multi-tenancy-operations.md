@@ -104,12 +104,23 @@ For mssql-python, `"rls"` and `"session_context"` default `pool_enabled` to `Fal
 Use `OracleSyncClientContextStrategy` or `OracleAsyncClientContextStrategy` to bind a tenant to `CLIENTCONTEXT`. The SDK sends this state with the next request, with no extra setup query. List each allowed tenant key in `variable_keys`. Unknown keys fail checkout.
 
 ```python
-from sqlspec.adapters.oracledb import OracleAsyncClientContextStrategy, OracleAsyncConfig
+from sqlspec.adapters.oracledb import (
+    OracleAsyncClientContextStrategy,
+    OracleAsyncConfig,
+)
 from sqlspec.utils.tenant import TenantContextPayload
 
 config = OracleAsyncConfig(
-    connection_config={"dsn": "localhost:1521/FREEPDB1", "user": "app", "password": "secret"},
-    driver_features={"tenant_strategy": OracleAsyncClientContextStrategy(variable_keys=("region",))},
+    connection_config={
+        "dsn": "localhost:1521/FREEPDB1",
+        "user": "app",
+        "password": "secret",
+    },
+    driver_features={
+        "tenant_strategy": OracleAsyncClientContextStrategy(
+            variable_keys=("region",)
+        )
+    },
 )
 payload = TenantContextPayload("acme", variables={"region": "west"})
 ```
@@ -119,7 +130,7 @@ Pass `payload` to `config.provide_session(tenant=payload)`. The [runnable exampl
 ??? example "Complete client-context example"
 
     ```python
-    --8<-- "docs/examples/databases/oracledb/zero_rtt_tenancy.py"
+    --8<-- "docs/examples/databases/oracledb/zero_rtt_tenancy.py:example"
     ```
 
 Use `OracleSyncEndUserSecurityStrategy` or `OracleAsyncEndUserSecurityStrategy` for Deep Data Security on a supported Oracle 26ai Thin TCPS server. These bind a database access token, user identity, data roles, and declared fields. The token can be a value or a refresh callable. Token providers read the captured `end_user_token` tenant field. Trusted identities can use the tenant ID with an optional `end_user_key`. Each socket owns its security state. Checkin clears it. The SDK plugin's thread-local state is never used for request secrets.

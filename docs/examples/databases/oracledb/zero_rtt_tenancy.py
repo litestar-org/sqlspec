@@ -1,5 +1,6 @@
 """Read Oracle client-context attributes from a captured tenant lease."""
 
+# --8<-- [start:example]
 import asyncio
 import os
 
@@ -38,8 +39,16 @@ async def run_example() -> dict[str, object]:
         await config.close_pool()
 
 
+# --8<-- [end:example]
+
+__all__ = ("main", "run_example")
+
+
 def main() -> None:
     """Execute the Oracle tenant-context example."""
+    if not os.getenv("ORACLE_DSN"):
+        print("Set ORACLE_DSN, ORACLE_USER, and ORACLE_PASSWORD to run this example.")
+        return
     print(asyncio.run(run_example()))
 
 

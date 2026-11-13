@@ -1,5 +1,6 @@
 """Suspend and resume a ledger transaction across two Oracle pool checkouts."""
 
+# --8<-- [start:example]
 import asyncio
 import os
 
@@ -55,8 +56,16 @@ async def run_example() -> bytes:
             await config.close_pool()
 
 
+# --8<-- [end:example]
+
+__all__ = ("main", "run_example")
+
+
 def main() -> None:
     """Execute the Oracle sessionless transaction example."""
+    if not os.getenv("ORACLE_DSN"):
+        print("Set ORACLE_DSN, ORACLE_USER, and ORACLE_PASSWORD to run this example.")
+        return
     asyncio.run(run_example())
 
 

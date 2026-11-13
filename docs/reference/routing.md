@@ -2,8 +2,19 @@
 
 ```python
 from sqlspec.config import ReadReplicaGroup
-from sqlspec.core.routing import RandomSelector, ReplicaHealthBreaker, ReplicaSpec, RoundRobinSelector
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, RoutingScope, SQLSpecRoutingMiddleware
+from sqlspec.core.routing import (
+    RandomSelector,
+    ReplicaHealthBreaker,
+    ReplicaSpec,
+    RoundRobinSelector,
+)
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    RoutingScope,
+    SQLSpecRoutingMiddleware,
+)
 ```
 
 Use [Read Replicas](../learn/recipes/read-replicas.md) for setup and [Replica Operations](../learn/recipes/read-replicas-operations.md) for freshness and failure policy. Context scopes select intent; database roles and policies still govern access and write permission.
@@ -56,4 +67,3 @@ Use [Read Replicas](../learn/recipes/read-replicas.md) for setup and [Replica Op
     options:
       heading_level: 4
       members: false
-

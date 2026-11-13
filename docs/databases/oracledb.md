@@ -282,10 +282,16 @@ Pass acquire keywords to select a shard or request a pool tag for one checkout:
 from sqlspec.adapters.oracledb import OracleSyncConfig
 
 config = OracleSyncConfig(
-    connection_config={"dsn": "db.example.internal/app", "user": "app", "password": "secret"}
+    connection_config={
+        "dsn": "db.example.internal/app",
+        "user": "app",
+        "password": "secret",
+    }
 )
 with config.provide_session(sharding_key=["acme"]) as session:
-    tenant_name = session.select_value("SELECT SYS_CONTEXT('USERENV', 'SESSION_USER') FROM DUAL")
+    tenant_name = session.select_value(
+        "SELECT SYS_CONTEXT('USERENV', 'SESSION_USER') FROM DUAL"
+    )
 ```
 
 The providers accept `sharding_key` and `super_sharding_key` directly. Direct client routing needs Thick mode and a sharded database. Thin mode omits native shard-key arguments; use the configured routing endpoint. Tenant configs can derive keys from `sharding_key_variable`, `super_sharding_key_variable`, a `shard_resolver`, or `use_tenant_id_as_sharding_key=True`. Select one primary shard source. The resolver receives the captured tenant payload before acquisition.
@@ -307,7 +313,7 @@ Run the [sessionless example](https://github.com/litestar-org/sqlspec/blob/main/
 ??? example "Complete sessionless example"
 
     ```python
-    --8<-- "docs/examples/databases/oracledb/sessionless_transactions.py"
+    --8<-- "docs/examples/databases/oracledb/sessionless_transactions.py:example"
     ```
 
 `session.set_transaction_priority("HIGH")` sets the native priority field without a query. This call is sync on both drivers. `OracleTransactionPriority` accepts `"DEFAULT"`, `"LOW"`, `"MEDIUM"`, or `"HIGH"`. Priority support and policy depend on the server. `execute(..., suspend_on_success=True)` suspends after one statement. It needs an active sessionless transaction and does not commit.
