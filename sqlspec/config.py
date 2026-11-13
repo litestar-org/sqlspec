@@ -1198,6 +1198,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return None, entry
         effective_group = bind_group if bind_group is not None else entry.bind_group if entry is not None else None
         if not self._replica_groups and effective_group is None:
+            if entry is not None and entry.mode == "replica":
+                msg = "No read replica is configured for the requested bind"
+                raise ReplicaUnavailableError(msg)
             return None, entry
         group_key = effective_group if effective_group is not None else "default"
         if group_key in self._replica_groups:
@@ -1279,7 +1282,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             provider = group.provide_session if session else group.provide_connection
             return provider(
                 *args,
-                primary=self,
+                primary=None if entry is not None and entry.mode == "replica" else self,
                 causal_token=None if entry is None else entry.causal_token,
                 max_staleness_seconds=None if entry is None else entry.max_staleness_seconds,
                 **kwargs,

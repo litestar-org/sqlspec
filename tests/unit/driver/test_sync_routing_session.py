@@ -358,3 +358,151 @@ async def test_native_unopenable_reader_maps_checkout_failure(tmp_path: Path, as
             await primary.close_pool()
         else:
             primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("replicas", [False, True])
+@pytest.mark.parametrize("raw", [False, True])
+async def test_strict_replica_provider_never_falls_back_to_primary(
+    tmp_path: Path, async_mode: bool, replicas: bool, raw: bool
+) -> None:
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.exceptions import ReplicaUnavailableError
+
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(
+        connection_config={"database": str(tmp_path / "writer.db")},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}] if replicas else None,
+    )
+    provider = primary.provide_read_connection if raw else primary.provide_read_session
+    try:
+        with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+            if async_mode:
+                async with provider():
+                    pytest.fail("strict replica checkout must not use primary")
+            else:
+                with provider():
+                    pytest.fail("strict replica checkout must not use primary")
+        assert primary.connection_instance is None
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("writer_first", [False, True])
+async def test_strict_replica_rejects_cached_fallback_and_held_writer(
+    tmp_path: Path, async_mode: bool, writer_first: bool
+) -> None:
+    import asyncio
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.exceptions import ReplicaUnavailableError
+
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(
+        connection_config={"database": str(tmp_path / "writer.db"), **({"pool_size": 1} if async_mode else {})},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+    )
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                if writer_first:
+                    await session.execute("CREATE TABLE committed_write (id INTEGER)")
+                    await session.commit()
+                else:
+                    assert await session.select_value("SELECT 1") == 1
+                with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                    await asyncio.wait_for(session.select_value("SELECT 2"), timeout=2)
+                assert await session.select_value("SELECT 3") == 3
+        else:
+            with primary.provide_routing_session() as session:
+                if writer_first:
+                    session.execute("CREATE TABLE committed_write (id INTEGER)")
+                    session.commit()
+                else:
+                    assert session.select_value("SELECT 1") == 1
+                with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                    session.select_value("SELECT 2")
+                assert session.select_value("SELECT 3") == 3
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_replica_policy_change_releases_finished_lease_and_protects_stream(
+    tmp_path: Path, async_mode: bool, streaming: bool
+) -> None:
+    import asyncio
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.config import ReadReplicaGroup
+
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    reader = config_type(
+        connection_config={"database": str(tmp_path / "reader.db"), **({"pool_size": 1} if async_mode else {})}
+    )
+    primary = config_type(
+        connection_config={"database": str(tmp_path / "writer.db")},
+        replicas={"default": ReadReplicaGroup([reader], causal_validator=lambda _driver, _token: True)},
+    )
+    query = "SELECT 1 AS value UNION ALL SELECT 2 AS value"
+    stream: Any = None
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                with RoutingContext.replica(causal_token="first"):
+                    if streaming:
+                        stream = session.select_stream(query, chunk_size=1)
+                        await stream.__aenter__()
+                        assert await anext(stream) == {"value": 1}
+                    else:
+                        assert await session.select_value("SELECT 1") == 1
+                first = session.replica_session
+                if streaming:
+                    with (
+                        RoutingContext.replica(causal_token="second"),
+                        pytest.raises(RoutingContextError, match="stream"),
+                    ):
+                        await asyncio.wait_for(session.select_value("SELECT 3"), timeout=2)
+                    assert [row async for row in stream] == [{"value": 2}]
+                    await stream.aclose()
+                with RoutingContext.replica(causal_token="second"):
+                    assert await asyncio.wait_for(session.select_value("SELECT 3"), timeout=2) == 3
+                assert session.replica_session is not first
+        else:
+            with primary.provide_routing_session() as session:
+                with RoutingContext.replica(causal_token="first"):
+                    if streaming:
+                        stream = session.select_stream(query, chunk_size=1)
+                        stream.__enter__()
+                        assert next(stream) == {"value": 1}
+                    else:
+                        assert session.select_value("SELECT 1") == 1
+                first = session.replica_session
+                if streaming:
+                    with (
+                        RoutingContext.replica(causal_token="second"),
+                        pytest.raises(RoutingContextError, match="stream"),
+                    ):
+                        session.select_value("SELECT 3")
+                    assert list(stream) == [{"value": 2}]
+                    stream.close()
+                with RoutingContext.replica(causal_token="second"):
+                    assert session.select_value("SELECT 3") == 3
+                assert session.replica_session is not first
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()

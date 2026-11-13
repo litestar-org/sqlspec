@@ -65,6 +65,8 @@ class _RoutingSessionState:
         "_replica_causal_token",
         "_replica_driver",
         "_replica_max_staleness",
+        "_replica_streams",
+        "_replica_strict",
         "_statement_config",
         "_tenant",
     )
@@ -93,6 +95,8 @@ class _RoutingSessionState:
         self._replica_bind_group: str | None = None
         self._replica_causal_token: str | None = None
         self._replica_max_staleness: float | None = None
+        self._replica_strict = False
+        self._replica_streams = 0
         self._preparer = CommonDriverAttributesMixin(None, self._statement_config, config.driver_features)
 
     @property
@@ -238,7 +242,7 @@ class _RoutingSessionState:
 class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     """Lazy synchronous session selecting replicas for provably safe reads."""
 
-    __slots__ = ("_primary_read_stack", "_stack")
+    __slots__ = ("_primary_read_stack", "_replica_stack", "_stack")
 
     def __init__(
         self,
@@ -253,6 +257,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
         self._stack = ExitStack()
         self._primary_read_stack: ExitStack | None = None
+        self._replica_stack: ExitStack | None = None
 
     @property
     def primary_session(self) -> "SyncDriverT | None":
@@ -285,13 +290,23 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         """Release all physical checkouts and prevent further execution."""
         self.__exit__(None, None, None)
 
+    def _release_replica(self) -> None:
+        if self._replica_stack is not None:
+            if self._replica_streams:
+                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+                raise RoutingContextError(msg)
+            try:
+                self._replica_stack.close()
+            finally:
+                if self._replica_driver is self._primary_driver:
+                    self._primary_driver = None
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+
     def _release_primary_read(self) -> None:
         if self._primary_read_stack is not None:
-            try:
-                self._primary_read_stack.close()
-            finally:
-                self._primary_read_stack = None
-                self._replica_driver = None
+            self._release_replica()
 
     def _acquire_primary(self) -> SyncDriverT:
         self._ensure_open()
@@ -314,11 +329,13 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
         causal_token = entry.causal_token if entry is not None else None
         max_staleness = entry.max_staleness_seconds if entry is not None else None
+        strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
             or bind_group != self._replica_bind_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
+            or strict_replica != self._replica_strict
         ):
             context = self._config.provide_read_session(
                 bind_group=bind_group,
@@ -331,9 +348,10 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 from sqlspec.base import _RuntimeReadSyncContext
 
                 context = _RuntimeReadSyncContext(context, session=True)
-            self._release_primary_read()
+            self._release_replica()
             lease_stack = self._stack.enter_context(ExitStack())
             self._replica_driver = lease_stack.enter_context(context)
+            self._replica_stack = lease_stack
             managed_replicas = self._config.has_replicas
             if getattr(selection_receipt, "config", None) is self._config:
                 features = self._replica_driver.driver_features
@@ -344,6 +362,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
+            self._replica_strict = strict_replica
         return cast("SyncDriverT", self._replica_driver)
 
     def _resolve_driver(
@@ -746,7 +765,8 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
         """Execute a query and stream rows in chunks."""
         driver, sql = self._resolve_driver(statement, parameters, statement_config, kwargs)
-        return driver.select_stream(sql, schema_type=schema_type, chunk_size=chunk_size, native_only=native_only)
+        inner = driver.select_stream(sql, chunk_size=chunk_size, native_only=native_only)
+        return SyncRowStream(_SyncRoutingRowSource(self, inner, driver), schema_type=schema_type)
 
     def select_to_storage(
         self,
@@ -896,7 +916,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
 class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     """Lazy asynchronous session selecting replicas for provably safe reads."""
 
-    __slots__ = ("_primary_read_stack", "_stack")
+    __slots__ = ("_primary_read_stack", "_replica_stack", "_stack")
 
     def __init__(
         self,
@@ -911,6 +931,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         self._initialize(config, bind_group, statement_config, tenant, bypass_tenant)
         self._stack = AsyncExitStack()
         self._primary_read_stack: AsyncExitStack | None = None
+        self._replica_stack: AsyncExitStack | None = None
 
     @property
     def primary_session(self) -> "AsyncDriverT | None":
@@ -943,13 +964,23 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         """Release all physical checkouts and prevent further execution."""
         await self.__aexit__(None, None, None)
 
+    async def _release_replica(self) -> None:
+        if self._replica_stack is not None:
+            if self._replica_streams:
+                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+                raise RoutingContextError(msg)
+            try:
+                await self._replica_stack.aclose()
+            finally:
+                if self._replica_driver is self._primary_driver:
+                    self._primary_driver = None
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+
     async def _release_primary_read(self) -> None:
         if self._primary_read_stack is not None:
-            try:
-                await self._primary_read_stack.aclose()
-            finally:
-                self._primary_read_stack = None
-                self._replica_driver = None
+            await self._release_replica()
 
     async def _acquire_primary(self) -> AsyncDriverT:
         self._ensure_open()
@@ -972,11 +1003,13 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
         causal_token = entry.causal_token if entry is not None else None
         max_staleness = entry.max_staleness_seconds if entry is not None else None
+        strict_replica = entry is not None and entry.mode == "replica"
         if (
             self._replica_driver is None
             or bind_group != self._replica_bind_group
             or causal_token != self._replica_causal_token
             or max_staleness != self._replica_max_staleness
+            or strict_replica != self._replica_strict
         ):
             context = self._config.provide_read_session(
                 bind_group=bind_group,
@@ -989,9 +1022,10 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 from sqlspec.base import _RuntimeReadAsyncContext
 
                 context = _RuntimeReadAsyncContext(context, session=True)
-            await self._release_primary_read()
+            await self._release_replica()
             lease_stack = await self._stack.enter_async_context(AsyncExitStack())
             self._replica_driver = await lease_stack.enter_async_context(context)
+            self._replica_stack = lease_stack
             managed_replicas = self._config.has_replicas
             if getattr(selection_receipt, "config", None) is self._config:
                 features = self._replica_driver.driver_features
@@ -1002,6 +1036,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token
             self._replica_max_staleness = max_staleness
+            self._replica_strict = strict_replica
         return cast("AsyncDriverT", self._replica_driver)
 
     async def _resolve_driver(
@@ -1558,6 +1593,38 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     fetch_stream = select_stream
 
 
+class _SyncRoutingRowSource:
+    """Retain the current replica lease until the native stream closes."""
+
+    __slots__ = ("_inner_stream", "_routing_session", "_tracked")
+
+    def __init__(self, session: SyncRoutingSession[Any], inner: SyncRowStream[dict[str, Any]], driver: Any) -> None:
+        self._routing_session = session
+        self._inner_stream = inner
+        self._tracked = driver is session._replica_driver
+        if self._tracked:
+            session._replica_streams += 1
+
+    def start(self) -> None:
+        self._inner_stream._source.start()
+
+    @property
+    def column_types(self) -> dict[str, str] | None:
+        """Expose native stream type metadata."""
+        return self._inner_stream.column_types
+
+    def fetch_chunk(self) -> list[dict[str, Any]]:
+        return self._inner_stream._source.fetch_chunk()
+
+    def close(self, error: bool = False) -> None:
+        try:
+            self._inner_stream._source.close(error=error)
+        finally:
+            if self._tracked:
+                self._routing_session._replica_streams -= 1
+                self._tracked = False
+
+
 class _AsyncRoutingRowSource:
     """Acquire the selected session only when an async stream starts consuming."""
 
@@ -1570,6 +1637,7 @@ class _AsyncRoutingRowSource:
         "_routing_session",
         "_statement",
         "_statement_config",
+        "_tracked",
     )
 
     def __init__(
@@ -1590,6 +1658,7 @@ class _AsyncRoutingRowSource:
         self._chunk_size = chunk_size
         self._native_only = native_only
         self._inner_stream: AsyncRowStream[dict[str, Any]] | None = None
+        self._tracked = False
 
     async def start(self) -> None:
         driver, sql = await self._routing_session._resolve_driver(
@@ -1597,6 +1666,9 @@ class _AsyncRoutingRowSource:
         )
         inner = driver.select_stream(sql, chunk_size=self._chunk_size, native_only=self._native_only)
         self._inner_stream = inner
+        self._tracked = driver is self._routing_session._replica_driver
+        if self._tracked:
+            self._routing_session._replica_streams += 1
         await inner._source.start()
 
     @property
@@ -1611,8 +1683,13 @@ class _AsyncRoutingRowSource:
 
     async def close(self, error: bool = False) -> None:
         if self._inner_stream is not None:
-            await self._inner_stream._source.close(error=error)
-            self._inner_stream = None
+            try:
+                await self._inner_stream._source.close(error=error)
+            finally:
+                self._inner_stream = None
+                if self._tracked:
+                    self._routing_session._replica_streams -= 1
+                    self._tracked = False
 
 
 class _AsyncRoutingDataDictionary(Generic[AsyncDriverT]):
