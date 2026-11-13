@@ -4,7 +4,13 @@ import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
-from sqlspec.adapters.mssql_python.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.mssql_python.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    merge_connection_overrides,
+    resolve_configured_database,
+)
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
@@ -15,10 +21,10 @@ from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_odbc_connection_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -32,6 +38,8 @@ class MssqlPythonConnectionParams(TypedDict):
 
     connection_string: NotRequired[str]
     """Full ODBC/TDS semicolon-delimited connection string passed to ``mssql_python.connect``."""
+    host: NotRequired[str]
+    """Alias for the SQL Server endpoint."""
     server: NotRequired[str]
     """SQL Server hostname, ``host,port``, or ``host\\instance`` target."""
     address: NotRequired[str]
@@ -219,7 +227,7 @@ class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
 class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonConnectionPool, MssqlPythonDriver]):
     """Configuration for mssql-python synchronous database connections."""
 
-    __slots__ = ("_user_connection_hook",)
+    __slots__ = ("_pool_enabled", "_raw_connection_config", "_user_connection_hook")
 
     driver_type: "ClassVar[type[MssqlPythonDriver]]" = MssqlPythonDriver
     connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
@@ -262,6 +270,8 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         normalized, features_dict, user_connection_hook = _normalize_mssql_python_init(
             connection_config, driver_features
         )
+        self._raw_connection_config = dict(normalized)
+        self._pool_enabled = bool(normalized.get("pool_enabled", features_dict.get("enable_pooling", True)))
         self._user_connection_hook = user_connection_hook
         statement_config, _ = apply_driver_features(statement_config or default_statement_config, features_dict)
         super().__init__(
@@ -285,6 +295,37 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
             if connection_instance is not None and not connection_instance.require_unpooled:
                 msg = "Tenant connection_instance must require verified unpooled operation"
                 raise ImproperConfigurationError(msg)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_connection_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            if not resolve_configured_database(self._raw_connection_config):
+                msg = "SQL Server read-only intent requires a target database"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"application_intent": "ReadOnly", "multi_subnet_failover": True}}
+        result: dict[str, Any] = {}
+        if isinstance(spec_input, str):
+            options: dict[str, Any] = {"connection_string" if "=" in spec_input else "host": spec_input}
+        else:
+            result = dict(spec_input)
+            options = dict(result.pop("connection_config_overrides", {}))
+            for key in tuple(result):
+                if key in MssqlPythonPoolParams.__annotations__:
+                    options[key] = result.pop(key)
+        string_options = dict(parse_odbc_connection_string(str(options.get("connection_string", ""))))
+        intent = next(
+            (value for key, value in string_options.items() if key.lower() == "applicationintent"), "ReadOnly"
+        )
+        failover = next((value for key, value in string_options.items() if key.lower() == "multisubnetfailover"), True)
+        if "applicationintent" not in options:
+            options.setdefault("application_intent", intent)
+        if "multisubnetfailover" not in options:
+            options.setdefault("multi_subnet_failover", failover)
+        return {**result, "connection_config_overrides": options}
 
     def create_connection(self) -> "MssqlPythonConnection":
         self._require_leased_tenant_connection()

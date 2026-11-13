@@ -903,3 +903,114 @@ def test_tenant_connection_hook_failure_closes_acquired_connection(
     with TenantContext.scope("a"), pytest.raises(RuntimeError, match="hook"), config.provide_connection():
         pass
     assert calls == ["close"]
+
+
+def test_ag_replica_defaults_and_database_guard() -> None:
+    config = MssqlPythonConfig(connection_config={"server": "listener", "database": "app"}, replicas=True)
+    replica = config.replica_groups["default"].configs[0]
+    connection_string, _ = build_connection_config(dict(replica.connection_config))
+    assert "ApplicationIntent=ReadOnly" in connection_string
+    assert "MultiSubnetFailover=yes" in connection_string
+    assert config.connection_config == {"server": "listener", "database": "app"}
+    with pytest.raises(ImproperConfigurationError, match="database"):
+        MssqlPythonConfig(connection_config={"server": "listener"}, replicas=True)
+
+
+def test_ag_derive_alias_and_tenant_pooling_hook_are_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kwargs: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MssqlPythonPoolingManager.is_enabled", lambda: False)
+    seen: list[object] = []
+    hook = seen.append
+    strategy = MssqlPythonSessionContextStrategy()
+    config = MssqlPythonConfig(
+        connection_config={"server": "primary", "database": "app"},
+        driver_features={"tenant_strategy": strategy, "on_connection_create": hook},
+        replicas=True,
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.driver_features["enable_pooling"] is False
+    pool = replica.create_pool()
+    try:
+        assert pool.enabled is False
+        assert pool.require_unpooled
+        assert pool.on_connection_create is hook
+    finally:
+        replica.close_pool()
+    derived = config.derive_pool(host="standby")
+    assert build_connection_config(dict(derived.connection_config))[0].startswith("Server=standby;")
+
+
+def test_ag_derive_new_connection_string_replaces_inherited_aliases() -> None:
+    config = MssqlPythonConfig(connection_config={"server": "primary", "database": "old", "uid": "old-user"})
+    derived = config.derive_pool(connection_string="Server=standby;Database=new;UID=new-user;")
+    assert build_connection_config(dict(derived.connection_config))[0] == "Server=standby;Database=new;UID=new-user;"
+    assert config.connection_config["database"] == "old"
+
+
+def test_ag_acquire_maps_unavailable_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.exceptions import ReplicaUnavailableError
+
+    native = Exception(976, "The target database is not available for queries")
+
+    def fail_connect(*args: Any, **kwargs: Any) -> None:
+        raise native
+
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **kwargs: None)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", fail_connect)
+    config = MssqlPythonConfig(connection_config={"server": "listener", "database": "app"}, replicas=True)
+    try:
+        replica = config.replica_groups["default"].configs[0]
+        with pytest.raises(ReplicaUnavailableError) as caught, replica.provide_session():
+            pass
+        assert caught.value.__cause__ is native
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    "shorthand",
+    [
+        True,
+        "Server=reader;Database=app;",
+        {"host": "reader", "application_intent": "ReadWrite", "multi_subnet_failover": False},
+    ],
+)
+def test_ag_shorthand_uses_connection_string_database_and_explicit_intent(shorthand: Any) -> None:
+    config = MssqlPythonConfig(
+        connection_config={"connection_string": "Server=primary;Database={app};"}, replicas=shorthand
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    if isinstance(shorthand, dict):
+        assert "ApplicationIntent=ReadWrite" in text
+        assert "MultiSubnetFailover=no" in text
+    else:
+        assert "ApplicationIntent=ReadOnly" in text
+        assert "MultiSubnetFailover=yes" in text
+
+
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        "Server=reader;Database=app;ApplicationIntent=ReadWrite;MultiSubnetFailover=no;",
+        {"host": "reader", "applicationintent": "ReadWrite", "multisubnetfailover": False},
+    ],
+)
+def test_ag_replica_preserves_explicit_odbc_intent_aliases(replicas: Any) -> None:
+    config = MssqlPythonConfig(connection_config={"server": "primary", "database": "app"}, replicas=replicas)
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "ApplicationIntent=ReadWrite" in text
+    assert "MultiSubnetFailover=no" in text
+
+
+def test_ag_clone_replaces_inherited_extra_endpoint_without_mutation() -> None:
+    extra = {"Server": "primary", "KeepAlive": 60}
+    parent = MssqlPythonConfig(connection_config={"server": "primary", "database": "app", "extra": extra})
+    replica = parent.derive_pool(host="standby")
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "Server=standby" in text
+    assert "primary" not in text
+    assert "KeepAlive=60" in text
+    assert extra == {"Server": "primary", "KeepAlive": 60}
+    assert parent.connection_config["server"] == "primary"

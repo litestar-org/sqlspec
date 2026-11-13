@@ -360,3 +360,22 @@ def test_create_mapped_exception_maps_odbc_sqlstate() -> None:
     err_timeout = MssqlPythonError("Query timeout expired", "HYT00")
     mapped_timeout = create_mapped_exception(err_timeout)
     assert isinstance(mapped_timeout, QueryTimeoutError)
+
+
+@pytest.mark.parametrize("code", [3906, 3908, 978, 976])
+def test_ag_error_mapping_retains_native_cause(code: int) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    native = Exception(code, "Availability group replica rejected request")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReplicaUnavailableError if code == 976 else ReadOnlyTransactionError)
+    assert mapped.__cause__ is native
+
+
+def test_ag_read_only_sqlstate_maps_without_numeric_code() -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    native = Exception("request rejected", "25006")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native

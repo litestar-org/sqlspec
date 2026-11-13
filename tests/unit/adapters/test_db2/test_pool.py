@@ -290,3 +290,26 @@ def test_failed_creation_hook_closes_unregistered_connection(fake_ibm_db: FakeMo
         pool.acquire()
     assert connection.closed is True
     assert pool.size() == 0
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_hadr_pool_passes_read_only_cli_options_without_mutation(
+    fake_ibm_db: FakeModules, asynchronous: bool
+) -> None:
+    from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool
+
+    _, module = fake_ibm_db
+    options = {999: 42}
+    if asynchronous:
+        pool = Db2AsyncConnectionPool({"database": "app", "read_only": True}, conn_options=options)
+        connection = await pool.new_connection()
+        await connection.close()
+        await pool.close()
+    else:
+        sync_pool = Db2SyncConnectionPool({"database": "app", "read_only": True}, conn_options=options)
+        connection = sync_pool.new_connection()
+        connection.close()
+        sync_pool.close()
+    assert module.connect_calls[-1][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON, 101: 1}
+    assert "READONLY" not in module.connect_calls[-1][0]
+    assert options == {999: 42}

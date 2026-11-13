@@ -19,6 +19,8 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -53,9 +55,11 @@ __all__ = (
     "extract_sqlstate",
     "format_identifier",
     "materialize_tuple_rows",
+    "merge_connection_overrides",
     "normalize_execute_parameters",
     "quote_bracket_identifier",
     "resolve_column_names",
+    "resolve_configured_database",
     "resolve_many_rowcount",
     "resolve_rowcount",
     "split_schema_and_table",
@@ -63,11 +67,13 @@ __all__ = (
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
+_REPLICA_UNAVAILABLE_CODE: Final[int] = 976
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
+_SERVER_ALIASES: Final[tuple[str, ...]] = ("server", "address", "addr", "host")
 _CONNECTION_STRING_KEYS: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
-    (("server",), "Server", False),
+    (_SERVER_ALIASES, "Server", False),
     (("database", "db"), "Database", False),
     (("uid", "user", "username"), "UID", False),
     (("pwd", "password"), "PWD", False),
@@ -113,6 +119,7 @@ _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {
     "workstation_id",
 }
 _ODBC_SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "25006": (ReadOnlyTransactionError, "read-only transaction"),
     "08S01": (DatabaseConnectionError, "communication link failure"),
     "08001": (DatabaseConnectionError, "unable to connect to data source"),
     "HYT00": (QueryTimeoutError, "query timeout expired"),
@@ -333,6 +340,15 @@ def extract_sqlstate(error: BaseException) -> str | None:
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a SQL Server exception to SQLSpec's exception hierarchy."""
     sqlstate = extract_sqlstate(error)
+    number = extract_error_number(error)
+    if sqlstate == "25006" or number in {3906, 3908, 978, 976}:
+        mapped = (
+            ReplicaUnavailableError(str(error))
+            if number == _REPLICA_UNAVAILABLE_CODE
+            else ReadOnlyTransactionError(str(error))
+        )
+        mapped.__cause__ = error
+        return mapped
     if sqlstate is not None and sqlstate in _ODBC_SQLSTATE_MAP:
         error_class, description = _ODBC_SQLSTATE_MAP[sqlstate]
         return error_class(f"SQL Server SQLSTATE {sqlstate}: {description}. Original error: {error}")
@@ -390,7 +406,7 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge mssql-python driver-feature defaults with caller overrides."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    features.setdefault("enable_pooling", True)
+    features.setdefault("enable_pooling", not bool(features.get("tenant_strategy")))
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 
@@ -441,7 +457,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
             canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
             options[canonical_key.lower()] = (canonical_key, raw_value)
 
-        server = _pop_alias(config, ("server", "address", "addr"), "server")
+        server = _pop_alias(config, _SERVER_ALIASES, "server")
         port = config.pop("port", None)
         if server is not None:
             options["server"] = ("Server", _append_port(str(server), port))
@@ -476,7 +492,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         merged_parts = [f"{name}={val}" for name, val in options.values()]
         return ";".join(merged_parts) + ";", connect_kwargs
 
-    server = _pop_alias(config, ("server", "address", "addr"), "server")
+    server = _pop_alias(config, _SERVER_ALIASES, "server")
     if not server:
         msg = "mssql-python connection_config requires 'server' or 'connection_string'."
         raise ValueError(msg)
@@ -500,6 +516,53 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         config.pop(remaining_key, None)
 
     return ";".join(parts) + ";", connect_kwargs
+
+
+def merge_connection_overrides(raw_config: "Mapping[str, Any]", overrides: "Mapping[str, Any]") -> dict[str, Any]:
+    """Resolve clone aliases without mutating inherited endpoint options."""
+    result = dict(raw_config)
+    groups = [aliases for aliases, _, _ in _CONNECTION_STRING_KEYS]
+    if "connection_string" in overrides:
+        for key in tuple(result):
+            if key.lower() in _CANONICAL_KEY_LOOKUP and key not in overrides:
+                result.pop(key, None)
+        if "port" not in overrides:
+            result.pop("port", None)
+        if "extra" not in overrides:
+            result.pop("extra", None)
+    extra = dict(result.get("extra") or {})
+    for aliases in groups:
+        if any(alias in overrides for alias in aliases):
+            canonical = _CANONICAL_KEY_LOOKUP[aliases[0]]
+            for key in tuple(result):
+                if _CANONICAL_KEY_LOOKUP.get(key.lower(), key) == canonical and key not in overrides:
+                    result.pop(key, None)
+            extra = {
+                key: value
+                for key, value in extra.items()
+                if str(_CANONICAL_KEY_LOOKUP.get(str(key).lower(), key)).lower() != canonical.lower()
+            }
+    if extra:
+        result["extra"] = extra
+    else:
+        result.pop("extra", None)
+    result.update(overrides)
+    return result
+
+
+def resolve_configured_database(config: "Mapping[str, Any]") -> str | None:
+    """Resolve a target database from discrete options or an ODBC string."""
+    value = config.get("database", config.get("db"))
+    if value is None:
+        value = next(
+            (
+                value
+                for key, value in parse_odbc_connection_string(str(config.get("connection_string", "")))
+                if key.lower() in {"database", "initial catalog"}
+            ),
+            None,
+        )
+    return str(value).strip() or None if value is not None else None
 
 
 def build_profile() -> "DriverParameterProfile":

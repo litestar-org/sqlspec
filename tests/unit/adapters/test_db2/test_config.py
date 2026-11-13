@@ -542,3 +542,89 @@ async def test_statement_config_coerces_aware_datetime_to_naive_utc(db2_mode: Dr
     coerced = type_coercion_map[datetime](aware)
     assert coerced == datetime(2026, 9, 24, 12, 30)
     assert coerced.tzinfo is None
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        True,
+        "standby:50001",
+        "db2://reader:secret@standby:50001/ro",
+        {"hostname": "standby"},
+        "DATABASE=ro;HOSTNAME=standby;PORT=50001;READONLY=1;",
+    ],
+)
+def test_hadr_replica_shorthands_and_dsn_clone(config_type: Any, replicas: Any) -> None:
+    def hook(connection: Any) -> None:
+        pass
+
+    parent = config_type(
+        connection_config={"hostname": "primary", "database": "app"},
+        driver_features={"on_connection_create": hook},
+        replicas=replicas,
+    )
+    replica = parent.replica_groups["default"].configs[0]
+    assert replica.connection_config["read_only"] is True
+    assert "READONLY" not in replica.get_connection_string().upper()
+    derived = parent.derive_pool(dsn="DATABASE=other;HOSTNAME=other-standby;PORT=50002;")
+    assert derived.connection_config["database"] == "other"
+    assert derived.connection_config["hostname"] == "other-standby"
+    assert parent.connection_config["hostname"] == "primary"
+
+
+def test_read_only_dsn_tokens_are_cli_options_not_keywords() -> None:
+    config = Db2SyncConfig(connection_config={"dsn": "DATABASE=app;READ_ONLY=yes;"})
+    assert config.connection_config["read_only"] is True
+    assert config.get_connection_string() == "DATABASE=app;"
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        {"read_only": False},
+        "DATABASE=ro;HOSTNAME=standby;READONLY=0;",
+        {"dsn": "DATABASE=ro;HOSTNAME=standby;READ_ONLY=0;"},
+    ],
+)
+def test_hadr_replica_preserves_explicit_read_only_mode(config_type: Any, replicas: Any) -> None:
+    config = config_type(connection_config={"database": "app", "hostname": "primary"}, replicas=replicas)
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["read_only"] is False
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.anyio
+async def test_hadr_config_passes_independent_native_attributes(config_type: Any, fake_ibm_db: FakeModules) -> None:
+    _, module = fake_ibm_db
+    options = {999: 42}
+    config = config_type(connection_config={"database": "app", "conn_options": options}, replicas=True)
+    replica = config.replica_groups["default"].configs[0]
+    if config.is_async:
+        async with replica.provide_session():
+            pass
+        async with config.provide_session():
+            pass
+        await config.close_pool()
+    else:
+        with replica.provide_session():
+            pass
+        with config.provide_session():
+            pass
+        config.close_pool()
+    assert module.connect_calls[0][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON, 101: 1}
+    assert module.connect_calls[1][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON}
+    assert options == {999: 42}
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+def test_hadr_clone_replacement_dsn_controls_native_mode(config_type: Any) -> None:
+    parent = config_type(
+        connection_config={"database": "app", "hostname": "primary", "autocommit": True, "read_only": False}
+    )
+    replica = parent.derive_pool(dsn="DATABASE=standby;HOSTNAME=reader;AUTOCOMMIT=0;READONLY=1;")
+    assert replica.connection_config["autocommit"] is False
+    assert replica.connection_config["read_only"] is True
+    assert parent.connection_config["autocommit"] is True
+    assert parent.connection_config["read_only"] is False

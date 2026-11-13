@@ -27,6 +27,18 @@ _ADAPTER_NAME = "db2"
 _IBM_DB_DBI = ibm_db_dbi
 
 
+def _build_connection_options(base: dict[int, Any], autocommit_mode: int, read_only: bool) -> dict[int, Any]:
+    """Prepare fresh native CLI attributes for one physical connection."""
+    options = dict(base)
+    options[typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT] = autocommit_mode
+    if read_only:
+        options.setdefault(
+            getattr(typing_module.ibm_db, "SQL_ATTR_ACCESS_MODE", 101),
+            getattr(typing_module.ibm_db, "SQL_MODE_READ_ONLY", 1),
+        )
+    return options
+
+
 def _set_current_schema(connection: Any, schema: str) -> None:
     """Set the SQL register and SDK catalog schema without CLI keyword quoting."""
     cursor = connection.cursor()
@@ -68,6 +80,7 @@ class Db2SyncConnectionPool:
 
     __slots__ = (
         "_autocommit",
+        "_conn_options",
         "_connection_parameters",
         "_connection_registry",
         "_dsn",
@@ -75,6 +88,7 @@ class Db2SyncConnectionPool:
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
+        "_read_only",
         "_recycle_seconds",
         "_registry_lock",
         "_thread_local",
@@ -86,6 +100,9 @@ class Db2SyncConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[Any], None] | None" = None,
+        *,
+        conn_options: "dict[int, Any] | None" = None,
+        read_only: bool | None = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -96,12 +113,16 @@ class Db2SyncConnectionPool:
             recycle_seconds: Connection recycle time in seconds (default 24h).
             health_check_interval: Seconds of idle time before running health check.
             on_connection_create: Callback executed when connection is created.
+            conn_options: Native CLI attributes copied for each physical connection.
+            read_only: Override configured native read-only access mode.
         """
         self._connection_parameters = connection_parameters
         native_parameters = dict(connection_parameters)
         native_parameters.pop("current_schema", None)
         self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
+        self._conn_options = dict(conn_options or {})
+        self._read_only = bool(connection_parameters.get("read_only", False)) if read_only is None else read_only
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
         self._generation = 0
@@ -138,9 +159,8 @@ class Db2SyncConnectionPool:
             if self._autocommit
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
-        connection = typing_module.ibm_db_dbi.connect(
-            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
-        )
+        options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
+        connection = typing_module.ibm_db_dbi.connect(self._dsn, "", "", "", "", options)
 
         try:
             schema = self._connection_parameters.get("current_schema")
@@ -357,6 +377,7 @@ class Db2AsyncConnectionPool:
         "_autocommit",
         "_checked_out",
         "_closed",
+        "_conn_options",
         "_connection_parameters",
         "_dsn",
         "_health_check_interval",
@@ -364,6 +385,7 @@ class Db2AsyncConnectionPool:
         "_max_size",
         "_on_connection_create",
         "_pool_id",
+        "_read_only",
         "_recycle_seconds",
         "_semaphore_instance",
     )
@@ -377,6 +399,8 @@ class Db2AsyncConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[Any], Awaitable[None] | None] | None" = None,
+        conn_options: "dict[int, Any] | None" = None,
+        read_only: bool | None = None,
     ) -> None:
         """Initialize the pool.
 
@@ -390,12 +414,16 @@ class Db2AsyncConnectionPool:
             health_check_interval: Seconds of idle time before a connection is pinged on reuse.
             on_connection_create: Callback run on every new connection; awaited when it returns
                 an awaitable.
+            conn_options: Native CLI attributes copied for each physical connection.
+            read_only: Override configured native read-only access mode.
         """
         self._connection_parameters = connection_parameters
         native_parameters = dict(connection_parameters)
         native_parameters.pop("current_schema", None)
         self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
+        self._conn_options = dict(conn_options or {})
+        self._read_only = bool(connection_parameters.get("read_only", False)) if read_only is None else read_only
         self._max_size = max_size
         self._acquire_timeout = acquire_timeout
         self._recycle_seconds = recycle_seconds
@@ -439,9 +467,8 @@ class Db2AsyncConnectionPool:
             if self._autocommit
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
-        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(
-            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
-        )
+        options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
+        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
         try:
             schema = self._connection_parameters.get("current_schema")
             if schema is not None:

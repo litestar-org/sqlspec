@@ -9,12 +9,15 @@ from typing import TYPE_CHECKING, Any, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection, MssqlPythonPoolingManager
+from sqlspec.adapters.mssql_python.core import create_mapped_exception, extract_error_number
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = ("MssqlPythonConnectionPool",)
+
+_REPLICA_UNAVAILABLE_CODE = 976
 
 _POOLING_PARAMS: "tuple[int, int, bool] | None" = None
 _POOL_LOCK = threading.Lock()
@@ -102,9 +105,14 @@ class MssqlPythonConnectionPool:
         if self._closed:
             msg = "Cannot acquire a connection from a closed mssql-python pool."
             raise RuntimeError(msg)
-        connection = cast(
-            "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
-        )
+        try:
+            connection = cast(
+                "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
+            )
+        except Exception as error:
+            if extract_error_number(error) == _REPLICA_UNAVAILABLE_CODE:
+                raise create_mapped_exception(error) from error
+            raise
         if self.on_connection_create is not None and not getattr(connection, "_sqlspec_initialized", False):
             try:
                 self.on_connection_create(connection)

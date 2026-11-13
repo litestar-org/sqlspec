@@ -17,6 +17,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -47,6 +48,7 @@ __all__ = (
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "resolve_column_names",
+    "resolve_connection_overrides",
     "resolve_many_rowcount",
     "resolve_rowcount",
     "split_db2_table_name",
@@ -78,6 +80,8 @@ _CLI_KEYWORD_TO_KEY: Final[dict[str, str]] = {keyword: key for key, keyword in _
 _SUPPORTED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     *(key for key, _ in _CLI_KEYWORDS),
     "autocommit",
+    "read_only",
+    "conn_options",
     "dsn",
     "extra",
     "health_check_interval",
@@ -194,6 +198,12 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     sqlstate = extract_sqlstate(error)
     sqlcode = _extract_sqlcode(error)
 
+    if sqlstate == "25006" or sqlcode in {817, 1773, 1776}:
+        mapped = _build_mapped_exception(
+            ReadOnlyTransactionError, "read-only standby transaction", sqlstate, sqlcode, error
+        )
+        mapped.__cause__ = error
+        return mapped
     if sqlstate in _ROLLBACK_SQLSTATES or sqlcode in _ROLLBACK_SQLCODES:
         if _extract_reason_code(str(error)) == _LOCK_TIMEOUT_REASON_CODE:
             return _build_mapped_exception(QueryTimeoutError, "lock timeout", sqlstate, sqlcode, error)
@@ -498,6 +508,25 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
     return config
 
 
+def resolve_connection_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a replacement DSN or endpoint without retaining inherited aliases."""
+    result = dict(base_config)
+    if "dsn" in overrides:
+        for key, _ in _CLI_KEYWORDS:
+            if key not in overrides:
+                result.pop(key, None)
+        if "extra" not in overrides:
+            result.pop("extra", None)
+        parsed = _parse_db2_dsn(str(overrides["dsn"]))
+        for key in ("read_only", "autocommit"):
+            if key in parsed and key not in overrides:
+                result.pop(key, None)
+    elif any(key in overrides for key in ("hostname", "database", "port")):
+        result.pop("dsn", None)
+    result.update(overrides)
+    return result
+
+
 def build_dsn_string(config: Mapping[str, Any]) -> str:
     """Render a normalized Db2 configuration as an IBM CLI connection string.
 
@@ -667,6 +696,9 @@ def _assign_dsn_value(params: dict[str, Any], extra: dict[str, Any], keyword: st
         value: Unquoted keyword value.
     """
     upper = keyword.upper()
+    if upper in {"READONLY", "READ_ONLY"}:
+        params["read_only"] = _parse_bool("read_only", value)
+        return
     if upper == "AUTOCOMMIT":
         params["autocommit"] = _parse_bool("autocommit", value)
         return
@@ -744,7 +776,7 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     for source in (dsn_extra, explicit_extra):
         for keyword, value in source.items():
             upper = str(keyword).upper()
-            if upper in _CLI_KEYWORD_TO_KEY or upper == "AUTOCOMMIT":
+            if upper in _CLI_KEYWORD_TO_KEY or upper in {"AUTOCOMMIT", "READONLY", "READ_ONLY"}:
                 canonical = _CLI_KEYWORD_TO_KEY.get(upper, "autocommit")
                 msg = f"Db2 connection keyword {keyword!r} must be configured with the {canonical!r} parameter"
                 raise ImproperConfigurationError(msg)

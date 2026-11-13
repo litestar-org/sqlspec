@@ -253,3 +253,24 @@ def test_collect_rows_returns_tuple_rows_with_lowercased_names() -> None:
     assert column_names == ["id", "Label"]
     assert row_format == "tuple"
     assert collect_rows(None, None, lowercase=True) == ([], [], "tuple")
+
+
+@pytest.mark.parametrize(
+    ("state", "code"),
+    [
+        ("25006", None),
+        ("25502", -817),
+        ("51043", -1773),
+        ("51043", -1776),
+        ("25502", 817),
+        ("51043", 1773),
+        ("51043", 1776),
+    ],
+)
+def test_hadr_read_only_mapping_overrides_generic_sqlstate(state: str, code: int | None) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    native = DiagnosticAttributeError("HADR standby rejected request", sqlstate=state, error_code=code)
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native
