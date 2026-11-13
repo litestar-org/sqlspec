@@ -299,3 +299,62 @@ async def test_managed_primary_fallback_is_reused_for_subsequent_write(tmp_path:
             assert session.primary_session is fallback
         primary.close_pool()
     assert len(connections) == 1
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_native_unopenable_reader_maps_checkout_failure(tmp_path: Path, async_mode: bool, fallback: bool) -> None:
+    import sqlite3
+    from typing import Any
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.config import ReadReplicaGroup
+    from sqlspec.exceptions import DatabaseConnectionError, ReplicaUnavailableError
+
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    missing = tmp_path / "missing" / "reader.db"
+    reader = config_type(connection_config={"database": str(missing)})
+    group: ReadReplicaGroup[Any] = ReadReplicaGroup([reader], fallback_to_primary=fallback)
+    primary = config_type(connection_config={"database": str(tmp_path / "writer.db")}, replicas={"default": group})
+    try:
+        if fallback:
+            if async_mode:
+                async with primary.provide_read_session() as session:
+                    assert await session.select_value("SELECT 42") == 42
+            else:
+                with primary.provide_read_session() as session:
+                    assert session.select_value("SELECT 42") == 42
+            caller_error = sqlite3.OperationalError("caller body failed")
+            with pytest.raises(sqlite3.OperationalError) as caller_failure:
+                if async_mode:
+                    async with primary.provide_read_session():
+                        raise caller_error
+                else:
+                    with primary.provide_read_session():
+                        raise caller_error
+            assert caller_failure.value is caller_error
+        else:
+            with pytest.raises(ReplicaUnavailableError) as failure:
+                if async_mode:
+                    async with primary.provide_read_session():
+                        pytest.fail("unavailable reader must not yield")
+                else:
+                    with primary.provide_read_session():
+                        pytest.fail("unavailable reader must not yield")
+            mapped = failure.value.__cause__
+            assert isinstance(mapped, DatabaseConnectionError)
+            assert isinstance(mapped.__cause__, sqlite3.OperationalError)
+            assert mapped.__cause__.sqlite_errorcode == sqlite3.SQLITE_CANTOPEN
+            assert "unable to open database file" in str(mapped)
+        missing.parent.mkdir()
+        if async_mode:
+            async with reader.provide_session() as recovered:
+                assert await recovered.select_value("SELECT 7") == 7
+        else:
+            with reader.provide_session() as recovered:
+                assert recovered.select_value("SELECT 7") == 7
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()

@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.core import end_transaction, is_read_only_sqlite_config, run_on_worker_thread
+from sqlspec.adapters.aiosqlite.core import (
+    create_mapped_exception,
+    end_transaction,
+    is_read_only_sqlite_config,
+    run_on_worker_thread,
+)
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -324,8 +329,13 @@ class AiosqliteConnectionPool:
         self._set_connect_proxy_daemon(connect_proxy)
         try:
             connection = await connect_proxy
-        except BaseException:
+        except BaseException as exc:
             self._detach_worker(connect_proxy)
+            if (
+                isinstance(exc, sqlite3.OperationalError)
+                and getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_CANTOPEN
+            ):
+                raise create_mapped_exception(exc) from exc
             raise
 
         pragma_lines: list[str] = []

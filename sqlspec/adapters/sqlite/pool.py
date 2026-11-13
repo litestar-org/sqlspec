@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.core import end_transaction, is_read_only_sqlite_config
+from sqlspec.adapters.sqlite.core import create_mapped_exception, end_transaction, is_read_only_sqlite_config
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -127,7 +127,12 @@ class SqliteConnectionPool:
         Returns:
             SqliteConnection: A newly opened, fully configured connection.
         """
-        connection = sqlite3.connect(**self._connection_parameters)
+        try:
+            connection = sqlite3.connect(**self._connection_parameters)
+        except sqlite3.OperationalError as exc:
+            if getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_CANTOPEN:
+                raise create_mapped_exception(exc) from exc
+            raise
 
         try:
             if self._enable_optimizations:
