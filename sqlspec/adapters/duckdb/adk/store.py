@@ -127,13 +127,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "DuckDBConfig") -> None:
+    def __init__(self, config: "DuckDBConfig", *, read_config: "DuckDBConfig | None" = None) -> None:
         """Initialize DuckDB ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: DuckDBConfig instance.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -174,7 +175,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Returns:
             Session record or None if not found.
         """
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state.
@@ -211,7 +212,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             List of session records.
         """
         return self._list_sessions(
-            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
         )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -283,7 +284,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
 
     def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than a timestamp, optionally scoped to one application."""
@@ -521,7 +522,13 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
         """Synchronous implementation of get_session."""
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -541,7 +548,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             params = [app_name, user_id, session_id]
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 row = cursor.fetchone()
 
@@ -599,6 +606,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         """Synchronous implementation of list_sessions."""
         column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
@@ -610,7 +618,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -745,6 +753,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         """Synchronous implementation of get_events."""
         if limit == 0:
@@ -769,7 +779,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -947,13 +957,14 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "DuckDBConfig") -> None:
+    def __init__(self, config: "DuckDBConfig", *, read_config: "DuckDBConfig | None" = None) -> None:
         """Initialize DuckDB ADK memory store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: DuckDBConfig instance.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -990,7 +1001,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if embedding is not None:
             msg = "DuckDB ADK memory store does not support embedding-based search."
             raise NotImplementedError(msg)
-        return self._search_entries(query, app_name, user_id, limit, scope_filter)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, read=True)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1240,6 +1251,8 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         """Synchronous implementation of search_entries."""
         if not self._enabled:
@@ -1254,7 +1267,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         rows: list[Any] | None = None
         columns: list[str] = []
 
-        with self._config.provide_connection() as conn:
+        with self._provide_read_connection(primary=not read) as conn:
             if use_fts and not self._ensure_fts_extension(conn):
                 use_fts = False
 
@@ -1274,7 +1287,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             """
                 fts_params = (query, *scope_params, limit_value)
                 try:
-                    rows = conn.execute(fts_sql, fts_params).fetchall()
+                    rows = cast("list[Any]", conn.execute(fts_sql, fts_params).fetchall())
                     columns = [col[0] for col in conn.description or []]
                 except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
@@ -1289,7 +1302,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             """
                 params = (*scope_params, f"%{query}%", limit_value)
                 try:
-                    rows = conn.execute(sql, params).fetchall()
+                    rows = cast("list[Any]", conn.execute(sql, params).fetchall())
                     columns = [col[0] for col in conn.description or []]
                 except Exception as exc:
                     if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):

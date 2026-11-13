@@ -897,13 +897,15 @@ def test_sybase_adk_store_session_list_and_memory_operations(monkeypatch: pytest
     """SybaseADKStore uses ROWS LIMIT ... OFFSET ... for pagination and SybaseADKMemoryStore inserts entries."""
     captured: list[tuple[str, tuple[Any, ...]]] = []
 
-    def _capture(_self: SybaseADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+    def _capture(_self: Any, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         captured.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(SybaseADKStore, "_execute_fetchall", _capture)
     config = MagicMock()
     config.extension_config = {"adk": {}}
+    cursor = config.provide_connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.execute.side_effect = lambda sql, params=(): _capture(None, sql, params)
+    cursor.fetchall.return_value = []
     store = SybaseADKStore(cast("Any", config))
 
     store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)

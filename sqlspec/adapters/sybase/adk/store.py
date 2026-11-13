@@ -43,8 +43,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SybaseConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SybaseConfig", *, read_config: "SybaseConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create ADK tables (idempotent Sybase ASE DDL) and DD-gated indexes."""
@@ -109,6 +109,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -117,6 +118,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 WHERE app_name = %s AND user_id = %s AND id = %s
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
@@ -155,7 +157,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
@@ -237,7 +239,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
@@ -447,8 +449,10 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
     ) -> "tuple[str, tuple[Any, ...]]":
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchone(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
+    ) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 row = cursor.fetchone()
@@ -461,16 +465,16 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 raise create_mapped_exception(exc) from exc
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())
             except Exception as exc:
                 raise create_mapped_exception(exc) from exc
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 rowcount = resolve_rowcount(cursor)
@@ -491,8 +495,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SybaseConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SybaseConfig", *, read_config: "SybaseConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create the memory table (idempotent Sybase ASE DDL) and DD-gated indexes."""
@@ -587,7 +591,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         WHERE {where_scope} AND content_text LIKE %s ESCAPE '\\'
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"), read=True)
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -651,8 +655,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         ref = escape_sql_literal(_table_ref(self._memory_table))
         return [f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())

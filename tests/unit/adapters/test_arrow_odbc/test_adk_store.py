@@ -123,12 +123,14 @@ def _session_store_with_capture(
 ) -> "tuple[ArrowOdbcADKStore, list[tuple[str, tuple[Any, ...]]]]":
     calls: list[tuple[str, tuple[Any, ...]]] = []
 
-    def capture(_store: ArrowOdbcADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+    def capture(_store: Any, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         calls.append((sql, tuple(params)))
         return []
 
-    monkeypatch.setattr(ArrowOdbcADKStore, "_execute_fetchall", capture)
-    return ArrowOdbcADKStore(_mock_config()), calls
+    config = _mock_config()
+    driver = config.provide_session.return_value.__enter__.return_value
+    driver.select.side_effect = lambda sql, params=(): capture(None, sql, params)
+    return ArrowOdbcADKStore(config), calls
 
 
 def test_arrow_odbc_list_sessions_binds_order_and_page(monkeypatch: "pytest.MonkeyPatch") -> None:

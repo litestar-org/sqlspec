@@ -68,8 +68,8 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "ArrowOdbcConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "ArrowOdbcConfig", *, read_config: "ArrowOdbcConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         self._sql = _adk_sql_for(config)
 
     def _table_ddls(self) -> tuple[tuple[str, str], ...]:
@@ -141,7 +141,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=renew_for is not None) as driver:
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     driver.execute(
                         f"""
@@ -193,7 +193,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             self._sql.table_ref(self._session_table), app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if self._sql.is_table_missing(exc):
                 return []
@@ -268,7 +268,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except SQLSpecError as exc:
             if self._sql.is_table_missing(exc):
                 return []
@@ -419,9 +419,11 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         with self._config.provide_session() as driver:
             return driver.select_one_or_none(sql, params)
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[dict[str, Any]]":
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _execute_fetchall(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False
+    ) -> "list[dict[str, Any]]":
+        with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
@@ -461,8 +463,8 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "ArrowOdbcConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "ArrowOdbcConfig", *, read_config: "ArrowOdbcConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         self._sql = _adk_sql_for(config)
 
     def create_tables(self) -> None:
@@ -568,6 +570,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
                     self._memory_table, where_scope, effective_limit, has_escaped_wildcards=escaped_query != query
                 ),
                 (*scope_params, f"%{escaped_query}%"),
+                read=True,
             )
         except SQLSpecError as exc:
             if self._sql.is_table_missing(exc):
@@ -620,9 +623,11 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         return [self._sql.drop_table_sql(self._memory_table)]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[dict[str, Any]]":
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+    def _execute_fetchall(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False
+    ) -> "list[dict[str, Any]]":
+        with self._provide_read_session(primary=not read) as driver:
+            return cast("list[dict[str, Any]]", driver.select(sql, params))
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_session() as driver:
