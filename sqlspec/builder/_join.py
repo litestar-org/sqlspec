@@ -12,6 +12,7 @@ from sqlglot import exp
 from sqlspec.builder._base import BuiltQuery, QueryBuilder, register_subquery_fragment
 from sqlspec.builder._parsing_utils import (
     extract_sql_object_expression,
+    parse_condition_expression,
     parse_table_expression,
     parse_table_function,
     resolve_value_expression,
@@ -270,16 +271,15 @@ class JoinBuilder:
         condition_expr: exp.Expr
         unwrapped_condition = unwrap_expression_source(condition)
         if isinstance(condition, str):
-            parsed: exp.Expr | None = exp.maybe_parse(condition)
-            condition_expr = parsed or exp.condition(condition)
+            condition_expr = parse_condition_expression(condition)
         elif unwrapped_condition is not None:
-            condition_expr = unwrapped_condition
+            condition_expr = parse_condition_expression(unwrapped_condition)
         elif isinstance(condition, SQL):
-            condition_expr = extract_sql_object_expression(condition)
+            condition_expr = extract_sql_object_expression(condition, parse_sql=parse_condition_expression)
             if condition.named_parameters:
                 condition_expr = register_subquery_fragment(condition_expr, condition.named_parameters)
         else:
-            condition_expr = condition
+            condition_expr = parse_condition_expression(condition)
 
         table_expr: exp.Expr
         unwrapped_table = unwrap_expression_source(self._table)
@@ -288,16 +288,20 @@ class JoinBuilder:
                 self._table, self._alias, None, self._lateral or self._join_type == "LATERAL JOIN"
             )
         elif unwrapped_table is not None:
-            table_expr = exp.alias_(unwrapped_table, self._alias) if self._alias else unwrapped_table
+            table_expr = (
+                exp.alias_(unwrapped_table, self._alias, copy=isinstance(self._table, exp.Expr))
+                if self._alias
+                else unwrapped_table
+            )
         elif isinstance(self._table, SQL):
             table_expr = extract_sql_object_expression(self._table)
             if self._alias:
-                table_expr = exp.alias_(table_expr, self._alias)
+                table_expr = exp.alias_(table_expr, self._alias, copy=False)
             if self._table.named_parameters:
                 table_expr = register_subquery_fragment(table_expr, self._table.named_parameters)
         elif isinstance(self._table, QueryBuilder):
-            subquery_expr = exp.paren(self._table._build_final_expression(copy=True))
-            table_expr = exp.alias_(subquery_expr, self._alias) if self._alias else subquery_expr
+            subquery_expr = exp.paren(self._table._build_final_expression(copy=True), copy=False)
+            table_expr = exp.alias_(subquery_expr, self._alias, copy=False) if self._alias else subquery_expr
             if self._table.parameters:
                 table_expr = register_subquery_fragment(table_expr, self._table.parameters)
         else:
@@ -331,20 +335,20 @@ def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr
     if on is None:
         return None
     if isinstance(on, str):
-        return exp.condition(on)
+        return parse_condition_expression(on, builder)
     if isinstance(on, SQL):
 
         def parse_join_condition(sql_text: str) -> exp.Expr:
-            return exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.condition(sql_text)
+            return parse_condition_expression(sql_text, builder)
 
         return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
     if isinstance(on, exp.Expr):
-        return on.copy()
+        return parse_condition_expression(on.copy(), builder)
     resolved = resolve_value_expression(on, builder, "join_on")
     if resolved is None:
         msg = f"Unsupported join condition type: {type(on).__name__}"
         raise SQLBuilderError(msg)
-    return resolved
+    return parse_condition_expression(resolved, builder)
 
 
 def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
@@ -366,8 +370,8 @@ def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProto
             for param_name, param_value in parameters.items():
                 builder.add_parameter(param_value, name=param_name)
 
-    subquery_exp = exp.paren(subquery_expression)
-    return exp.alias_(subquery_exp, alias) if alias else subquery_exp
+    subquery_exp = exp.paren(subquery_expression, copy=False)
+    return exp.alias_(subquery_exp, alias, copy=False) if alias else subquery_exp
 
 
 def _parse_join_text(table: str, alias: str | None, dialect: Any, lateral: bool) -> exp.Expr:
@@ -385,10 +389,10 @@ def _parse_join_table(
         return _table_from_builder(table, alias, builder)
     unwrapped = unwrap_expression_source(table)
     if unwrapped is not None:
-        return exp.alias_(unwrapped, alias) if alias else unwrapped
+        return exp.alias_(unwrapped, alias, copy=isinstance(table, exp.Expr)) if alias else unwrapped
     if isinstance(table, SQL):
         expression = extract_sql_object_expression(table, builder=builder)
-        return exp.alias_(expression, alias) if alias else expression
+        return exp.alias_(expression, alias, copy=False) if alias else expression
     return cast("exp.Expr", table)
 
 
@@ -478,4 +482,4 @@ def _attach_as_of_version(
 
     version = create_temporal_version(this=as_of_type, expression=exp.convert(as_of))
     inner_table.set("version", version)
-    return exp.alias_(inner_table, target_alias) if target_alias else inner_table
+    return exp.alias_(inner_table, target_alias, copy=False) if target_alias else inner_table

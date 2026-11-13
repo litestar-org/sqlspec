@@ -175,13 +175,13 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
                 msg = f"Invalid qualified column name: {column!r}"
                 raise SQLSpecError(msg)
             if len(parts) == _TABLE_QUALIFIED_PARTS:
-                return exp.column(parts[1], table=parts[0])
+                return exp.column(parts[1], table=parts[0], copy=False)
             if len(parts) == _DATABASE_QUALIFIED_PARTS:
-                return exp.column(parts[2], table=parts[1], db=parts[0])
-            return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0])
-        return exp.column(column)
+                return exp.column(parts[2], table=parts[1], db=parts[0], copy=False)
+            return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0], copy=False)
+        return exp.column(column, copy=False)
 
-    return exp.column(str(column))
+    return exp.column(str(column), copy=False)
 
 
 def extract_column_name(column: str | exp.Column | exp.Expr) -> str:

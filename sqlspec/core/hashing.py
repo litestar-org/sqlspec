@@ -62,7 +62,7 @@ def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) ->
         if has_explicit_nulls(expr):
             components.append("explicit_nulls")
     else:
-        components.append(hash(expr.sql()))
+        components.append(hash(expr.sql(copy=False)))
 
     return hash(tuple(components))
 

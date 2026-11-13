@@ -607,3 +607,26 @@ def test_subquery_fragments_accept_query_objects(fragment: Any, expected: str) -
 
     assert _normalized_sql(statement) == QUALIFIED_PREFIX + expected
     assert statement.parameters == ({"p": 3})
+
+
+def test_where_eq_parenthesizes_binary_scalar_column_expression() -> None:
+    """Binary scalar expressions in where_eq are parenthesized before comparison."""
+    query = sql.select("*").from_("t").where_eq("a + b", 10)
+    query.enable_optimization = False
+    stmt = query.build()
+    rendered = " ".join(stmt.sql.split()).replace('"', "").replace("( ", "(").replace(" )", ")")
+    assert "(a + b) = :a_b" in rendered
+    assert stmt.parameters == {"a_b": 10}
+
+
+@pytest.mark.parametrize("bad_hint", ["", "   ", "INDEX(t) */ SELECT 1 /*", "INDEX\x00(t)"])
+def test_with_hint_rejects_comment_terminators_and_empty_hints(bad_hint: str) -> None:
+    """Optimizer hints reject empty strings, NUL bytes, and comment terminators."""
+    with pytest.raises(SQLBuilderError):
+        sql.select("*").from_("t").with_hint(bad_hint)
+
+
+def test_join_rejects_multi_statement_on_clause() -> None:
+    """Join conditions reject multi-statement strings."""
+    with pytest.raises(SQLBuilderError):
+        sql.select("*").from_("t").join("u", on="t.id = u.id; DROP TABLE u")

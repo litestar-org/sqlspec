@@ -129,7 +129,7 @@ def test_parse_column_expression_qualified() -> None:
     assert isinstance(expr, exp.Expr)
 
 
-_PARSING_CORPUS = [
+_COLUMN_PARSING_CORPUS = [
     "name",
     "users.name",
     "db.users.name",
@@ -143,6 +143,21 @@ _PARSING_CORPUS = [
     "name AS n",
     "price * 2",
     '"Quoted".col',
+]
+
+_ORDER_PARSING_CORPUS = [
+    "name",
+    "users.name",
+    "db.users.name",
+    "col$1",
+    "_x",
+    "true",
+    "null",
+    "count",
+    "user",
+    "MAX(price)",
+    "price * 2",
+    '"Quoted".col',
     "name DESC",
     "users.name asc",
     "COUNT(*) DESC",
@@ -151,7 +166,10 @@ _PARSING_CORPUS = [
 
 
 def _parse_column_oracle(value: str) -> exp.Expr:
-    return exp.maybe_parse(value) or exp.column(value)
+    parsed = exp.maybe_parse(value) or exp.column(value)
+    if isinstance(parsed, exp.Binary):
+        return exp.Paren(this=parsed)
+    return parsed
 
 
 def _parse_order_oracle(value: str) -> exp.Expr:
@@ -173,13 +191,13 @@ def _assert_matches_oracle(value: str, parser, oracle) -> None:
         parser(value)
 
 
-@pytest.mark.parametrize("value", _PARSING_CORPUS)
+@pytest.mark.parametrize("value", _COLUMN_PARSING_CORPUS)
 def test_parse_column_expression_matches_parser_oracle(value: str) -> None:
     """Column parser fast paths must preserve the previous parser-backed shape."""
     _assert_matches_oracle(value, parse_column_expression, _parse_column_oracle)
 
 
-@pytest.mark.parametrize("value", _PARSING_CORPUS)
+@pytest.mark.parametrize("value", _ORDER_PARSING_CORPUS)
 def test_parse_order_expression_matches_parser_oracle(value: str) -> None:
     """Order parser fast paths must preserve the previous parser-backed shape."""
     _assert_matches_oracle(value, parse_order_expression, _parse_order_oracle)
@@ -598,3 +616,53 @@ def test_value_sites_reject_positional_sql_objects(site: Any, fragment: SQL) -> 
     """Positional parameters cannot merge into a builder's named parameters, so they raise instead of misbinding."""
     with pytest.raises(SQLBuilderError, match="Positional parameters"):
         site(fragment)
+
+
+def test_coerce_column_splits_qualified_dotted_identifiers() -> None:
+    """Dotted column strings split into table and column components."""
+    col = parsing_utils._coerce_column("t.col")  # pyright: ignore[reportPrivateUsage]
+    assert col.table == "t"
+    assert col.name == "col"
+
+
+@pytest.mark.parametrize(
+    "invalid_expr",
+    [
+        "",
+        "   ",
+        "col\x00",
+        "a; SELECT 1",
+        "name nulls first",
+        "a = 1",
+        "a AND b",
+        "(SELECT 1)",
+        "SELECT 1",
+        "DROP TABLE t",
+    ],
+)
+def test_parse_column_expression_rejects_non_scalar_inputs(invalid_expr: str) -> None:
+    """Column expression parser rejects multi-statement, ordering, predicate, and query AST nodes."""
+    with pytest.raises(SQLBuilderError):
+        parse_column_expression(invalid_expr)
+
+
+def test_parse_column_expression_disallows_alias_when_requested() -> None:
+    """Predicate and grouping column parsing rejects AS aliases when allow_alias is False."""
+    with pytest.raises(SQLBuilderError, match="Invalid column expression"):
+        parse_column_expression("name AS alias_name", allow_alias=False)
+    with pytest.raises(SQLBuilderError, match="Invalid column expression"):
+        parse_column_expression("name DESC", allow_alias=False)
+
+
+@pytest.mark.parametrize("invalid_order", ["", "col\x00", "a; SELECT 1", "name AS n", "(SELECT 1)", "a = 1"])
+def test_parse_order_expression_rejects_invalid_clauses(invalid_order: str) -> None:
+    """ORDER BY parser rejects aliases, predicates, subqueries, and statement terminators."""
+    with pytest.raises(SQLBuilderError):
+        parse_order_expression(invalid_order)
+
+
+@pytest.mark.parametrize("invalid_cond", ["", "   ", "a = 1\x00", "a = 1; SELECT 1", "DROP TABLE t"])
+def test_parse_condition_expression_rejects_multi_statement_and_non_conditions(invalid_cond: str) -> None:
+    """Condition expression parser rejects empty strings, NUL bytes, semicolons, and command nodes."""
+    with pytest.raises(SQLBuilderError):
+        parse_condition_expression(invalid_cond)

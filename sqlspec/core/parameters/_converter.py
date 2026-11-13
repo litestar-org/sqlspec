@@ -607,7 +607,7 @@ class ParameterConverter:
                 raise SQLSpecError(msg)
             return "'" + text.replace("'", "''") + "'"
         try:
-            rendered = exp.Literal.string(text).sql(dialect=literal_dialect)
+            rendered = exp.Literal.string(text).sql(dialect=literal_dialect, copy=False)
         except ValueError as exc:
             msg = f"Cannot embed a string value in statically compiled SQL for dialect '{dialect}'"
             raise SQLSpecError(msg) from exc

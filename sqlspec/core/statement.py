@@ -1965,31 +1965,6 @@ class StatementConfig:
         """Mark the configuration as immutable to enable caching."""
         self._is_frozen = True
 
-    def _with_dialect(self, dialect: str) -> "StatementConfig":
-        """Return this configuration with ``dialect`` set.
-
-        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
-        processing caches carry over between statements.
-
-        Args:
-            dialect: SQLGlot dialect name.
-
-        Returns:
-            Configuration whose ``dialect`` is ``dialect``.
-        """
-        if not self._is_frozen:
-            return self.replace(dialect=dialect)
-        variants = self._dialect_variants
-        if variants is None:
-            variants = {}
-            self._dialect_variants = variants
-        derived = variants.get(dialect)
-        if derived is None:
-            derived = self.replace(dialect=dialect)
-            derived.freeze()
-            variants[dialect] = derived
-        return derived
-
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
 
@@ -2028,6 +2003,31 @@ class StatementConfig:
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
+
+    def _with_dialect(self, dialect: str) -> "StatementConfig":
+        """Return this configuration with ``dialect`` set.
+
+        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
+        processing caches carry over between statements.
+
+        Args:
+            dialect: SQLGlot dialect name.
+
+        Returns:
+            Configuration whose ``dialect`` is ``dialect``.
+        """
+        if not self._is_frozen:
+            return self.replace(dialect=dialect)
+        variants = self._dialect_variants
+        if variants is None:
+            variants = {}
+            self._dialect_variants = variants
+        derived = variants.get(dialect)
+        if derived is None:
+            derived = self.replace(dialect=dialect)
+            derived.freeze()
+            variants[dialect] = derived
+        return derived
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs."""
@@ -2131,7 +2131,7 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
         raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
     if not normalized:
-        return exp.column(order_item)
+        return exp.column(order_item, copy=False)
 
     if enable_parsing:
         try:
@@ -2146,10 +2146,10 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
 
     parts = normalized.rsplit(None, 1)
     if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
-        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+        base_expr = exp.column(parts[0], copy=False) if parts[0] else exp.column(normalized, copy=False)
         return ordered(base_expr, desc=True if parts[1].lower() == "desc" else None)
 
-    return exp.column(normalized)
+    return exp.column(normalized, copy=False)
 
 
 def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:

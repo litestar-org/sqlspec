@@ -1157,7 +1157,7 @@ def _placeholder_position(
         placeholder_key = str(name_expr)
     else:
         value = placeholder.args.get("this")
-        placeholder_key = str(value) if value is not None else placeholder.sql()
+        placeholder_key = str(value) if value is not None else placeholder.sql(copy=False)
 
     if not placeholder_key:
         return None

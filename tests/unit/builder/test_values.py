@@ -241,3 +241,13 @@ def test_values_render_expression_values() -> None:
 
     assert " ".join(statement.sql.split()) == 'VALUES ("b", COUNT("c"), :col_3, "d" + 1)'
     assert statement.parameters == {"col_3": 1}
+
+
+def test_values_rejects_duplicate_columns_and_invalid_aliases() -> None:
+    """Values builder rejects duplicate column names and empty or NUL aliases."""
+    with pytest.raises(SQLBuilderError, match="unique"):
+        Values([(1, 2)], columns=["id", "id"])
+    with pytest.raises(SQLBuilderError, match="alias"):
+        Values([(1,)], alias="")
+    with pytest.raises(SQLBuilderError, match="alias"):
+        Values([(1,)], alias="v\x00")

@@ -19,7 +19,9 @@ from sqlglot.tokenizer_core import TokenType
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import SQL, ParameterStyle, ParameterValidator, default_nulls, ordered
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.core.splitter import contains_statement_terminator
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.utils.type_guards import has_expression_attr, has_parameter_builder
 
 if TYPE_CHECKING:
@@ -119,6 +121,29 @@ _DIALECT_ALIASES: Final[dict[str, str]] = {
     "postgresql": "postgres",
     "sa": "sqlanywhere",
 }
+_FORBIDDEN_STATEMENT_NODES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Block,
+    exp.Command,
+    exp.DDL,
+    exp.DML,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+)
+_FORBIDDEN_SCALAR_AST_NODES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Block,
+    exp.Command,
+    exp.DDL,
+    exp.DML,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Subquery,
+    exp.Select,
+    exp.SetOperation,
+    exp.Ordered,
+    exp.Alias,
+)
 
 
 def extract_column_name(column: str | exp.Column) -> str:
@@ -143,7 +168,13 @@ def extract_column_name(column: str | exp.Column) -> str:
     return "column"
 
 
-def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | None = None) -> exp.Expr:
+def parse_column_expression(
+    column_input: str | exp.Expr | Any,
+    builder: Any | None = None,
+    *,
+    dialect: "DialectType | None" = None,
+    allow_alias: bool = True,
+) -> exp.Expr:
     """Parse a column input that might be a complex expression.
 
     Handles cases like:
@@ -159,35 +190,98 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
     Args:
         column_input: String, SQLGlot expression, SQL object, Column object, or query builder
         builder: Optional builder instance for parameter merging
+        dialect: Optional SQL dialect for parsing string expressions
+        allow_alias: Whether top-level ``AS`` aliases are permitted on string or AST inputs
 
     Returns:
         exp.Expr: Parsed SQLGlot expression
+
+    Raises:
+        SQLBuilderError: If the input contains forbidden statement, subquery, or predicate nodes.
     """
     if isinstance(column_input, exp.Expr):
+        if isinstance(column_input, _FORBIDDEN_STATEMENT_NODES) or (
+            column_input.find(*_FORBIDDEN_STATEMENT_NODES) is not None
+        ):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        if not allow_alias and isinstance(
+            column_input,
+            (exp.Alias, exp.Ordered, exp.Subquery, exp.Select, exp.SetOperation, exp.Connector, exp.Predicate),
+        ):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
         if builder is not None and isinstance(column_input, (exp.Select, exp.SetOperation)):
             return _scalar_subquery(column_input.copy())
         return column_input
 
     if isinstance(column_input, str):
+        if not column_input or not column_input.strip() or "\x00" in column_input:
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
         if _is_simple_identifier(column_input):
             return _simple_column_expression(column_input)
-        return exp.maybe_parse(column_input) or exp.column(column_input)
+        resolved_dialect = _normalize_dialect(dialect if dialect is not None else getattr(builder, "dialect", None))
+        if contains_statement_terminator(column_input, dialect=resolved_dialect):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        try:
+            parsed: exp.Expr | None = exp.maybe_parse(column_input, dialect=resolved_dialect)
+        except SqlglotError as exc:
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg) from exc
+        if parsed is None:
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        if isinstance(parsed, exp.Alias):
+            if not allow_alias or not parsed.alias or not isinstance(parsed.this, exp.Expr):
+                msg = f"Invalid column expression: {column_input!r}"
+                raise SQLBuilderError(msg)
+            _validate_scalar_ast_nodes(parsed.this, raw=column_input)
+            return parsed
+        _validate_scalar_ast_nodes(parsed, raw=column_input)
+        if isinstance(parsed, exp.Binary):
+            return exp.Paren(this=parsed)
+        return parsed
 
     from sqlspec.builder._base import QueryBuilder
 
-    if builder is not None and isinstance(column_input, QueryBuilder):
-        return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
+    if isinstance(column_input, QueryBuilder):
+        if not allow_alias:
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        if builder is not None:
+            return _scalar_subquery(builder._embed_subquery(column_input, alias_hint="subquery"))
 
     if isinstance(column_input, SQL):
         extracted = extract_sql_object_expression(column_input, builder)
+        if isinstance(extracted, _FORBIDDEN_STATEMENT_NODES) or (
+            extracted.find(*_FORBIDDEN_STATEMENT_NODES) is not None
+        ):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        if not allow_alias and isinstance(
+            extracted,
+            (exp.Alias, exp.Ordered, exp.Subquery, exp.Select, exp.SetOperation, exp.Connector, exp.Predicate),
+        ):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
         if builder is not None and isinstance(extracted, (exp.Select, exp.SetOperation)):
             return _scalar_subquery(extracted)
         return extracted
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
-        return column_input._expression  # pyright: ignore[reportPrivateUsage]
+        inner_expr = column_input._expression  # pyright: ignore[reportPrivateUsage]
+        if not allow_alias and isinstance(
+            inner_expr,
+            (exp.Alias, exp.Ordered, exp.Subquery, exp.Select, exp.SetOperation, exp.Connector, exp.Predicate),
+        ):
+            msg = f"Invalid column expression: {column_input!r}"
+            raise SQLBuilderError(msg)
+        return inner_expr
 
-    return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
+    msg = f"Invalid column expression: {column_input!r}"
+    raise SQLBuilderError(msg)
 
 
 def parse_table_expression(
@@ -261,8 +355,331 @@ def parse_table_function(
         if source.args.get("alias"):
             msg = f"Invalid table alias {explicit_alias!r}: table function {function_input!r} already has an alias."
             raise SQLBuilderError(msg)
-        return exp.alias_(source, _parse_alias_identifier(explicit_alias))
+        return exp.alias_(source, _parse_alias_identifier(explicit_alias), copy=False)
     return source  # type: ignore[no-any-return]
+
+
+def parse_order_expression(order_input: str | exp.Expr, *, dialect: "DialectType | None" = None) -> exp.Expr:
+    """Parse an ORDER BY expression that might include direction.
+
+    Handles cases like:
+        - Simple column: "name" -> Column(this=name)
+        - With direction: "name DESC" -> Ordered(this=Column(name), desc=True)
+        - Qualified: "users.name ASC" -> Ordered(this=Column(table=users, this=name), desc=False)
+        - Function: "COUNT(*) DESC" -> Ordered(this=Count(this=Star), desc=True)
+
+    Args:
+        order_input: String or SQLGlot expression for ORDER BY
+        dialect: Optional SQL dialect for parsing
+
+    Returns:
+        exp.Expr: Parsed SQLGlot expression (usually Ordered or Column)
+
+    Raises:
+        SQLBuilderError: If the input contains forbidden statement, subquery, or predicate nodes.
+    """
+    if isinstance(order_input, exp.Expr):
+        if isinstance(order_input, _FORBIDDEN_STATEMENT_NODES) or (
+            order_input.find(*_FORBIDDEN_STATEMENT_NODES) is not None
+        ):
+            msg = f"Invalid ORDER BY expression: {order_input!r}"
+            raise SQLBuilderError(msg)
+        return order_input
+
+    order_value = str(order_input)
+    if not order_value or not order_value.strip() or "\x00" in order_value:
+        msg = f"Invalid ORDER BY expression: {order_input!r}"
+        raise SQLBuilderError(msg)
+    parts = order_value.rsplit(None, 1)
+    if len(parts) == ALIAS_PARTS_EXPECTED_COUNT and parts[1].lower() in {"asc", "desc"}:
+        base, direction = parts
+        if _is_simple_identifier(base):
+            column_expr = _simple_column_expression(base)
+            return ordered(column_expr, desc=direction.lower() == "desc")
+
+    resolved_dialect = _normalize_dialect(dialect)
+    if contains_statement_terminator(order_value, dialect=resolved_dialect):
+        msg = f"Invalid ORDER BY expression: {order_input!r}"
+        raise SQLBuilderError(msg)
+
+    try:
+        parsed = maybe_parse(order_value, into=exp.Ordered, dialect=resolved_dialect)
+    except SqlglotError as exc:
+        msg = f"Invalid ORDER BY expression: {order_input!r}"
+        raise SQLBuilderError(msg) from exc
+    if parsed:
+        inner = parsed.this if isinstance(parsed, exp.Ordered) and isinstance(parsed.this, exp.Expr) else parsed
+        _validate_scalar_ast_nodes(inner, raw=order_value)
+        return default_nulls(parsed, order_value)
+
+    return parse_column_expression(order_value, dialect=resolved_dialect, allow_alias=False)
+
+
+def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any], builder: "Any" = None) -> exp.Expr:
+    """Parse a condition that might be complex SQL.
+
+    Handles cases like:
+        - Simple conditions: "name = 'John'" -> EQ(Column(name), Literal('John'))
+        - Tuple format: ("name", "John") -> EQ(Column(name), Literal('John'))
+        - Complex conditions: "age > 18 AND status = 'active'" -> And(GT(...), EQ(...))
+        - Function conditions: "LENGTH(name) > 5" -> GT(Length(Column(name)), Literal(5))
+
+    Args:
+        condition_input: String, tuple, or SQLGlot expression for condition
+        builder: Optional builder instance for parameter binding
+
+    Returns:
+        exp.Expr: Parsed SQLGlot expression (usually a comparison or logical op)
+
+    Raises:
+        SQLBuilderError: If the condition is empty, multi-statement, or contains DDL/DML/Command nodes.
+    """
+    if isinstance(condition_input, exp.Expr):
+        if isinstance(condition_input, _FORBIDDEN_STATEMENT_NODES) or (
+            condition_input.find(*_FORBIDDEN_STATEMENT_NODES) is not None
+        ):
+            msg = f"Invalid condition expression: {condition_input!r}"
+            raise SQLBuilderError(msg)
+        return condition_input
+
+    tuple_condition_parts: Final[int] = 2
+    if isinstance(condition_input, tuple) and len(condition_input) == tuple_condition_parts:
+        column, value = condition_input
+        column_expr = parse_column_expression(column, builder, allow_alias=False)
+        if value is None:
+            return exp.Is(this=column_expr, expression=exp.null())
+        if builder and has_parameter_builder(builder):
+            column_name = extract_column_name(column)
+            param_name = builder.generate_unique_parameter_name(column_name)  # pyright: ignore[reportAttributeAccessIssue]
+            _, param_name = builder.add_parameter(value, name=param_name)
+            return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
+        return exp.EQ(this=column_expr, expression=exp.convert(value))
+
+    if not isinstance(condition_input, str):
+        condition_input = str(condition_input)
+
+    resolved_dialect = _normalize_dialect(getattr(builder, "dialect", None))
+    if (
+        not condition_input
+        or not condition_input.strip()
+        or "\x00" in condition_input
+        or contains_statement_terminator(condition_input, dialect=resolved_dialect)
+    ):
+        msg = f"Invalid condition expression: {condition_input!r}"
+        raise SQLBuilderError(msg)
+
+    param_info = (
+        _PARAMETER_VALIDATOR.extract_parameters(condition_input, dialect=resolved_dialect)
+        if resolved_dialect is not None
+        else _PARAMETER_VALIDATOR.extract_parameters(condition_input)
+    )
+
+    if param_info:
+        converted_condition = condition_input
+        for param in param_info[::-1]:
+            if param.style in {
+                ParameterStyle.NUMERIC,
+                ParameterStyle.POSITIONAL_PYFORMAT,
+                ParameterStyle.POSITIONAL_COLON,
+                ParameterStyle.QMARK,
+            }:
+                placeholder = f":param_{param.ordinal}"
+                converted_condition = (
+                    converted_condition[: param.position]
+                    + placeholder
+                    + converted_condition[param.position + len(param.placeholder_text) :]
+                )
+        condition_input = converted_condition
+
+    try:
+        parsed: exp.Expr | None = exp.maybe_parse(condition_input, dialect=resolved_dialect)
+        if parsed is None:
+            parsed = exp.condition(condition_input, dialect=resolved_dialect, copy=False)
+    except SqlglotError as exc:
+        msg = f"Invalid condition expression: {condition_input!r}"
+        raise SQLBuilderError(msg) from exc
+
+    if (
+        isinstance(parsed, (*_FORBIDDEN_STATEMENT_NODES, exp.Select, exp.SetOperation))
+        or parsed.find(*_FORBIDDEN_STATEMENT_NODES) is not None
+    ):
+        msg = f"Invalid condition expression: {condition_input!r}"
+        raise SQLBuilderError(msg)
+    return parsed
+
+
+def extract_sql_object_expression(
+    value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
+) -> exp.Expr:
+    """Extract the SQLGlot expression from a SQL object and merge its parameters.
+
+    Only ``SQL`` instances are accepted, so an object that merely exposes the same attributes
+    never renders as SQL.
+
+    Args:
+        value: The SQL object to process
+        builder: Optional builder instance for parameter merging (must have add_parameter method)
+        parse_sql: Optional parser for raw SQL fallback text.
+
+    Returns:
+        SQLGlot Expression extracted from the SQL object
+
+    Raises:
+        TypeError: If the value is not a SQL object
+    """
+    if not isinstance(value, SQL):
+        msg = f"Value is not a SQL object: {type(value)}"
+        raise TypeError(msg)
+
+    if value.expression is not None and isinstance(value.expression, exp.Expr):
+        expr = value.expression.copy()
+        param_mapping = _merge_sql_parameters(value, builder)
+        if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
+            expr = builder._update_placeholders(expr, param_mapping)
+        return expr
+
+    param_mapping = _merge_sql_parameters(value, builder)
+    sql_text = value.raw_sql
+    expr = parse_sql(sql_text) if parse_sql is not None else (exp.maybe_parse(sql_text) or exp.convert(str(sql_text)))
+    if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
+        expr = builder._update_placeholders(expr, param_mapping)
+    return expr
+
+
+def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.Expr | None:
+    """Resolve a builder value to the expression it renders as.
+
+    Only SQLGlot nodes, SQLSpec expression wrappers, ``SQL`` objects, and query builders render as SQL.
+    Every other value binds as a parameter, whatever attributes it exposes, so application data cannot
+    become SQL by having fields named like a SQL carrier's.
+
+    Args:
+        value: Value passed to a builder method.
+        builder: Query builder receiving merged parameters.
+        alias_hint: Name seed for parameters merged from a subquery builder.
+
+    Returns:
+        An expression independent of the caller's objects, or None when the value binds as a parameter.
+    """
+    if value is None or isinstance(value, (str, int, float, bytes, bytearray)):
+        return None
+    from sqlspec.builder._base import QueryBuilder
+
+    expression: exp.Expr
+    if isinstance(value, exp.Expr):
+        expression = value.copy()
+    elif isinstance(value, ExpressionWrapper):
+        expression = value.expression.copy()
+    elif isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        expression = value.sqlglot_expression.copy()
+    elif isinstance(value, QueryBuilder):
+        return _scalar_subquery(builder._embed_subquery(value, alias_hint=alias_hint))
+    elif isinstance(value, SQL):
+        expression = extract_sql_object_expression(value, builder=builder)
+    else:
+        return None
+    merged: exp.Expr = builder._merge_subquery_fragments(expression)
+    if isinstance(merged, (exp.Select, exp.SetOperation)):
+        return _scalar_subquery(merged)
+    return merged
+
+
+def extract_expression(value: Any) -> exp.Expr:
+    """Extract SQLGlot expression from value, handling wrapper types.
+
+    Args:
+        value: String, SQLGlot expression, or wrapper type.
+
+    Returns:
+        Raw SQLGlot expression.
+    """
+    if isinstance(value, str):
+        if not value.strip() or "\x00" in value:
+            msg = f"Invalid column expression: {value!r}"
+            raise SQLBuilderError(msg)
+        return exp.column(value, copy=False)
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression
+    if isinstance(value, ExpressionWrapper):
+        return value.expression
+    if isinstance(value, exp.Expr):
+        return value
+    return exp.convert(value)
+
+
+def unwrap_expression_source(value: Any, builder: Any = None) -> exp.Expr | None:
+    """Extract a SQLGlot expression from an expression, builder wrapper, or SQL object.
+
+    Args:
+        value: Candidate expression, wrapper, or SQL object.
+        builder: Optional builder for merging SQL object parameters.
+
+    Returns:
+        Underlying ``exp.Expr``, or ``None`` when ``value`` is not an expression or wrapper.
+    """
+    if isinstance(value, exp.Expr):
+        return value
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression.copy()
+    if isinstance(value, ExpressionWrapper):
+        return value.expression.copy()
+    if builder is not None and isinstance(value, SQL):
+        return extract_sql_object_expression(value, builder=builder)
+    return None
+
+
+def to_expression(value: Any) -> exp.Expr:
+    """Convert a Python value to a raw SQLGlot expression.
+
+    Args:
+        value: Python value or SQLGlot expression to convert.
+
+    Returns:
+        Raw SQLGlot expression.
+    """
+    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
+        return value.sqlglot_expression
+    if isinstance(value, ExpressionWrapper):
+        return value.expression
+    if isinstance(value, exp.Expr):
+        return value
+    return exp.convert(value)
+
+
+def sql_named_parameters(sql_obj: Any) -> "Mapping[str, Any]":
+    """Return a SQL object's named parameters.
+
+    Args:
+        sql_obj: SQL object with parameters attribute
+
+    Returns:
+        The named parameters, empty when the object has none.
+
+    Raises:
+        SQLBuilderError: If the SQL object carries positional parameters.
+    """
+    parameters = sql_obj.parameters
+    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
+        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
+        raise SQLBuilderError(msg)
+    return parameters or {}
+
+
+def _scalar_subquery(query: exp.Expr) -> exp.Expr:
+    """Wrap a query as a scalar operand.
+
+    Set operations use ``exp.Subquery`` because the optimizer unwraps their parentheses.
+    Other queries use ``exp.Paren`` because the optimizer unnests ``exp.Subquery`` into joins.
+
+    Args:
+        query: Query expression to wrap.
+
+    Returns:
+        The wrapped query.
+    """
+    if isinstance(query, exp.SetOperation):
+        return exp.Subquery(this=query)
+    return exp.paren(query, copy=False)
 
 
 def _parse_table_reference(
@@ -501,251 +918,6 @@ def _identifier_from_text(text: str) -> exp.Identifier:
     return identifier
 
 
-def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:
-    """Parse an ORDER BY expression that might include direction.
-
-    Handles cases like:
-        - Simple column: "name" -> Column(this=name)
-        - With direction: "name DESC" -> Ordered(this=Column(name), desc=True)
-        - Qualified: "users.name ASC" -> Ordered(this=Column(table=users, this=name), desc=False)
-        - Function: "COUNT(*) DESC" -> Ordered(this=Count(this=Star), desc=True)
-
-    Args:
-        order_input: String or SQLGlot expression for ORDER BY
-
-    Returns:
-        exp.Expr: Parsed SQLGlot expression (usually Ordered or Column)
-    """
-    if isinstance(order_input, exp.Expr):
-        return order_input
-
-    order_value = str(order_input)
-    parts = order_value.rsplit(None, 1)
-    if len(parts) == ALIAS_PARTS_EXPECTED_COUNT and parts[1].lower() in {"asc", "desc"}:
-        base, direction = parts
-        if _is_simple_identifier(base):
-            column_expr = _simple_column_expression(base)
-            return ordered(column_expr, desc=direction.lower() == "desc")
-
-    parsed = maybe_parse(order_value, into=exp.Ordered)
-    if parsed:
-        return default_nulls(parsed, order_value)
-
-    return parse_column_expression(order_input)
-
-
-def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any], builder: "Any" = None) -> exp.Expr:
-    """Parse a condition that might be complex SQL.
-
-    Handles cases like:
-        - Simple conditions: "name = 'John'" -> EQ(Column(name), Literal('John'))
-        - Tuple format: ("name", "John") -> EQ(Column(name), Literal('John'))
-        - Complex conditions: "age > 18 AND status = 'active'" -> And(GT(...), EQ(...))
-        - Function conditions: "LENGTH(name) > 5" -> GT(Length(Column(name)), Literal(5))
-
-    Args:
-        condition_input: String, tuple, or SQLGlot expression for condition
-        builder: Optional builder instance for parameter binding
-
-    Returns:
-        exp.Expr: Parsed SQLGlot expression (usually a comparison or logical op)
-    """
-    if isinstance(condition_input, exp.Expr):
-        return condition_input
-
-    tuple_condition_parts: Final[int] = 2
-    if isinstance(condition_input, tuple) and len(condition_input) == tuple_condition_parts:
-        column, value = condition_input
-        column_expr = parse_column_expression(column)
-        if value is None:
-            return exp.Is(this=column_expr, expression=exp.null())
-        if builder and has_parameter_builder(builder):
-            column_name = extract_column_name(column)
-            param_name = builder.generate_unique_parameter_name(column_name)  # pyright: ignore[reportAttributeAccessIssue]
-            _, param_name = builder.add_parameter(value, name=param_name)
-            return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
-        return exp.EQ(this=column_expr, expression=exp.convert(value))
-
-    if not isinstance(condition_input, str):
-        condition_input = str(condition_input)
-
-    param_info = _PARAMETER_VALIDATOR.extract_parameters(condition_input)
-
-    if param_info:
-        converted_condition = condition_input
-        for param in param_info[::-1]:
-            if param.style in {
-                ParameterStyle.NUMERIC,
-                ParameterStyle.POSITIONAL_PYFORMAT,
-                ParameterStyle.POSITIONAL_COLON,
-                ParameterStyle.QMARK,
-            }:
-                placeholder = f":param_{param.ordinal}"
-                converted_condition = (
-                    converted_condition[: param.position]
-                    + placeholder
-                    + converted_condition[param.position + len(param.placeholder_text) :]
-                )
-        condition_input = converted_condition
-
-    parsed: exp.Expr | None = exp.maybe_parse(condition_input)
-    if parsed:
-        return parsed
-    return exp.condition(condition_input)
-
-
-def extract_sql_object_expression(
-    value: Any, builder: Any | None = None, parse_sql: Callable[[str], exp.Expr] | None = None
-) -> exp.Expr:
-    """Extract the SQLGlot expression from a SQL object and merge its parameters.
-
-    Only ``SQL`` instances are accepted, so an object that merely exposes the same attributes
-    never renders as SQL.
-
-    Args:
-        value: The SQL object to process
-        builder: Optional builder instance for parameter merging (must have add_parameter method)
-        parse_sql: Optional parser for raw SQL fallback text.
-
-    Returns:
-        SQLGlot Expression extracted from the SQL object
-
-    Raises:
-        TypeError: If the value is not a SQL object
-    """
-    if not isinstance(value, SQL):
-        msg = f"Value is not a SQL object: {type(value)}"
-        raise TypeError(msg)
-
-    if value.expression is not None and isinstance(value.expression, exp.Expr):
-        expr = value.expression.copy()
-        param_mapping = _merge_sql_parameters(value, builder)
-        if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
-            expr = builder._update_placeholders(expr, param_mapping)
-        return expr
-
-    param_mapping = _merge_sql_parameters(value, builder)
-    sql_text = value.raw_sql
-    expr = parse_sql(sql_text) if parse_sql is not None else (exp.maybe_parse(sql_text) or exp.convert(str(sql_text)))
-    if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
-        expr = builder._update_placeholders(expr, param_mapping)
-    return expr
-
-
-def resolve_value_expression(value: Any, builder: Any, alias_hint: str) -> exp.Expr | None:
-    """Resolve a builder value to the expression it renders as.
-
-    Only SQLGlot nodes, SQLSpec expression wrappers, ``SQL`` objects, and query builders render as SQL.
-    Every other value binds as a parameter, whatever attributes it exposes, so application data cannot
-    become SQL by having fields named like a SQL carrier's.
-
-    Args:
-        value: Value passed to a builder method.
-        builder: Query builder receiving merged parameters.
-        alias_hint: Name seed for parameters merged from a subquery builder.
-
-    Returns:
-        An expression independent of the caller's objects, or None when the value binds as a parameter.
-    """
-    if value is None or isinstance(value, (str, int, float, bytes, bytearray)):
-        return None
-    from sqlspec.builder._base import QueryBuilder
-
-    expression: exp.Expr
-    if isinstance(value, exp.Expr):
-        expression = value.copy()
-    elif isinstance(value, ExpressionWrapper):
-        expression = value.expression.copy()
-    elif isinstance(value, (Column, FunctionColumn, ColumnExpression)):
-        expression = value.sqlglot_expression.copy()
-    elif isinstance(value, QueryBuilder):
-        return _scalar_subquery(builder._embed_subquery(value, alias_hint=alias_hint))
-    elif isinstance(value, SQL):
-        expression = extract_sql_object_expression(value, builder=builder)
-    else:
-        return None
-    merged: exp.Expr = builder._merge_subquery_fragments(expression)
-    if isinstance(merged, (exp.Select, exp.SetOperation)):
-        return _scalar_subquery(merged)
-    return merged
-
-
-def _scalar_subquery(query: exp.Expr) -> exp.Expr:
-    """Wrap a query as a scalar operand.
-
-    Set operations use ``exp.Subquery`` because the optimizer unwraps their parentheses.
-    Other queries use ``exp.Paren`` because the optimizer unnests ``exp.Subquery`` into joins.
-
-    Args:
-        query: Query expression to wrap.
-
-    Returns:
-        The wrapped query.
-    """
-    if isinstance(query, exp.SetOperation):
-        return exp.Subquery(this=query)
-    return exp.paren(query)
-
-
-def extract_expression(value: Any) -> exp.Expr:
-    """Extract SQLGlot expression from value, handling wrapper types.
-
-    Args:
-        value: String, SQLGlot expression, or wrapper type.
-
-    Returns:
-        Raw SQLGlot expression.
-    """
-    if isinstance(value, str):
-        return exp.column(value)
-    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
-        return value.sqlglot_expression
-    if isinstance(value, ExpressionWrapper):
-        return value.expression
-    if isinstance(value, exp.Expr):
-        return value
-    return exp.convert(value)
-
-
-def unwrap_expression_source(value: Any, builder: Any = None) -> exp.Expr | None:
-    """Extract a SQLGlot expression from an expression, builder wrapper, or SQL object.
-
-    Args:
-        value: Candidate expression, wrapper, or SQL object.
-        builder: Optional builder for merging SQL object parameters.
-
-    Returns:
-        Underlying ``exp.Expr``, or ``None`` when ``value`` is not an expression or wrapper.
-    """
-    if isinstance(value, exp.Expr):
-        return value
-    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
-        return value.sqlglot_expression.copy()
-    if isinstance(value, ExpressionWrapper):
-        return value.expression.copy()
-    if builder is not None and isinstance(value, SQL):
-        return extract_sql_object_expression(value, builder=builder)
-    return None
-
-
-def to_expression(value: Any) -> exp.Expr:
-    """Convert a Python value to a raw SQLGlot expression.
-
-    Args:
-        value: Python value or SQLGlot expression to convert.
-
-    Returns:
-        Raw SQLGlot expression.
-    """
-    if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
-        return value.sqlglot_expression
-    if isinstance(value, ExpressionWrapper):
-        return value.expression
-    if isinstance(value, exp.Expr):
-        return value
-    return exp.convert(value)
-
-
 def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
     """Distinguish supplied table quotes from quoting added by optimization."""
     if not any(quote in source for quote in ('"', "`", "[")):
@@ -781,9 +953,11 @@ def _normalize_partition_by(
     partition_by: str | list[Any] | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper | None,
 ) -> list[exp.Expr] | None:
     if isinstance(partition_by, str):
-        return [exp.column(partition_by)]
+        return [_coerce_column(partition_by)]
     if isinstance(partition_by, list):
-        return [extract_expression(column) for column in partition_by]
+        return [
+            _coerce_column(column) if isinstance(column, str) else extract_expression(column) for column in partition_by
+        ]
     if isinstance(partition_by, (Column, FunctionColumn, ColumnExpression, ExpressionWrapper)):
         return [extract_expression(partition_by)]
     if isinstance(partition_by, exp.Expr):
@@ -795,11 +969,13 @@ def _normalize_order_by(
     order_by: str | list[Any] | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper | None,
 ) -> exp.Order | None:
     if isinstance(order_by, str):
-        return exp.Order(expressions=[ordered(exp.column(order_by))])
+        return exp.Order(expressions=[ordered(_coerce_column(order_by))])
     if isinstance(order_by, list):
         return exp.Order(
             expressions=[
-                column if isinstance(column, exp.Ordered) else ordered(extract_expression(column))
+                column
+                if isinstance(column, exp.Ordered)
+                else ordered(_coerce_column(column) if isinstance(column, str) else extract_expression(column))
                 for column in order_by
             ]
         )
@@ -812,7 +988,10 @@ def _normalize_order_by(
 
 def _coerce_column(value: str | exp.Expr | Column | FunctionColumn | ColumnExpression | ExpressionWrapper) -> exp.Expr:
     if isinstance(value, str):
-        return exp.column(value)
+        try:
+            return parse_column_for_condition(value)
+        except SQLSpecError as exc:
+            raise SQLBuilderError(str(exc)) from exc
     if isinstance(value, (Column, FunctionColumn, ColumnExpression)):
         return value.sqlglot_expression
     if isinstance(value, ExpressionWrapper):
@@ -888,25 +1067,6 @@ def _truthy_metadata_flag(value: Any) -> bool:
     return bool(value)
 
 
-def sql_named_parameters(sql_obj: Any) -> "Mapping[str, Any]":
-    """Return a SQL object's named parameters.
-
-    Args:
-        sql_obj: SQL object with parameters attribute
-
-    Returns:
-        The named parameters, empty when the object has none.
-
-    Raises:
-        SQLBuilderError: If the SQL object carries positional parameters.
-    """
-    parameters = sql_obj.parameters
-    if sql_obj.positional_parameters or (parameters and not isinstance(parameters, Mapping)):
-        msg = "Positional parameters on a SQL object cannot merge into a builder; use named parameters."
-        raise SQLBuilderError(msg)
-    return parameters or {}
-
-
 def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
     """Merge parameters from SQL object into builder and return renamed placeholder mapping.
 
@@ -944,8 +1104,62 @@ def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
     return param_mapping
 
 
+def _validate_scalar_ast_nodes(root: exp.Expr, *, raw: str) -> None:
+    """Validate that a parsed scalar column expression contains no statement, subquery, or top-level predicate nodes."""
+    stack: list[tuple[exp.Expr, bool]] = [(root, False)]
+    while stack:
+        current, in_condition_slot = stack.pop()
+        if isinstance(current, _FORBIDDEN_SCALAR_AST_NODES):
+            msg = f"Invalid column expression: {raw!r}"
+            raise SQLBuilderError(msg)
+        if not in_condition_slot and isinstance(current, (exp.Connector, exp.Predicate)):
+            msg = f"Invalid column expression: {raw!r}"
+            raise SQLBuilderError(msg)
+        if isinstance(current, exp.If):
+            cond = current.this
+            if isinstance(cond, exp.Expr):
+                stack.append((cond, True))
+            for key in ("true", "false"):
+                branch = current.args.get(key)
+                if isinstance(branch, exp.Expr):
+                    stack.append((branch, False))
+            continue
+        if isinstance(current, exp.Filter):
+            if isinstance(current.this, exp.Expr):
+                stack.append((current.this, False))
+            where_node = current.args.get("expression")
+            if isinstance(where_node, exp.Where) and isinstance(where_node.this, exp.Expr):
+                stack.append((where_node.this, True))
+            elif isinstance(where_node, exp.Expr):
+                stack.append((where_node, True))
+            continue
+        if isinstance(current, exp.Window):
+            if isinstance(current.this, exp.Expr):
+                stack.append((current.this, False))
+            stack.extend(
+                (part_expr, False)
+                for part_expr in current.args.get("partition_by") or ()
+                if isinstance(part_expr, exp.Expr)
+            )
+            order_node = current.args.get("order")
+            if isinstance(order_node, exp.Order):
+                for order_item in order_node.expressions:
+                    target = order_item.this if isinstance(order_item, exp.Ordered) else order_item
+                    if isinstance(target, exp.Expr):
+                        stack.append((target, False))
+            continue
+        stack.extend((child, in_condition_slot) for child in current.iter_expressions())
+
+
 def _is_simple_identifier(value: str) -> bool:
     stripped = value.strip()
+    if not stripped:
+        return False
+    if "$" not in stripped:
+        if "." not in stripped:
+            return stripped.isascii() and stripped.isidentifier() and stripped.lower() not in _BARE_KEYWORDS
+        parts = stripped.split(".")
+        return 1 <= len(parts) <= _MAX_DIRECT_TABLE_PARTS and all(p.isascii() and p.isidentifier() for p in parts)
     if not _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
         return False
     return "." in stripped or stripped.lower() not in _BARE_KEYWORDS

@@ -464,3 +464,15 @@ def test_parameter_validator_singleton_parameter_validator_singleton_reuses_scan
     first = _parsing_utils._PARAMETER_VALIDATOR.extract_parameters("id = :id")
     second = _parsing_utils._PARAMETER_VALIDATOR.extract_parameters("id = :id")
     assert second == first
+
+
+@pytest.mark.parametrize(
+    ("column_key", "expected_param"),
+    [("first-name", "first_name"), ("123col", "p_123col"), ("user.email-addr", "email_addr")],
+)
+def test_builder_sanitizes_non_identifier_parameter_names(column_key: str, expected_param: str) -> None:
+    """Hyphenated and digit-leading column keys produce sanitized parameter names."""
+    stmt = sql.insert("users").values({column_key: "val"}).build()
+    assert expected_param in stmt.parameters
+    assert stmt.parameters[expected_param] == "val"
+    assert f":{expected_param}" in stmt.sql

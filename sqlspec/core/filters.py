@@ -546,7 +546,9 @@ class LimitOffsetFilter(PaginationFilter):
         new_statement = safe_modify_with_cte(
             target,
             lambda expression: (
-                cast("exp.Select | exp.SetOperation", expression).limit(limit_placeholder).offset(offset_placeholder)
+                cast("exp.Select | exp.SetOperation", expression)
+                .limit(limit_placeholder, copy=False)
+                .offset(offset_placeholder, copy=False)
             ),
         )
 
@@ -782,7 +784,7 @@ class CursorFilter(PaginationFilter):
         items: list[exp.Ordered] = []
         predicates: list[tuple[exp.Expr | bool, exp.Expr | bool]] = []
         for index, key in enumerate(self._keys):
-            col = exp.column(key.result_name) if wrap else self._get_column_expression(key.field_name)
+            col = exp.column(key.result_name, copy=False) if wrap else self._get_column_expression(key.field_name)
             ascending = (key.sort_order == "asc") != self._backward
             nulls = key.nulls
             if self._backward and nulls is not None:
@@ -946,9 +948,9 @@ class OrderByFilter(StatementFilter):
         current_statement = statement._filter_expression()
 
         if isinstance(current_statement, (exp.Select, exp.SetOperation)):
-            new_statement = current_statement.order_by(order_expr)
+            new_statement = current_statement.order_by(order_expr, copy=False)
         else:
-            new_statement = wrap_as_subquery(current_statement).order_by(order_expr)
+            new_statement = wrap_as_subquery(current_statement).order_by(order_expr, copy=False)
 
         return statement.copy(statement=new_statement)
 
@@ -1072,10 +1074,10 @@ class _TextSearchFilter(StatementFilter):
         """Return cache key for this filter configuration."""
         if isinstance(self.field_name, set):
             field_names: Any = tuple(
-                sorted(item.sql() if isinstance(item, exp.Expression) else item for item in self.field_name)
+                sorted(item.sql(copy=False) if isinstance(item, exp.Expression) else item for item in self.field_name)
             )
         elif isinstance(self.field_name, exp.Expression):
-            field_names = self.field_name.sql()
+            field_names = self.field_name.sql(copy=False)
         else:
             field_names = self.field_name
         return (self._cache_key_name, field_names, self.value, self.ignore_case)
@@ -1336,7 +1338,7 @@ def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":
 
 def _stable_filter_key_part(value: Any) -> Any:
     if isinstance(value, exp.Expression):
-        return value.sql()
+        return value.sql(copy=False)
     if isinstance(value, set):
         return tuple(sorted((_stable_filter_key_part(item) for item in value), key=repr))
     if isinstance(value, dict):
