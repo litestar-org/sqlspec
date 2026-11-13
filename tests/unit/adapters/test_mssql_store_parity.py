@@ -97,18 +97,30 @@ def test_litestar_store_ddl_matches() -> None:
     assert MssqlPythonStore(mssql_cfg)._drop_table_sql() == PymssqlStore(pymssql_cfg)._drop_table_sql()
 
 
-def test_create_mapped_exception_ast_parity() -> None:
-    """create_mapped_exception in mssql_python.core and pymssql.core must remain AST-equivalent."""
-    import ast
-    import inspect
-
+@pytest.mark.parametrize(
+    ("error_args", "expected_name"),
+    [
+        ((3906, "Database is read-only"), "ReadOnlyTransactionError"),
+        ((3908, "Database is read-only"), "ReadOnlyTransactionError"),
+        ((978, "Read-only replica connection required"), "ReadOnlyTransactionError"),
+        ((976, "Replica unavailable"), "ReplicaUnavailableError"),
+        (("25006", "Read-only transaction"), "ReadOnlyTransactionError"),
+        ((547, "check constraint violation"), "CheckViolationError"),
+        ((547, "foreign key violation"), "ForeignKeyViolationError"),
+        ((2627, "unique constraint violation"), "UniqueViolationError"),
+    ],
+)
+def test_create_mapped_exception_parity(error_args: tuple[Any, ...], expected_name: str) -> None:
+    """Both SQL Server adapters expose the same exception contracts for native errors."""
     from sqlspec.adapters.mssql_python import core as mssql_core
     from sqlspec.adapters.pymssql import core as pymssql_core
 
-    mssql_ast = ast.dump(ast.parse(inspect.getsource(mssql_core.create_mapped_exception)))
-    pymssql_ast = ast.dump(ast.parse(inspect.getsource(pymssql_core.create_mapped_exception)))
-    assert mssql_ast == pymssql_ast
-    assert mssql_core._ERROR_CODE_MAPPING == pymssql_core._ERROR_CODE_MAPPING
+    error = RuntimeError(*error_args)
+    mapped = [core.create_mapped_exception(error) for core in (mssql_core, pymssql_core)]
+    assert type(mapped[0]) is type(mapped[1])
+    assert type(mapped[0]).__name__ == expected_name
+    if expected_name in {"ReadOnlyTransactionError", "ReplicaUnavailableError"}:
+        assert all(exception.__cause__ is error for exception in mapped)
 
 
 def _normalized(sql: str) -> str:

@@ -8,7 +8,6 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from pytest_databases.docker.spanner import configure_spanner_emulator_client_guards
 
 from sqlspec.core.cache import clear_all_caches
 from tests.fixtures.modules import module_is_available as _module_is_available
@@ -149,6 +148,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 @pytest.fixture(scope="session", autouse=True)
 def disable_spanner_builtin_metrics() -> Generator[None, None, None]:
     """Apply and restore the upstream Spanner emulator client guards."""
+    from pytest_databases.docker.spanner import configure_spanner_emulator_client_guards
+
     with configure_spanner_emulator_client_guards():
         yield
 
