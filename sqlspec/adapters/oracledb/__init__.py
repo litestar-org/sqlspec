@@ -1,17 +1,32 @@
 """OracleDB database adapter for SQLSpec."""
 
+from sqlspec.adapters.oracledb._plugins import (
+    OraclePluginName,
+    register_oracle_params_hook,
+    register_oracle_protocol,
+    unregister_oracle_params_hook,
+)
+from sqlspec.adapters.oracledb._typing import (
+    OracleAsyncSessionlessTransactionContext,
+    OracleSyncSessionlessTransactionContext,
+)
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
     OracleDriverFeatures,
+    OraclePoolBoundary,
     OraclePoolParams,
+    OraclePurityInput,
     OracleSyncConfig,
+    OracleTransactionPriority,
 )
 from sqlspec.adapters.oracledb.core import (
     VALID_ORACLE_DRIVER_FEATURE_KEYS,
+    OracleAcquireOptions,
     OracleBlob,
     OracleClob,
     OracleEndpoint,
+    OracleEndUserSecurityConfig,
     OracleJson,
     OracleSessionContextConfig,
     OracleTopologyConfig,
@@ -24,6 +39,7 @@ from sqlspec.adapters.oracledb.core import (
     build_session_release_plsql,
     build_session_reset_plsql,
     build_tns_description,
+    clear_oracle_otel_trace_context,
     default_statement_config,
     execute_session_checkout_async,
     execute_session_checkout_sync,
@@ -36,6 +52,8 @@ from sqlspec.adapters.oracledb.core import (
     parse_sqlnet_ora,
     parse_tnsnames_ora,
     sanitize_oracle_text_query,
+    supports_opentelemetry_tracing,
+    synthesize_session_state_tag,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
@@ -49,10 +67,16 @@ from sqlspec.adapters.oracledb.driver import (
     OracleSyncExceptionHandler,
 )
 from sqlspec.adapters.oracledb.tenant import (
+    OracleAsyncClientContextStrategy,
+    OracleAsyncEndUserSecurityStrategy,
     OracleAsyncIdentifierStrategy,
     OracleAsyncVPDStrategy,
+    OracleShardResolver,
+    OracleSyncClientContextStrategy,
+    OracleSyncEndUserSecurityStrategy,
     OracleSyncIdentifierStrategy,
     OracleSyncVPDStrategy,
+    resolve_tenant_shard_keys,
 )
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.utils.arrow_helpers import (
@@ -64,26 +88,39 @@ from sqlspec.utils.arrow_helpers import (
 
 __all__ = (
     "VALID_ORACLE_DRIVER_FEATURE_KEYS",
+    "OracleAcquireOptions",
+    "OracleAsyncClientContextStrategy",
     "OracleAsyncConfig",
     "OracleAsyncDriver",
+    "OracleAsyncEndUserSecurityStrategy",
     "OracleAsyncExceptionHandler",
     "OracleAsyncIdentifierStrategy",
+    "OracleAsyncSessionlessTransactionContext",
     "OracleAsyncVPDStrategy",
     "OracleBlob",
     "OracleClob",
     "OracleConnectionParams",
     "OracleDriverFeatures",
+    "OracleEndUserSecurityConfig",
     "OracleEndpoint",
     "OracleJson",
     "OracleOutputConverter",
+    "OraclePluginName",
+    "OraclePoolBoundary",
     "OraclePoolParams",
+    "OraclePurityInput",
     "OracleSessionContextConfig",
+    "OracleShardResolver",
+    "OracleSyncClientContextStrategy",
     "OracleSyncConfig",
     "OracleSyncDriver",
+    "OracleSyncEndUserSecurityStrategy",
     "OracleSyncExceptionHandler",
     "OracleSyncIdentifierStrategy",
+    "OracleSyncSessionlessTransactionContext",
     "OracleSyncVPDStrategy",
     "OracleTopologyConfig",
+    "OracleTransactionPriority",
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
     "OracledbSyncDataDictionary",
@@ -96,6 +133,7 @@ __all__ = (
     "build_session_release_plsql",
     "build_session_reset_plsql",
     "build_tns_description",
+    "clear_oracle_otel_trace_context",
     "coerce_oracle_df_to_arrow_batches",
     "coerce_oracle_df_to_arrow_table",
     "default_statement_config",
@@ -111,5 +149,11 @@ __all__ = (
     "oracle_df_to_arrow_table",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "register_oracle_params_hook",
+    "register_oracle_protocol",
+    "resolve_tenant_shard_keys",
     "sanitize_oracle_text_query",
+    "supports_opentelemetry_tracing",
+    "synthesize_session_state_tag",
+    "unregister_oracle_params_hook",
 )

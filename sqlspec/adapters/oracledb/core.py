@@ -54,7 +54,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
-from sqlspec.observability import get_trace_context
+from sqlspec.observability import get_trace_context, get_w3c_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional
@@ -186,13 +186,18 @@ __all__ = (
     "ORACLEDB_VERSION",
     "ORACLE_ACTION_MAX_BYTES",
     "ORACLE_CLIENT_IDENTIFIER_MAX_BYTES",
+    "ORACLE_CLIENT_INFO_MAX_BYTES",
+    "ORACLE_DBOP_MAX_BYTES",
     "ORACLE_ECID_MAX_BYTES",
     "ORACLE_MODULE_MAX_BYTES",
+    "ORACLE_SESSIONLESS_TXN_ID_MAX_BYTES",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "VALID_ORACLE_DRIVER_FEATURE_KEYS",
+    "OracleAcquireOptions",
     "OracleAsyncStreamSource",
     "OracleBlob",
     "OracleClob",
+    "OracleEndUserSecurityConfig",
     "OracleEndpoint",
     "OracleJson",
     "OracleSessionContextConfig",
@@ -200,7 +205,9 @@ __all__ = (
     "OracleTopologyConfig",
     "OracleVersionCache",
     "apply_driver_features",
+    "apply_end_user_security_checkout",
     "apply_oracle_session_trace_attributes",
+    "apply_oracle_transaction_priority",
     "apply_wallet_ssl_context",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
@@ -221,10 +228,13 @@ __all__ = (
     "build_wallet_ssl_context_if_needed",
     "chain_input_handler",
     "chain_output_handler",
+    "clear_end_user_security_release",
+    "clear_oracle_otel_trace_context",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
     "coerce_many_parameters_sync",
+    "coerce_pipeline_rows_async",
     "collect_async_rows",
     "collect_sync_rows",
     "connection_is_thin",
@@ -238,12 +248,24 @@ __all__ = (
     "extract_duality_etag",
     "extract_duality_view_etag",
     "extract_oracle_wallet_zip",
+    "extract_pipeline_single_row",
+    "extract_static_alter_session_config",
+    "forget_oracle_session_state",
+    "has_callable_alter_session_fields",
     "inject_duality_view_etag",
+    "is_stateful_oracle_session_context",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
+    "normalize_oracle_appcontext",
+    "normalize_oracle_config_dsn",
+    "normalize_oracle_purity",
+    "normalize_oracle_sharding_keys",
+    "normalize_oracle_transaction_priority",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
+    "prepare_session_checkout_pipeline",
+    "prepare_session_release_pipeline",
     "read_oracle_lob_async",
     "read_oracle_lob_sync",
     "release_extracted_wallet_dir",
@@ -256,7 +278,13 @@ __all__ = (
     "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
+    "supports_opentelemetry_tracing",
+    "synthesize_session_state_tag",
     "truncate_utf8_bytes",
+    "validate_oracle_drcp_and_mode_constraints",
+    "validate_oracle_session_callback",
+    "validate_sessionless_execution_options",
+    "validate_sessionless_transaction_args",
 )
 
 
@@ -422,6 +450,11 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     12541: (ConnectionTimeoutError, "no listener"),
     12545: (ConnectionTimeoutError, "connect failed"),
     12899: (DataError, "value too large for column"),
+    24756: (TransactionError, "transaction does not exist"),
+    25351: (TransactionError, "transaction is currently in use"),
+    26202: (TransactionError, "no sessionless transaction is active"),
+    26211: (TransactionError, "sessionless transaction cannot mix DBMS_TRANSACTION and driver methods"),
+    26216: (TransactionError, "sessionless transaction is already active"),
     28000: (PermissionDeniedError, "the account is locked"),
     28001: (PermissionDeniedError, "the password has expired"),
     30006: (OperationalError, "resource busy; acquire with WAIT timeout expired"),
@@ -432,6 +465,24 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
 
 _DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
     "DPY-1001": (DatabaseConnectionError, "not connected to database"),
+    "DPY-2056": (ImproperConfigurationError, "centralized config protocol handler failed"),
+    "DPY-2057": (ImproperConfigurationError, "password type handler failed"),
+    "DPY-2058": (ImproperConfigurationError, "password in centralized configuration must specify a type"),
+    "DPY-2061": (ImproperConfigurationError, "registered params hook handler failed"),
+    "DPY-2072": (DataError, "end-user security attribute data exceeds 1024-byte protocol limit"),
+    "DPY-2073": (ImproperConfigurationError, "end-user security context requires Oracle AI Database 26ai over TCPS"),
+    "DPY-3034": (TransactionError, "sessionless transaction cannot mix DBMS_TRANSACTION and driver methods"),
+    "DPY-3035": (TransactionError, "sessionless transaction is already active"),
+    "DPY-3036": (TransactionError, "no sessionless transaction is active"),
+    "DPY-3041": (OperationalError, "database does not support Oracle Deep Data Security"),
+    "DPY-3043": (OperationalError, "database does not support transaction priority"),
+    "DPY-3044": (OperationalError, "database does not support OpenTelemetry tracing"),
+    "DPY-4004": (DataError, "invalid number"),
+    "DPY-4005": (ConnectionTimeoutError, "connection pool checkout timed out"),
+    "DPY-4021": (ImproperConfigurationError, "invalid connection protocol"),
+    "DPY-4027": (ImproperConfigurationError, "no configuration directory specified"),
+    "DPY-4033": (DatabaseConnectionError, "connection closed due to exceeded idle time"),
+    "DPY-4034": (ImproperConfigurationError, "invalid password type"),
     "DPY-4011": (DatabaseConnectionError, "connection was closed"),
     "DPY-4024": (QueryTimeoutError, "query execution timeout expired"),
     "DPY-6000": (DatabaseConnectionError, "cannot connect to database"),
@@ -446,6 +497,17 @@ ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "_statement_cache_holder",
+    "on_pool_destroying",
+    "on_session_end",
+    "on_session_start",
+    "params_hooks",
+    "plugins",
+    "shard_resolver",
+    "sharding_key_variable",
+    "super_sharding_key_variable",
+    "use_tenant_id_as_sharding_key",
+    "enable_auto_state_tagging",
+    "enable_otel_trace_context",
     "arraysize",
     "arrow_requested_schema",
     "custom",
@@ -714,6 +776,277 @@ class OracleTopologyConfig:
         ))
 
 
+class OracleEndUserSecurityConfig:
+    """Explicit per-session Oracle Deep Data Security credentials."""
+
+    __slots__ = ("attributes", "data_roles", "database_access_token", "end_user_identity")
+
+    def __init__(
+        self,
+        database_access_token: str | Callable[[], str],
+        *,
+        end_user_identity: Any = None,
+        data_roles: Any = None,
+        attributes: Any = None,
+    ) -> None:
+        if not callable(database_access_token) and (
+            not isinstance(database_access_token, str) or not database_access_token
+        ):
+            msg = "database_access_token must be a nonempty string or callable"
+            raise ImproperConfigurationError(msg)
+        if end_user_identity is not None and not callable(end_user_identity):
+            _validate_end_user_identity(end_user_identity)
+        if data_roles is not None and not callable(data_roles):
+            _validate_end_user_roles(data_roles)
+        if attributes is not None and not callable(attributes):
+            _validate_end_user_attributes(attributes)
+        self.database_access_token = database_access_token
+        self.end_user_identity = end_user_identity
+        self.data_roles = list(data_roles) if data_roles is not None and not callable(data_roles) else data_roles
+        self.attributes = dict(attributes) if attributes is not None and not callable(attributes) else attributes
+
+    def __repr__(self) -> str:
+        return "OracleEndUserSecurityConfig(database_access_token='***', end_user_identity='***', data_roles=<redacted>, attributes=<redacted>)"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleEndUserSecurityConfig):
+            return NotImplemented
+        return (self.database_access_token, self.end_user_identity, self.data_roles, self.attributes) == (
+            other.database_access_token,
+            other.end_user_identity,
+            other.data_roles,
+            other.attributes,
+        )
+
+    def __hash__(self) -> int:
+        roles = tuple(self.data_roles) if isinstance(self.data_roles, Sequence) else self.data_roles
+        attributes = tuple(sorted(self.attributes.items())) if isinstance(self.attributes, Mapping) else self.attributes
+        return hash((self.database_access_token, self.end_user_identity, roles, attributes))
+
+
+def _validate_end_user_identity(value: Any) -> None:
+    if isinstance(value, str) and value:
+        return
+    if (
+        isinstance(value, tuple)
+        and len(value) == _QUALIFIED_TABLE_PARTS
+        and isinstance(value[0], str)
+        and value[0]
+        and (value[1] is None or (isinstance(value[1], str) and value[1]))
+    ):
+        return
+    msg = "end_user_identity must be a nonempty string or (user_name, key) pair"
+    raise ImproperConfigurationError(msg)
+
+
+def _validate_end_user_roles(value: Any) -> None:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or any(not isinstance(role, str) or not role for role in value)
+    ):
+        msg = "data_roles must be a sequence of nonempty strings"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_end_user_attributes(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        msg = "end-user attributes must be a mapping"
+        raise ImproperConfigurationError(msg)
+    for key, item in value.items():
+        _validate_oracle_identifier(key, "end-user attribute")
+        if not isinstance(item, str):
+            msg = "end-user attributes must contain string values"
+            raise ImproperConfigurationError(msg)
+
+
+def apply_end_user_security_checkout(connection: Any, config: OracleEndUserSecurityConfig) -> None:
+    """Attach explicitly scoped native security credentials without a network call."""
+    if not connection_is_thin(connection):
+        msg = "Oracle Deep Data Security requires Thin mode over TCPS"
+        raise ImproperConfigurationError(msg)
+    create_context = getattr(oracledb_module, "create_end_user_security_context", None)
+    if create_context is None or not callable(getattr(connection, "set_end_user_security_context", None)):
+        msg = "Oracle Deep Data Security requires python-oracledb 26.1 or newer"
+        raise oracledb_module.NotSupportedError(msg)
+    token = config.database_access_token() if callable(config.database_access_token) else config.database_access_token
+    identity = config.end_user_identity() if callable(config.end_user_identity) else config.end_user_identity
+    roles = config.data_roles() if callable(config.data_roles) else config.data_roles
+    attrs = config.attributes() if callable(config.attributes) else config.attributes
+    validated = OracleEndUserSecurityConfig(token, end_user_identity=identity, data_roles=roles, attributes=attrs)
+    try:
+        context = create_context(
+            validated.database_access_token,
+            end_user_identity=validated.end_user_identity,
+            data_roles=validated.data_roles,
+            attributes=validated.attributes,
+        )
+        connection.set_end_user_security_context(context)
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+def clear_end_user_security_release(connection: Any) -> None:
+    """Unconditionally detach session credentials before pool release."""
+    try:
+        connection.clear_end_user_security_context()
+    except oracledb_module.DatabaseError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+_INITIAL_SCHEMA_BY_CONN_ID: dict[int, str] = {}
+_INITIAL_PRIORITY_BY_CONN_ID: dict[int, Any] = {}
+
+
+def forget_oracle_session_state(connection: Any) -> None:
+    """Remove checkout baselines when a physical connection is discarded."""
+    _INITIAL_SCHEMA_BY_CONN_ID.pop(id(connection), None)
+    _INITIAL_PRIORITY_BY_CONN_ID.pop(id(connection), None)
+
+
+def normalize_oracle_appcontext(
+    raw_appcontext: Sequence[tuple[str, str, str]] | Mapping[str, Mapping[str, str]],
+) -> list[tuple[str, str, str]]:
+    """Validate and normalize native connect-time application context triplets."""
+    if isinstance(raw_appcontext, Mapping):
+        result = [
+            (namespace, key, value) for namespace, attrs in raw_appcontext.items() for key, value in attrs.items()
+        ]
+    elif isinstance(raw_appcontext, Sequence) and not isinstance(raw_appcontext, (str, bytes)):
+        result = list(raw_appcontext)
+    else:
+        msg = "Oracle appcontext must be context triplets or a nested mapping"
+        raise ImproperConfigurationError(msg)
+    for entry in result:
+        if (
+            not isinstance(entry, (tuple, list))
+            or len(entry) != _VERSION_COMPONENTS
+            or any(not isinstance(item, str) for item in entry)
+        ):
+            msg = "Oracle appcontext entries must contain three strings"
+            raise ImproperConfigurationError(msg)
+        _validate_oracle_identifier(entry[0], "context namespace")
+        _validate_oracle_identifier(entry[1], "context attribute")
+    return [(entry[0], entry[1], entry[2]) for entry in result]
+
+
+def extract_pipeline_single_row(pipeline_result: Any) -> tuple[Any, ...] | None:
+    """Extract the first native fetchone result without fabricating a missing row."""
+    rows = pipeline_result.rows
+    return tuple(rows[0]) if rows else None
+
+
+def _copy_oracle_session_context(
+    config: "OracleSessionContextConfig", *, contexts: Any, edition: Any
+) -> "OracleSessionContextConfig":
+    return OracleSessionContextConfig(
+        contexts=contexts,
+        edition=edition,
+        module=config.module,
+        action=config.action,
+        client_identifier=config.client_identifier,
+        ecid=config.ecid,
+        time_zone=config.time_zone,
+        nls_parameters=config.nls_parameters,
+        ebs_apps_initialize=config.ebs_apps_initialize,
+        mo_global_policy=config.mo_global_policy,
+        apex_session=config.apex_session,
+        reset_package=config.reset_package,
+        clear_identifier=config.clear_identifier,
+        clear_context_namespaces=config.clear_context_namespaces,
+        apex_detach=config.apex_detach,
+        reset_on_release=config.reset_on_release,
+        clientinfo=config.clientinfo,
+        current_schema=config.current_schema,
+        dbop=config.dbop,
+        transaction_priority=config.transaction_priority,
+        end_user_security=config.end_user_security,
+    )
+
+
+def prepare_session_checkout_pipeline(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
+) -> tuple[str | None, dict[str, Any]]:
+    """Apply zero-round-trip connection fields and prepare optional checkout SQL."""
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    if resolved.current_schema is not None:
+        baseline = getattr(connection, "current_schema", "") or getattr(connection, "username", "")
+        if isinstance(baseline, str):
+            _INITIAL_SCHEMA_BY_CONN_ID.setdefault(id(connection), baseline)
+    if resolved.transaction_priority is not None:
+        if getattr(oracledb_module, "TransactionPriority", None) is None:
+            msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), connection.transaction_priority)
+        apply_oracle_transaction_priority(connection, resolved.transaction_priority)
+    if resolved.end_user_security is not None:
+        apply_end_user_security_checkout(connection, resolved.end_user_security)
+    contexts = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+    if callable(resolved.contexts):
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=resolved.edition)
+    if contexts:
+        for namespace, attrs in contexts.items():
+            if namespace.upper() == "CLIENTCONTEXT":
+                values: dict[str, str] = {}
+                for key, raw in attrs.items():
+                    value = raw() if callable(raw) else raw
+                    if value is not None:
+                        if not isinstance(value, str):
+                            msg = "CLIENTCONTEXT values must be strings"
+                            raise ImproperConfigurationError(msg)
+                        values[key] = value
+                connection.set_app_context("CLIENTCONTEXT", **values)
+    edition = _resolve_callable_or_str(resolved.edition)
+    actual = getattr(connection, "edition", None)
+    if edition is not None and isinstance(actual, str) and edition.upper() == actual.upper():
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=None)
+    plsql, binds, piggybacks = _build_session_checkout_plan(resolved, skip_alter_session=skip_alter_session)
+    for name, value in piggybacks.items():
+        if name == "econtext_id" and connection_is_thin(connection):
+            continue
+        if value is not None:
+            maximum = ORACLE_MODULE_MAX_BYTES if name == "module" else ORACLE_ACTION_MAX_BYTES
+            value = truncate_utf8_bytes(value, maximum) if name != "current_schema" else value
+        with contextlib.suppress(AttributeError):
+            setattr(connection, name, value)
+    return plsql, binds
+
+
+def prepare_session_release_pipeline(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, defer_identifier_reset: bool = False
+) -> tuple[str | None, dict[str, Any], Callable[[], None] | None]:
+    """Clear zero-round-trip state and prepare bound cleanup SQL."""
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    if resolved.end_user_security is not None:
+        clear_end_user_security_release(connection)
+    contexts = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+    if callable(resolved.contexts):
+        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=resolved.edition)
+    namespaces = set(resolved.clear_context_namespaces)
+    if resolved.reset_on_release and contexts:
+        namespaces.update(contexts)
+    if any(namespace.upper() == "CLIENTCONTEXT" for namespace in namespaces):
+        connection.clear_app_context("CLIENTCONTEXT")
+    schema = _INITIAL_SCHEMA_BY_CONN_ID.pop(id(connection), None)
+    priority = _INITIAL_PRIORITY_BY_CONN_ID.pop(id(connection), None)
+    if resolved.reset_on_release:
+        if schema is not None:
+            connection.current_schema = schema
+        if priority is not None:
+            apply_oracle_transaction_priority(connection, priority)
+    plsql, binds, piggybacks = _build_session_release_plan(resolved)
+    deferred = None
+    for name, value in piggybacks.items():
+        if name == "econtext_id" and connection_is_thin(connection):
+            continue
+        if name == "client_identifier" and defer_identifier_reset:
+            deferred = partial(setattr, connection, name, value)
+        else:
+            with contextlib.suppress(AttributeError):
+                setattr(connection, name, value)
+    return plsql, binds, deferred
+
+
 class OracleSessionContextConfig:
     """Declarative Oracle session context, EBR edition, NLS, EBS, APEX, and VPD configuration."""
 
@@ -724,22 +1057,32 @@ class OracleSessionContextConfig:
         "clear_context_namespaces",
         "clear_identifier",
         "client_identifier",
+        "clientinfo",
         "context_attributes",
         "contexts",
+        "current_schema",
+        "dbop",
         "ebs_apps_initialize",
         "ecid",
         "edition",
+        "end_user_security",
         "mo_global_policy",
         "module",
         "nls_parameters",
         "reset_on_release",
         "reset_package",
         "time_zone",
+        "transaction_priority",
     )
 
     def __init__(
         self,
         *,
+        clientinfo: Any = None,
+        current_schema: Any = None,
+        dbop: Any = None,
+        transaction_priority: Any = None,
+        end_user_security: OracleEndUserSecurityConfig | Mapping[str, Any] | None = None,
         module: "str | Callable[[], str | None] | None" = None,
         action: "str | Callable[[], str | None] | None" = None,
         client_identifier: "str | Callable[[], str | None] | None" = None,
@@ -769,6 +1112,15 @@ class OracleSessionContextConfig:
             _validate_oracle_contexts(resolved_contexts)
         for ns in clear_context_namespaces:
             _validate_oracle_identifier(ns, "context namespace")
+        self.clientinfo = clientinfo
+        self.current_schema = current_schema
+        self.dbop = dbop
+        self.transaction_priority = transaction_priority
+        self.end_user_security = (
+            OracleEndUserSecurityConfig(**end_user_security)
+            if isinstance(end_user_security, Mapping)
+            else end_user_security
+        )
         self.module = module
         self.action = action
         self.client_identifier = client_identifier
@@ -805,6 +1157,11 @@ class OracleSessionContextConfig:
         if not isinstance(other, OracleSessionContextConfig):
             return NotImplemented
         return (
+            self.clientinfo,
+            self.current_schema,
+            self.dbop,
+            self.end_user_security,
+            self.transaction_priority,
             self.module,
             self.action,
             self.client_identifier,
@@ -822,6 +1179,11 @@ class OracleSessionContextConfig:
             self.apex_detach,
             self.reset_on_release,
         ) == (
+            other.clientinfo,
+            other.current_schema,
+            other.dbop,
+            other.end_user_security,
+            other.transaction_priority,
             other.module,
             other.action,
             other.client_identifier,
@@ -842,6 +1204,11 @@ class OracleSessionContextConfig:
 
     def __hash__(self) -> int:
         return hash((
+            self.clientinfo,
+            self.current_schema,
+            self.dbop,
+            self.end_user_security,
+            self.transaction_priority,
             self.module,
             self.action,
             self.client_identifier,
@@ -1152,7 +1519,9 @@ def build_pipeline_stack_result(
     returns_rows: bool,
     parameters: Any,
     pipeline_result: Any,
-    driver_features: "dict[str, Any]",
+    driver_features: "Mapping[str, Any]",
+    *,
+    coerced_rows: Sequence[Any] | None = None,
 ) -> "StackResult":
     """Build StackResult from Oracle pipeline output.
 
@@ -1163,6 +1532,7 @@ def build_pipeline_stack_result(
         parameters: Prepared parameters used for execution.
         pipeline_result: Raw pipeline execution result.
         driver_features: Driver feature configuration for normalization.
+        coerced_rows: Optional LOB-materialized pipeline rows.
 
     Returns:
         StackResult for the pipeline operation.
@@ -1176,6 +1546,8 @@ def build_pipeline_stack_result(
     except AttributeError:
         columns = None
 
+    if coerced_rows is not None:
+        rows = coerced_rows
     data: list[dict[str, Any]] | None = None
     if returns_rows:
         if not rows:
@@ -1192,7 +1564,7 @@ def build_pipeline_stack_result(
             else:
                 first = rows[0]
                 names = [f"column_{index}" for index in range(len(first) if isinstance(first, Sized) else 0)]
-            names = normalize_column_names(names, driver_features)
+            names = normalize_column_names(names, dict(driver_features))
             normalized_rows: list[dict[str, Any]] = []
             for row in rows:
                 if isinstance(row, dict):
@@ -1216,14 +1588,7 @@ def build_pipeline_stack_result(
     if return_value is not None:
         metadata["return_value"] = return_value
 
-    try:
-        rowcount = pipeline_result.rowcount
-    except AttributeError:
-        rowcount = None
-
-    if isinstance(rowcount, int) and rowcount >= 0:
-        rows_affected = rowcount
-    elif method == "execute_many":
+    if method == "execute_many":
         try:
             rows_affected = len(parameters or ())
         except TypeError:
@@ -1256,6 +1621,8 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
+ORACLE_CLIENT_INFO_MAX_BYTES: int = 64
+ORACLE_DBOP_MAX_BYTES: int = 64
 ORACLE_MODULE_MAX_BYTES: int = 48
 ORACLE_ACTION_MAX_BYTES: int = 64
 ORACLE_CLIENT_IDENTIFIER_MAX_BYTES: int = 64
@@ -1278,6 +1645,91 @@ def truncate_utf8_bytes(value: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
+ORACLE_SESSIONLESS_TXN_ID_MAX_BYTES: Final[int] = 64
+
+
+def supports_opentelemetry_tracing(connection: Any) -> bool:
+    """Probe native trace support without raising on closed or older connections."""
+    try:
+        return bool(getattr(connection, "supports_opentelemetry_tracing", False))
+    except Exception:
+        return False
+
+
+def clear_oracle_otel_trace_context(connection: Any) -> None:
+    """Clear native trace state, propagating reset failures to the lease owner."""
+    method = getattr(connection, "set_opentelemetry_trace_context", None)
+    if method is None:
+        return
+    if bool(getattr(connection, "supports_opentelemetry_tracing", False)):
+        method(None)
+
+
+def validate_sessionless_transaction_args(
+    transaction_id: str | bytes | None, *, timeout: int, is_resume: bool = False, defer_round_trip: bool = True
+) -> bytes | None:
+    """Validate an optional global transaction identifier before native operations."""
+    if (
+        not isinstance(defer_round_trip, bool)
+        or isinstance(timeout, bool)
+        or not isinstance(timeout, int)
+        or timeout < (0 if is_resume else 1)
+    ):
+        msg = "Sessionless timeout must be positive (nonnegative on resume) and defer_round_trip must be bool"
+        raise ImproperConfigurationError(msg)
+    if transaction_id is None and not is_resume:
+        return None
+    if not isinstance(transaction_id, (str, bytes)):
+        msg = "Sessionless transaction_id must be a string or bytes"
+        raise ImproperConfigurationError(msg)
+    resolved = transaction_id.encode("utf-8") if isinstance(transaction_id, str) else transaction_id
+    if not 1 <= len(resolved) <= ORACLE_SESSIONLESS_TXN_ID_MAX_BYTES:
+        msg = "Sessionless transaction_id must contain 1..64 UTF-8 bytes"
+        raise ImproperConfigurationError(msg)
+    return resolved
+
+
+def validate_sessionless_execution_options(*, suspend_on_success: bool = False, batch_size: int | None = None) -> None:
+    """Refuse invalid suspension and batch combinations before issuing SQL."""
+    if (
+        not isinstance(suspend_on_success, bool)
+        or (
+            batch_size is not None
+            and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0)
+        )
+        or (suspend_on_success and batch_size is not None)
+    ):
+        msg = "suspend_on_success must be bool and cannot be combined with a positive batch_size"
+        raise ImproperConfigurationError(msg)
+
+
+async def coerce_pipeline_rows_async(
+    rows: Sequence[Any] | None, driver_features: Mapping[str, Any]
+) -> list[Any] | None:
+    """Materialize LOB cells while preserving scalar pipeline rows on a fast path."""
+    if rows is None:
+        return None
+    if driver_features.get("fetch_lobs", False):
+        return list(rows)
+    result: list[Any] = []
+    for row in rows:
+        cells = row.values() if isinstance(row, Mapping) else row
+        if not any(is_async_readable(cell) or is_readable(cell) for cell in cells):
+            result.append(row)
+            continue
+        keys = list(row) if isinstance(row, Mapping) else None
+        values = row.values() if isinstance(row, Mapping) else row
+        converted: list[Any] = []
+        for cell in values:
+            if is_async_readable(cell):
+                cell = await cell.read()
+            elif is_readable(cell):
+                cell = cell.read()
+            converted.append(cell)
+        result.append(dict(zip(keys, converted, strict=True)) if keys is not None else tuple(converted))
+    return result
+
+
 def apply_oracle_session_trace_attributes(
     connection: Any,
     *,
@@ -1287,6 +1739,8 @@ def apply_oracle_session_trace_attributes(
     econtext_id: "str | None" = None,
     ecid: "str | None" = None,
     preserve_client_identifier: bool = False,
+    enable_session_attributes: bool = True,
+    enable_otel_trace_context: bool = False,
 ) -> None:
     """Set Oracle end-to-end tracing attributes on connection for zero-RTT OALL8 piggybacking.
 
@@ -1298,6 +1752,8 @@ def apply_oracle_session_trace_attributes(
         econtext_id: Optional explicit V$SESSION.ECID value (truncated to 64 UTF-8 bytes).
         ecid: Optional alias for ``econtext_id``.
         preserve_client_identifier: Keep an active tenant identifier unchanged.
+        enable_session_attributes: Apply traditional Oracle diagnostic attributes.
+        enable_otel_trace_context: Propagate W3C headers through supported native APIs.
     """
     ctx = SQLCommenterContext.get() or {}
     resolved_module = (
@@ -1319,22 +1775,33 @@ def apply_oracle_session_trace_attributes(
         else:
             resolved_ecid = ctx.get("traceparent") or ctx.get("econtext_id") or ctx.get("ecid")
 
-    if resolved_module is not None:
+    if enable_session_attributes and resolved_module is not None:
         with contextlib.suppress(Exception):
             connection.module = truncate_utf8_bytes(resolved_module, ORACLE_MODULE_MAX_BYTES)
-    if resolved_action is not None:
+    if enable_session_attributes and resolved_action is not None:
         with contextlib.suppress(Exception):
             connection.action = truncate_utf8_bytes(resolved_action, ORACLE_ACTION_MAX_BYTES)
-    if resolved_client_id is not None and not preserve_client_identifier:
+    if enable_session_attributes and resolved_client_id is not None and not preserve_client_identifier:
         with contextlib.suppress(Exception):
             connection.client_identifier = truncate_utf8_bytes(resolved_client_id, ORACLE_CLIENT_IDENTIFIER_MAX_BYTES)
-    if resolved_ecid is not None:
+    if enable_session_attributes and resolved_ecid is not None and not connection_is_thin(connection):
         truncated_ecid = truncate_utf8_bytes(resolved_ecid, ORACLE_ECID_MAX_BYTES)
         with contextlib.suppress(Exception):
             try:
                 connection.econtext_id = truncated_ecid
             except AttributeError:
                 connection.ecid = truncated_ecid
+    if enable_otel_trace_context and supports_opentelemetry_tracing(connection):
+        try:
+            traceparent, tracestate = get_w3c_trace_context()
+            if traceparent is None:
+                connection.set_opentelemetry_trace_context(None)
+            else:
+                connection.set_opentelemetry_trace_context(traceparent, tracestate)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).debug("Oracle trace context propagation failed: %s", exc)
 
 
 def apply_driver_features(
@@ -1352,6 +1819,8 @@ def apply_driver_features(
             msg = f"Unknown Oracle driver_features key(s): {', '.join(unknown_keys)}"
             raise ImproperConfigurationError(msg)
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    features.setdefault("enable_otel_trace_context", True)
+    features.setdefault("enable_auto_state_tagging", True)
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
@@ -1483,6 +1952,7 @@ class OracleSyncStreamSource:
         self._driver._check_pending_exception(handler)
 
     def _start(self) -> None:
+        self._driver._apply_session_tracing(self._driver.connection)
         try:
             cursor = self._driver.connection.cursor()
             self._cursor = cursor
@@ -1622,6 +2092,7 @@ class OracleAsyncStreamSource:
                 cursor.close()
 
     async def _start(self) -> None:
+        self._driver._apply_session_tracing(self._driver.connection)
         try:
             cursor = self._driver.connection.cursor()
             self._cursor = cursor
@@ -2149,64 +2620,46 @@ def build_session_reset_plsql(
     return build_session_release_plsql(config)
 
 
-def execute_session_checkout_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
-    """Apply TTC piggyback attributes and execute session checkout PL/SQL synchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
+def execute_session_checkout_sync(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
+) -> None:
+    """Apply checkout state and execute the optional PL/SQL block."""
+    plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
     if plsql is not None:
         with connection.cursor() as cursor:
-            if bind_params:
-                cursor.execute(plsql, bind_params)
-            else:
-                cursor.execute(plsql)
+            cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
 
 
-def execute_session_release_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
-    """Clear TTC piggyback attributes and execute session release PL/SQL synchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
+def execute_session_release_sync(connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]) -> None:
+    """Clear checkout state before making a connection available for reuse."""
+    plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
     if plsql is not None:
         with connection.cursor() as cursor:
-            if bind_params:
-                cursor.execute(plsql, bind_params)
-            else:
-                cursor.execute(plsql)
+            cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
+    if deferred is not None:
+        deferred()
 
 
 async def execute_session_checkout_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> None:
-    """Apply TTC piggyback attributes and execute session checkout PL/SQL asynchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
+    """Apply asynchronous checkout state and optional PL/SQL block."""
+    plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
     if plsql is not None:
         with connection.cursor() as cursor:
-            if bind_params:
-                await cursor.execute(plsql, bind_params)
-            else:
-                await cursor.execute(plsql)
+            await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
 
 
 async def execute_session_release_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+    connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
 ) -> None:
-    """Clear TTC piggyback attributes and execute session release PL/SQL asynchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
-    for attr_name, attr_val in piggyback_attrs.items():
-        with contextlib.suppress(AttributeError):
-            setattr(connection, attr_name, attr_val)
+    """Clear asynchronous session state before pool return."""
+    plsql, binds, deferred = prepare_session_release_pipeline(connection, config)
     if plsql is not None:
         with connection.cursor() as cursor:
-            if bind_params:
-                await cursor.execute(plsql, bind_params)
-            else:
-                await cursor.execute(plsql)
+            await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
+    if deferred is not None:
+        deferred()
 
 
 def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
@@ -2313,6 +2766,319 @@ def build_duality_etag_update_sql(
     )
 
 
+def is_stateful_oracle_session_context(config: OracleSessionContextConfig | Mapping[str, Any] | None) -> bool:
+    """Identify server session state that cannot survive statement-boundary pooling."""
+    if config is None:
+        return False
+    fields = (
+        "client_identifier",
+        "clear_identifier",
+        "edition",
+        "time_zone",
+        "nls_parameters",
+        "contexts",
+        "context_attributes",
+        "clear_context_namespaces",
+        "ebs_apps_initialize",
+        "mo_global_policy",
+        "apex_session",
+        "apex_detach",
+        "reset_package",
+        "current_schema",
+        "end_user_security",
+        "transaction_priority",
+    )
+    return any(
+        bool(config.get(name) if isinstance(config, Mapping) else getattr(config, name, None)) for name in fields
+    )
+
+
+def validate_oracle_drcp_and_mode_constraints(
+    connection_config: Mapping[str, Any], driver_features: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Reject DRCP and edition combinations that lose state or conflict in the SDK."""
+    config = dict(connection_config)
+    features = driver_features or {}
+    extra = config.get("extra")
+    values = dict(extra) if isinstance(extra, Mapping) else {}
+    values.update(config)
+    dsn = str(config.get("dsn", ""))
+    for key in ("pool_boundary", "pool_name", "cclass", "edition"):
+        match = re.search(r"(?:[?&]|\()" + key + r"\s*=\s*([^)&]+)", dsn, re.IGNORECASE)
+        if key not in values and match:
+            values[key] = match.group(1)
+    boundary = values.get("pool_boundary")
+    if boundary is not None:
+        if not isinstance(boundary, str) or boundary.lower() not in {"statement", "transaction"}:
+            msg = "Oracle pool_boundary must be 'statement' or 'transaction'"
+            raise ImproperConfigurationError(msg)
+        if "pool_boundary" in config:
+            config["pool_boundary"] = boundary.lower()
+        if boundary.lower() == "statement" and (
+            features.get("tenant_strategy")
+            or is_stateful_oracle_session_context(features.get("session_context_hook"))
+            or values.get("transaction_priority")
+            or values.get("edition")
+        ):
+            msg = "Statement-boundary DRCP cannot preserve tenant or stateful session settings"
+            raise ImproperConfigurationError(msg)
+    if values.get("edition") is not None and values.get("cclass") is not None:
+        msg = "Oracle edition and cclass conflict; set edition through OracleSessionContextConfig instead"
+        raise ImproperConfigurationError(msg)
+    hook = features.get("session_context_hook")
+    security = hook.get("end_user_security") if isinstance(hook, Mapping) else getattr(hook, "end_user_security", None)
+    if security is not None:
+        thick = (
+            bool(config.get("thick_mode"))
+            or config.get("lib_dir") is not None
+            or bool(config.get("soda_metadata_cache"))
+            or not oracledb_module.is_thin_mode()
+        )
+        plain_tcp = (
+            str(values.get("protocol", "")).lower() == "tcp"
+            or dsn.lower().startswith("tcp://")
+            or bool(re.search(r"\(PROTOCOL\s*=\s*TCP\)", dsn, re.IGNORECASE))
+        )
+        if thick or plain_tcp:
+            msg = "Oracle Deep Data Security requires Thin mode over TCPS"
+            raise ImproperConfigurationError(msg)
+    if values.get("pool_name") is not None:
+        name = values["pool_name"]
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_$#.-]+", name):
+            msg = "Oracle pool_name must be a nonempty TNS-safe token"
+            raise ImproperConfigurationError(msg)
+    return config
+
+
+def normalize_oracle_purity(purity: Any) -> int | None:
+    """Normalize native purity enums, valid integer constants, and named inputs."""
+    if purity is None:
+        return None
+    if isinstance(purity, str):
+        purity = getattr(oracledb_module.Purity, purity.upper(), None)
+        if purity is None:
+            msg = "Oracle purity must be DEFAULT, NEW, or SELF"
+            raise ImproperConfigurationError(msg)
+    if isinstance(purity, bool) or not isinstance(purity, int) or purity not in tuple(oracledb_module.Purity):
+        msg = "Invalid Oracle session purity"
+        raise ImproperConfigurationError(msg)
+    return int(purity)
+
+
+def normalize_oracle_sharding_keys(
+    sharding_key: Sequence[Any] | None, super_sharding_key: Sequence[Any] | None = None
+) -> tuple[list[Any] | None, list[Any] | None]:
+    """Normalize nonempty shard sequences and reject orphan super-shard keys."""
+    normalized: list[list[Any] | None] = []
+    for value in (sharding_key, super_sharding_key):
+        if value is not None and (isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or not value):
+            msg = "Oracle sharding keys must be nonempty sequences, not strings or bytes"
+            raise ImproperConfigurationError(msg)
+        normalized.append(list(value) if value is not None else None)
+    if normalized[1] is not None and normalized[0] is None:
+        msg = "Oracle super_sharding_key requires sharding_key"
+        raise ImproperConfigurationError(msg)
+    return normalized[0], normalized[1]
+
+
+def normalize_oracle_transaction_priority(value: Any) -> Any:
+    """Resolve optional native transaction priority without increasing the SDK floor."""
+    if value is None:
+        return None
+    priority_type = getattr(oracledb_module, "TransactionPriority", None)
+    if priority_type is None:
+        msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
+        raise oracledb_module.NotSupportedError(msg)
+    if isinstance(value, str):
+        value = getattr(priority_type, value.upper(), None)
+    if value is None or isinstance(value, bool) or not isinstance(value, priority_type):
+        msg = "Oracle transaction priority must be DEFAULT, LOW, MEDIUM, or HIGH"
+        raise ImproperConfigurationError(msg)
+    return value
+
+
+def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
+    """Assign native priority and map optional-feature server rejection."""
+    resolved = normalize_oracle_transaction_priority(priority)
+    if resolved is not None:
+        try:
+            connection.transaction_priority = resolved
+        except oracledb_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
+
+
+class OracleAcquireOptions:
+    """Normalized Oracle checkout overrides with stable equality and hash semantics."""
+
+    __slots__ = (
+        "cclass",
+        "match_any_tag",
+        "purity",
+        "sharding_key",
+        "super_sharding_key",
+        "tag",
+        "transaction_priority",
+    )
+
+    def __init__(
+        self,
+        *,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: Any = None,
+        transaction_priority: Any = None,
+    ) -> None:
+        self.sharding_key, self.super_sharding_key = normalize_oracle_sharding_keys(sharding_key, super_sharding_key)
+        self.tag = tag
+        self.match_any_tag = match_any_tag
+        self.cclass = cclass
+        self.purity = normalize_oracle_purity(purity)
+        self.transaction_priority = normalize_oracle_transaction_priority(transaction_priority)
+
+    def is_default(self) -> bool:
+        """Return whether checkout can use native pool defaults without kwargs."""
+        return (
+            all(
+                value is None
+                for value in (
+                    self.sharding_key,
+                    self.super_sharding_key,
+                    self.tag,
+                    self.cclass,
+                    self.purity,
+                    self.transaction_priority,
+                )
+            )
+            and not self.match_any_tag
+        )
+
+    def __repr__(self) -> str:
+        return f"OracleAcquireOptions(sharding_key={self.sharding_key!r}, super_sharding_key={self.super_sharding_key!r}, tag={self.tag!r}, match_any_tag={self.match_any_tag!r}, cclass={self.cclass!r}, purity={self.purity!r}, transaction_priority={self.transaction_priority!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleAcquireOptions):
+            return NotImplemented
+        return (
+            self.sharding_key,
+            self.super_sharding_key,
+            self.tag,
+            self.match_any_tag,
+            self.cclass,
+            self.purity,
+            self.transaction_priority,
+        ) == (
+            other.sharding_key,
+            other.super_sharding_key,
+            other.tag,
+            other.match_any_tag,
+            other.cclass,
+            other.purity,
+            other.transaction_priority,
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            tuple(self.sharding_key) if self.sharding_key is not None else None,
+            tuple(self.super_sharding_key) if self.super_sharding_key is not None else None,
+            self.tag,
+            self.match_any_tag,
+            self.cclass,
+            self.purity,
+            self.transaction_priority,
+        ))
+
+
+def _oracle_context_value(config: Any, field: str) -> Any:
+    return config.get(field) if isinstance(config, Mapping) else getattr(config, field, None)
+
+
+def synthesize_session_state_tag(
+    config: OracleSessionContextConfig | Mapping[str, Any] | None, *, explicit_tag: str | None = None
+) -> str | None:
+    """Build a deterministic OCI state tag without evaluating dynamic session fields."""
+    pairs: dict[str, str] = {}
+    for field in ("edition", "time_zone", "current_schema", "standby_max_data_delay", "adg_redirect_dml"):
+        value = _oracle_context_value(config, field)
+        if value is None or callable(value):
+            continue
+        if field == "standby_max_data_delay" and (isinstance(value, bool) or not isinstance(value, int)):
+            msg = "standby_max_data_delay must be an integer"
+            raise ImproperConfigurationError(msg)
+        pairs[field.upper()] = str(value).upper() if isinstance(value, bool) else str(value)
+    nls = _oracle_context_value(config, "nls_parameters")
+    if isinstance(nls, Mapping):
+        _validate_oracle_nls_parameters(nls)
+        pairs.update({str(key).upper(): str(value) for key, value in nls.items()})
+    if explicit_tag is not None:
+        for segment in explicit_tag.split(";"):
+            key, separator, value = segment.partition("=")
+            if not separator or not key or not value or any(char in segment for char in "\r\n"):
+                msg = "Oracle state tag must contain nonempty KEY=VALUE segments"
+                raise ImproperConfigurationError(msg)
+            pairs[key] = value
+    for key, value in pairs.items():
+        if any(char in key + value for char in ";\r\n") or "=" in key:
+            msg = "Oracle state tag components cannot contain delimiters or line breaks"
+            raise ImproperConfigurationError(msg)
+    return ";".join(f"{key}={pairs[key]}" for key in sorted(pairs)) or None
+
+
+def validate_oracle_session_callback(callback: Any, *, is_thin_mode: bool) -> Callable[..., Any] | str | None:
+    """Validate a native callback or qualified PL/SQL procedure before pool creation."""
+    if callback is None or callable(callback):
+        return cast("Callable[..., Any] | None", callback)
+    if not isinstance(callback, str) or not re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_$#]*(?:\.[A-Za-z][A-Za-z0-9_$#]*){0,2}", callback
+    ):
+        msg = "Oracle session_callback must be a callable or qualified PL/SQL procedure"
+        raise ImproperConfigurationError(msg)
+    if is_thin_mode:
+        msg = "PL/SQL session_callback requires Oracle Thick mode"
+        raise ImproperConfigurationError(msg)
+    return callback
+
+
+def extract_static_alter_session_config(
+    config: OracleSessionContextConfig | Mapping[str, Any] | None,
+) -> OracleSessionContextConfig | None:
+    """Select static ALTER SESSION fields for one-time owned Thin connection setup."""
+    values = {field: _oracle_context_value(config, field) for field in ("edition", "time_zone", "nls_parameters")}
+    static = {field: value for field, value in values.items() if value is not None and not callable(value)}
+    return OracleSessionContextConfig(**static) if static else None
+
+
+def has_callable_alter_session_fields(config: OracleSessionContextConfig | Mapping[str, Any] | None) -> bool:
+    """Check whether ALTER SESSION settings must be resolved for every checkout."""
+    return any(callable(_oracle_context_value(config, field)) for field in ("edition", "time_zone", "nls_parameters"))
+
+
+def normalize_oracle_config_dsn(dsn: str) -> str:
+    """Normalize file and centralized configuration URI schemes."""
+    scheme, separator, payload = dsn.partition("://")
+    normalized = scheme.lower()
+    if not separator or (normalized != "file" and not normalized.startswith("config-")):
+        return dsn
+    if normalized in {"config-aws", "config-gcp"}:
+        alternatives = (
+            "config-awss3:// or config-awssecretsmanager://"
+            if normalized == "config-aws"
+            else "config-gcpstorage:// or config-gcpsecretmanager://"
+        )
+        msg = f"Invalid Oracle config provider {scheme!r}; use {alternatives}"
+        raise ImproperConfigurationError(msg)
+    if not payload:
+        msg = "Oracle configuration URI requires a nonempty payload"
+        raise ImproperConfigurationError(msg)
+    if normalized == "file":
+        normalized = "config-file"
+        if payload.startswith("localhost/"):
+            payload = payload[len("localhost") :]
+    return f"{normalized}://{payload}"
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Build a normalized connection configuration dictionary.
 
@@ -2347,7 +3113,39 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     user_alias = config.pop("username", None)
     if "user" not in config and user_alias is not None:
         config["user"] = user_alias
+    if isinstance(config.get("dsn"), str):
+        config["dsn"] = normalize_oracle_config_dsn(config["dsn"])
+    shard = config.pop("sharding_key", None)
+    super_shard = config.pop("super_sharding_key", None)
+    if (shard is not None and "shardingkey" in config) or (super_shard is not None and "supershardingkey" in config):
+        msg = "Oracle sharding aliases cannot be specified together"
+        raise ImproperConfigurationError(msg)
+    shard, super_shard = normalize_oracle_sharding_keys(
+        shard if shard is not None else config.get("shardingkey"),
+        super_shard if super_shard is not None else config.get("supershardingkey"),
+    )
+    if shard is not None:
+        config["shardingkey"] = shard
+    if super_shard is not None:
+        config["supershardingkey"] = super_shard
+    if "transaction_priority" in config:
+        config["transaction_priority"] = normalize_oracle_transaction_priority(config["transaction_priority"])
+    if "appcontext" in config:
+        config["appcontext"] = normalize_oracle_appcontext(config["appcontext"])
     _apply_ora_directory_resolution(config, tns_alias=tns_alias)
+    dsn = config.get("dsn", "")
+    if (
+        isinstance(dsn, str)
+        and dsn.startswith("config-")
+        and "://" in dsn
+        and (
+            bool(config.get("thick_mode"))
+            or config.get("lib_dir") is not None
+            or bool(config.get("soda_metadata_cache"))
+            or not oracledb_module.is_thin_mode()
+        )
+    ):
+        config.setdefault("thick_mode_dsn_passthrough", False)
     return config
 
 
@@ -2566,7 +3364,7 @@ def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext 
 
 
 def _build_session_checkout_plan(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     piggyback_attrs: dict[str, str | None] = {}
@@ -2583,6 +3381,13 @@ def _build_session_checkout_plan(
     ecid_val = _resolve_callable_or_str(resolved.ecid)
     if ecid_val is not None:
         piggyback_attrs["econtext_id"] = ecid_val
+
+    for field in ("clientinfo", "dbop", "current_schema"):
+        value = _resolve_callable_or_str(getattr(resolved, field))
+        if value is not None:
+            if field == "current_schema":
+                _validate_oracle_identifier(value, "current_schema")
+            piggyback_attrs[field] = value
 
     alter_clauses: list[str] = []
     tz = _resolve_callable_or_str(resolved.time_zone)
@@ -2603,7 +3408,7 @@ def _build_session_checkout_plan(
             alter_clauses.append(f"{key.upper()} = ''{val}''")
 
     plsql_statements: list[str] = []
-    if alter_clauses:
+    if alter_clauses and not skip_alter_session:
         joined_alter = " ".join(alter_clauses)
         plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
 
@@ -2631,6 +3436,8 @@ def _build_session_checkout_plan(
         _validate_oracle_contexts(ctx_raw)
         idx = 0
         for namespace in sorted(ctx_raw.keys()):
+            if namespace.upper() == "CLIENTCONTEXT":
+                continue
             attrs = ctx_raw[namespace]
             for attr_key in sorted(attrs.keys()):
                 raw_val = attrs[attr_key]
@@ -2684,13 +3491,17 @@ def _build_session_release_plan(
 
     piggyback_attrs: dict[str, str | None] = {}
     if resolved.client_identifier is not None or resolved.clear_identifier:
-        piggyback_attrs["client_identifier"] = None if resolved.clear_identifier else ""
+        piggyback_attrs["client_identifier"] = None
     if resolved.module is not None:
         piggyback_attrs["module"] = ""
     if resolved.action is not None:
         piggyback_attrs["action"] = ""
     if resolved.ecid is not None:
         piggyback_attrs["econtext_id"] = ""
+    if resolved.clientinfo is not None:
+        piggyback_attrs["clientinfo"] = ""
+    if resolved.dbop is not None:
+        piggyback_attrs["dbop"] = ""
 
     plsql_statements: list[str] = []
     bind_params: dict[str, Any] = {}
@@ -2698,18 +3509,23 @@ def _build_session_release_plan(
         plsql_statements.append("APEX_SESSION.DETACH;")
     if resolved.clear_identifier:
         plsql_statements.append("DBMS_SESSION.CLEAR_IDENTIFIER;")
-    for idx, namespace in enumerate(resolved.clear_context_namespaces):
+    idx = 0
+    for namespace in resolved.clear_context_namespaces:
+        if namespace.upper() == "CLIENTCONTEXT":
+            continue
         plsql_statements.append(f"DBMS_SESSION.CLEAR_ALL_CONTEXT(:p_clr_ns_{idx});")
         bind_params[f"p_clr_ns_{idx}"] = namespace
+        idx += 1
     if resolved.reset_on_release:
         ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
         if ctx_raw:
             _validate_oracle_contexts(ctx_raw)
-            plsql_statements.extend(
-                f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}');"
-                for namespace in sorted(ctx_raw.keys())
-                if namespace not in resolved.clear_context_namespaces
-            )
+            for namespace in sorted(ctx_raw):
+                if namespace.upper() == "CLIENTCONTEXT" or namespace in resolved.clear_context_namespaces:
+                    continue
+                plsql_statements.append(f"DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_{idx});")
+                bind_params[f"p_clr_ns_{idx}"] = namespace
+                idx += 1
     if resolved.reset_package:
         plsql_statements.append("DBMS_SESSION.RESET_PACKAGE;")
 
@@ -3234,6 +4050,8 @@ def read_oracle_lob_sync(value: Any) -> Any:
 
 
 class _OracleSyncStreamDriver(Protocol):
+    def _apply_session_tracing(self, connection: Any = None) -> None: ...
+
     connection: "OracleSyncConnection"
     driver_features: dict[str, Any]
 
@@ -3249,6 +4067,8 @@ class _OracleSyncStreamDriver(Protocol):
 
 
 class _OracleAsyncStreamDriver(Protocol):
+    def _apply_session_tracing(self, connection: Any = None) -> None: ...
+
     connection: "OracleAsyncConnection"
     driver_features: dict[str, Any]
 

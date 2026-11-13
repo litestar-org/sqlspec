@@ -15,6 +15,7 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncConnection,
     OracleSyncCursor,
     OracleSyncSessionContext,
+    oracledb_module,
 )
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.adapters.oracledb._typing import Error as OracleError
@@ -24,6 +25,7 @@ from sqlspec.adapters.oracledb.core import (
     OracleAsyncStreamSource,
     OracleSyncStreamSource,
     apply_oracle_session_trace_attributes,
+    apply_oracle_transaction_priority,
     build_arrow_fetch_kwargs,
     build_dbms_cloud_copy_data_sql,
     build_fetch_kwargs,
@@ -34,6 +36,7 @@ from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_sync,
     coerce_many_parameters_async,
     coerce_many_parameters_sync,
+    coerce_pipeline_rows_async,
     collect_async_rows,
     collect_sync_rows,
     connection_is_thin,
@@ -46,6 +49,8 @@ from sqlspec.adapters.oracledb.core import (
     resolve_rowcount,
     supports_df_batches,
     supports_direct_path_load,
+    validate_sessionless_execution_options,
+    validate_sessionless_transaction_args,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
@@ -97,11 +102,16 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 
+    from sqlspec.adapters.oracledb._typing import (
+        OracleAsyncSessionlessTransactionContext,
+        OracleSyncSessionlessTransactionContext,
+    )
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.core.cache import CachedQuery
     from sqlspec.core.stack import StackOperation
     from sqlspec.driver import ExecutionResult
+    from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowReturnFormat, ArrowSchema, SchemaT, StatementParameters
 
@@ -163,8 +173,16 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
 
     __slots__ = ()
 
+    def attach_observability(self, runtime: "ObservabilityRuntime") -> None:
+        """Refresh trace propagation when the session receives its runtime."""
+        super().attach_observability(runtime)
+        driver = cast("OracleSyncDriver | OracleAsyncDriver", self)
+        driver._otel_tracing_enabled = (
+            bool(driver.driver_features.get("enable_otel_trace_context", True)) and runtime.span_manager.is_enabled
+        )
+
     def _apply_session_tracing(self, connection: Any = None) -> None:
-        if not getattr(self, "_session_tracing_enabled", False):
+        if not (getattr(self, "_session_tracing_enabled", False) or getattr(self, "_otel_tracing_enabled", False)):
             return
         driver = cast("OraclePipelineDriver", self)
         target_conn = connection if connection is not None else getattr(self, "connection", None)
@@ -187,6 +205,8 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
             module=default_module,
             action=default_action,
             preserve_client_identifier=driver.driver_features.get("tenant_strategy") is not None,
+            enable_session_attributes=getattr(self, "_session_tracing_enabled", False),
+            enable_otel_trace_context=getattr(self, "_otel_tracing_enabled", False),
         )
 
     def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
@@ -272,7 +292,12 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
         parameters = operation.parameters or []
         if operation.method == "execute":
             if operation.returns_rows:
-                pipeline.add_fetchall(operation.sql, parameters)
+                driver = cast("OraclePipelineDriver", self)
+                fetch_kwargs = build_fetch_kwargs(driver.driver_features)
+                arraysize = driver.driver_features.get("arraysize")
+                if arraysize is not None:
+                    fetch_kwargs["arraysize"] = arraysize
+                pipeline.add_fetchall(operation.sql, parameters, **fetch_kwargs)
             else:
                 pipeline.add_execute(operation.sql, parameters)
             return
@@ -290,6 +315,8 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
         pipeline_results: "Sequence[Any]",
         continue_on_error: bool,
         observer: StackExecutionObserver,
+        *,
+        coerced_rows_by_index: "Mapping[int, Sequence[Any] | None] | None" = None,
     ) -> "list[StackResult]":
         driver = cast("OraclePipelineDriver", self)
         stack_results: list[StackResult] = []
@@ -321,9 +348,15 @@ class OraclePipelineMixin(CommonDriverAttributesMixin):
                     compiled.parameters,
                     result,
                     driver.driver_features,
+                    coerced_rows=coerced_rows_by_index.get(index) if coerced_rows_by_index is not None else None,
                 )
             )
         return stack_results
+
+    def _check_pipeline_commit_result(self, result: Any) -> None:
+        error = getattr(result, "error", None)
+        if error is not None:
+            raise create_mapped_exception(error)
 
     def _wrap_pipeline_error(
         self, error: Exception, stack: "StatementStack", continue_on_error: bool
@@ -385,8 +418,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         "_fetch_kwargs",
         "_migration_schema_restore",
         "_oracle_version_cache",
+        "_otel_tracing_enabled",
         "_row_metadata_cache",
         "_session_tracing_enabled",
+        "_sessionless_transaction_id",
         "_transaction_active",
     )
     dialect = "oracle"
@@ -416,10 +451,145 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
+        self._sessionless_transaction_id: bytes | None = None
+        self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
         )
+
+    @property
+    def sessionless_transaction_id(self) -> bytes | None:
+        """Return the sessionless transaction currently attached to this connection."""
+        return self._sessionless_transaction_id
+
+    def set_transaction_priority(self, priority: Any) -> None:
+        """Set native transaction priority as a zero-round-trip connection field."""
+        apply_oracle_transaction_priority(self.connection, priority)
+
+    def begin_sessionless_transaction(
+        self, transaction_id: str | bytes | None = None, *, timeout: int = 60, defer_round_trip: bool = True
+    ) -> bytes:
+        """Begin an explicitly supported native sessionless transaction."""
+        resolved = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, defer_round_trip=defer_round_trip
+        )
+        method = getattr(self.connection, "begin_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            txid = method(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = cast("bytes", txid)
+        return self._sessionless_transaction_id
+
+    def resume_sessionless_transaction(
+        self, transaction_id: str | bytes, *, timeout: int = 60, defer_round_trip: bool = True
+    ) -> bytes:
+        """Attach a suspended native transaction to this connection."""
+        resolved = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, is_resume=True, defer_round_trip=defer_round_trip
+        )
+        method = getattr(self.connection, "resume_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            txid = method(cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip)
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = cast("bytes", txid)
+        return self._sessionless_transaction_id
+
+    def suspend_sessionless_transaction(self) -> None:
+        """Detach the active transaction so another pooled connection can resume it."""
+        method = getattr(self.connection, "suspend_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            method()
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = None
+        self._transaction_active = False
+
+    def sessionless_transaction(
+        self,
+        transaction_id: str | bytes | None = None,
+        *,
+        timeout: int = 60,
+        defer_round_trip: bool = True,
+        resume: bool = False,
+        rollback_on_error: bool = True,
+    ) -> "OracleSyncSessionlessTransactionContext":
+        """Scope a sessionless transaction and suspend it on successful exit."""
+        from sqlspec.adapters.oracledb._typing import OracleSyncSessionlessTransactionContext
+
+        return OracleSyncSessionlessTransactionContext(
+            self,
+            transaction_id=transaction_id,
+            timeout=timeout,
+            defer_round_trip=defer_round_trip,
+            resume=resume,
+            rollback_on_error=rollback_on_error,
+        )
+
+    def execute(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        suspend_on_success: bool = False,
+        **kwargs: Any,
+    ) -> SQLResult:
+        """Execute a statement with optional native sessionless suspension."""
+        validate_sessionless_execution_options(suspend_on_success=suspend_on_success)
+        if suspend_on_success:
+            config = statement_config or self.statement_config
+            args = dict(config.execution_args or {})
+            args["oracle_suspend_on_success"] = True
+            statement_config = config.replace(execution_args=args)
+        if suspend_on_success:
+            prepared = self.prepare_statement(statement, parameters, statement_config=statement_config, kwargs=kwargs)
+            prepared = prepared.copy(statement_config=statement_config)
+            result = self.dispatch_statement_execution(prepared, self.connection)
+        else:
+            result = super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        if suspend_on_success:
+            self._sessionless_transaction_id = None
+            self._transaction_active = False
+        return result
+
+    def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        batch_size: int | None = None,
+        suspend_on_success: bool = False,
+        **kwargs: Any,
+    ) -> SQLResult:
+        """Execute a batch with validated native batching and suspension options."""
+        validate_sessionless_execution_options(suspend_on_success=suspend_on_success, batch_size=batch_size)
+        if suspend_on_success or batch_size is not None:
+            config = statement_config or self.statement_config
+            args = dict(config.execution_args or {})
+            if suspend_on_success:
+                args["oracle_suspend_on_success"] = True
+            if batch_size is not None:
+                args["oracle_batch_size"] = batch_size
+            statement_config = config.replace(execution_args=args)
+        result = super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+        if suspend_on_success and parameters:
+            self._sessionless_transaction_id = None
+            self._transaction_active = False
+        return result
 
     @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
@@ -467,7 +637,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
             )
 
-        cursor.execute(sql, prepared_parameters or {}, **self._fetch_kwargs)
+        execution_args = statement.statement_config.execution_args or {}
+        fetch_kwargs = dict(self._fetch_kwargs)
+        if execution_args.get("oracle_suspend_on_success", False):
+            fetch_kwargs["suspend_on_success"] = True
+        cursor.execute(sql, prepared_parameters or {}, **fetch_kwargs)
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
@@ -559,7 +733,20 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         execution_args = statement.statement_config.execution_args or {}
         batch_errors = bool(execution_args.get("oracle_batch_errors", False))
         array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
-        cursor.executemany(sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts)
+        cursor.executemany(
+            sql,
+            prepared_parameters,
+            batcherrors=batch_errors,
+            arraydmlrowcounts=array_dml_row_counts,
+            **{
+                key: value
+                for key, value in {
+                    "suspend_on_success": execution_args.get("oracle_suspend_on_success"),
+                    "batch_size": execution_args.get("oracle_batch_size"),
+                }.items()
+                if value is not None
+            },
+        )
 
         affected_rows = len(prepared_parameters)
         special_data: dict[str, Any] | None = None
@@ -654,6 +841,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            self._sessionless_transaction_id = None
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -668,6 +856,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            self._sessionless_transaction_id = None
 
     def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
@@ -717,7 +906,9 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
-            on_enter=self._apply_session_tracing if self._session_tracing_enabled else None,
+            on_enter=self._apply_session_tracing
+            if self._session_tracing_enabled or self._otel_tracing_enabled
+            else None,
         )
 
     @overload
@@ -1135,7 +1326,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         issuing SQL, which the native predicate alone cannot see. Both signals
         are required.
         """
-        return self._transaction_active or bool(self.connection.transaction_in_progress)
+        return (
+            self._sessionless_transaction_id is not None
+            or self._transaction_active
+            or bool(self.connection.transaction_in_progress)
+        )
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
@@ -1342,10 +1537,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         "_fetch_kwargs",
         "_migration_schema_restore",
         "_oracle_version_cache",
+        "_otel_tracing_enabled",
         "_pipeline_support",
         "_pipeline_support_reason",
         "_row_metadata_cache",
         "_session_tracing_enabled",
+        "_sessionless_transaction_id",
         "_transaction_active",
     )
     dialect = "oracle"
@@ -1370,10 +1567,149 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._oracle_version_cache: OracleVersionCache | None = None
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
+        self._sessionless_transaction_id: bytes | None = None
+        self._otel_tracing_enabled = False
         self._fetch_kwargs = build_fetch_kwargs(self.driver_features)
         self._session_tracing_enabled = bool(
             self.driver_features.get("enable_session_tracing", False) or self.statement_config.enable_sqlcommenter
         )
+
+    @property
+    def sessionless_transaction_id(self) -> bytes | None:
+        """Return the sessionless transaction currently attached to this connection."""
+        return self._sessionless_transaction_id
+
+    def set_transaction_priority(self, priority: Any) -> None:
+        """Set native transaction priority as a zero-round-trip connection field."""
+        apply_oracle_transaction_priority(self.connection, priority)
+
+    async def begin_sessionless_transaction(
+        self, transaction_id: str | bytes | None = None, *, timeout: int = 60, defer_round_trip: bool = True
+    ) -> bytes:
+        """Begin an explicitly supported native sessionless transaction."""
+        resolved = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, defer_round_trip=defer_round_trip
+        )
+        method = getattr(self.connection, "begin_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            txid = await cast("Any", method)(resolved, timeout=timeout, defer_round_trip=defer_round_trip)
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = cast("bytes", txid)
+        return self._sessionless_transaction_id
+
+    async def resume_sessionless_transaction(
+        self, transaction_id: str | bytes, *, timeout: int = 60, defer_round_trip: bool = True
+    ) -> bytes:
+        """Attach a suspended native transaction to this connection."""
+        resolved = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, is_resume=True, defer_round_trip=defer_round_trip
+        )
+        method = getattr(self.connection, "resume_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            txid = await cast("Any", method)(
+                cast("bytes", resolved), timeout=timeout, defer_round_trip=defer_round_trip
+            )
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = cast("bytes", txid)
+        return self._sessionless_transaction_id
+
+    async def suspend_sessionless_transaction(self) -> None:
+        """Detach the active transaction so another pooled connection can resume it."""
+        method = getattr(self.connection, "suspend_sessionless_transaction", None)
+        if not callable(method):
+            msg = "Sessionless transactions require python-oracledb 26.1 or newer"
+            raise oracledb_module.NotSupportedError(msg)
+        try:
+            await cast("Any", method)()
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._sessionless_transaction_id = None
+        self._transaction_active = False
+
+    def sessionless_transaction(
+        self,
+        transaction_id: str | bytes | None = None,
+        *,
+        timeout: int = 60,
+        defer_round_trip: bool = True,
+        resume: bool = False,
+        rollback_on_error: bool = True,
+    ) -> "OracleAsyncSessionlessTransactionContext":
+        """Scope a sessionless transaction and suspend it on successful exit."""
+        from sqlspec.adapters.oracledb._typing import OracleAsyncSessionlessTransactionContext
+
+        return OracleAsyncSessionlessTransactionContext(
+            self,
+            transaction_id=transaction_id,
+            timeout=timeout,
+            defer_round_trip=defer_round_trip,
+            resume=resume,
+            rollback_on_error=rollback_on_error,
+        )
+
+    async def execute(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        suspend_on_success: bool = False,
+        **kwargs: Any,
+    ) -> SQLResult:
+        """Execute a statement with optional native sessionless suspension."""
+        validate_sessionless_execution_options(suspend_on_success=suspend_on_success)
+        if suspend_on_success:
+            config = statement_config or self.statement_config
+            args = dict(config.execution_args or {})
+            args["oracle_suspend_on_success"] = True
+            statement_config = config.replace(execution_args=args)
+        if suspend_on_success:
+            prepared = self.prepare_statement(statement, parameters, statement_config=statement_config, kwargs=kwargs)
+            prepared = prepared.copy(statement_config=statement_config)
+            result = await self.dispatch_statement_execution(prepared, self.connection)
+        else:
+            result = await super().execute(statement, *parameters, statement_config=statement_config, **kwargs)
+        if suspend_on_success:
+            self._sessionless_transaction_id = None
+            self._transaction_active = False
+        return result
+
+    async def execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        /,
+        parameters: "Sequence[StatementParameters]",
+        *filters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        batch_size: int | None = None,
+        suspend_on_success: bool = False,
+        **kwargs: Any,
+    ) -> SQLResult:
+        """Execute a batch with validated native batching and suspension options."""
+        validate_sessionless_execution_options(suspend_on_success=suspend_on_success, batch_size=batch_size)
+        if suspend_on_success or batch_size is not None:
+            config = statement_config or self.statement_config
+            args = dict(config.execution_args or {})
+            if suspend_on_success:
+                args["oracle_suspend_on_success"] = True
+            if batch_size is not None:
+                args["oracle_batch_size"] = batch_size
+            statement_config = config.replace(execution_args=args)
+        result = await super().execute_many(
+            statement, parameters, *filters, statement_config=statement_config, **kwargs
+        )
+        if suspend_on_success and parameters:
+            self._sessionless_transaction_id = None
+            self._transaction_active = False
+        return result
 
     @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
@@ -1421,7 +1757,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
             )
 
-        await cursor.execute(sql, prepared_parameters or {}, **self._fetch_kwargs)
+        execution_args = statement.statement_config.execution_args or {}
+        fetch_kwargs = dict(self._fetch_kwargs)
+        if execution_args.get("oracle_suspend_on_success", False):
+            fetch_kwargs["suspend_on_success"] = True
+        await cursor.execute(sql, prepared_parameters or {}, **fetch_kwargs)
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
@@ -1514,7 +1854,18 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_errors = bool(execution_args.get("oracle_batch_errors", False))
         array_dml_row_counts = bool(execution_args.get("oracle_array_dml_row_counts", False))
         await cursor.executemany(
-            sql, prepared_parameters, batcherrors=batch_errors, arraydmlrowcounts=array_dml_row_counts
+            sql,
+            prepared_parameters,
+            batcherrors=batch_errors,
+            arraydmlrowcounts=array_dml_row_counts,
+            **{
+                key: value
+                for key, value in {
+                    "suspend_on_success": execution_args.get("oracle_suspend_on_success"),
+                    "batch_size": execution_args.get("oracle_batch_size"),
+                }.items()
+                if value is not None
+            },
         )
 
         affected_rows = len(prepared_parameters)
@@ -1610,6 +1961,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            self._sessionless_transaction_id = None
 
     async def rollback(self) -> None:
         """Rollback the current transaction.
@@ -1624,6 +1976,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
+            self._sessionless_transaction_id = None
 
     async def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
@@ -1676,7 +2029,9 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
-            on_enter=self._apply_session_tracing if self._session_tracing_enabled else None,
+            on_enter=self._apply_session_tracing
+            if self._session_tracing_enabled or self._otel_tracing_enabled
+            else None,
         )
 
     @overload
@@ -2141,7 +2496,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         issuing SQL, which the native predicate alone cannot see. Both signals
         are required.
         """
-        return self._transaction_active or bool(self.connection.transaction_in_progress)
+        return (
+            self._sessionless_transaction_id is not None
+            or self._transaction_active
+            or bool(self.connection.transaction_in_progress)
+        )
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
@@ -2384,17 +2743,38 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
             try:
-                if owns_transaction and not continue_on_error:
-                    await self.begin()
-
-                self._apply_session_tracing(self.connection)
-                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=True)
-                results = self._build_stack_results_from_pipeline(
-                    compiled_operations, pipeline_results, continue_on_error, observer
-                )
-
+                pipelined_commit = owns_transaction and not continue_on_error
                 if owns_transaction:
-                    await self.commit()
+                    await self.begin()
+                if pipelined_commit:
+                    pipeline.add_commit()
+                self._apply_session_tracing(self.connection)
+                pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=continue_on_error)
+                has_commit_result = pipelined_commit and len(pipeline_results) > len(compiled_operations)
+                if has_commit_result:
+                    self._check_pipeline_commit_result(pipeline_results[len(compiled_operations)])
+                statement_results = pipeline_results[: len(compiled_operations)]
+                coerced_rows_by_index = {
+                    index: await coerce_pipeline_rows_async(result.rows, self.driver_features)
+                    for index, (compiled, result) in enumerate(
+                        zip(compiled_operations, statement_results, strict=False)
+                    )
+                    if compiled.returns_rows and getattr(result, "error", None) is None
+                }
+                results = self._build_stack_results_from_pipeline(
+                    compiled_operations,
+                    statement_results,
+                    continue_on_error,
+                    observer,
+                    coerced_rows_by_index=coerced_rows_by_index,
+                )
+                if owns_transaction:
+                    if has_commit_result:
+                        self._transaction_active = False
+                    elif not continue_on_error or any(item.error is None for item in results):
+                        await self.commit()
+                    else:
+                        await self.rollback()
             except Exception as exc:
                 if owns_transaction:
                     try:

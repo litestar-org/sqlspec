@@ -1338,3 +1338,30 @@ def test_statement_event_profile_and_script_index_fields(caplog: Any) -> None:
 def test_resolve_db_system_snowflake(name: str, expected: str) -> None:
     """Snowflake identity takes precedence over the ADBC transport name."""
     assert resolve_db_system(name) == expected
+
+
+@pytest.mark.parametrize("flags", [0, 1])
+def test_w3c_trace_context_preserves_remote_span_sampling(flags: int) -> None:
+    from opentelemetry import trace
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
+
+    from sqlspec.observability import get_w3c_trace_context
+
+    context = SpanContext(
+        trace_id=1,
+        span_id=2,
+        is_remote=True,
+        trace_flags=TraceFlags(flags),
+        trace_state=TraceState([("vendor", "value")]),
+    )
+    with trace.use_span(NonRecordingSpan(context)):
+        assert get_w3c_trace_context() == (f"00-{'1':0>32}-{'2':0>16}-{flags:02x}", "vendor=value")
+
+
+def test_w3c_trace_context_sqlcommenter_fallback() -> None:
+    from sqlspec.core.sqlcommenter import SQLCommenterContext
+    from sqlspec.observability import get_w3c_trace_context
+
+    with SQLCommenterContext.scope({"traceparent": "00-parent", "tracestate": "vendor=state"}):
+        assert get_w3c_trace_context() == ("00-parent", "vendor=state")
+    assert get_w3c_trace_context() == (None, "")
