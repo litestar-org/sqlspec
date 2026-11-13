@@ -5,6 +5,7 @@ from unittest.mock import patch
 from uuid import UUID
 
 import duckdb
+import pytest
 
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
@@ -247,3 +248,25 @@ def test_version_tuple_parsing() -> None:
     assert _parse_duckdb_version("2.0.0rc1") == (2, 0, 0)
     assert _parse_duckdb_version("v0.9.2") == (0, 9, 2)
     assert duckdb_version_tuple() >= (0, 0, 0)
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
+def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) -> None:
+    """DuckDB provide_session rolls back uncommitted driver.begin() work on both clean and error exit."""
+    config = DuckDBConfig(connection_config={"database": ":memory:session_rollback_test"})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE IF NOT EXISTS items (id INTEGER); DELETE FROM items;")
+        if body_raises:
+            with pytest.raises(ValueError, match="abort"), config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+                raise ValueError("abort")
+        else:
+            with config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()

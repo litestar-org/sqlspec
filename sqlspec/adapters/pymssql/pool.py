@@ -7,6 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -22,6 +24,7 @@ _ADAPTER_NAME = "pymssql"
 pymssql = PYMSSQL_MODULE
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PymssqlConnectionPool:
     """Thread-local connection manager for pymssql."""
 
@@ -102,16 +105,22 @@ class PymssqlConnectionPool:
         depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
         self._thread_local.depth = depth + 1
+        body_failed = False
         try:
             yield connection
         except BaseException:
+            body_failed = True
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
             self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
-            self.release(connection)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -133,10 +142,12 @@ class PymssqlConnectionPool:
         return connection
 
     def release(self, connection: PymssqlConnection) -> None:
-        _ = connection
-        with self._registry_lock:
-            if self._checked_out > 0:
-                self._checked_out -= 1
+        try:
+            self._rollback_on_checkin(connection)
+        finally:
+            with self._registry_lock:
+                if self._checked_out > 0:
+                    self._checked_out -= 1
 
     def size(self) -> int:
         self._prune_dead_thread_connections()
@@ -243,6 +254,20 @@ class PymssqlConnectionPool:
             self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
+
+    def _rollback_on_checkin(self, connection: PymssqlConnection) -> None:
+        """Roll back uncommitted work on the outermost checkin and retire the connection when rollback fails."""
+        if getattr(self._thread_local, "depth", 0) > 0:
+            return
+        if getattr(self._thread_local, "connection", None) is not connection:
+            return
+        if bool(connection.autocommit_state):
+            return
+        try:
+            connection.rollback()
+        except BaseException:
+            self._close_thread_connection()
+            raise
 
     def _close_thread_connection(self) -> None:
         thread_state = self._thread_local.__dict__

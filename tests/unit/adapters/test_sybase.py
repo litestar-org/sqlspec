@@ -1336,3 +1336,55 @@ def test_sybase_reconcile_orchestrators_converge_litestar_events_and_adk() -> No
     assert any("CREATE TABLE [dbo].[adk_memory]" in stmt for stmt in scripts)
     assert len(executed) == 11
     driver.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_sybase_pool_checkin_rolls_back_only_when_autocommit_off(
+    monkeypatch: pytest.MonkeyPatch, autocommit: bool
+) -> None:
+    """SybaseConnectionPool rolls back on outermost checkin only when autocommit_state is False."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    connection = FakeConnection()
+    connection.autocommit(autocommit)
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: connection))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert connection.rollbacks == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()
+
+
+def test_sybase_pool_closes_on_failed_hook_and_failed_checkin_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseConnectionPool closes sockets on failed _on_connection_create and retires on failed rollback."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn))
+    hook_pool = SybaseConnectionPool(
+        {"server": "ase.example.test"},
+        on_connection_create=lambda _c: (_ for _ in ()).throw(RuntimeError("ase hook failed")),
+    )
+    with pytest.raises(RuntimeError, match="ase hook failed"):
+        hook_pool.new_connection()
+    assert hook_conn.closed is True
+
+    first = FakeConnection()
+    first.autocommit(False)
+    second = FakeConnection()
+    conns = [first, second]
+    monkeypatch.setattr(first, "rollback", MagicMock(side_effect=OSError("ase rollback broken")))
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: conns.pop(0)))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(OSError, match="ase rollback broken"), pool.get_connection():
+            pass
+        assert first.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pool.get_connection() as fresh:
+            assert cast("object", fresh) is second
+    finally:
+        pool.close()

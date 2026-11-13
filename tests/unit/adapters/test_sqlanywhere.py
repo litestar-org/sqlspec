@@ -5,11 +5,13 @@ import threading
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
+import sqlspec.adapters.sqlanywhere.pool as sqlanywhere_pool_module
 from sqlspec.adapters.sqlanywhere import (
     DEFAULT_SQLANYWHERE_PORT,
     SqlanywhereConfig,
@@ -1042,3 +1044,47 @@ def test_sqlanywhere_build_connection_config_rejects_invalid_keys_ports_and_cont
     """Invalid SQL Anywhere keys, out-of-range ports, and control characters raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
         build_connection_config(bad_config)
+
+
+def test_sqlanywhere_pool_checkin_rolls_back_and_retires_on_hook_or_rollback_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SqlanywhereConnectionPool rolls back once on outermost checkin, closes failed-hook sockets, and retires failed rollbacks."""
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn)
+    )
+    hook_pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"},
+        on_connection_create=lambda _c: (_ for _ in ()).throw(RuntimeError("sa hook failed")),
+    )
+    with pytest.raises(RuntimeError, match="sa hook failed"):
+        hook_pool.new_connection()
+    assert hook_conn.closed is True
+
+    c1 = FakeConnection()
+    c2 = FakeConnection()
+    conns = [c1, c2]
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conns.pop(0))
+    )
+    pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert c1.rollbacks == 0
+        assert c1.rollbacks == 1
+
+        monkeypatch.setattr(c1, "rollback", MagicMock(side_effect=OSError("sa rollback broken")))
+        with pytest.raises(OSError, match="sa rollback broken"), pool.get_connection():
+            pass
+        assert c1.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pool.get_connection() as fresh:
+            assert cast("object", fresh) is c2
+    finally:
+        pool.close()

@@ -154,6 +154,12 @@ class AdbcSessionContext:
                     driver.close_streams()
                 except BaseException as exc:
                     first_error = exc
+                if driver._connection_in_transaction():
+                    try:
+                        driver.rollback()
+                    except BaseException as exc:
+                        if first_error is None:
+                            first_error = exc
             try:
                 self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb, driver=driver)
             except BaseException as exc:

@@ -7,6 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlanywhere._typing import SQLANYDB_MODULE, SqlanywhereConnection
 from sqlspec.exceptions import OperationalError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -21,6 +23,7 @@ logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlanywhere"
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SqlanywhereConnectionPool:
     """Thread-local connection manager for SAP SQL Anywhere over sqlanydb."""
 
@@ -74,7 +77,12 @@ class SqlanywhereConnectionPool:
         """Open a standalone SAP SQL Anywhere connection via ``sqlanydb.connect``."""
         connection = SQLANYDB_MODULE.connect(**self._connection_parameters)
         if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            try:
+                self._on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
         return connection
 
     @contextmanager
@@ -83,16 +91,22 @@ class SqlanywhereConnectionPool:
         depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
         self._thread_local.depth = depth + 1
+        body_failed = False
         try:
             yield connection
         except BaseException:
+            body_failed = True
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
             self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
-            self.release(connection)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection opened by this pool."""
@@ -116,10 +130,12 @@ class SqlanywhereConnectionPool:
 
     def release(self, connection: SqlanywhereConnection) -> None:
         """Release a checked-out connection back to the thread-local slot."""
-        _ = connection
-        with self._registry_lock:
-            if self._checked_out > 0:
-                self._checked_out -= 1
+        try:
+            self._rollback_on_checkin(connection)
+        finally:
+            with self._registry_lock:
+                if self._checked_out > 0:
+                    self._checked_out -= 1
 
     def size(self) -> int:
         """Return the number of active connections registered with this pool."""
@@ -225,6 +241,19 @@ class SqlanywhereConnectionPool:
 
         self._thread_local.last_used = now
         return cast("SqlanywhereConnection", conn)
+
+    def _rollback_on_checkin(self, connection: SqlanywhereConnection) -> None:
+        """Roll back uncommitted work on the outermost checkin and retire the connection when rollback fails."""
+        if getattr(self._thread_local, "depth", 0) > 0:
+            return
+        if getattr(self._thread_local, "connection", None) is not connection:
+            return
+        assert connection is not None
+        try:
+            connection.rollback()
+        except BaseException:
+            self._close_thread_connection()
+            raise
 
     def _close_thread_connection(self) -> None:
         conn = getattr(self._thread_local, "connection", None)

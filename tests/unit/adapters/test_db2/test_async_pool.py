@@ -401,3 +401,53 @@ async def test_discard_closes_connection_and_frees_capacity(fake_ibm_db: FakeMod
         await pool.release(replacement)
     finally:
         await pool.close()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+async def test_async_pool_checkin_rolls_back_when_autocommit_off(fake_ibm_db: FakeModules, autocommit: bool) -> None:
+    """Db2AsyncConnectionPool rolls back on release when autocommit=False and skips when True."""
+    pool = Db2AsyncConnectionPool({"database": "TESTDB", "autocommit": autocommit}, max_size=1)
+    try:
+        async with pool.get_connection() as conn:
+            fake_conn = _as_fake(conn).sync_connection
+        assert fake_conn.rollbacks == (0 if autocommit else 1)
+    finally:
+        await pool.close()
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_async_pool_discards_failed_rollback_and_closed_handle(
+    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch, body_raises: bool
+) -> None:
+    """Failed async rollback or closed conn_handler discards the connection and frees semaphore capacity."""
+    pool = Db2AsyncConnectionPool({"database": "TESTDB", "autocommit": False}, max_size=1, acquire_timeout=0.1)
+    try:
+        first = _as_fake(await pool.acquire())
+
+        def fail_rollback() -> None:
+            raise RuntimeError("async db2 rollback failed")
+
+        monkeypatch.setattr(first.sync_connection, "rollback", fail_rollback)
+        await pool.release(first) if False else None
+        ctx = pool.get_connection()
+        ctx._connection = first  # pyright: ignore[reportPrivateUsage]
+        expected_exc = ValueError if body_raises else RuntimeError
+        with pytest.raises(expected_exc):
+            if body_raises:
+                await ctx.__aexit__(ValueError, ValueError("body error"), None)
+                raise ValueError("body error")
+            await ctx.__aexit__(None, None, None)
+
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        second = _as_fake(await pool.acquire())
+        assert second is not first
+        second.sync_connection.conn_handler = None
+        await pool.release(second)
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        third = await pool.acquire()
+        assert third is not second
+        await pool.release(third)
+    finally:
+        await pool.close()

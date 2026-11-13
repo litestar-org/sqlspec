@@ -371,3 +371,63 @@ def test_driver_features_chunk_size_default() -> None:
     """ArrowOdbcConfig defaults chunk_size to 65536 matching documentation."""
     config = ArrowOdbcConfig()
     assert config.driver_features["chunk_size"] == 65_536
+
+
+@pytest.mark.parametrize("entry", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: str, autocommit: bool) -> None:
+    """Caller-supplied connection_instance is rolled back when autocommit=False and never closed across exits."""
+
+    class _CallerConnection:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+            self.closed = False
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    stub = _CallerConnection()
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics", "autocommit": autocommit}, connection_instance=cast("Any", stub)
+    )
+    for _ in range(2):
+        with getattr(config, entry)():
+            pass
+
+    assert stub.closed is False
+    assert stub.rollbacks == (0 if autocommit else 2)
+
+
+def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owned connections close on exit and ArrowOdbcSessionContext rolls back active begin() transactions."""
+
+    class _OwnedConnection:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+            self.rollbacks = 0
+            self.closed = False
+
+        def execute(self, query: str, parameters: Any = None, **_kwargs: Any) -> None:
+            _ = parameters
+            self.executed.append(query)
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    owned = _OwnedConnection()
+    monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", lambda *_a, **_kw: owned)
+    config = ArrowOdbcConfig(connection_config={"dsn": "analytics", "autocommit": True})
+
+    with config.provide_session() as session:
+        session.begin()
+
+    assert owned.executed == ["BEGIN", "ROLLBACK"]
+    assert owned.closed is True

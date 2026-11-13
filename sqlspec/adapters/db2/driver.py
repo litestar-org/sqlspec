@@ -5,6 +5,8 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.db2._typing import (
     Db2AsyncCursor,
     Db2AsyncSessionContext,
@@ -65,6 +67,7 @@ __all__ = (
 logger = get_logger("sqlspec.adapters.db2")
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -82,6 +85,7 @@ class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncStreamSource:
     """Native Db2 chunk source backed by cursor.fetchmany()."""
 
@@ -145,6 +149,7 @@ class Db2SyncStreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncDriver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
@@ -401,7 +406,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
 
         A transaction started by this driver is always rolled back; on a connection whose
         autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
+        failure is logged, closes the connection handle so the pool retires it, and is not raised
+        so it never masks an error from the session body.
 
         Args:
             autocommit_baseline: Autocommit mode the connection was opened in.
@@ -412,6 +418,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self.rollback()
         except SQLSpecError as exc:
             log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+            with contextlib.suppress(Exception):
+                self.connection.close()
 
     def _restore_connection_autocommit(self) -> None:
         """Switch autocommit back on when ``begin()`` turned it off.
@@ -440,6 +448,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
 
@@ -457,6 +466,7 @@ class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncStreamSource:
     """Native async Db2 chunk source backed by ``AsyncCursor.fetchmany()``."""
 
@@ -511,6 +521,7 @@ class Db2AsyncStreamSource:
                 await cursor_manager.__aexit__(None, None, None)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncDriver(AsyncDriverAdapterBase):
     """IBM Db2 async database driver over ``ibm_db_dbi.AsyncConnection``."""
 
@@ -776,7 +787,8 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
 
         A transaction started by this driver is always rolled back; on a connection whose
         autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
+        failure is logged, closes the connection handle so the pool retires it, and is not raised
+        so it never masks an error from the session body.
 
         Args:
             autocommit_baseline: Autocommit mode the connection was opened in.
@@ -787,6 +799,8 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             await self.rollback()
         except SQLSpecError as exc:
             log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+            with contextlib.suppress(Exception):
+                await self.connection.close()
 
     async def _restore_connection_autocommit(self) -> None:
         """Switch autocommit back on when ``begin()`` turned it off.

@@ -3,17 +3,21 @@
 import uuid
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
+import pytest
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
+import sqlspec.adapters.bigquery._typing as bq_typing
+from sqlspec.adapters.bigquery._typing import BigQuerySessionContext
 from sqlspec.adapters.bigquery.config import (
     BigQueryConfig,
     BigQueryConnectionParams,
     BigQueryDriverFeatures,
     build_connection_config,
 )
-from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config
+from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
 
 
 class _RecordingBigQueryClient:
@@ -210,3 +214,40 @@ def test_native_job_resource_controls_are_forwarded() -> None:
     assert job_config.priority == "BATCH"
     assert job_config.reservation == "projects/p/locations/us/reservations/r"
     assert job_config.max_slots == 25
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
+@pytest.mark.parametrize("rollback_fails", [False, True], ids=["rollback-ok", "rollback-fails"])
+def test_bigquery_session_context_rolls_back_active_script_transaction(
+    monkeypatch: MonkeyPatch, body_raises: bool, rollback_fails: bool
+) -> None:
+    """BigQuerySessionContext rolls back active script transactions on clean and error exit and always releases."""
+    conn = object()
+    release = MagicMock()
+    rollback_err = RuntimeError("bq rollback failed")
+    fake_driver = MagicMock()
+    fake_driver._connection_in_transaction.return_value = True
+    if rollback_fails:
+        fake_driver.rollback.side_effect = rollback_err
+    monkeypatch.setattr(bq_typing, "_get_driver_type", lambda: MagicMock(return_value=fake_driver))
+
+    ctx = BigQuerySessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    if body_raises:
+        with pytest.raises(ValueError, match="bq body failed") as caught, ctx:
+            raise ValueError("bq body failed")
+        assert caught.value is not rollback_err
+    elif rollback_fails:
+        with pytest.raises(RuntimeError, match="bq rollback failed"), ctx:
+            pass
+    else:
+        with ctx:
+            pass
+
+    fake_driver.rollback.assert_called_once_with()
+    release.assert_called_once()
