@@ -1203,6 +1203,45 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         msg = f"Unknown replica bind_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
         raise RoutingContextError(msg)
 
+    def provide_routing_session(
+        self,
+        *,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+    ) -> "SyncRoutingSession[Any] | AsyncRoutingSession[Any]":
+        """Construct a lazy routing facade for this configuration.
+
+        Args:
+            bind_group: Replica group used for eligible reads.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload for physical checkouts.
+            bypass_tenant: Explicitly bypass tenant setup.
+
+        Returns:
+            A facade matching this configuration's execution mode.
+        """
+        from sqlspec.driver._routing import AsyncRoutingSession, SyncRoutingSession
+
+        if self.is_async:
+            async_config = cast("AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", self)
+            return AsyncRoutingSession(
+                async_config,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+            )
+        sync_config = cast("SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]", self)
+        return SyncRoutingSession(
+            sync_config,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+        )
+
     def provide_read_connection(
         self, *args: Any, bind_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
