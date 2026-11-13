@@ -557,3 +557,85 @@ def test_ora_data_and_timeout_error_mappings() -> None:
         create_mapped_exception(oracledb.DatabaseError("ORA-03136: inbound connection timed out")),
         ConnectionTimeoutError,
     )
+
+
+@pytest.mark.parametrize("boundary", ["statement", "STATEMENT"])
+def test_drcp_guard_preserves_only_stateless_context(boundary: str) -> None:
+    from sqlspec.adapters.oracledb.core import OracleSessionContextConfig, validate_oracle_drcp_and_mode_constraints
+
+    config = validate_oracle_drcp_and_mode_constraints(
+        {"pool_boundary": boundary}, {"session_context_hook": OracleSessionContextConfig(module="api")}
+    )
+    assert config["pool_boundary"] == "statement"
+    with pytest.raises(ImproperConfigurationError, match="stateful"):
+        validate_oracle_drcp_and_mode_constraints(
+            {"dsn": "localhost/db?pool_boundary=statement"}, {"session_context_hook": {"edition": "V2"}}
+        )
+    with pytest.raises(ImproperConfigurationError, match="edition"):
+        validate_oracle_drcp_and_mode_constraints({"edition": "V2", "dsn": "(CONNECT_DATA=(CCLASS=APP))"})
+
+
+def test_oracle_acquire_options_normalization() -> None:
+    from oracledb import Purity, TransactionPriority
+
+    from sqlspec.adapters.oracledb.core import OracleAcquireOptions
+
+    options = OracleAcquireOptions(sharding_key=("acme", 7), purity="self", transaction_priority="high")
+    equivalent = OracleAcquireOptions(
+        sharding_key=["acme", 7], purity=Purity.SELF, transaction_priority=TransactionPriority.HIGH
+    )
+    assert options == equivalent
+    assert hash(options) == hash(equivalent)
+    assert options.sharding_key == ["acme", 7]
+    assert options.purity == int(Purity.SELF)
+    assert options.transaction_priority == TransactionPriority.HIGH
+    assert OracleAcquireOptions().is_default()
+    assert options.is_default() is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sharding_key": "acme"},
+        {"sharding_key": []},
+        {"super_sharding_key": ["us"]},
+        {"purity": True},
+        {"transaction_priority": True},
+        {"transaction_priority": "URGENT"},
+    ],
+)
+def test_oracle_acquire_options_reject_invalid_inputs(kwargs: dict[str, Any]) -> None:
+    from sqlspec.adapters.oracledb.core import OracleAcquireOptions
+
+    with pytest.raises(ImproperConfigurationError):
+        OracleAcquireOptions(**kwargs)
+
+
+def test_oracle_state_tag_is_canonical_and_validated() -> None:
+    from sqlspec.adapters.oracledb.core import synthesize_session_state_tag
+
+    assert (
+        synthesize_session_state_tag(
+            {
+                "edition": "V2",
+                "time_zone": "UTC",
+                "nls_parameters": {"NLS_DATE_FORMAT": "YYYY-MM-DD"},
+                "current_schema": "APP",
+                "standby_max_data_delay": 5,
+                "adg_redirect_dml": True,
+            },
+            explicit_tag="ROLE=ANALYST",
+        )
+        == "ADG_REDIRECT_DML=TRUE;CURRENT_SCHEMA=APP;EDITION=V2;NLS_DATE_FORMAT=YYYY-MM-DD;ROLE=ANALYST;STANDBY_MAX_DATA_DELAY=5;TIME_ZONE=UTC"
+    )
+    for tag in ("BROKEN", "A=", "=X", "A=X\nY"):
+        with pytest.raises(ImproperConfigurationError):
+            synthesize_session_state_tag(None, explicit_tag=tag)
+
+
+@pytest.mark.parametrize("callback", ["", "pkg.p; DROP TABLE t", "a.b.c.d"])
+def test_oracle_plsql_callback_validation(callback: str) -> None:
+    from sqlspec.adapters.oracledb.core import validate_oracle_session_callback
+
+    with pytest.raises(ImproperConfigurationError):
+        validate_oracle_session_callback(callback, is_thin_mode=False)

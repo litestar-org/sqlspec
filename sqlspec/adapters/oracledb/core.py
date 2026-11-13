@@ -190,6 +190,7 @@ __all__ = (
     "ORACLE_MODULE_MAX_BYTES",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "VALID_ORACLE_DRIVER_FEATURE_KEYS",
+    "OracleAcquireOptions",
     "OracleAsyncStreamSource",
     "OracleBlob",
     "OracleClob",
@@ -201,6 +202,7 @@ __all__ = (
     "OracleVersionCache",
     "apply_driver_features",
     "apply_oracle_session_trace_attributes",
+    "apply_oracle_transaction_priority",
     "apply_wallet_ssl_context",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
@@ -238,11 +240,17 @@ __all__ = (
     "extract_duality_etag",
     "extract_duality_view_etag",
     "extract_oracle_wallet_zip",
+    "extract_static_alter_session_config",
+    "has_callable_alter_session_fields",
     "inject_duality_view_etag",
+    "is_stateful_oracle_session_context",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
     "normalize_oracle_config_dsn",
+    "normalize_oracle_purity",
+    "normalize_oracle_sharding_keys",
+    "normalize_oracle_transaction_priority",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "read_oracle_lob_async",
@@ -257,7 +265,10 @@ __all__ = (
     "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
+    "synthesize_session_state_tag",
     "truncate_utf8_bytes",
+    "validate_oracle_drcp_and_mode_constraints",
+    "validate_oracle_session_callback",
 )
 
 
@@ -423,6 +434,11 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     12541: (ConnectionTimeoutError, "no listener"),
     12545: (ConnectionTimeoutError, "connect failed"),
     12899: (DataError, "value too large for column"),
+    24756: (TransactionError, "transaction does not exist"),
+    25351: (TransactionError, "transaction is currently in use"),
+    26202: (TransactionError, "no sessionless transaction is active"),
+    26211: (TransactionError, "sessionless transaction cannot mix DBMS_TRANSACTION and driver methods"),
+    26216: (TransactionError, "sessionless transaction is already active"),
     28000: (PermissionDeniedError, "the account is locked"),
     28001: (PermissionDeniedError, "the password has expired"),
     30006: (OperationalError, "resource busy; acquire with WAIT timeout expired"),
@@ -433,6 +449,24 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
 
 _DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
     "DPY-1001": (DatabaseConnectionError, "not connected to database"),
+    "DPY-2056": (ImproperConfigurationError, "centralized config protocol handler failed"),
+    "DPY-2057": (ImproperConfigurationError, "password type handler failed"),
+    "DPY-2058": (ImproperConfigurationError, "password in centralized configuration must specify a type"),
+    "DPY-2061": (ImproperConfigurationError, "registered params hook handler failed"),
+    "DPY-2072": (DataError, "end-user security attribute data exceeds 1024-byte protocol limit"),
+    "DPY-2073": (ImproperConfigurationError, "end-user security context requires Oracle AI Database 26ai over TCPS"),
+    "DPY-3034": (TransactionError, "sessionless transaction cannot mix DBMS_TRANSACTION and driver methods"),
+    "DPY-3035": (TransactionError, "sessionless transaction is already active"),
+    "DPY-3036": (TransactionError, "no sessionless transaction is active"),
+    "DPY-3041": (OperationalError, "database does not support Oracle Deep Data Security"),
+    "DPY-3043": (OperationalError, "database does not support transaction priority"),
+    "DPY-3044": (OperationalError, "database does not support OpenTelemetry tracing"),
+    "DPY-4004": (DataError, "invalid number"),
+    "DPY-4005": (ConnectionTimeoutError, "connection pool checkout timed out"),
+    "DPY-4021": (ImproperConfigurationError, "invalid connection protocol"),
+    "DPY-4027": (ImproperConfigurationError, "no configuration directory specified"),
+    "DPY-4033": (DatabaseConnectionError, "connection closed due to exceeded idle time"),
+    "DPY-4034": (ImproperConfigurationError, "invalid password type"),
     "DPY-4011": (DatabaseConnectionError, "connection was closed"),
     "DPY-4024": (QueryTimeoutError, "query execution timeout expired"),
     "DPY-6000": (DatabaseConnectionError, "cannot connect to database"),
@@ -447,6 +481,16 @@ ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 VALID_ORACLE_DRIVER_FEATURE_KEYS: Final[frozenset[str]] = frozenset({
     "_statement_cache_holder",
+    "on_pool_destroying",
+    "on_session_end",
+    "on_session_start",
+    "params_hooks",
+    "plugins",
+    "shard_resolver",
+    "sharding_key_variable",
+    "super_sharding_key_variable",
+    "use_tenant_id_as_sharding_key",
+    "enable_auto_state_tagging",
     "arraysize",
     "arrow_requested_schema",
     "custom",
@@ -1353,6 +1397,7 @@ def apply_driver_features(
             msg = f"Unknown Oracle driver_features key(s): {', '.join(unknown_keys)}"
             raise ImproperConfigurationError(msg)
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    features.setdefault("enable_auto_state_tagging", True)
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
@@ -2150,9 +2195,11 @@ def build_session_reset_plsql(
     return build_session_release_plsql(config)
 
 
-def execute_session_checkout_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
+def execute_session_checkout_sync(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
+) -> None:
     """Apply TTC piggyback attributes and execute session checkout PL/SQL synchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config, skip_alter_session=skip_alter_session)
     for attr_name, attr_val in piggyback_attrs.items():
         with contextlib.suppress(AttributeError):
             setattr(connection, attr_name, attr_val)
@@ -2179,10 +2226,10 @@ def execute_session_release_sync(connection: Any, config: "OracleSessionContextC
 
 
 async def execute_session_checkout_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> None:
     """Apply TTC piggyback attributes and execute session checkout PL/SQL asynchronously."""
-    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config, skip_alter_session=skip_alter_session)
     for attr_name, attr_val in piggyback_attrs.items():
         with contextlib.suppress(AttributeError):
             setattr(connection, attr_name, attr_val)
@@ -2314,6 +2361,276 @@ def build_duality_etag_update_sql(
     )
 
 
+def is_stateful_oracle_session_context(config: OracleSessionContextConfig | Mapping[str, Any] | None) -> bool:
+    """Identify server session state that cannot survive statement-boundary pooling."""
+    if config is None:
+        return False
+    fields = (
+        "client_identifier",
+        "clear_identifier",
+        "edition",
+        "time_zone",
+        "nls_parameters",
+        "contexts",
+        "context_attributes",
+        "clear_context_namespaces",
+        "ebs_apps_initialize",
+        "mo_global_policy",
+        "apex_session",
+        "apex_detach",
+        "reset_package",
+        "current_schema",
+        "end_user_security",
+        "transaction_priority",
+    )
+    return any(
+        bool(config.get(name) if isinstance(config, Mapping) else getattr(config, name, None)) for name in fields
+    )
+
+
+def validate_oracle_drcp_and_mode_constraints(
+    connection_config: Mapping[str, Any], driver_features: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Reject DRCP and edition combinations that lose state or conflict in the SDK."""
+    config = dict(connection_config)
+    features = driver_features or {}
+    extra = config.get("extra")
+    values = dict(extra) if isinstance(extra, Mapping) else {}
+    values.update(config)
+    dsn = str(config.get("dsn", ""))
+    for key in ("pool_boundary", "pool_name", "cclass", "edition"):
+        match = re.search(r"(?:[?&]|\()" + key + r"\s*=\s*([^)&]+)", dsn, re.IGNORECASE)
+        if key not in values and match:
+            values[key] = match.group(1)
+    boundary = values.get("pool_boundary")
+    if boundary is not None:
+        if not isinstance(boundary, str) or boundary.lower() not in {"statement", "transaction"}:
+            msg = "Oracle pool_boundary must be 'statement' or 'transaction'"
+            raise ImproperConfigurationError(msg)
+        if "pool_boundary" in config:
+            config["pool_boundary"] = boundary.lower()
+        if boundary.lower() == "statement" and (
+            features.get("tenant_strategy")
+            or is_stateful_oracle_session_context(features.get("session_context_hook"))
+            or values.get("transaction_priority")
+            or values.get("edition")
+        ):
+            msg = "Statement-boundary DRCP cannot preserve tenant or stateful session settings"
+            raise ImproperConfigurationError(msg)
+    if values.get("edition") is not None and values.get("cclass") is not None:
+        msg = "Oracle edition and cclass conflict; set edition through OracleSessionContextConfig instead"
+        raise ImproperConfigurationError(msg)
+    if values.get("pool_name") is not None and not str(values["pool_name"]).strip():
+        msg = "Oracle pool_name must be nonempty"
+        raise ImproperConfigurationError(msg)
+    return config
+
+
+def normalize_oracle_purity(purity: Any) -> int | None:
+    """Normalize native purity enums, valid integer constants, and named inputs."""
+    if purity is None:
+        return None
+    if isinstance(purity, str):
+        purity = getattr(oracledb_module.Purity, purity.upper(), None)
+        if purity is None:
+            msg = "Oracle purity must be DEFAULT, NEW, or SELF"
+            raise ImproperConfigurationError(msg)
+    if isinstance(purity, bool) or not isinstance(purity, int) or purity not in tuple(oracledb_module.Purity):
+        msg = "Invalid Oracle session purity"
+        raise ImproperConfigurationError(msg)
+    return int(purity)
+
+
+def normalize_oracle_sharding_keys(
+    sharding_key: Sequence[Any] | None, super_sharding_key: Sequence[Any] | None = None
+) -> tuple[list[Any] | None, list[Any] | None]:
+    """Normalize nonempty shard sequences and reject orphan super-shard keys."""
+    normalized: list[list[Any] | None] = []
+    for value in (sharding_key, super_sharding_key):
+        if value is not None and (isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or not value):
+            msg = "Oracle sharding keys must be nonempty sequences, not strings or bytes"
+            raise ImproperConfigurationError(msg)
+        normalized.append(list(value) if value is not None else None)
+    if normalized[1] is not None and normalized[0] is None:
+        msg = "Oracle super_sharding_key requires sharding_key"
+        raise ImproperConfigurationError(msg)
+    return normalized[0], normalized[1]
+
+
+def normalize_oracle_transaction_priority(value: Any) -> Any:
+    """Resolve optional native transaction priority without increasing the SDK floor."""
+    if value is None:
+        return None
+    priority_type = getattr(oracledb_module, "TransactionPriority", None)
+    if priority_type is None:
+        msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
+        raise oracledb_module.NotSupportedError(msg)
+    if isinstance(value, str):
+        value = getattr(priority_type, value.upper(), None)
+    if value is None or isinstance(value, bool) or not isinstance(value, priority_type):
+        msg = "Oracle transaction priority must be DEFAULT, LOW, MEDIUM, or HIGH"
+        raise ImproperConfigurationError(msg)
+    return value
+
+
+def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
+    """Assign native priority and map optional-feature server rejection."""
+    resolved = normalize_oracle_transaction_priority(priority)
+    if resolved is not None:
+        try:
+            connection.transaction_priority = resolved
+        except oracledb_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
+
+
+class OracleAcquireOptions:
+    """Normalized Oracle checkout overrides with stable equality and hash semantics."""
+
+    __slots__ = (
+        "cclass",
+        "match_any_tag",
+        "purity",
+        "sharding_key",
+        "super_sharding_key",
+        "tag",
+        "transaction_priority",
+    )
+
+    def __init__(
+        self,
+        *,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: Any = None,
+        transaction_priority: Any = None,
+    ) -> None:
+        self.sharding_key, self.super_sharding_key = normalize_oracle_sharding_keys(sharding_key, super_sharding_key)
+        self.tag = tag
+        self.match_any_tag = match_any_tag
+        self.cclass = cclass
+        self.purity = normalize_oracle_purity(purity)
+        self.transaction_priority = normalize_oracle_transaction_priority(transaction_priority)
+
+    def is_default(self) -> bool:
+        """Return whether checkout can use native pool defaults without kwargs."""
+        return (
+            all(
+                value is None
+                for value in (
+                    self.sharding_key,
+                    self.super_sharding_key,
+                    self.tag,
+                    self.cclass,
+                    self.purity,
+                    self.transaction_priority,
+                )
+            )
+            and not self.match_any_tag
+        )
+
+    def __repr__(self) -> str:
+        return f"OracleAcquireOptions(sharding_key={self.sharding_key!r}, super_sharding_key={self.super_sharding_key!r}, tag={self.tag!r}, match_any_tag={self.match_any_tag!r}, cclass={self.cclass!r}, purity={self.purity!r}, transaction_priority={self.transaction_priority!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleAcquireOptions):
+            return NotImplemented
+        return (
+            self.sharding_key,
+            self.super_sharding_key,
+            self.tag,
+            self.match_any_tag,
+            self.cclass,
+            self.purity,
+            self.transaction_priority,
+        ) == (
+            other.sharding_key,
+            other.super_sharding_key,
+            other.tag,
+            other.match_any_tag,
+            other.cclass,
+            other.purity,
+            other.transaction_priority,
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            tuple(self.sharding_key) if self.sharding_key is not None else None,
+            tuple(self.super_sharding_key) if self.super_sharding_key is not None else None,
+            self.tag,
+            self.match_any_tag,
+            self.cclass,
+            self.purity,
+            self.transaction_priority,
+        ))
+
+
+def _oracle_context_value(config: Any, field: str) -> Any:
+    return config.get(field) if isinstance(config, Mapping) else getattr(config, field, None)
+
+
+def synthesize_session_state_tag(
+    config: OracleSessionContextConfig | Mapping[str, Any] | None, *, explicit_tag: str | None = None
+) -> str | None:
+    """Build a deterministic OCI state tag without evaluating dynamic session fields."""
+    pairs: dict[str, str] = {}
+    for field in ("edition", "time_zone", "current_schema", "standby_max_data_delay", "adg_redirect_dml"):
+        value = _oracle_context_value(config, field)
+        if value is None or callable(value):
+            continue
+        if field == "standby_max_data_delay" and (isinstance(value, bool) or not isinstance(value, int)):
+            msg = "standby_max_data_delay must be an integer"
+            raise ImproperConfigurationError(msg)
+        pairs[field.upper()] = str(value).upper() if isinstance(value, bool) else str(value)
+    nls = _oracle_context_value(config, "nls_parameters")
+    if isinstance(nls, Mapping):
+        _validate_oracle_nls_parameters(nls)
+        pairs.update({str(key).upper(): str(value) for key, value in nls.items()})
+    if explicit_tag is not None:
+        for segment in explicit_tag.split(";"):
+            key, separator, value = segment.partition("=")
+            if not separator or not key or not value or any(char in segment for char in "\r\n"):
+                msg = "Oracle state tag must contain nonempty KEY=VALUE segments"
+                raise ImproperConfigurationError(msg)
+            pairs[key] = value
+    for key, value in pairs.items():
+        if any(char in key + value for char in ";\r\n") or "=" in key:
+            msg = "Oracle state tag components cannot contain delimiters or line breaks"
+            raise ImproperConfigurationError(msg)
+    return ";".join(f"{key}={pairs[key]}" for key in sorted(pairs)) or None
+
+
+def validate_oracle_session_callback(callback: Any, *, is_thin_mode: bool) -> Callable[..., Any] | str | None:
+    """Validate a native callback or qualified PL/SQL procedure before pool creation."""
+    if callback is None or callable(callback):
+        return cast("Callable[..., Any] | None", callback)
+    if not isinstance(callback, str) or not re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_$#]*(?:\.[A-Za-z][A-Za-z0-9_$#]*){0,2}", callback
+    ):
+        msg = "Oracle session_callback must be a callable or qualified PL/SQL procedure"
+        raise ImproperConfigurationError(msg)
+    if is_thin_mode:
+        msg = "PL/SQL session_callback requires Oracle Thick mode"
+        raise ImproperConfigurationError(msg)
+    return callback
+
+
+def extract_static_alter_session_config(
+    config: OracleSessionContextConfig | Mapping[str, Any] | None,
+) -> OracleSessionContextConfig | None:
+    """Select static ALTER SESSION fields for one-time owned Thin connection setup."""
+    values = {field: _oracle_context_value(config, field) for field in ("edition", "time_zone", "nls_parameters")}
+    static = {field: value for field, value in values.items() if value is not None and not callable(value)}
+    return OracleSessionContextConfig(**static) if static else None
+
+
+def has_callable_alter_session_fields(config: OracleSessionContextConfig | Mapping[str, Any] | None) -> bool:
+    """Check whether ALTER SESSION settings must be resolved for every checkout."""
+    return any(callable(_oracle_context_value(config, field)) for field in ("edition", "time_zone", "nls_parameters"))
+
+
 def normalize_oracle_config_dsn(dsn: str) -> str:
     """Normalize file and centralized configuration URI schemes."""
     scheme, separator, payload = dsn.partition("://")
@@ -2374,6 +2691,21 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["user"] = user_alias
     if isinstance(config.get("dsn"), str):
         config["dsn"] = normalize_oracle_config_dsn(config["dsn"])
+    shard = config.pop("sharding_key", None)
+    super_shard = config.pop("super_sharding_key", None)
+    if (shard is not None and "shardingkey" in config) or (super_shard is not None and "supershardingkey" in config):
+        msg = "Oracle sharding aliases cannot be specified together"
+        raise ImproperConfigurationError(msg)
+    shard, super_shard = normalize_oracle_sharding_keys(
+        shard if shard is not None else config.get("shardingkey"),
+        super_shard if super_shard is not None else config.get("supershardingkey"),
+    )
+    if shard is not None:
+        config["shardingkey"] = shard
+    if super_shard is not None:
+        config["supershardingkey"] = super_shard
+    if "transaction_priority" in config:
+        config["transaction_priority"] = normalize_oracle_transaction_priority(config["transaction_priority"])
     _apply_ora_directory_resolution(config, tns_alias=tns_alias)
     dsn = config.get("dsn", "")
     if (
@@ -2606,7 +2938,7 @@ def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext 
 
 
 def _build_session_checkout_plan(
-    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     piggyback_attrs: dict[str, str | None] = {}
@@ -2643,7 +2975,7 @@ def _build_session_checkout_plan(
             alter_clauses.append(f"{key.upper()} = ''{val}''")
 
     plsql_statements: list[str] = []
-    if alter_clauses:
+    if alter_clauses and not skip_alter_session:
         joined_alter = " ".join(alter_clauses)
         plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
 
