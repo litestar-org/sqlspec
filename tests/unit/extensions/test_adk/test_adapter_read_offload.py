@@ -72,7 +72,69 @@ def _native_handle(adapter: str, asynchronous: bool) -> Any:
     return connection
 
 
-async def exercise_concrete_store(
+@pytest.mark.parametrize(
+    ("adapter", "store_name", "config_name", "artifact"),
+    [
+        ("asyncpg", "AsyncpgADKStore", "AsyncpgConfig", False),
+        ("asyncpg", "AsyncpgADKMemoryStore", "AsyncpgConfig", False),
+        ("psycopg", "PsycopgAsyncADKStore", "PsycopgAsyncConfig", False),
+        ("psycopg", "PsycopgSyncADKStore", "PsycopgSyncConfig", False),
+        ("psycopg", "PsycopgAsyncADKMemoryStore", "PsycopgAsyncConfig", False),
+        ("psycopg", "PsycopgSyncADKMemoryStore", "PsycopgSyncConfig", False),
+        ("psqlpy", "PsqlpyADKStore", "PsqlpyConfig", False),
+        ("psqlpy", "PsqlpyADKMemoryStore", "PsqlpyConfig", False),
+        ("cockroach_asyncpg", "CockroachAsyncpgADKStore", "CockroachAsyncpgConfig", False),
+        ("cockroach_asyncpg", "CockroachAsyncpgADKMemoryStore", "CockroachAsyncpgConfig", False),
+        ("cockroach_psycopg", "CockroachPsycopgAsyncADKStore", "CockroachPsycopgAsyncConfig", False),
+        ("cockroach_psycopg", "CockroachPsycopgSyncADKStore", "CockroachPsycopgSyncConfig", False),
+        ("cockroach_psycopg", "CockroachPsycopgAsyncADKMemoryStore", "CockroachPsycopgAsyncConfig", False),
+        ("cockroach_psycopg", "CockroachPsycopgSyncADKMemoryStore", "CockroachPsycopgSyncConfig", False),
+        ("adbc", "AdbcADKStore", "AdbcConfig", False),
+        ("adbc", "AdbcADKMemoryStore", "AdbcConfig", False),
+        ("aiomysql", "AiomysqlADKStore", "AiomysqlConfig", False),
+        ("aiomysql", "AiomysqlADKMemoryStore", "AiomysqlConfig", False),
+        ("asyncmy", "AsyncmyADKStore", "AsyncmyConfig", False),
+        ("asyncmy", "AsyncmyADKMemoryStore", "AsyncmyConfig", False),
+        ("pymysql", "PyMysqlADKStore", "PyMysqlConfig", False),
+        ("pymysql", "PyMysqlADKMemoryStore", "PyMysqlConfig", False),
+        ("mssql_python", "MssqlPythonADKStore", "MssqlPythonConfig", False),
+        ("mssql_python", "MssqlPythonADKMemoryStore", "MssqlPythonConfig", False),
+        ("pymssql", "PymssqlADKStore", "PymssqlConfig", False),
+        ("pymssql", "PymssqlADKMemoryStore", "PymssqlConfig", False),
+        ("mysqlconnector", "MysqlConnectorAsyncADKStore", "MysqlConnectorAsyncConfig", False),
+        ("mysqlconnector", "MysqlConnectorSyncADKStore", "MysqlConnectorSyncConfig", False),
+        ("mysqlconnector", "MysqlConnectorAsyncADKMemoryStore", "MysqlConnectorAsyncConfig", False),
+        ("mysqlconnector", "MysqlConnectorSyncADKMemoryStore", "MysqlConnectorSyncConfig", False),
+        ("oracledb", "OracleAsyncADKStore", "OracleAsyncConfig", False),
+        ("oracledb", "OracleSyncADKStore", "OracleSyncConfig", False),
+        ("oracledb", "OracleAsyncADKMemoryStore", "OracleAsyncConfig", False),
+        ("oracledb", "OracleSyncADKMemoryStore", "OracleSyncConfig", False),
+        ("db2", "Db2SyncADKStore", "Db2SyncConfig", False),
+        ("db2", "Db2AsyncADKStore", "Db2AsyncConfig", False),
+        ("db2", "Db2SyncADKMemoryStore", "Db2SyncConfig", False),
+        ("db2", "Db2AsyncADKMemoryStore", "Db2AsyncConfig", False),
+        ("sqlanywhere", "SqlanywhereADKStore", "SqlanywhereConfig", False),
+        ("sqlanywhere", "SqlanywhereADKMemoryStore", "SqlanywhereConfig", False),
+        ("snowflake", "SnowflakeADKStore", "SnowflakeConfig", False),
+        ("snowflake", "SnowflakeADKMemoryStore", "SnowflakeConfig", False),
+        ("teradata", "TeradataADKStore", "TeradataConfig", False),
+        ("teradata", "TeradataADKMemoryStore", "TeradataConfig", False),
+        ("bigquery", "BigQueryADKStore", "BigQueryConfig", False),
+        ("duckdb", "DuckDBADKStore", "DuckDBConfig", False),
+        ("duckdb", "DuckDBADKMemoryStore", "DuckDBConfig", False),
+        ("arrow_odbc", "ArrowOdbcADKStore", "ArrowOdbcConfig", False),
+        ("arrow_odbc", "ArrowOdbcADKMemoryStore", "ArrowOdbcConfig", False),
+        ("sybase", "SybaseADKStore", "SybaseConfig", False),
+        ("sybase", "SybaseADKMemoryStore", "SybaseConfig", False),
+        ("spanner", "SpannerSyncADKStore", "SpannerSyncConfig", False),
+        ("spanner", "SpannerAsyncADKStore", "SpannerAsyncConfig", False),
+        ("spanner", "SpannerSyncADKMemoryStore", "SpannerSyncConfig", False),
+        ("spanner", "SpannerAsyncADKMemoryStore", "SpannerAsyncConfig", False),
+        ("spanner", "SpannerSyncADKArtifactStore", "SpannerSyncConfig", True),
+        ("spanner", "SpannerAsyncADKArtifactStore", "SpannerAsyncConfig", True),
+    ],
+)
+async def test_adapter_store_offloads_only_pure_reads(
     monkeypatch: pytest.MonkeyPatch, adapter: str, store_name: str, config_name: str, artifact: bool
 ) -> None:
     module = pytest.importorskip(f"sqlspec.adapters.{adapter}.adk.{'artifact_store' if artifact else 'store'}")
@@ -193,22 +255,3 @@ async def exercise_concrete_store(
     with pytest.raises((RuntimeError, SQLSpecError), match="reader unavailable"):
         await _invoke(read_method, *arguments)
     assert calls[-2:] == [("reader", "enter"), ("reader", "exit")]
-
-
-@pytest.mark.parametrize(
-    ("adapter", "store_name", "config_name", "artifact"),
-    [
-        ("asyncpg", "AsyncpgADKStore", "AsyncpgConfig", False),
-        ("asyncpg", "AsyncpgADKMemoryStore", "AsyncpgConfig", False),
-        ("psycopg", "PsycopgAsyncADKStore", "PsycopgAsyncConfig", False),
-        ("psycopg", "PsycopgSyncADKStore", "PsycopgSyncConfig", False),
-        ("psycopg", "PsycopgAsyncADKMemoryStore", "PsycopgAsyncConfig", False),
-        ("psycopg", "PsycopgSyncADKMemoryStore", "PsycopgSyncConfig", False),
-        ("psqlpy", "PsqlpyADKStore", "PsqlpyConfig", False),
-        ("psqlpy", "PsqlpyADKMemoryStore", "PsqlpyConfig", False),
-    ],
-)
-async def test_concrete_store_offloads_only_pure_reads(
-    monkeypatch: pytest.MonkeyPatch, adapter: str, store_name: str, config_name: str, artifact: bool
-) -> None:
-    await exercise_concrete_store(monkeypatch, adapter, store_name, config_name, artifact)
