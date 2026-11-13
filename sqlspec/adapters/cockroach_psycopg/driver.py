@@ -735,7 +735,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         else:
             return
         cursor = await self.connection.execute(cast("Any", command))
-        cursor.close()
+        await cursor.close()
 
     async def _begin_follower_read_transaction(self) -> bool:
         """Open the transaction a follower read needs so the staleness clause can lead it.
