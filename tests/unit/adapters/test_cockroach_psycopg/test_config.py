@@ -8,10 +8,13 @@ Tests cover:
 - Connection config normalization
 """
 
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from psycopg import Error as PsycopgError
+from psycopg import pq
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -34,7 +37,7 @@ from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.adapters.cockroach_psycopg.core import build_native_export
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 @pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
@@ -395,6 +398,8 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
 
     with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_async_driver") as resolver:
         driver_type = resolver.return_value
+        driver_type.return_value._transaction_active = False
+        driver_type.return_value._connection_in_transaction.return_value = False
         async with ctx:
             pass
 
@@ -1424,3 +1429,79 @@ async def test_tenant_session_entry_failure_releases_once(asynchronous: bool, st
     release.assert_called_once()
     assert release.call_args.args == (connection,)
     assert release.call_args.kwargs["exc_val"] is error
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tx_active", "in_tx_probe"), [(True, False), (False, True)], ids=["driver-flag", "connection-probe"]
+)
+async def test_cockroach_psycopg_session_context_rolls_back_active_transaction_on_clean_exit(
+    asynchronous: bool, tx_active: bool, in_tx_probe: bool
+) -> None:
+    """CockroachPsycopg session contexts roll back uncommitted driver work before releasing the connection."""
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(
+        transaction_status=pq.TransactionStatus.INTRANS if in_tx_probe else pq.TransactionStatus.IDLE
+    )
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = CockroachPsycopgAsyncSessionContext if asynchronous else CockroachPsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    if isinstance(ctx, CockroachPsycopgAsyncSessionContext):
+        async with ctx as driver:
+            driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        conn.rollback.assert_awaited_once()
+        release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+    else:
+        with ctx as sync_driver:
+            sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        conn.rollback.assert_called_once()
+        release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_cockroach_psycopg_session_context_propagates_or_preserves_rollback_error(
+    asynchronous: bool, body_raises: bool
+) -> None:
+    """Rollback failure propagates on clean exit, preserves body exceptions, and passes error info to release."""
+    rollback_err = PsycopgError("crdb rollback failed")
+    body_err = ValueError("crdb body failed")
+    expected_type: type[BaseException] = ValueError if body_raises else SQLSpecError
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(transaction_status=pq.TransactionStatus.INTRANS)
+    conn.rollback = AsyncMock(side_effect=rollback_err) if asynchronous else MagicMock(side_effect=rollback_err)
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = CockroachPsycopgAsyncSessionContext if asynchronous else CockroachPsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with pytest.raises(expected_type) as caught:
+        if isinstance(ctx, CockroachPsycopgAsyncSessionContext):
+            async with ctx as driver:
+                driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+        else:
+            with ctx as sync_driver:
+                sync_driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+    if body_raises:
+        assert caught.value is body_err
+    else:
+        assert caught.value.__cause__ is rollback_err
+    assert release.call_args.args == (conn,)
+    assert release.call_args.kwargs["exc_type"] is type(caught.value)
+    assert release.call_args.kwargs["exc_val"] is caught.value

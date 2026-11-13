@@ -201,11 +201,18 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AiomysqlConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
-        if ctx is not None:
-            if hasattr(_conn, "get_transaction_status") and _conn.get_transaction_status():
-                with contextlib.suppress(Exception):
-                    await _conn.rollback()
-            await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+        if ctx is None:
+            return
+        exc_type = kwargs.get("exc_type")
+        try:
+            if _conn is not None:
+                try:
+                    await _rollback_before_release(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            await ctx.__aexit__(exc_type, kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AiomysqlConnectionContext(AsyncPoolConnectionContext):
@@ -240,14 +247,20 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
     ) -> bool | None:
         conn = self._connection
         self._connection = None
-        if conn is not None and hasattr(conn, "get_transaction_status") and conn.get_transaction_status():
-            with contextlib.suppress(Exception):
-                await conn.rollback()
-        if self._ctx:
-            ctx = self._ctx
-            self._ctx = None
-            return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
-        return None
+        ctx = self._ctx
+        self._ctx = None
+        exit_result: bool | None = None
+        try:
+            if conn is not None:
+                try:
+                    await _rollback_before_release(conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if ctx is not None:
+                exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
+        return exit_result
 
 
 @mypyc_attr(native_class=False)
@@ -451,3 +464,23 @@ def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dic
     config.pop("passwd", None)
 
     return config
+
+
+def _autocommit_enabled(connection: Any) -> bool:
+    """Return whether autocommit is active on an aiomysql connection."""
+    get_autocommit = getattr(connection, "get_autocommit", None)
+    if callable(get_autocommit):
+        return bool(get_autocommit())
+    return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _rollback_before_release(connection: Any) -> None:
+    """Roll back open work before pool release and close the connection when rollback fails."""
+    if getattr(connection, "closed", False) or _autocommit_enabled(connection):
+        return
+    try:
+        await connection.rollback()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            connection.close()
+        raise

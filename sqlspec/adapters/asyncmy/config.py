@@ -223,15 +223,18 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
-        if ctx is not None:
+        if ctx is None:
+            return
+        exc_type = kwargs.get("exc_type")
+        try:
             if _conn is not None:
-                in_transaction = False
-                with contextlib.suppress(AttributeError):
-                    in_transaction = bool(_conn.server_status & 1)
-                if in_transaction:
-                    with contextlib.suppress(Exception):
-                        await _conn.rollback()
-            await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+                try:
+                    await _rollback_before_release(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            await ctx.__aexit__(exc_type, kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AsyncmyConnectionContext(AsyncPoolConnectionContext):
@@ -265,18 +268,20 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
     ) -> bool | None:
         conn = self._connection
         self._connection = None
-        if conn is not None:
-            in_transaction = False
-            with contextlib.suppress(AttributeError):
-                in_transaction = bool(conn.server_status & 1)
-            if in_transaction:
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-        if self._ctx:
-            ctx = self._ctx
-            self._ctx = None
-            return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
-        return None
+        ctx = self._ctx
+        self._ctx = None
+        exit_result: bool | None = None
+        try:
+            if conn is not None:
+                try:
+                    await _rollback_before_release(conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if ctx is not None:
+                exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
+        return exit_result
 
 
 class AsyncmySessionContext:
@@ -581,3 +586,23 @@ def _split_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[st
 def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     pool_kwargs, connection_kwargs = _split_pool_config(connection_config)
     return {**connection_kwargs, **pool_kwargs}
+
+
+def _autocommit_enabled(connection: Any) -> bool:
+    """Return whether autocommit is active on an asyncmy connection."""
+    get_autocommit = getattr(connection, "get_autocommit", None)
+    if callable(get_autocommit):
+        return bool(get_autocommit())
+    return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _rollback_before_release(connection: Any) -> None:
+    """Roll back open work before pool release and close the connection when rollback fails."""
+    if getattr(connection, "closed", False) or _autocommit_enabled(connection):
+        return
+    try:
+        await connection.rollback()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            connection.close()
+        raise

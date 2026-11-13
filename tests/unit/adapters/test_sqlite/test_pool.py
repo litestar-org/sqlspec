@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 
+from sqlspec.adapters.sqlite import pool as sqlite_pool_module
 from sqlspec.adapters.sqlite.core import end_transaction
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 
@@ -473,5 +474,42 @@ def test_sqlite_pool_checked_out_reflects_active_sessions_and_prunes_dead_thread
 
         assert not t.is_alive()
         assert pool.size() == 1
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("path", ["get_connection_exception", "get_connection_commit_fallback", "release"])
+def test_sqlite_pool_retires_thread_connection_when_rollback_fails(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    """Failed rollback retires the thread-local connection so the next checkout opens a fresh one."""
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    original_end_tx = sqlite_pool_module.end_transaction
+    try:
+        with pool.get_connection() as first_conn:
+            first_conn.execute("CREATE TABLE items (id INT)")
+            first_conn.commit()
+
+        def failing_end_tx(conn: Any, *, commit: bool) -> None:
+            if commit:
+                raise sqlite3.OperationalError("commit failed")
+            raise sqlite3.OperationalError("rollback failed")
+
+        monkeypatch.setattr(sqlite_pool_module, "end_transaction", failing_end_tx)
+
+        if path == "get_connection_exception":
+            with pytest.raises(ValueError, match="caller boom"), pool.get_connection() as conn:
+                assert conn is first_conn
+                raise ValueError("caller boom")
+        elif path == "get_connection_commit_fallback":
+            with pytest.raises(sqlite3.OperationalError, match="commit failed"), pool.get_connection() as conn:
+                assert conn is first_conn
+        else:
+            acquired = pool.acquire()
+            assert acquired is first_conn
+            pool.release(acquired)
+
+        monkeypatch.setattr(sqlite_pool_module, "end_transaction", original_end_tx)
+        with pool.get_connection() as second_conn:
+            assert second_conn is not first_conn
+            assert second_conn.execute("SELECT 1").fetchone() == (1,)
     finally:
         pool.close()

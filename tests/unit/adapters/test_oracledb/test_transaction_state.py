@@ -140,7 +140,7 @@ def test_connection_context_rolls_back_on_block_exception() -> None:
 
     from sqlspec.adapters.oracledb.config import OracleSyncConnectionContext
 
-    conn = MagicMock()
+    conn = MagicMock(autocommit=False)
     config = MagicMock()
     config._create_tenant_lease.return_value = None
     config.driver_features = {}
@@ -161,7 +161,7 @@ async def test_async_connection_context_rolls_back_on_block_exception() -> None:
 
     from sqlspec.adapters.oracledb.config import OracleAsyncConnectionContext
 
-    conn = AsyncMock()
+    conn = AsyncMock(autocommit=False)
     pool = MagicMock()
     pool.acquire = AsyncMock(return_value=conn)
     pool.release = AsyncMock()

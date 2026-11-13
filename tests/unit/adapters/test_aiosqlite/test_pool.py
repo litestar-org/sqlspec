@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+import threading
 from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -357,7 +358,7 @@ async def test_close_continues_after_a_native_connection_was_closed() -> None:
 
 
 async def test_acquire_and_release_idle_fast_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Warm idle connection acquire skips asyncio.wait_for and clean release skips end_transaction."""
+    """Warm idle connection acquire skips asyncio.wait_for and checks transaction state once on the worker thread."""
     pool = AiosqliteConnectionPool({"database": str(tmp_path / "fast_path.sqlite")}, pool_size=2, min_size=1)
     try:
         async with pool.get_connection() as conn:
@@ -391,14 +392,13 @@ async def test_acquire_and_release_idle_fast_path(monkeypatch: pytest.MonkeyPatc
                 assert row == (1,)
 
         assert wait_for_calls == 0
-        assert end_tx_calls == 0
+        assert end_tx_calls == 10
 
         async with pool.get_connection() as conn:
             cursor = await conn.execute("INSERT INTO items (name) VALUES ('dirty')")
             await cursor.close()
-            assert conn.in_transaction is True
 
-        assert end_tx_calls == 1
+        assert end_tx_calls == 11
 
         async with pool.get_connection() as conn:
             cursor = await conn.execute("SELECT COUNT(*) FROM items")
@@ -582,7 +582,7 @@ async def test_aiosqlite_session_raised_error_rolls_back(tmp_path: Path) -> None
 
 
 async def test_aiosqlite_no_transaction_is_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A clean exit without an open transaction skips end_transaction."""
+    """A clean exit without an open transaction checks state once on the worker thread without issuing COMMIT."""
     db_path = tmp_path / "noop.db"
     end_tx_calls = 0
     original_end_tx = pool_module.end_transaction
@@ -598,15 +598,14 @@ async def test_aiosqlite_no_transaction_is_noop(monkeypatch: pytest.MonkeyPatch,
     async with config.provide_connection() as conn:
         cursor = await conn.execute("SELECT 1")
         await cursor.close()
-        assert conn.in_transaction is False
 
-    assert end_tx_calls == 0
+    assert end_tx_calls == 1
     if config.connection_instance:
         await config.connection_instance.close()
 
 
 async def test_aiosqlite_explicit_commit_before_exit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """An explicit commit leaves in_transaction False so exit skips end_transaction."""
+    """An explicit commit leaves no open transaction on the worker thread and checks state once on exit."""
     db_path = tmp_path / "explicit_commit.db"
     config = AiosqliteConfig(connection_config={"database": str(db_path)})
     async with config.provide_connection() as conn:
@@ -626,9 +625,8 @@ async def test_aiosqlite_explicit_commit_before_exit(monkeypatch: pytest.MonkeyP
     async with config.provide_connection() as conn:
         await conn.execute("INSERT INTO t VALUES (1)")
         await conn.commit()
-        assert conn.in_transaction is False
 
-    assert end_tx_calls == 0
+    assert end_tx_calls == 1
 
     with sqlite3.connect(db_path) as sync_conn:
         row = sync_conn.execute("SELECT COUNT(*) FROM t").fetchone()
@@ -719,14 +717,12 @@ async def test_aiosqlite_commit_failure_rolls_back_and_raises(monkeypatch: pytes
             raise sqlite3.OperationalError("simulated commit failure")
         await original_end_tx(connection, commit=commit, supports_autocommit=supports_autocommit)
 
-    monkeypatch.setattr(pool_module, "end_transaction", failing_end_tx)
-
     try:
         async with pool.get_connection() as conn:
             await conn.execute("CREATE TABLE t (x INTEGER)")
             await conn.commit()
 
-        calls.clear()
+        monkeypatch.setattr(pool_module, "end_transaction", failing_end_tx)
 
         with pytest.raises(sqlite3.OperationalError, match="simulated commit failure"):
             async with pool.get_connection() as conn:
@@ -806,3 +802,70 @@ async def test_aiosqlite_context_exit_handles_closed_connection_or_pool(tmp_path
             await connection2.close()
     finally:
         await config.close_pool()
+
+
+async def test_aiosqlite_pool_never_reads_in_transaction_on_event_loop_thread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """__aexit__ and release() evaluate transaction state on the worker thread, never on the event-loop thread."""
+    event_loop_thread_id = threading.get_ident()
+    accessed_threads: list[int] = []
+
+    class _ThreadRecordingConnection:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        @property
+        def in_transaction(self) -> bool:
+            accessed_threads.append(threading.get_ident())
+            return False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    pool = AiosqliteConnectionPool({"database": str(tmp_path / "thread_confine.db")}, pool_size=1, min_size=1)
+    try:
+        pool_conn = await pool.acquire()
+        real_conn = pool_conn.connection
+        pool_conn.connection = cast("Any", _ThreadRecordingConnection(real_conn))
+        await pool.release(pool_conn)
+        assert event_loop_thread_id not in accessed_threads
+
+        async with pool.get_connection():
+            pass
+        assert event_loop_thread_id not in accessed_threads
+        pool_conn.connection = real_conn
+    finally:
+        await pool.close()
+
+
+async def test_aiosqlite_commit_and_rollback_double_failure_retires_and_replaces_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When both commit and fallback rollback fail in __aexit__, the connection is retired and replaced."""
+    db_path = tmp_path / "double_fail.db"
+    pool = AiosqliteConnectionPool({"database": str(db_path)}, pool_size=1, min_size=1)
+    original_end_tx = pool_module.end_transaction
+    try:
+        async with pool.get_connection() as first_conn:
+            await first_conn.execute("CREATE TABLE t (x INTEGER)")
+            await first_conn.commit()
+
+        async def always_failing_end_tx(
+            _connection: Any, *, commit: bool, supports_autocommit: bool | None = None
+        ) -> None:
+            _ = supports_autocommit
+            raise sqlite3.OperationalError("commit boom" if commit else "rollback boom")
+
+        monkeypatch.setattr(pool_module, "end_transaction", always_failing_end_tx)
+
+        with pytest.raises(sqlite3.OperationalError, match="commit boom"):
+            async with pool.get_connection() as conn:
+                assert conn is first_conn
+                await conn.execute("INSERT INTO t VALUES (1)")
+
+        monkeypatch.setattr(pool_module, "end_transaction", original_end_tx)
+        async with pool.get_connection() as replacement_conn:
+            assert replacement_conn is not first_conn
+    finally:
+        await pool.close()

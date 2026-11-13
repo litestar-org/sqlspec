@@ -1293,3 +1293,120 @@ def test_oracle_tenant_strategy_public_exports(name: str) -> None:
 
     assert getattr(adapter, name) is getattr(tenant, name)
     assert name in adapter.__all__
+
+
+@pytest.mark.parametrize("config_cls", [OracleSyncConfig, OracleAsyncConfig], ids=["sync", "async"])
+@pytest.mark.parametrize("boundary", ["statement", "STATEMENT", " Statement "])
+def test_oracle_config_rejects_statement_pool_boundary_with_tenant_strategy(config_cls: Any, boundary: str) -> None:
+    """pool_boundary='statement' is rejected when tenant_strategy is active and accepted otherwise."""
+    with pytest.raises(ImproperConfigurationError, match="pool_boundary='statement'"):
+        config_cls(
+            connection_config=cast("Any", {"pool_boundary": boundary}),
+            driver_features={"tenant_strategy": "identifier"},
+        )
+
+    no_tenant = config_cls(connection_config=cast("Any", {"pool_boundary": boundary}))
+    assert no_tenant.connection_config["pool_boundary"] == boundary
+
+    tx_boundary = config_cls(
+        connection_config={"pool_boundary": "transaction"}, driver_features={"tenant_strategy": "identifier"}
+    )
+    assert tx_boundary.connection_config["pool_boundary"] == "transaction"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+async def test_oracle_non_lease_release_rolls_back_iff_autocommit_off(
+    mode: str, provider: str, autocommit: bool
+) -> None:
+    """Oracle non-lease checkin rolls back when autocommit is off and skips rollback when autocommit is on."""
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+    cursor.execute = AsyncMock() if mode == "async" else MagicMock()
+
+    conn = MagicMock(autocommit=autocommit, version="23.5.0.0.0", transaction_in_progress=False)
+    conn.cursor.return_value = cursor
+    conn.rollback = AsyncMock() if mode == "async" else MagicMock()
+
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn) if mode == "async" else MagicMock(return_value=conn)
+    pool.release = AsyncMock() if mode == "async" else MagicMock()
+    pool.drop = AsyncMock() if mode == "async" else MagicMock()
+
+    config_cls: Any = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_cls(
+        connection_instance=pool,
+        driver_features={"session_context_hook": {"module": "billing", "reset_on_release": True}},
+    )
+    if mode == "async":
+        async with getattr(config, provider)():
+            pass
+    else:
+        with getattr(config, provider)():
+            pass
+
+    expected_rollbacks = 0 if autocommit else 1
+    assert conn.rollback.call_count == expected_rollbacks
+    assert pool.release.call_count == 1
+    assert pool.drop.call_count == 0
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("failure_stage", ["hook", "rollback", "cancelled"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_oracle_release_drops_connection_when_hook_or_rollback_fails(
+    mode: str, provider: str, failure_stage: str, body_raises: bool
+) -> None:
+    """Oracle release calls pool.drop instead of pool.release when release hook or rollback raises or cancels."""
+    if mode == "sync" and failure_stage == "cancelled":
+        return
+
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+    hook_exc: BaseException = (
+        asyncio.CancelledError() if failure_stage == "cancelled" else RuntimeError("release hook failed")
+    )
+
+    def fail_on_release(sql: str, _binds: Any = None) -> None:
+        if "RESET_PACKAGE" in sql and failure_stage in {"hook", "cancelled"}:
+            raise hook_exc
+
+    cursor.execute = (
+        AsyncMock(side_effect=fail_on_release) if mode == "async" else MagicMock(side_effect=fail_on_release)
+    )
+    conn = MagicMock(autocommit=False, version="23.5.0.0.0", transaction_in_progress=False)
+    conn.cursor.return_value = cursor
+    rollback_side_effect = RuntimeError("rollback failed") if failure_stage == "rollback" else None
+    conn.rollback = (
+        AsyncMock(side_effect=rollback_side_effect) if mode == "async" else MagicMock(side_effect=rollback_side_effect)
+    )
+
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn) if mode == "async" else MagicMock(return_value=conn)
+    pool.release = AsyncMock() if mode == "async" else MagicMock()
+    pool.drop = AsyncMock() if mode == "async" else MagicMock()
+
+    config_cls: Any = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_cls(
+        connection_instance=pool,
+        driver_features={"session_context_hook": {"client_identifier": "u1", "reset_package": True}},
+    )
+    expected_exc: type[BaseException] = (
+        asyncio.CancelledError if failure_stage == "cancelled" else (ValueError if body_raises else RuntimeError)
+    )
+    with pytest.raises(expected_exc):
+        if mode == "async":
+            async with getattr(config, provider)():
+                if body_raises:
+                    raise ValueError("caller body failed")
+        else:
+            with getattr(config, provider)():
+                if body_raises:
+                    raise ValueError("caller body failed")
+
+    assert pool.drop.call_count == 1
+    assert pool.release.call_count == 0

@@ -243,9 +243,9 @@ def test_pymysql_config_with_dsn_applies_to_connection_parameters() -> None:
 
 
 def test_pool_discards_connection_after_rollback_failure() -> None:
-    broken = MagicMock(server_status=1)
+    broken = MagicMock(server_status=1, get_autocommit=MagicMock(return_value=False))
     broken.rollback.side_effect = RuntimeError("rollback failed")
-    replacement = MagicMock(server_status=0)
+    replacement = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
     factory = MagicMock(side_effect=[broken, replacement])
     pool = PyMysqlConnectionPool({}, connection_factory=factory)
     try:

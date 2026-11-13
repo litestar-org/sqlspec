@@ -542,10 +542,13 @@ def test_sync_close_pool_drains_cnx_queue() -> None:
     assert config.connection_instance is None
 
 
-def test_sync_connection_context_rolls_back_when_pool_reset_session_disabled() -> None:
-    pooled_conn = MagicMock(in_transaction=True)
+@pytest.mark.parametrize("pool_reset_session", [False, True])
+def test_sync_connection_context_rolls_back_when_autocommit_disabled(pool_reset_session: bool) -> None:
+    pooled_conn = MagicMock(autocommit=False, in_transaction=False)
     fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
-    config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": False}, connection_instance=fake_pool)
+    config = MysqlConnectorSyncConfig(
+        connection_config={"pool_reset_session": pool_reset_session}, connection_instance=fake_pool
+    )
 
     with config.provide_connection() as conn:
         assert conn is pooled_conn

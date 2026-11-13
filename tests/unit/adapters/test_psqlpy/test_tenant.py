@@ -220,3 +220,39 @@ async def test_tenant_rolls_back_only_open_or_aborted_transactions(probe: object
     executed = [call.args[0] for call in connection.execute.await_args_list]
     assert executed == (["ROLLBACK"] if rolls_back else [])
     context.__aexit__.assert_awaited_once()
+
+
+async def test_psqlpy_rls_checkout_rejects_connection_already_in_transaction() -> None:
+    """PsqlpyRLSStrategy.checkout rejects connections that enter checkout with an open transaction."""
+    strategy = PsqlpyRLSStrategy()
+    conn = SimpleNamespace(in_transaction=AsyncMock(return_value=True), fetch_row=AsyncMock())
+    with pytest.raises(TenantContextError, match="open transaction"):
+        await strategy.checkout(cast("PsqlpyConnection", conn), TenantContextPayload("tenant-a"))
+    conn.fetch_row.assert_not_awaited()
+
+
+@pytest.mark.parametrize("has_baseline", [True, False], ids=["with-baseline", "empty-baseline"])
+@pytest.mark.parametrize("failure_mode", ["ok", "rollback-raises", "remains-open"])
+async def test_psqlpy_rls_checkin_rolls_back_leftover_transaction_and_verifies_clean(
+    has_baseline: bool, failure_mode: str
+) -> None:
+    """PsqlpyRLSStrategy.checkin rolls back any leftover open transaction and raises TenantCleanupError on failure."""
+    connection = GucConnection()
+    strategy = PsqlpyRLSStrategy()
+    state = (
+        await strategy.checkout(connection.native, TenantContextPayload("tenant-a"))
+        if has_baseline
+        else TenantLeaseState(TenantContextPayload("tenant-a"))
+    )
+    in_tx_states = [True, True] if failure_mode == "remains-open" else [True, False]
+    connection.in_transaction = AsyncMock(side_effect=in_tx_states)  # type: ignore[attr-defined]
+    connection.execute = (  # type: ignore[attr-defined]
+        AsyncMock(side_effect=RuntimeError("rollback failed")) if failure_mode == "rollback-raises" else AsyncMock()
+    )
+
+    if failure_mode == "ok":
+        await strategy.checkin(connection.native, state)
+    else:
+        with pytest.raises(TenantCleanupError, match="open transaction"):
+            await strategy.checkin(connection.native, state)
+    connection.execute.assert_awaited_once_with("ROLLBACK")  # type: ignore[attr-defined]
