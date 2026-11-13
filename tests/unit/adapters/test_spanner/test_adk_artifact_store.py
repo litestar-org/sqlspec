@@ -260,6 +260,7 @@ async def test_async_artifact_store_operations(mocker: Any) -> None:
 
     mock_db = MagicMock()
     mock_db.snapshot.return_value = snapshot_cm
+    mocker.patch.object(store._config, "provide_connection", return_value=snapshot_cm)
 
     async def _run_in_tx(fn: Any) -> Any:
         return await fn(tx)

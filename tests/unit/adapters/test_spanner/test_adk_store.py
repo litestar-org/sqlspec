@@ -496,21 +496,25 @@ def _normalized(sql: str) -> str:
 
 
 @contextmanager
-def _capture_session_list() -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
+def _capture_session_list(config: Any) -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
     calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
-    def capture(sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> "list[Any]":
-        calls.append((sql, dict(params or {}), dict(types or {})))
+    def capture(
+        sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> "list[Any]":
+        calls.append((sql, dict(params or {}), dict(param_types or {})))
         return []
 
-    with patch.object(SpannerSyncADKStore, "_run_read", side_effect=capture):
-        yield calls
+    snapshot = MagicMock()
+    snapshot.execute_sql.side_effect = capture
+    config.provide_connection.return_value.__enter__.return_value = snapshot
+    yield calls
 
 
 def test_spanner_list_sessions_binds_order_and_page() -> None:
     """Explicit ordering renders inline while page bounds bind as typed named parameters."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
 
     sql, params, types = calls[0]
@@ -524,7 +528,7 @@ def test_spanner_list_sessions_binds_order_and_page() -> None:
 def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None:
     """The default listing keeps recent-first ordering and binds no page values."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app")
 
     sql, params, _ = calls[0]
@@ -535,7 +539,7 @@ def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None
 def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
     """User filtering composes with the bound page values."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app", "u1", limit=5)
 
     sql, params, _ = calls[0]
@@ -546,7 +550,7 @@ def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
 def test_spanner_list_sessions_zero_limit_never_reads() -> None:
     """A zero limit short-circuits before any read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         assert store.list_sessions("app", limit=0) == []
     assert calls == []
 
@@ -563,7 +567,7 @@ def test_spanner_list_sessions_zero_limit_never_reads() -> None:
 def test_spanner_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
     """Invalid ordering or paging fails before a read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls, pytest.raises(ValueError):
+    with _capture_session_list(store._config) as calls, pytest.raises(ValueError):
         store.list_sessions("app", **options)
 
     assert calls == []
@@ -634,6 +638,7 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
     snap_ctx.__aenter__ = AsyncMock(return_value=snapshot)
     snap_ctx.__aexit__ = AsyncMock(return_value=None)
     database.snapshot.return_value = snap_ctx
+    config.provide_connection.return_value = snap_ctx
     config.get_database = AsyncMock(return_value=database)
 
     store = SpannerAsyncADKStore(config)

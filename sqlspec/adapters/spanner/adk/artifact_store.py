@@ -13,8 +13,6 @@ from sqlspec.adapters.spanner.core import (
     _extract_spanner_json_codecs,
     _is_spanner_table_missing,
     _json_param_type,
-    _run_read,
-    _run_read_async,
     _spanner_row_deletion_policy,
     _SpannerAsyncUpdateJob,
     _SpannerReadProtocol,
@@ -338,8 +336,8 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerSyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerSyncConfig, *, read_config: "SpannerSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
             _adk_config(config), "artifact_ttl_seconds", "created_at"
         )
@@ -377,7 +375,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         """Get a specific artifact version's metadata."""
         sql, params, types = self._build_get_artifact_query(app_name, user_id, filename, session_id, version)
         try:
-            rows = self._run_read(sql, params, types)
+            rows = self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return None
@@ -394,7 +392,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         """List all version records for an artifact, ordered by version ascending."""
         sql, params, types = self._build_list_artifact_versions_query(app_name, user_id, filename, session_id)
         try:
-            rows = self._run_read(sql, params, types)
+            rows = self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
@@ -407,7 +405,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         """List distinct artifact filenames."""
         sql, params, types = self._build_list_artifact_keys_query(app_name, user_id, session_id)
         try:
-            rows = self._run_read(sql, params, types)
+            rows = self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
@@ -465,9 +463,19 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
             raise create_mapped_exception(exc) from exc
 
     def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return _run_read(self._config, sql, params, types)
+        try:
+            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                reader = cast("_SpannerReadProtocol", snapshot)
+                return list(reader.execute_sql(sql, params=params, param_types=types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
         """Return the SchemaTarget for the Spanner ADK artifact table."""
@@ -482,8 +490,8 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerAsyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerAsyncConfig, *, read_config: "SpannerAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
             _adk_config(config), "artifact_ttl_seconds", "created_at"
         )
@@ -524,7 +532,7 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         """Get a specific artifact version's metadata."""
         sql, params, types = self._build_get_artifact_query(app_name, user_id, filename, session_id, version)
         try:
-            rows = await self._run_read(sql, params, types)
+            rows = await self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return None
@@ -541,7 +549,7 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         """List all version records for an artifact, ordered by version ascending."""
         sql, params, types = self._build_list_artifact_versions_query(app_name, user_id, filename, session_id)
         try:
-            rows = await self._run_read(sql, params, types)
+            rows = await self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
@@ -554,7 +562,7 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         """List distinct artifact filenames."""
         sql, params, types = self._build_list_artifact_keys_query(app_name, user_id, session_id)
         try:
-            rows = await self._run_read(sql, params, types)
+            rows = await self._run_read(sql, params, types, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
@@ -618,9 +626,19 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
             raise create_mapped_exception(exc) from exc
 
     async def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return await _run_read_async(await self._database(), sql, params, types)
+        try:
+            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+                return [row async for row in result_set]
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
         """Return the SchemaTarget for the Spanner ADK artifact table."""

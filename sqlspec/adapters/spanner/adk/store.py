@@ -677,8 +677,8 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerSyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerSyncConfig, *, read_config: "SpannerSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._session_table_options,
@@ -708,7 +708,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     ) -> "StoredSession | None":
         """Get session by ID."""
         try:
-            return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+            return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
@@ -733,7 +733,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         """List sessions for an app."""
         try:
             return self._list_sessions(
-                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
             )
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
@@ -776,7 +776,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     ) -> "list[StoredEvent]":
         """Get events for a session."""
         try:
-            return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+            return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
@@ -833,10 +833,15 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             raise create_mapped_exception(exc) from exc
 
     def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
         try:
-            with self._config.provide_connection(transaction=False) as snapshot:
+            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
                 reader = cast("_SpannerReadProtocol", snapshot)
                 return list(reader.execute_sql(sql, params=params, param_types=types))
         except SpannerGoogleAPICallError as exc:
@@ -868,13 +873,19 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         }
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         if not rows:
             return None
         return self._decode_session_row(rows[0])
@@ -891,6 +902,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         query = self._build_list_sessions_query(
             app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
@@ -898,7 +910,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         if query is None:
             return []
         sql, params, types = query
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return [self._decode_session_row(row) for row in rows]
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -937,12 +949,14 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         query = self._build_get_events_query(app_name, user_id, session_id, after_timestamp, limit)
         if query is None:
             return []
         sql, params, types = query
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return self._decode_event_rows(rows)
 
     def _append_event(self, event_record: StoredEvent) -> None:
@@ -1045,8 +1059,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerAsyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerAsyncConfig, *, read_config: "SpannerAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._session_table_options,
@@ -1076,7 +1090,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     ) -> "StoredSession | None":
         """Get session by ID."""
         try:
-            return await self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+            return await self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
@@ -1101,7 +1115,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         """List sessions for an app."""
         try:
             return await self._list_sessions(
-                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
             )
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
@@ -1144,7 +1158,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     ) -> "list[StoredEvent]":
         """Get events for a session."""
         try:
-            return await self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+            return await self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
@@ -1201,9 +1215,19 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             raise create_mapped_exception(exc) from exc
 
     async def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return await _run_read_async(await self._database(), sql, params, types)
+        try:
+            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+                return [row async for row in result_set]
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         database = await self._database()
@@ -1233,13 +1257,19 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         }
 
     async def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
             await self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         if not rows:
             return None
         return self._decode_session_row(rows[0])
@@ -1258,6 +1288,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         query = self._build_list_sessions_query(
             app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
@@ -1265,7 +1296,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         if query is None:
             return []
         sql, params, types = query
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return [self._decode_session_row(row) for row in rows]
 
     async def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -1304,12 +1335,14 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         query = self._build_get_events_query(app_name, user_id, session_id, after_timestamp, limit)
         if query is None:
             return []
         sql, params, types = query
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return self._decode_event_rows(rows)
 
     async def _append_event(self, event_record: StoredEvent) -> None:
@@ -1823,8 +1856,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerSyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerSyncConfig, *, read_config: "SpannerSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._memory_table_options,
@@ -1862,7 +1895,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query or vector embedding."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1885,10 +1918,15 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             raise create_mapped_exception(exc) from exc
 
     def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
         try:
-            with self._config.provide_connection(transaction=False) as snapshot:
+            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
                 reader = cast("_SpannerReadProtocol", snapshot)
                 return list(reader.execute_sql(sql, params=params, param_types=types))
         except SpannerGoogleAPICallError as exc:
@@ -1959,6 +1997,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1971,7 +2011,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         sql, params, types = self._build_search_entries_query(
             query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
         )
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
     def _delete_entries_by_session(self, session_id: str) -> int:
@@ -2003,8 +2043,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerAsyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerAsyncConfig, *, read_config: "SpannerAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._memory_table_options,
@@ -2042,7 +2082,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query or vector embedding."""
-        return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
+        return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -2067,9 +2107,19 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
             raise create_mapped_exception(exc) from exc
 
     async def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return await _run_read_async(await self._database(), sql, params, types)
+        try:
+            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+                return [row async for row in result_set]
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
@@ -2140,6 +2190,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2152,7 +2204,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         sql, params, types = self._build_search_entries_query(
             query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
         )
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
     async def _delete_entries_by_session(self, session_id: str) -> int:
@@ -2164,20 +2216,6 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     ) -> int:
         sql, params, types = self._build_delete_entries_older_than_statement(days, app_name, scope)
         return await self._execute_update(sql, params, types)
-
-
-async def _run_read_async(
-    database: "SpannerAsyncDatabase",
-    sql: str,
-    params: "dict[str, Any] | None" = None,
-    types: "dict[str, Any] | None" = None,
-) -> "list[Any]":
-    try:
-        async with cast("Any", database).snapshot() as snapshot:
-            result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
-            return [row async for row in result_set]
-    except SpannerGoogleAPICallError as exc:
-        raise create_mapped_exception(exc) from exc
 
 
 def _json_param_type() -> Any:
