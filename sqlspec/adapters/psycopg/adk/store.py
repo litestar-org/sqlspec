@@ -21,6 +21,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -192,8 +193,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgAsyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PsycopgAsyncConfig", *, read_config: "PsycopgAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -255,7 +256,8 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                 update_time=row["update_time"],
             )
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -282,7 +284,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with (
+                self._provide_read_connection(primary=renew_for is not None) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 await cur.execute(query, params)
                 row = await cur.fetchone()
                 if should_touch:
@@ -332,7 +337,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, params)
                 rows = await cur.fetchall()
 
@@ -527,7 +532,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
 
@@ -749,8 +754,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PsycopgSyncConfig", *, read_config: "PsycopgSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -814,7 +819,8 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                 update_time=row["update_time"],
             )
 
-        result = self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -842,7 +848,10 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             params = (app_name, user_id, session_id)
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with (
+                self._provide_read_connection(primary=renew_for is not None) as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
                 cur.execute(query, params)
                 row = cur.fetchone()
                 if should_touch:
@@ -894,7 +903,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params)
                 rows = cur.fetchall()
 
@@ -1071,7 +1080,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
@@ -1327,9 +1336,9 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PsycopgAsyncConfig") -> None:
+    def __init__(self, config: "PsycopgAsyncConfig", *, read_config: "PsycopgAsyncConfig | None" = None) -> None:
         """Initialize Psycopg async memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -1458,18 +1467,22 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         try:
             if embedding is not None and self._enable_bm25 and has_query:
                 return await self._search_entries_hybrid(
-                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                    query, app_name, user_id, effective_limit, scope_filter, embedding, read=True
                 )
             if embedding is not None:
-                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+                return await self._search_entries_vector(
+                    app_name, user_id, effective_limit, scope_filter, embedding, read=True
+                )
             if self._use_fts:
                 try:
-                    return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                    return await self._search_entries_fts(
+                        query, app_name, user_id, effective_limit, scope_filter, read=True
+                    )
                 except errors.UndefinedTable:
                     raise
                 except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except errors.UndefinedTable:
             return []
 
@@ -1552,6 +1565,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         candidate_limit = max(limit * 2, 50)
@@ -1580,7 +1595,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -1593,6 +1608,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1605,13 +1622,20 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (*scope_params, embedding_param, limit)
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
 
     async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1627,13 +1651,20 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         params = (query, *scope_params, query, limit)
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
 
     async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1649,7 +1680,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         pattern = f"%{query}%"
         params = (*scope_params, pattern, limit)
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        async with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
@@ -1791,17 +1822,21 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         try:
             if embedding is not None and self._enable_bm25 and has_query:
-                return self._search_entries_hybrid(query, app_name, user_id, effective_limit, scope_filter, embedding)
+                return self._search_entries_hybrid(
+                    query, app_name, user_id, effective_limit, scope_filter, embedding, read=True
+                )
             if embedding is not None:
-                return self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+                return self._search_entries_vector(
+                    app_name, user_id, effective_limit, scope_filter, embedding, read=True
+                )
             if self._use_fts:
                 try:
-                    return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                    return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter, read=True)
                 except errors.UndefinedTable:
                     raise
                 except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
-            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter, read=True)
         except errors.UndefinedTable:
             return []
 
@@ -1882,6 +1917,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         candidate_limit = max(limit * 2, 50)
@@ -1910,7 +1947,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -1923,6 +1960,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1935,13 +1974,20 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         embedding_param = [float(v) for v in embedding]
         params = (*scope_params, embedding_param, limit)
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
 
     def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1957,13 +2003,20 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         params = (query, *scope_params, query, limit)
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)
 
     def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         where_scope, scope_params = _build_psycopg_scope_where(app_name, user_id, scope_filter)
         sql = pg_sql.SQL(
@@ -1979,7 +2032,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
         pattern = f"%{query}%"
         params = (*scope_params, pattern, limit)
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with self._provide_read_connection(primary=not read) as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return _rows_to_records(rows)

@@ -125,6 +125,8 @@ def _build_store(
     store: Any = PsycopgSyncADKStore.__new__(PsycopgSyncADKStore)
     config = _DummyConfig(connection)
     store._config = config
+    store._read_config = None
+    store._read_config_enabled = False
     store._events_table = "test_events"
     store._session_table = "test_sessions"
     store._app_state_table = "test_app_state"

@@ -93,8 +93,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     _config: "PsqlpyConfig"
 
-    def __init__(self, config: "PsqlpyConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "PsqlpyConfig", *, read_config: "PsqlpyConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -169,7 +169,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=renew_for is not None) as conn:
                 result = await conn.fetch(sql, [app_name, user_id, session_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -235,7 +235,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -389,7 +389,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=False) as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -666,9 +666,9 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
     _config: "PsqlpyConfig"
 
-    def __init__(self, config: "PsqlpyConfig") -> None:
+    def __init__(self, config: "PsqlpyConfig", *, read_config: "PsqlpyConfig | None" = None) -> None:
         """Initialize Psqlpy memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -848,21 +848,23 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         try:
             if embedding is not None and self._enable_bm25 and has_query:
                 return await self._search_entries_hybrid(
-                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                    query, app_name, user_id, effective_limit, scope_filter, embedding, read=True
                 )
             if embedding is not None:
-                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+                return await self._search_entries_vector(
+                    app_name, user_id, effective_limit, scope_filter, embedding, read=True
+                )
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(
-                        query, app_name, user_id, effective_limit, scope_filter=scope_filter
+                        query, app_name, user_id, effective_limit, scope_filter=scope_filter, read=True
                     )
                 except Exception as exc:
                     if _is_table_missing_error(exc):
                         raise
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(
-                query, app_name, user_id, effective_limit, scope_filter=scope_filter
+                query, app_name, user_id, effective_limit, scope_filter=scope_filter, read=True
             )
         except Exception as e:
             if _is_table_missing_error(e):
@@ -973,6 +975,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
@@ -1013,7 +1017,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rrf_score DESC, m.timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             self._config._ensure_pg_textsearch_available()
             result = await conn.fetch(sql, [*scope_params, candidate_limit, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
@@ -1026,6 +1030,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         limit: int,
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
@@ -1047,13 +1053,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY embedding <=> $1::float8[]::vector ASC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if scope_filter == "all":
             where_scope = "app_name = $2 AND ((scope = 'user' AND user_id = $3) OR scope = 'app')"
@@ -1078,13 +1091,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rank DESC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
 
     async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         pattern = f"%{query}%"
         if scope_filter == "all":
@@ -1112,7 +1132,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection(primary=not read) as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
