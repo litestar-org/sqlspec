@@ -24,6 +24,7 @@ from sqlspec.observability import (
     create_statement_observer,
     default_statement_observer,
     format_statement_event,
+    get_w3c_trace_context,
 )
 ```
 
@@ -121,6 +122,10 @@ Structured statement observers, parameter redaction, OpenTelemetry span manageme
     options:
       heading_level: 4
       members: false
+
+::: sqlspec.observability.get_w3c_trace_context
+    options:
+      heading_level: 4
 
 ## Cloud & OpenTelemetry Log Formatters
 

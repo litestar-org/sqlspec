@@ -1,6 +1,6 @@
 # Oracle Database
 
-`sqlspec.adapters.oracledb` wraps `python-oracledb` (`>= 3.4`) across Oracle Database 12c through 26ai in Thin mode (older releases require Thick mode), supporting synchronous (`OracleSyncConfig`) and `asyncio` (`OracleAsyncConfig`) pools, zero-client Thin mode, Instant Client Thick mode, mTLS/PKCS#12 wallets (`wallet_zip`), multi-endpoint RAC/Data Guard topologies (`OracleTopologyConfig`), zero-RTT session context piggybacking (`OracleSessionContextConfig`), Oracle 26ai `VECTOR` and Hybrid RRF search, Direct Path Loads, and server-side `DBMS_CLOUD.COPY_DATA`.
+`sqlspec.adapters.oracledb` provides synchronous and async Oracle sessions through `python-oracledb`. Use Thin mode for Oracle Database 12c through 26ai without client libraries, or Thick mode for deployments that need Oracle Instant Client. Both configurations support pools, wallet authentication, session context, JSON, vectors, and bulk loading. The native features below need `python-oracledb` 26.1 and server support.
 
 ## Overview & Capabilities
 
@@ -171,7 +171,10 @@ Pass `OracleConnectionParams` and `OraclePoolParams` keys (including `thick_mode
 | `edition` | `str` | - | Edition-Based Redefinition (EBR) edition name activated on connect. |
 | `tag` | `str` | - | Pool session state tag requested when acquiring a connection. |
 | `matchanytag` | `bool` | - | Allow acquiring a pooled connection with a different tag when an exact match is unavailable. |
-| `appcontext` | `list[OracleAppContext]` | - | Initial `(namespace, name, value)` application context entries set on connect. |
+| `appcontext` | `Sequence[OracleAppContext] or Mapping[str, Mapping[str, str]]` | - | Initial `(namespace, name, value)` application context entries set on connect. |
+| `sharding_key` | `Sequence[Any]` | - | Primary shard key forwarded as native `shardingkey`. |
+| `super_sharding_key` | `Sequence[Any]` | - | Super-shard key forwarded as native `supershardingkey`. |
+| `transaction_priority` | `OracleTransactionPriority` | - | Priority applied during connection checkout on supported drivers. |
 | `shardingkey` | `list[Any]` | - | Primary sharding key values routing the connection to an Oracle shard. |
 | `supershardingkey` | `list[Any]` | - | Composite super-sharding key values for multi-tier sharded topologies. |
 | `debug_jdwp` | `str` | - | JDWP `host:port` endpoint attached for PL/SQL and Java stored-procedure debugging. |
@@ -209,7 +212,7 @@ Pass `OracleConnectionParams` and `OraclePoolParams` keys (including `thick_mode
 | `timeout` | `int` | - | Idle seconds after which surplus sessions above `min` are closed. |
 | `wait_timeout` | `int` | - | Maximum milliseconds to wait for an available session under `POOL_GETMODE_TIMEDWAIT`. |
 | `max_lifetime_session` | `int` | - | Maximum lifetime in seconds before a pooled session is retired. |
-| `session_callback` | `Callable[..., Any]` | - | Callback `(connection, requested_tag)` invoked when a pooled session is acquired. |
+| `session_callback` | `Callable[..., Any] or str` | - | Callback `(connection, requested_tag)` invoked when a pooled session is acquired. |
 | `max_sessions_per_shard` | `int` | - | Maximum pooled sessions allocated to any single Oracle shard. |
 | `soda_metadata_cache` | `bool` | - | Enable Thick-mode SODA collection metadata caching across pooled sessions. |
 | `ping_interval` | `int` | - | Idle seconds elapsed before a pooled session is health-checked on checkout. |
@@ -223,6 +226,9 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 <!-- GENERATED:START config-table:sqlspec.adapters.oracledb.config.OracleDriverFeatures -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `plugins` | `Sequence[OraclePluginName or str]` | - | Optional cloud configuration or token plugins imported lazily. |
+| `params_hooks` | `Sequence[Callable[[Any], None]]` | - | Native parameter hooks registered idempotently before connecting. |
+| `enable_auto_state_tagging` | `bool` | `True` | Synthesize and reuse Thick pool session state tags (defaults to True). |
 | `enable_numpy_vectors` | `bool` | `True` | Register bidirectional NumPy `ndarray` handlers for Oracle 23ai+ `VECTOR` columns (defaults to `True` when NumPy is installed). |
 | `enable_lowercase_column_names` | `bool` | `True` | Normalize unquoted uppercase Oracle column names to lowercase while preserving quoted aliases (defaults to `True`). |
 | `enable_uuid_binary` | `bool` | - | Convert Python `UUID` values to and from `RAW(16)` columns. |
@@ -237,11 +243,79 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 | `enable_events` | `bool` | - | Enable SQLSpec event channels (separate from `connection_config['events']` FAN/CQN notifications). |
 | `events_backend` | `OracleEventsBackend` | - | Event queue backend (`'poll_queue'` default, `'aq'`, or `'txeventq'`). |
 | `enable_direct_path_load` | `bool` | `True` | Route `load_from_arrow` through Thin-mode `Connection.direct_path_load` with `executemany` fallback (defaults to `True`). |
-| `tenant_strategy` | `TenantStrategy or TenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"identifier"` shorthand, applied to every session and connection lease. |
+| `tenant_strategy` | `TenantStrategy or OracleTenantStrategyShorthand or None` | - | Opt-in tenant strategy, or the `"identifier"` shorthand, applied to every session and connection lease. |
 | `session_context_hook` | `OracleSessionContextConfig or dict[str, Any]` | - | Declarative `DBMS_SESSION` / `CLIENT_IDENTIFIER` context applied on checkout and cleared on release. |
+| `sharding_key_variable` | `str` | - | Tenant variable carrying the primary shard key. |
+| `super_sharding_key_variable` | `str` | - | Tenant variable carrying the super-shard key. |
+| `shard_resolver` | `OracleShardResolver` | - | Resolve primary and super-shard keys from the captured tenant payload. |
+| `use_tenant_id_as_sharding_key` | `bool` | - | Route directly by captured tenant identity in Thick mode. |
+| `enable_otel_trace_context` | `bool` | - | Piggyback W3C trace headers on supported Oracle connections. |
 | `enable_session_tracing` | `bool` | - | Piggyback active correlation and trace identifiers onto `module`, `action`, `client_identifier`, and `econtext_id` in zero extra RTTs. |
 | `dbms_cloud_credential` | `str or None` | - | Default `DBMS_CLOUD` credential name used for server-side `DBMS_CLOUD.COPY_DATA` object-store loads. |
 <!-- GENERATED:END config-table:sqlspec.adapters.oracledb.config.OracleDriverFeatures -->
+
+## Oracle 26ai Session Workflows
+
+Use `python-oracledb>=26.1` for these APIs. Each feature also needs server support and the right client mode. A flag cannot enable a feature that the server or client lacks.
+
+#### Centralized configuration
+
+Point `connection_config["dsn"]` at a native config provider URI. `config-file://` reads a local configuration; `file://` normalizes to that scheme. Cloud schemes are `config-ociobject://`, `config-azure://`, `config-awss3://`, `config-awssecretsmanager://`, `config-gcpstorage://`, and `config-gcpsecretmanager://`.
+
+```python
+from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+config = OracleAsyncConfig(
+    connection_config={"dsn": "config-file:///etc/oracle/connection.json"}
+)
+config.refresh_config_cache()
+```
+
+Cloud modules load when needed. Install the provider's SDK too. A missing SDK raises `MissingDependencyError` with an install hint. `driver_features["plugins"]` also accepts the native configuration plugins and `oci_tokens` or `azure_tokens`. `params_hooks` registers each hook once. Use `register_oracle_params_hook`, `unregister_oracle_params_hook`, and `register_oracle_protocol` for app setup and teardown. Cache refresh can take a different `dsn` and `remove_permanently=True`. Thick mode defaults `thick_mode_dsn_passthrough=False` for config URIs, so the provider can resolve them.
+
+#### Acquire options, sharding, and state tags
+
+Use `OracleAcquireOptions` to select a shard or request a pool tag for one checkout:
+
+```python
+from sqlspec.adapters.oracledb import OracleAcquireOptions, OracleSyncConfig
+
+config = OracleSyncConfig(
+    connection_config={"dsn": "db.example.internal/app", "user": "app", "password": "secret"}
+)
+with config.provide_session(acquire_options=OracleAcquireOptions(sharding_key=["acme"])) as session:
+    tenant_name = session.select_value("SELECT SYS_CONTEXT('USERENV', 'SESSION_USER') FROM DUAL")
+```
+
+The providers also accept `sharding_key` and `super_sharding_key` directly. Direct client routing needs Thick mode and a sharded database. Thin mode omits native shard-key arguments; use the configured routing endpoint. Tenant configs can derive keys from `sharding_key_variable`, `super_sharding_key_variable`, a `shard_resolver`, or `use_tenant_id_as_sharding_key=True`. Select one primary shard source. The resolver receives the captured tenant payload before acquisition.
+
+Thick pools reuse session state through generated tags (`enable_auto_state_tagging=True`). Explicit tags take precedence. Thin pools never read or release a socket's Thick-only tag. Use `pool_boundary="transaction"` with tenant or stateful session hooks. Statement-boundary DRCP release would lose their state. Put an edition in `OracleSessionContextConfig` when also using `cclass`. Connect-time `edition` and `cclass` are rejected together.
+
+#### Session context and end-user security
+
+`OracleSessionContextConfig(contexts={"CLIENTCONTEXT": {"TENANT_ID": "acme"}})` sets native client context. The state travels with the next request. `current_schema`, `clientinfo`, and `dbop` use the same path. Edition, NLS, and other context changes can still need SQL. Reset runs before pool reuse. A failed reset drops the socket.
+
+Use `OracleEndUserSecurityConfig(database_access_token=..., end_user_identity=..., data_roles=..., attributes=...)` in the session hook for Deep Data Security. This needs a supported Oracle 26ai Thin TCPS server. Tokens may be callables resolved at checkout. Set up the server policy and valid credentials first. A tenant ID alone does not enforce row access. The [tenant operations recipe](../learn/recipes/multi-tenancy-operations.md#oracle-client-context-and-security) covers tenant strategies and cleanup.
+
+#### Suspend and resume transactions
+
+`sessionless_transaction()` yields a transaction ID. On clean exit it suspends the work on the server and releases the pool socket. A second checkout can resume that ID with `resume=True` and commit. Errors roll back by default. The sync and async drivers also expose explicit `begin_sessionless_transaction`, `resume_sessionless_transaction`, and `suspend_sessionless_transaction` methods; await all three on the async driver.
+
+Run the [sessionless example](https://github.com/litestar-org/sqlspec/blob/main/docs/examples/databases/oracledb/sessionless_transactions.py) with `ORACLE_DSN`, `ORACLE_USER`, and `ORACLE_PASSWORD`. It creates a temporary ledger table, writes on the first checkout, and resumes and commits on the second. It requires Oracle 23ai/26ai sessionless support and DDL rights for its example table. Keep the ID in app state and resume before the server timeout.
+
+??? example "Complete sessionless example"
+
+    ```python
+    --8<-- "docs/examples/databases/oracledb/sessionless_transactions.py"
+    ```
+
+`session.set_transaction_priority("HIGH")` sets the native priority field without a query. This call is sync on both drivers. `OracleTransactionPriority` accepts `"DEFAULT"`, `"LOW"`, `"MEDIUM"`, or `"HIGH"`. Priority support and policy depend on the server. `execute(..., suspend_on_success=True)` suspends after one statement. It needs an active sessionless transaction and does not commit.
+
+#### Async pipelines and trace propagation
+
+`execute_stack(..., continue_on_error=False)` tells the native Thin pipeline to stop at the first error. Later operations do not run. `continue_on_error=True` collects each result. Native pipelines need a supported SDK and Oracle 23ai/26ai server. Set `driver_features={"stack_native_disabled": True}` to run stacks one statement at a time. LOB values are read before the pipeline result is returned.
+
+With spans enabled, SQLSpec checks the socket's `supports_opentelemetry_tracing` flag. Supported Oracle 26ai sockets receive W3C headers through `set_opentelemetry_trace_context` on the next wire request. `enable_otel_trace_context=False` disables this propagation. See [observability](../learn/observability.md#request-correlation-and-wire-level-sqlcommenter) for trace extraction and SQLCommenter behavior.
 
 ## Type Mappings & Dialect Notes
 
@@ -254,7 +328,7 @@ Pass `OracleDriverFeatures` keys inside `driver_features={...}` on `OracleSyncCo
 | `RAW(16)` | `uuid.UUID` / `bytes` | Bi-directional `uuid.UUID` <-> `RAW(16)` coercion when `enable_uuid_binary=True` (default). |
 | `VECTOR` (Oracle 26ai) | `numpy.ndarray` / `array.array` / `list[float]` | Zero-copy `float32`, `float64`, `int8`, and `binary` vector conversion controlled by `enable_numpy_vectors` and `vector_return_format`. |
 
-- **Session Context on Checkout (`session_context_hook`)**: Pass an `OracleSessionContextConfig` (or an equivalent dict) as `session_context_hook`. Each field accepts a static value or a zero-argument callable resolved per checkout. `module`, `action`, `client_identifier`, and `ecid` are set as connection attributes that `python-oracledb` piggybacks onto the next round trip, while `edition`, `time_zone`, `nls_parameters`, and `contexts` run in a single checkout PL/SQL block. The context is cleared on release when `reset_on_release=True` (default).
+- **Session Context on Checkout (`session_context_hook`)**: Pass an `OracleSessionContextConfig` (or an equivalent dict) as `session_context_hook`. Each field accepts a static value or a zero-argument callable resolved per checkout. `module`, `action`, `client_identifier`, and `ecid` are set as connection attributes that `python-oracledb` piggybacks onto the next round trip, while `edition`, `time_zone`, `nls_parameters`, and non-`CLIENTCONTEXT` contexts run in a checkout PL/SQL block. The context is cleared on release when `reset_on_release=True` (default).
 - **Direct Path Load and Cloud Storage Copy**: When `enable_direct_path_load=True`, `session.load_from_arrow(...)` uses Oracle's Direct Path Load API (bypassing buffer cache when constraints/triggers allow) and falls back cleanly to batched array DML. For object-store Parquet/CSV/JSON files, set `dbms_cloud_credential` to run server-side `DBMS_CLOUD.COPY_DATA`.
 - **Oracle 26ai VECTOR HNSW and Hybrid RRF**: `sqlspec.builder` exposes `build_oracle_hnsw_subquery` and `build_oracle_hybrid_rrf_sql` (used by `OracleSyncADKMemoryStore` and `OracleAsyncADKMemoryStore`) to isolate `VECTOR_DISTANCE(..., COSINE)` inside an inline view so the Oracle Cost-Based Optimizer uses HNSW/IVF vector indexes alongside Oracle Text `CONTAINS` scores in a single-round-trip Reciprocal Rank Fusion query.
 - **Oracle AQ Events**: `EventChannel` supports both transactional table queues and native Oracle Advanced Queuing (`DBMS_AQ`) via `driver_features={"events_backend": "aq"}`.

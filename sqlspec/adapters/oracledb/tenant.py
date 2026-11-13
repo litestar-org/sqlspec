@@ -160,7 +160,7 @@ def _skip_tenant_alter(connection: Any, hook: OracleSessionContextConfig) -> boo
 class OracleSyncClientContextStrategy:
     """Bind tenant attributes through the zero-round-trip CLIENTCONTEXT API."""
 
-    __slots__ = ("_attribute", "_variable_keys", "source_hook")
+    __slots__ = ("_tenant_attribute", "_variable_keys", "source_hook")
 
     def __init__(
         self,
@@ -170,14 +170,14 @@ class OracleSyncClientContextStrategy:
         hook: OracleSessionContextConfig | Mapping[str, Any] | None = None,
     ) -> None:
         _validate_oracle_identifier(attribute, "attribute")
-        self._attribute = attribute
+        self._tenant_attribute = attribute
         self._variable_keys = _validate_variable_keys(variable_keys)
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
 
     def checkout(self, connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
         """Attach tenant attributes and apply the captured session hook."""
         variables = _tenant_variables(payload, self._variable_keys)
-        variables[self._attribute] = payload.tenant_id
+        variables[self._tenant_attribute] = payload.tenant_id
         with TenantContext.bind(payload):
             if self.source_hook is not None:
                 execute_session_checkout_sync(connection, self.source_hook)
@@ -196,7 +196,7 @@ class OracleSyncClientContextStrategy:
 class OracleAsyncClientContextStrategy:
     """Bind tenant attributes through asynchronous CLIENTCONTEXT piggybacking."""
 
-    __slots__ = ("_attribute", "_variable_keys", "source_hook")
+    __slots__ = ("_tenant_attribute", "_variable_keys", "source_hook")
 
     def __init__(
         self,
@@ -206,14 +206,14 @@ class OracleAsyncClientContextStrategy:
         hook: OracleSessionContextConfig | Mapping[str, Any] | None = None,
     ) -> None:
         _validate_oracle_identifier(attribute, "attribute")
-        self._attribute = attribute
+        self._tenant_attribute = attribute
         self._variable_keys = _validate_variable_keys(variable_keys)
         self.source_hook = OracleSessionContextConfig(**hook) if isinstance(hook, Mapping) else hook
 
     async def checkout(self, connection: Any, payload: TenantContextPayload) -> TenantLeaseState:
         """Attach tenant attributes and apply the captured session hook."""
         variables = _tenant_variables(payload, self._variable_keys)
-        variables[self._attribute] = payload.tenant_id
+        variables[self._tenant_attribute] = payload.tenant_id
         with TenantContext.bind(payload):
             if self.source_hook is not None:
                 await execute_session_checkout_async(connection, self.source_hook)
@@ -230,8 +230,8 @@ class OracleAsyncClientContextStrategy:
 
 def _deepsec_tenant_config(strategy: Any, payload: TenantContextPayload) -> OracleEndUserSecurityConfig:
     variables = _tenant_variables(payload, strategy._variable_keys, secrets=True)
-    if strategy._attribute is not None:
-        variables[strategy._attribute] = payload.tenant_id
+    if strategy._tenant_attribute is not None:
+        variables[strategy._tenant_attribute] = payload.tenant_id
     identity: Any = payload.variables.get("end_user_token")
     if strategy._identity_provider in {"oci", "entra", "obo"} and not identity:
         msg = "Oracle token identity providers require the end_user_token tenant variable"
@@ -249,10 +249,10 @@ class OracleSyncEndUserSecurityStrategy:
     """Bind captured tenant identity to a native Deep Data Security context."""
 
     __slots__ = (
-        "_attribute",
         "_data_roles",
         "_database_access_token",
         "_identity_provider",
+        "_tenant_attribute",
         "_variable_keys",
         "source_hook",
     )
@@ -273,7 +273,7 @@ class OracleSyncEndUserSecurityStrategy:
             raise ImproperConfigurationError(msg)
         if attribute is not None:
             _validate_oracle_identifier(attribute, "attribute")
-        self._attribute = attribute
+        self._tenant_attribute = attribute
         self._data_roles = data_roles
         self._database_access_token = database_access_token
         self._identity_provider = identity_provider
@@ -302,10 +302,10 @@ class OracleAsyncEndUserSecurityStrategy:
     """Bind captured tenant identity to a native Deep Data Security context."""
 
     __slots__ = (
-        "_attribute",
         "_data_roles",
         "_database_access_token",
         "_identity_provider",
+        "_tenant_attribute",
         "_variable_keys",
         "source_hook",
     )
@@ -326,7 +326,7 @@ class OracleAsyncEndUserSecurityStrategy:
             raise ImproperConfigurationError(msg)
         if attribute is not None:
             _validate_oracle_identifier(attribute, "attribute")
-        self._attribute = attribute
+        self._tenant_attribute = attribute
         self._data_roles = data_roles
         self._database_access_token = database_access_token
         self._identity_provider = identity_provider
@@ -576,13 +576,13 @@ def bind_oracle_tenant_hook(strategy: Any, hook: OracleSessionContextConfig | Ma
     if type(strategy) in (OracleSyncIdentifierStrategy, OracleAsyncIdentifierStrategy):
         return type(strategy)(normalized, variable_keys=strategy._variable_keys)
     if type(strategy) in (OracleSyncClientContextStrategy, OracleAsyncClientContextStrategy):
-        return type(strategy)(strategy._attribute, variable_keys=strategy._variable_keys, hook=normalized)
+        return type(strategy)(strategy._tenant_attribute, variable_keys=strategy._variable_keys, hook=normalized)
     if type(strategy) in (OracleSyncEndUserSecurityStrategy, OracleAsyncEndUserSecurityStrategy):
         return type(strategy)(
             strategy._database_access_token,
             identity_provider=strategy._identity_provider,
             data_roles=strategy._data_roles,
-            attribute=strategy._attribute,
+            attribute=strategy._tenant_attribute,
             variable_keys=strategy._variable_keys,
             hook=normalized,
         )
