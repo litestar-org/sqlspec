@@ -1809,3 +1809,24 @@ def test_oracle_replica_error_mapping(code: int, expected_name: str) -> None:
     mapped = create_mapped_exception(native)
     assert isinstance(mapped, getattr(exceptions, expected_name))
     assert mapped.__cause__ is native
+
+
+def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = "EDITION=V2"
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire.return_value = connection
+    zones = iter(["UTC", "+01:00"])
+    hook = OracleSessionContextConfig(edition="V2", time_zone=lambda: next(zones))
+    config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    for _ in range(2):
+        with config.provide_connection():
+            pass
+    assert len(cursor.execute.call_args_list) == 2
+    assert "TIME_ZONE = ''UTC''" in cursor.execute.call_args_list[0].args[0]
+    assert "TIME_ZONE = ''+01:00''" in cursor.execute.call_args_list[1].args[0]

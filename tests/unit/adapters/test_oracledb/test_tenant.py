@@ -592,17 +592,18 @@ async def test_deepsec_strategy_keeps_secret_variables_out_of_attributes(
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(mode: str) -> None:
+@pytest.mark.parametrize("thin", [False, True])
+async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(mode: str, thin: bool) -> None:
     from sqlspec.adapters.oracledb.tenant import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
 
     connection = SimpleNamespace(
-        thin=True,
+        thin=thin,
         set_app_context=MagicMock(),
         clear_app_context=MagicMock(),
         rollback=AsyncMock() if mode == "async" else MagicMock(),
     )
     pool = SimpleNamespace(
-        thin=True,
+        thin=thin,
         acquire=AsyncMock(return_value=connection) if mode == "async" else MagicMock(return_value=connection),
         release=AsyncMock() if mode == "async" else MagicMock(),
         drop=AsyncMock() if mode == "async" else MagicMock(),
@@ -621,7 +622,7 @@ async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(
         else:
             with context:
                 pass
-    pool.acquire.assert_called_once_with(shardingkey=["us"])
+    pool.acquire.assert_called_once_with(**({"shardingkey": ["us"]} if not thin else {}))
     pool.acquire.reset_mock()
     with TenantContext.scope("acme"), pytest.raises(TenantContextError, match=r"Missing.*shard"):
         context = config.provide_connection()
@@ -640,7 +641,7 @@ async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(
         else:
             with context:
                 pass
-    pool.acquire.assert_called_once_with(shardingkey=["override"])
+    pool.acquire.assert_called_once_with(**({"shardingkey": ["override"]} if not thin else {}))
 
 
 @pytest.mark.parametrize("vpd", [False, True])

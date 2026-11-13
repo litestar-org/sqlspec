@@ -402,3 +402,20 @@ async def test_oracle_async_driver_pipeline_native_supported_zero_rtt_from_conne
     assert await driver._pipeline_native_supported() is True
     assert driver._pipeline_support_reason is None
     get_version_mock.assert_not_called()
+
+
+async def test_pipeline_materializes_async_and_sync_lob_cells() -> None:
+    from sqlspec.adapters.oracledb.core import coerce_pipeline_rows_async
+
+    class AsyncLob:
+        async def read(self) -> str:
+            return "text payload"
+
+    class SyncLob:
+        def read(self) -> bytes:
+            return b"binary payload"
+
+    rows = [(AsyncLob(), SyncLob(), 42)]
+    assert await coerce_pipeline_rows_async(rows, {}) == [("text payload", b"binary payload", 42)]
+    assert await coerce_pipeline_rows_async(rows, {"fetch_lobs": True}) == rows
+    assert await coerce_pipeline_rows_async([(1, "value")], {}) == [(1, "value")]

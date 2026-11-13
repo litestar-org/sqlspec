@@ -61,7 +61,7 @@ from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
@@ -910,6 +910,9 @@ def _validate_end_user_attributes(value: Any) -> None:
         msg = "end-user attributes must be a mapping"
         raise ImproperConfigurationError(msg)
     for key, item in value.items():
+        if not isinstance(key, str):
+            msg = "end-user attribute names must be strings"
+            raise ImproperConfigurationError(msg)
         _validate_oracle_identifier(key, "end-user attribute")
         if not isinstance(item, str):
             msg = "end-user attributes must contain string values"
@@ -1029,7 +1032,10 @@ def prepare_session_checkout_pipeline(
     """Apply zero-round-trip connection fields and prepare optional checkout SQL."""
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     if resolved.current_schema is not None:
-        baseline = getattr(connection, "current_schema", "") or getattr(connection, "username", "")
+        baseline = getattr(connection, "current_schema", "")
+        if not baseline:
+            username = getattr(connection, "username", "")
+            baseline = normalize_identifier(username, "oracle") if isinstance(username, str) else username
         if isinstance(baseline, str):
             _INITIAL_SCHEMA_BY_CONN_ID.setdefault(id(connection), baseline)
     if resolved.transaction_priority is not None:
@@ -1066,8 +1072,11 @@ def prepare_session_checkout_pipeline(
         if value is not None:
             maximum = ORACLE_MODULE_MAX_BYTES if name == "module" else ORACLE_ACTION_MAX_BYTES
             value = truncate_utf8_bytes(value, maximum) if name != "current_schema" else value
-        with contextlib.suppress(AttributeError):
-            setattr(connection, name, value)
+        if name == "current_schema":
+            connection.current_schema = value
+        else:
+            with contextlib.suppress(AttributeError):
+                setattr(connection, name, value)
     return plsql, binds
 
 
@@ -3640,9 +3649,9 @@ def _build_session_release_plan(
     if resolved.ecid is not None:
         piggyback_attrs["econtext_id"] = ""
     if resolved.clientinfo is not None:
-        piggyback_attrs["clientinfo"] = ""
+        piggyback_attrs["clientinfo"] = None
     if resolved.dbop is not None:
-        piggyback_attrs["dbop"] = ""
+        piggyback_attrs["dbop"] = None
 
     plsql_statements: list[str] = []
     if resolved.reset_on_release:

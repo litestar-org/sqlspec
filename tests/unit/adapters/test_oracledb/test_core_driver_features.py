@@ -672,7 +672,7 @@ def test_clientcontext_checkout_and_release_uses_native_piggybacks() -> None:
     connection.clear_app_context.assert_called_once_with("CLIENTCONTEXT")
     assert connection.current_schema == "APP"
     assert connection.client_identifier is None
-    assert connection.clientinfo == ""
+    assert connection.clientinfo is None
     connection.cursor.assert_not_called()
 
 

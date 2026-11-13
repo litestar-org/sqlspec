@@ -42,6 +42,7 @@ from sqlspec.adapters.oracledb.core import (
     apply_wallet_ssl_context,
     build_connection_config,
     clear_oracle_otel_trace_context,
+    create_mapped_exception,
     default_statement_config,
     execute_session_checkout_async,
     execute_session_checkout_sync,
@@ -503,7 +504,7 @@ def _oracle_checkout_state(
     skip = False
     if getattr(connection, "thin", None) is False and config.driver_features.get("enable_auto_state_tagging", True):
         desired = synthesize_session_state_tag(hook, explicit_tag=options.tag)
-        skip = desired is not None and connection.tag == desired
+        skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
     elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
         skip = True
     baseline = None
@@ -822,7 +823,9 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             ("purity", "purity"),
         ):
             value = getattr(options, attr)
-            if value is not None:
+            if value is not None and (
+                attr not in {"sharding_key", "super_sharding_key"} or getattr(pool, "thin", None) is False
+            ):
                 result[key] = value
         if getattr(pool, "thin", None) is False:
             if options.tag is not None:
@@ -1025,7 +1028,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         config["session_callback"] = self._init_connection
         self._owns_pool_session_callback = True
 
-        return oracledb.create_pool(**config)
+        try:
+            return oracledb.create_pool(**config)
+        except oracledb.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _init_connection(self, connection: "OracleSyncConnection", tag: str) -> None:
         """Initialize connection with type handlers and cached server metadata.
@@ -1384,7 +1390,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             ("purity", "purity"),
         ):
             value = getattr(options, attr)
-            if value is not None:
+            if value is not None and (
+                attr not in {"sharding_key", "super_sharding_key"} or getattr(pool, "thin", None) is False
+            ):
                 result[key] = value
         if getattr(pool, "thin", None) is False:
             if options.tag is not None:
@@ -1582,7 +1590,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         config["session_callback"] = self._init_connection
         self._owns_pool_session_callback = True
 
-        return oracledb.create_pool_async(**config)
+        try:
+            return oracledb.create_pool_async(**config)
+        except oracledb.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _init_connection(self, connection: "OracleAsyncConnection", tag: str) -> None:
         """Initialize async connection with type handlers and cached server metadata.
