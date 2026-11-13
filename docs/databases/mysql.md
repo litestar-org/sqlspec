@@ -295,6 +295,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `ssl_verify_cert` | `bool` | - | Verify the server TLS certificate against `ssl_ca`. |
     | `ssl_verify_identity` | `bool` | - | Verify that the server TLS certificate matches the target hostname. |
     | `extra` | `dict[str, Any]` | - | Additional keyword arguments forwarded to `pymysql.connect`. |
+    | `read_only` | `bool` | - | Initialize each connection in session read-only mode after native initialization. |
     | `pool_recycle_seconds` | `int` | - | Maximum connection age in seconds before recycling pooled PyMySQL connections. |
     | `health_check_interval` | `float` | - | Minimum interval in seconds between `conn.ping()` liveness checks. |
     <!-- GENERATED:END config-table:sqlspec.adapters.pymysql.config.PyMysqlConnectionParams,sqlspec.adapters.pymysql.config.PyMysqlPoolParams -->
