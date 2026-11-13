@@ -23,6 +23,8 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -253,7 +255,7 @@ def test_version_tuple_parsing() -> None:
 
 @pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
 def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) -> None:
-    """DuckDB provide_session rolls back uncommitted driver.begin() work on both clean and error exit."""
+    """DuckDB provide_session rolls back uncommitted work and detaches the driver on clean and error exit."""
     config = DuckDBConfig(connection_config={"database": ":memory:session_rollback_test"})
     try:
         with config.provide_session() as setup_session:
@@ -267,6 +269,9 @@ def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) 
             with config.provide_session() as session:
                 session.begin()
                 session.execute("INSERT INTO items VALUES (1)")
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
         with config.provide_session() as check_session:
             assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
     finally:
@@ -276,7 +281,7 @@ def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) 
 def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Clean-exit rollback failure forwards error metadata to pool release so uncommitted writes never commit."""
+    """Clean-exit rollback failure forwards error metadata to pool release, detaches the driver, and avoids commit."""
     db_file = tmp_path / "failed_rollback.duckdb"
     config = DuckDBConfig(connection_config={"database": str(db_file)})
     try:
@@ -291,6 +296,7 @@ def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_c
             session.begin()
             session.execute("INSERT INTO items VALUES (42)")
 
+        assert session.connection is _DETACHED_CONNECTION
         assert config.provide_pool().size() == 0
         monkeypatch.undo()
         with config.provide_session() as check_session:

@@ -167,16 +167,24 @@ class Db2SyncSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        """Roll back open work, then return the connection to the pool."""
+        """Roll back open work, return the connection to the pool, and detach the driver."""
+        driver = self._driver
         if self._connection is None:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
             return None
         try:
             if self._driver is not None:
                 self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
-            self._driver = None
+            try:
+                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
         return None
 
 
@@ -290,16 +298,24 @@ class Db2AsyncSessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        """Roll back open work, then return the connection to the pool."""
+        """Roll back open work, return the connection to the pool, and detach the driver."""
+        driver = self._driver
         if self._connection is None:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
             return None
         try:
             if self._driver is not None:
                 await self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
-            self._driver = None
+            try:
+                await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
         return None
 
 

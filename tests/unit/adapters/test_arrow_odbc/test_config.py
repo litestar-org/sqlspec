@@ -19,6 +19,7 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.core import _extract_sqlstate, create_mapped_exception
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -377,7 +378,7 @@ def test_driver_features_chunk_size_default() -> None:
 @pytest.mark.parametrize("entry", ["provide_connection", "provide_session"])
 @pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
 def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: str, autocommit: bool) -> None:
-    """Caller-supplied connection_instance is rolled back when autocommit=False and never closed across exits."""
+    """Caller-supplied connection_instance is rolled back when autocommit=False, never closed, and detached per session."""
 
     class _CallerConnection:
         def __init__(self) -> None:
@@ -394,9 +395,17 @@ def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: 
     config = ArrowOdbcConfig(
         connection_config={"dsn": "analytics", "autocommit": autocommit}, connection_instance=cast("Any", stub)
     )
-    for _ in range(2):
-        with getattr(config, entry)():
-            pass
+    with getattr(config, entry)() as first:
+        if entry == "provide_session":
+            assert first.connection is stub
+    if entry == "provide_session":
+        assert first.connection is _DETACHED_CONNECTION
+
+    with getattr(config, entry)() as second:
+        if entry == "provide_session":
+            assert second.connection is stub
+    if entry == "provide_session":
+        assert second.connection is _DETACHED_CONNECTION
 
     assert stub.closed is False
     assert stub.rollbacks == (0 if autocommit else 2)
@@ -405,7 +414,7 @@ def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: 
 def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Owned connections close on exit and ArrowOdbcSessionContext rolls back active begin() transactions."""
+    """Owned connections close on exit and ArrowOdbcSessionContext rolls back active transactions and detaches."""
 
     class _OwnedConnection:
         def __init__(self) -> None:
@@ -432,10 +441,11 @@ def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transa
 
     assert owned.executed == ["BEGIN", "ROLLBACK"]
     assert owned.closed is True
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection_instance() -> None:
-    """Failed driver rollback on a caller connection_instance propagates the mapped error without a duplicate raw rollback."""
+    """Failed driver rollback on a caller connection_instance propagates the mapped error and detaches the driver."""
 
     class _FakeArrowOdbcError(ArrowOdbcError):
         def __init__(self, message: str) -> None:
@@ -457,3 +467,4 @@ def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection
         session.begin()
 
     assert caller.rollbacks == 1
+    assert session.connection is _DETACHED_CONNECTION

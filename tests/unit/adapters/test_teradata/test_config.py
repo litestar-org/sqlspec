@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlspec.adapters.teradata import TeradataConfig, TeradataDriver
+from sqlspec.adapters.teradata import TeradataConfig, TeradataDriver, TeradataSessionContext
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import TransactionError
 from sqlspec.utils.module_loader import reset_dependency_cache
 
@@ -37,17 +38,20 @@ def test_config_session_releases_connection_after_success(connections: list[Any]
     with config.provide_session() as session:
         assert isinstance(session, TeradataDriver)
         assert pool.checked_out() == 1
+    assert session.connection is _DETACHED_CONNECTION
     assert pool.checked_out() == 0
     with config.provide_session() as session:
         assert session.connection is connections[0]
+    assert session.connection is _DETACHED_CONNECTION
     pool.close()
 
 
 def test_session_prepare_hook_failure_discards_lease(connections: list[Any]) -> None:
-    def fail(session: Any) -> NoReturn:
-        raise ValueError("session setup failed")
+    captured: list[Any] = []
 
-    from sqlspec.adapters.teradata import TeradataSessionContext
+    def fail(session: Any) -> NoReturn:
+        captured.append(session)
+        raise ValueError("session setup failed")
 
     config = TeradataConfig(connection_config={"pool_max_size": 1})
     pool = config.provide_pool()
@@ -59,6 +63,7 @@ def test_session_prepare_hook_failure_discards_lease(connections: list[Any]) -> 
     with pytest.raises(ValueError, match="session setup failed"):
         with context:
             pytest.fail("setup hook must fail before yielding session")
+    assert captured[0].connection is _DETACHED_CONNECTION
     assert pool.checked_out() == 0
     assert pool.size() == 0
     connections[0].close.assert_called_once_with()
@@ -68,10 +73,12 @@ def test_session_prepare_hook_failure_discards_lease(connections: list[Any]) -> 
 def test_session_rollback_failure_discards_lease(connections: list[Any]) -> None:
     config = TeradataConfig(connection_config={"pool_max_size": 1})
     pool = config.provide_pool()
+    session: Any = None
     with pytest.raises(TransactionError, match="rollback"):
         with config.provide_session() as session:
             session.begin()
             session.connection.rollback.side_effect = RuntimeError("socket gone")
+    assert session.connection is _DETACHED_CONNECTION
     assert pool.checked_out() == 0
     assert pool.size() == 0
     connections[0].close.assert_called_once_with()

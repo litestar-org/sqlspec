@@ -89,6 +89,7 @@ class ArrowOdbcSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        driver = self._driver
         rollback_exc: BaseException | None = None
         driver_rolled_back = False
         try:
@@ -101,17 +102,24 @@ class ArrowOdbcSessionContext:
                     if exc_type is None:
                         raise
         finally:
-            self._driver = None
-            if self._connection is not None:
-                connection, self._connection = self._connection, None
-                release_type = exc_type if exc_type is not None else (type(rollback_exc) if rollback_exc else None)
-                release_val = exc_val if exc_val is not None else rollback_exc
-                release_tb = exc_tb if exc_tb is not None else (rollback_exc.__traceback__ if rollback_exc else None)
-                self._release_connection(
-                    connection,
-                    exc_type=release_type,
-                    exc_val=release_val,
-                    exc_tb=release_tb,
-                    already_rolled_back=driver_rolled_back,
-                )
+            try:
+                self._driver = None
+                if self._connection is not None:
+                    connection, self._connection = self._connection, None
+                    release_type = exc_type if exc_type is not None else (type(rollback_exc) if rollback_exc else None)
+                    release_val = exc_val if exc_val is not None else rollback_exc
+                    release_tb = (
+                        exc_tb if exc_tb is not None else (rollback_exc.__traceback__ if rollback_exc else None)
+                    )
+                    self._release_connection(
+                        connection,
+                        exc_type=release_type,
+                        exc_val=release_val,
+                        exc_tb=release_tb,
+                        already_rolled_back=driver_rolled_back,
+                    )
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
         return None

@@ -21,6 +21,7 @@ from sqlspec.adapters.db2.core import _parse_db2_dsn, build_connection_config, b
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
@@ -471,19 +472,53 @@ async def test_async_config_pool_params_are_applied(fake_ibm_db: FakeModules) ->
 
 @pytest.mark.anyio
 async def test_async_provide_session_yields_async_driver(fake_ibm_db: FakeModules) -> None:
-    """Async sessions hand out an async driver over a pooled connection and return it on exit."""
+    """Async sessions hand out an async driver over a pooled connection, return it on exit, and detach the driver."""
     config = Db2AsyncConfig(connection_config={"database": "TESTDB"})
     try:
         async with config.provide_session() as driver:
             assert isinstance(driver, Db2AsyncDriver)
             assert isinstance(driver.connection, FakeDb2AsyncConnection)
+            session_connection = driver.connection
             pool = await config.provide_pool()
             assert pool.checked_out() == 1
+        assert driver.connection is _DETACHED_CONNECTION
         assert pool.checked_out() == 0
         async with config.provide_connection() as connection:
-            assert connection is driver.connection
+            assert connection is session_connection
     finally:
         await config.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_db2_provide_session_detaches_driver_on_exit(
+    db2_mode: DriverMode, fake_ibm_db: FakeModules, body_raises: bool
+) -> None:
+    """Db2 sync and async provide_session contexts detach the driver on clean and error exit."""
+    _ = fake_ibm_db
+    config = db2_mode.config(connection_config={"database": "TESTDB"})
+    session: Any = None
+    try:
+        if db2_mode.is_async:
+            if body_raises:
+                with pytest.raises(RuntimeError, match="db2 body error"):
+                    async with config.provide_session() as session:
+                        raise RuntimeError("db2 body error")
+            else:
+                async with config.provide_session() as session:
+                    pass
+        elif body_raises:
+            with pytest.raises(RuntimeError, match="db2 body error"), config.provide_session() as session:
+                raise RuntimeError("db2 body error")
+        else:
+            with config.provide_session() as session:
+                pass
+        assert session.connection is _DETACHED_CONNECTION
+    finally:
+        if db2_mode.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()
 
 
 @pytest.mark.anyio

@@ -203,18 +203,28 @@ class OracleSyncSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver = self._driver
             try:
                 self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
             finally:
                 self._connection = None
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
             raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if self._connection is not None:
+                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None
 
 
@@ -266,20 +276,30 @@ class OracleAsyncSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver = self._driver
             try:
                 await self._release_connection(
                     self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
                 )
             finally:
                 self._connection = None
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
             raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if self._connection is not None:
+                await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None
 
 

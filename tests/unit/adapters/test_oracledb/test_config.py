@@ -38,6 +38,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -820,9 +821,10 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
 
     hook = OracleSessionContextConfig(client_identifier="u1", clear_identifier=True, reset_package=True)
     sync_cfg = OracleSyncConfig(connection_instance=pool_sync, driver_features={"session_context_hook": hook})
-    with pytest.raises(RuntimeError, match="boom_sync"), sync_cfg.provide_session():
+    with pytest.raises(RuntimeError, match="boom_sync"), sync_cfg.provide_session() as sync_session:
         raise RuntimeError("boom_sync")
 
+    assert sync_session.connection is _DETACHED_CONNECTION
     assert len(executed_sync) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_sync[0]
     assert "DBMS_SESSION.RESET_PACKAGE;" in executed_sync[1]
@@ -844,9 +846,12 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     pool_async.release = AsyncMock()
 
     async_cfg = OracleAsyncConfig(connection_instance=pool_async, driver_features={"session_context_hook": hook})
+    async_session: Any = None
     with pytest.raises(RuntimeError, match="boom_async"):
-        async with async_cfg.provide_session():
+        async with async_cfg.provide_session() as async_session:
             raise RuntimeError("boom_async")
+
+    assert async_session.connection is _DETACHED_CONNECTION
 
     assert len(executed_async) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_async[0]
@@ -1341,11 +1346,14 @@ async def test_oracle_non_lease_release_rolls_back_iff_autocommit_off(
         driver_features={"session_context_hook": {"module": "billing", "reset_on_release": True}},
     )
     if mode == "async":
-        async with getattr(config, provider)():
+        async with getattr(config, provider)() as target:
             pass
     else:
-        with getattr(config, provider)():
+        with getattr(config, provider)() as target:
             pass
+
+    if provider == "provide_session":
+        assert target.connection is _DETACHED_CONNECTION
 
     expected_rollbacks = 0 if autocommit else 1
     assert conn.rollback.call_count == expected_rollbacks

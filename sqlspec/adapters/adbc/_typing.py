@@ -138,16 +138,22 @@ class AdbcSessionContext:
                 self._release_connection(
                     connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__, driver=driver
                 )
+            if driver is not None:
+                driver._detach_connection()
             raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            connection = self._connection
-            driver = self._driver
-            self._connection = None
-            self._driver = None
+        driver = self._driver
+        self._driver = None
+        if self._connection is None:
+            if driver is not None:
+                driver._detach_connection()
+            return None
+        connection = self._connection
+        self._connection = None
+        try:
             first_error: BaseException | None = None
             driver_rolled_back = False
             if driver is not None:
@@ -179,6 +185,9 @@ class AdbcSessionContext:
                     first_error = exc
             if exc_type is None and first_error is not None:
                 raise first_error
+        finally:
+            if driver is not None:
+                driver._detach_connection()
         return None
 
 

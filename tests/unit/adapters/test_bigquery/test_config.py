@@ -18,6 +18,7 @@ from sqlspec.adapters.bigquery.config import (
     build_connection_config,
 )
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config, default_statement_config
+from sqlspec.driver._common import _DETACHED_CONNECTION
 
 
 class _RecordingBigQueryClient:
@@ -251,3 +252,20 @@ def test_bigquery_session_context_rolls_back_active_script_transaction(
 
     fake_driver.rollback.assert_called_once_with()
     release.assert_called_once()
+    fake_driver._detach_connection.assert_called_once_with()
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_bigquery_provide_session_detaches_driver_on_exit(body_raises: bool) -> None:
+    """BigQueryConfig.provide_session detaches the yielded driver on clean and error exit."""
+    client = MagicMock()
+    config = BigQueryConfig(connection_instance=client, connection_config={"project": "p"})
+    if body_raises:
+        with pytest.raises(RuntimeError, match="bq session error"), config.provide_session() as session:
+            assert session.connection is client
+            raise RuntimeError("bq session error")
+    else:
+        with config.provide_session() as session:
+            assert session.connection is client
+
+    assert session.connection is _DETACHED_CONNECTION

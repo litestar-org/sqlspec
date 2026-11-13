@@ -45,6 +45,7 @@ from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sybase import SybaseVersionInfo
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -179,9 +180,26 @@ def test_sybase_tracking_table_guard_uses_native_object_id(
     with config.provide_session() as driver:
         SybaseSyncMigrationTracker(version_table_name="audit.ddl_migrations").ensure_tracking_table(driver)
 
+    assert driver.connection is _DETACHED_CONNECTION
     assert cursor.calls[0][0].startswith(
         "IF OBJECT_ID('[audit].[ddl_migrations]') IS NULL EXECUTE('CREATE TABLE [audit].[ddl_migrations]"
     )
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_sybase_provide_session_detaches_driver_on_exit(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], body_raises: bool
+) -> None:
+    """SybaseConfig.provide_session detaches the yielded driver on clean and error exit."""
+    config, _cursor = recording_sybase_config
+    if body_raises:
+        with pytest.raises(RuntimeError, match="sybase body error"), config.provide_session() as session:
+            raise RuntimeError("sybase body error")
+    else:
+        with config.provide_session() as session:
+            pass
+
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_sybase_adk_lifecycle_uses_native_object_id(recording_sybase_config: tuple[SybaseConfig, FakeCursor]) -> None:

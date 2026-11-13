@@ -147,6 +147,7 @@ class BigQuerySessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        driver = self._driver
         try:
             if self._driver is not None and self._driver._connection_in_transaction():
                 try:
@@ -155,10 +156,15 @@ class BigQuerySessionContext:
                     if exc_type is None:
                         raise
         finally:
-            self._driver = None
-            if self._connection is not None:
-                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                self._connection = None
+            try:
+                self._driver = None
+                if self._connection is not None:
+                    self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
         return None
 
 

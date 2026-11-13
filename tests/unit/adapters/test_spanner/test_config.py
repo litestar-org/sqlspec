@@ -34,6 +34,7 @@ from sqlspec.adapters.spanner.config import (
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import DeadlockError, ImproperConfigurationError
 from tests.conftest import requires_interpreted
 
@@ -101,6 +102,8 @@ async def test_connection_hook_runs_for_session_checkout(is_async: bool, transac
     async with _hook_session(checkout.config, **kwargs) as session:
         assert session.connection is checkout.connection
         hook.assert_called_once_with(checkout.connection)
+
+    assert session.connection is _DETACHED_CONNECTION
 
     if transaction:
         _assert_sdk_call(checkout.connection.commit)
@@ -757,6 +760,7 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
 
     with config.provide_session(transaction=True) as driver:
         assert isinstance(driver.connection, _Txn)
+    assert driver.connection is _DETACHED_CONNECTION
 
 
 def test_provide_write_session_alias() -> None:
@@ -1026,11 +1030,13 @@ async def test_async_config_provide_connection_and_sessions() -> None:
 
     async with config.provide_read_session() as read_driver:
         assert read_driver.connection is snap_obj
+    assert read_driver.connection is _DETACHED_CONNECTION
     assert database.snapshot_checkout.exited is True
 
     database.sessions_manager.session.txn.committed = None
     async with config.provide_write_session() as write_driver:
         assert isinstance(write_driver.connection, _AsyncTxn)
+    assert write_driver.connection is _DETACHED_CONNECTION
     assert database.sessions_manager.session.txn.commit_calls == 2
 
 

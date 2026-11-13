@@ -37,6 +37,7 @@ from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTrac
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sqlanywhere import SqlanywhereVersionInfo
 from sqlspec.data_dictionary.dialects.sqlanywhere.config import SQLANYWHERE_FEATURE_FLAGS
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -772,7 +773,7 @@ def test_sqlanywhere_commit_and_rollback_raise_transaction_error() -> None:
 
 
 def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
-    """DML without begin() must be rolled back before a pooled connection is reused."""
+    """DML without begin() must be rolled back and the driver detached before a pooled connection is reused."""
     conn = FakeConnection()
     ctx = SqlanywhereSessionContext(
         acquire_connection=lambda: cast("SqlanywhereConnection", conn),
@@ -785,6 +786,27 @@ def test_sqlanywhere_session_context_rolls_back_implicit_work() -> None:
         driver.execute("INSERT INTO items (id) VALUES (1)")
 
     assert conn.rollbacks == 1
+    assert driver.connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_sqlanywhere_provide_session_detaches_driver_on_exit(
+    monkeypatch: pytest.MonkeyPatch, body_raises: bool
+) -> None:
+    """SqlanywhereConfig.provide_session detaches the yielded driver on clean and error exit."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    try:
+        if body_raises:
+            with pytest.raises(RuntimeError, match="sa body error"), config.provide_session() as session:
+                raise RuntimeError("sa body error")
+        else:
+            with config.provide_session() as session:
+                pass
+        assert session.connection is _DETACHED_CONNECTION
+    finally:
+        config.close_pool()
 
 
 def test_sqlanywhere_connection_pool_bounds_max_size(monkeypatch: pytest.MonkeyPatch) -> None:
