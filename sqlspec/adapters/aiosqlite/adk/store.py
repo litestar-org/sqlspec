@@ -79,13 +79,14 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
     __slots__ = ("_configured_connections", "_pragma_overrides")
 
-    def __init__(self, config: "AiosqliteConfig") -> None:
+    def __init__(self, config: "AiosqliteConfig", *, read_config: "AiosqliteConfig | None" = None) -> None:
         """Initialize Aiosqlite ADK store.
 
         Args:
             config: AiosqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._pragma_overrides = _pragma_overrides(config)
         self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
@@ -169,7 +170,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection(primary=renew_for is not None) as conn:
                 await self._ensure_pragmas(conn)
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     update_sql = f"""
@@ -259,7 +260,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection() as conn:
                 await self._ensure_pragmas(conn)
                 cursor = await conn.execute(sql, params)
                 try:
@@ -491,7 +492,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:
+            async with self._provide_read_connection() as conn:
                 await self._ensure_pragmas(conn)
                 cursor = await conn.execute(sql, params)
                 try:
@@ -851,13 +852,14 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
     __slots__ = ("_configured_connections", "_fts_options", "_pragma_overrides")
 
-    def __init__(self, config: "AiosqliteConfig") -> None:
+    def __init__(self, config: "AiosqliteConfig", *, read_config: "AiosqliteConfig | None" = None) -> None:
         """Initialize Aiosqlite ADK memory store.
 
         Args:
             config: AiosqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._fts_options = _fts_options(config)
         self._pragma_overrides = _pragma_overrides(config)
         self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
@@ -994,7 +996,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         rows: list[Any] | None = None
         columns: list[str] = []
 
-        async with self._config.provide_connection() as conn:
+        async with self._provide_read_connection() as conn:
             await self._ensure_foreign_keys(conn)
             if has_query and self._use_fts:
                 where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)

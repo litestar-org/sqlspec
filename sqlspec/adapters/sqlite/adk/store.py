@@ -79,13 +79,14 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     __slots__ = ("_configured_connection_ids", "_pragma_overrides")
 
-    def __init__(self, config: "SqliteConfig") -> None:
+    def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK store.
 
         Args:
             config: SqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._pragma_overrides = _pragma_overrides(config)
         self._configured_connection_ids: set[int] = set()
 
@@ -182,7 +183,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection(primary=renew_for is not None) as conn:
                 self._ensure_pragmas(conn)
                 if update_sql:
                     _close_cursor(conn.execute(update_sql, update_params))
@@ -265,7 +266,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
@@ -494,7 +495,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
+            with self._provide_read_connection() as conn:
                 self._ensure_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 try:
@@ -852,13 +853,14 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
     __slots__ = ("_configured_connection_ids", "_fts_options", "_pragma_overrides")
 
-    def __init__(self, config: "SqliteConfig") -> None:
+    def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK memory store.
 
         Args:
             config: SqliteConfig instance.
+            read_config: Optional compatible configuration for pure reads.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._fts_options = _fts_options(config)
         self._pragma_overrides = _pragma_overrides(config)
         self._configured_connection_ids: set[int] = set()
@@ -1287,7 +1289,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return self._fetch_records(sql, params)
 
     def _fetch_records(self, sql: str, params: "tuple[Any, ...]") -> "list[StoredMemory]":
-        with self._config.provide_connection() as conn:
+        with self._provide_read_connection() as conn:
             self._ensure_foreign_keys(conn)
             cursor = conn.execute(sql, params)
             try:
