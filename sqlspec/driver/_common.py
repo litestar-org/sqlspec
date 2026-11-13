@@ -2468,7 +2468,11 @@ class CommonDriverAttributesMixin:
         param_profile = processed.parameter_profile
         operation_profile = processed.operation_profile
         if not operation_profile.returns_rows and statement.returns_rows():
-            operation_profile = OperationProfile(returns_rows=True, modifies_rows=operation_profile.modifies_rows)
+            operation_profile = OperationProfile(
+                returns_rows=True,
+                modifies_rows=operation_profile.modifies_rows,
+                is_read_only=operation_profile.is_read_only,
+            )
         clean_sql = (
             strip_sqlcomment(processed.compiled_sql)
             if self.statement_config.enable_sqlcommenter

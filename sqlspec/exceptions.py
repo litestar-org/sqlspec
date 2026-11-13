@@ -29,7 +29,10 @@ __all__ = (
     "OutOfOrderMigrationError",
     "PermissionDeniedError",
     "QueryTimeoutError",
+    "ReadOnlyTransactionError",
+    "ReplicaUnavailableError",
     "RepositoryError",
+    "RoutingContextError",
     "SQLBuilderError",
     "SQLConversionError",
     "SQLFileNotFoundError",
@@ -211,6 +214,12 @@ class TransactionError(SQLSpecError):
     """Transaction error (rollback, deadlock, serialization failure)."""
 
 
+class ReadOnlyTransactionError(TransactionError):
+    """A database rejected a write or locking operation in a read-only transaction."""
+
+    __slots__ = ()
+
+
 class SerializationConflictError(TransactionError):
     """Serialization conflict (SQLSTATE 40001) requiring retry."""
 
@@ -275,6 +284,18 @@ class StackExecutionError(SQLSpecError):
 
 class OperationalError(SQLSpecError):
     """Operational database error (timeout, disk full, resource limit)."""
+
+
+class ReplicaUnavailableError(OperationalError):
+    """No healthy replica is available and primary fallback is disabled."""
+
+    __slots__ = ()
+
+
+class RoutingContextError(ImproperConfigurationError):
+    """Invalid routing mode, bind group, or primary-only operation."""
+
+    __slots__ = ()
 
 
 class QueryTimeoutError(OperationalError):
@@ -463,6 +484,7 @@ class SquashValidationError(MigrationError):
 SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
 
 SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
+    "25006": ReadOnlyTransactionError,
     "23505": UniqueViolationError,
     "23503": ForeignKeyViolationError,
     "23502": NotNullViolationError,

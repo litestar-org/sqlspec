@@ -43,6 +43,29 @@ __all__ = (
     "is_copy_to_operation",
 )
 
+VOLATILE_FUNCTIONS: Final[frozenset[str]] = frozenset({
+    "NEXTVAL",
+    "SETVAL",
+    "CURRVAL",
+    "LASTVAL",
+    "GET_LOCK",
+    "RELEASE_LOCK",
+    "RELEASE_ALL_LOCKS",
+    "SLEEP",
+    "PG_SLEEP",
+    "PG_SLEEP_FOR",
+    "PG_SLEEP_UNTIL",
+    "PG_TERMINATE_BACKEND",
+    "PG_CANCEL_BACKEND",
+    "PG_RELOAD_CONF",
+    "PG_ROTATE_LOGFILE",
+    "LO_CREAT",
+    "LO_CREATE",
+    "LO_UNLINK",
+    "LO_IMPORT",
+    "LO_EXPORT",
+})
+
 logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 OperationType = Literal[
     "SELECT",
@@ -152,14 +175,18 @@ def is_copy_to_operation(operation_type: "OperationType") -> bool:
 class OperationProfile:
     """Semantic characteristics derived from the parsed SQL expression."""
 
-    __slots__ = ("modifies_rows", "returns_rows")
+    __slots__ = ("is_read_only", "modifies_rows", "returns_rows")
 
-    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False) -> None:
+    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False, is_read_only: bool = False) -> None:
         self.returns_rows = returns_rows
         self.modifies_rows = modifies_rows
+        self.is_read_only = is_read_only
 
     def __repr__(self) -> str:
-        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
+        return (
+            f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r}, "
+            f"is_read_only={self.is_read_only!r})"
+        )
 
     @classmethod
     def empty(cls) -> "OperationProfile":
@@ -337,7 +364,9 @@ class SQLProcessor:
         )
         self._cache_hits = 0
         self._cache_misses = 0
-        self._parse_cache: OrderedDict[Any, tuple[exp.Expr | None, OperationType, tuple[bool, bool]]] = OrderedDict()
+        self._parse_cache: OrderedDict[Any, tuple[exp.Expr | None, OperationType, tuple[bool, bool, bool]]] = (
+            OrderedDict()
+        )
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
         self._last_cache_key: Any | None = None
@@ -606,12 +635,12 @@ class SQLProcessor:
         self._parse_cache[parse_cache_key] = (
             expression.copy() if expression is not None else None,
             operation_type,
-            (operation_profile.returns_rows, operation_profile.modifies_rows),
+            (operation_profile.returns_rows, operation_profile.modifies_rows, operation_profile.is_read_only),
         )
 
     @staticmethod
     def _unpack_parse_cache_entry(
-        parse_cache_entry: "tuple[exp.Expr | None, OperationType, tuple[bool, bool]]",
+        parse_cache_entry: "tuple[exp.Expr | None, OperationType, tuple[bool, bool, bool]]",
     ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Expand cached parse results into runtime objects.
 
@@ -622,7 +651,9 @@ class SQLProcessor:
             Parsed expression metadata.
         """
         cached_expression, cached_operation, cached_profile = parse_cache_entry
-        operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
+        operation_profile = OperationProfile(
+            returns_rows=cached_profile[0], modifies_rows=cached_profile[1], is_read_only=cached_profile[2]
+        )
         return (cached_expression, cached_operation, operation_profile)
 
     def _resolve_expression(
@@ -1076,7 +1107,61 @@ class SQLProcessor:
         if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
             modifies_rows = True
 
-        return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows)
+        if expression.find(exp.Into) or any(
+            isinstance(node, (exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.TruncateTable))
+            for node in expression.walk()
+        ):
+            modifies_rows = True
+        is_read_only = SQLProcessor._expression_is_read_only(expression, modifies_rows)
+        return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows, is_read_only=is_read_only)
+
+    @staticmethod
+    def _expression_is_read_only(expression: "exp.Expr", modifies_rows: bool) -> bool:
+        if modifies_rows:
+            return False
+        if isinstance(expression, exp.Command):
+            if expression.name.upper() != "EXPLAIN":
+                return False
+            payload = expression.args.get("expression")
+            if not isinstance(payload, exp.Literal):
+                return False
+            text = payload.name.lstrip()
+            prefix = text.upper()
+            if prefix.startswith("PLAN") or "ANALYZE" in prefix:
+                return False
+            try:
+                explained = sqlglot.parse_one(text)
+            except ParseError:
+                return False
+            return SQLProcessor._expression_is_read_only(explained, False)
+        if not isinstance(
+            expression,
+            (
+                exp.Select,
+                exp.Union,
+                exp.Except,
+                exp.Intersect,
+                exp.Values,
+                exp.Table,
+                exp.TableSample,
+                exp.Show,
+                exp.Describe,
+                exp.Copy,
+            ),
+        ):
+            return False
+        if isinstance(expression, exp.Copy) and expression.args.get("kind") is not False:
+            return False
+        if isinstance(expression, exp.Describe) and "ANALYZE" in expression.sql().upper():
+            return False
+        for node in expression.walk():
+            if isinstance(node, (exp.Lock, exp.Into, exp.NextValueFor, exp.Insert, exp.Update, exp.Delete, exp.Merge)):
+                return False
+            if isinstance(node, exp.Func):
+                name = node.name.upper() if isinstance(node, exp.Anonymous) else node.sql_name().upper()
+                if name in VOLATILE_FUNCTIONS or name.startswith(("PG_ADVISORY_", "PG_TRY_ADVISORY_")):
+                    return False
+        return True
 
     @staticmethod
     def _command_returns_rows(expression: "exp.Command") -> bool:

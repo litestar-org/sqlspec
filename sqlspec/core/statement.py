@@ -582,6 +582,18 @@ class SQL:
 
         return False
 
+    def is_read_only(self) -> bool:
+        """Return whether parsed SQL is provably safe for read replica routing."""
+        if self._is_many or self._is_script or not self._statement_config.enable_parsing:
+            return False
+        state = self._processed_state
+        if state is Empty:
+            self.compile()
+            state = self._processed_state
+            if state is Empty:
+                return False
+        return state.operation_profile.is_read_only
+
     def is_modifying_operation(self) -> bool:
         """Check if the SQL statement is a modifying operation.
 
@@ -590,7 +602,12 @@ class SQL:
         """
         state = self._processed_state
         if state is Empty:
-            return False
+            if not self._statement_config.enable_parsing:
+                return False
+            self.compile()
+            state = self._processed_state
+            if state is Empty:
+                return False
 
         profile = state.operation_profile
         if profile.modifies_rows:
