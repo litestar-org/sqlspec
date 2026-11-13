@@ -16,6 +16,11 @@ from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, Routing
         {"mode": "invalid"},
         {"mode": "primary", "bind_group": "a"},
         {"bind_group": ""},
+        {"bind_group": "reporting\r\nx-injected: 1"},
+        {"bind_group": "a" * 257},
+        {"causal_token": ""},
+        {"causal_token": "lsn\x00evil"},
+        {"causal_token": "t" * 257},
         {"max_staleness_seconds": -1},
         {"max_staleness_seconds": float("nan")},
     ],
@@ -81,6 +86,9 @@ def test_payload_and_entry_are_immutable_snapshots() -> None:
         ([(b"cookie", b"wp=lsn-10")], ("primary", None, "lsn-10")),
         ([(b"cookie", b"wp=1"), (b"x-sqlspec-routing", b"replica")], ("replica", None, None)),
         ([(b"x-sqlspec-routing", b"bogus")], ("auto", None, None)),
+        ([(b"x-sqlspec-routing", b"replica:" + b"a" * 257)], ("auto", None, None)),
+        ([(b"x-sqlspec-routing", b"replica:bad\x7fgroup")], ("auto", None, None)),
+        ([(b"cookie", b"wp=" + b"t" * 257)], ("auto", None, None)),
     ],
 )
 async def test_middleware_hints_and_reset(

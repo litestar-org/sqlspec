@@ -149,7 +149,11 @@ def autocommit_handler_maker(
         transaction_target = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session") or connection
         exc_override: BaseException | None = None
         try:
-            if connection is not None and message["type"] == HTTP_RESPONSE_START:
+            if (
+                connection is not None
+                and message["type"] == HTTP_RESPONSE_START
+                and getattr(transaction_target, "pinned_to_primary", True)
+            ):
                 has_exception = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is not None
                 if (
                     not has_exception
@@ -395,6 +399,56 @@ def has_tenant_strategy(config: Any) -> bool:
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
+def read_pool_provider_maker(
+    config: Any, pool_key: str, read_pool_key: str
+) -> "Callable[[State, Scope], Awaitable[Any]]":
+    """Build an explicitly typed DI provider for replica groups or the primary pool."""
+
+    async def provide_read_pool(state: "State", scope: "Scope") -> Any:
+        return state.get(read_pool_key, state.get(pool_key))
+
+    return provide_read_pool
+
+
+def read_connection_provider_maker(
+    config: Any, pool_key: str, read_pool_key: str, read_connection_key: str, *, tenant_settings: Any = None
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build a request-owned read connection provider with manual finalization."""
+
+    async def provide_read_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, read_connection_key, "connection")
+
+    return provide_read_connection
+
+
+def read_session_provider_maker(
+    config: Any,
+    pool_key: str,
+    read_pool_key: str,
+    read_connection_key: str,
+    read_session_key: str,
+    *,
+    tenant_settings: Any = None,
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build a request-owned read session provider using the adapter's read seam."""
+
+    async def provide_read_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, read_session_key, "session")
+
+    return provide_read_session
+
+
+def routing_session_provider_maker(
+    config: Any, pool_key: str, routing_session_key: str, *, tenant_settings: Any = None
+) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
+    """Build an opt-in lazy routing facade provider with explicit DI parameters."""
+
+    async def provide_routing_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
+        yield await _open_request_resource_async(config, scope, routing_session_key, "routing")
+
+    return provide_routing_session
+
+
 async def _capture_connection_tenant(
     config: "DatabaseConfigProtocol[Any, Any, Any]", scope: "Scope", connection_key: str
 ) -> TenantContextPayload | None:
@@ -509,53 +563,3 @@ async def _open_request_resource_async(config: Any, scope: "Scope", resource_key
         set_sqlspec_scope_state(scope, f"{resource_key}_ctx", context)
         set_sqlspec_scope_state(scope, resource_key, value)
         return value
-
-
-def read_pool_provider_maker(
-    config: Any, pool_key: str, read_pool_key: str
-) -> "Callable[[State, Scope], Awaitable[Any]]":
-    """Build an explicitly typed DI provider for replica groups or the primary pool."""
-
-    async def provide_read_pool(state: "State", scope: "Scope") -> Any:
-        return state.get(read_pool_key, state.get(pool_key))
-
-    return provide_read_pool
-
-
-def read_connection_provider_maker(
-    config: Any, pool_key: str, read_pool_key: str, read_connection_key: str, *, tenant_settings: Any = None
-) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
-    """Build a request-owned read connection provider with manual finalization."""
-
-    async def provide_read_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
-        yield await _open_request_resource_async(config, scope, read_connection_key, "connection")
-
-    return provide_read_connection
-
-
-def read_session_provider_maker(
-    config: Any,
-    pool_key: str,
-    read_pool_key: str,
-    read_connection_key: str,
-    read_session_key: str,
-    *,
-    tenant_settings: Any = None,
-) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
-    """Build a request-owned read session provider using the adapter's read seam."""
-
-    async def provide_read_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
-        yield await _open_request_resource_async(config, scope, read_session_key, "session")
-
-    return provide_read_session
-
-
-def routing_session_provider_maker(
-    config: Any, pool_key: str, routing_session_key: str, *, tenant_settings: Any = None
-) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
-    """Build an opt-in lazy routing facade provider with explicit DI parameters."""
-
-    async def provide_routing_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
-        yield await _open_request_resource_async(config, scope, routing_session_key, "routing")
-
-    return provide_routing_session

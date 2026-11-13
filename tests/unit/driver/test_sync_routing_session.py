@@ -43,6 +43,18 @@ def test_idle_facade_and_closed_session(routing_config: SqliteConfig) -> None:
         session.rollback()
     with pytest.raises(SQLSpecError, match="closed"):
         session.select("SELECT 1")
+    with SyncRoutingSession(routing_config) as active_session:
+        assert active_session.select_value("SELECT origin FROM notes WHERE id=1") == "replica"
+        leaked_replica = active_session.replica_session
+        assert leaked_replica is not None
+        active_session.execute("INSERT INTO notes VALUES (4, 'detached')")
+        leaked_primary = active_session.primary_session
+        assert leaked_primary is not None
+        active_session.rollback()
+    assert active_session.primary_session is None
+    assert active_session.replica_session is None
+    assert leaked_replica.connection is None
+    assert leaked_primary.connection is None
 
 
 def test_reads_replica_then_write_pins_primary(routing_config: SqliteConfig) -> None:

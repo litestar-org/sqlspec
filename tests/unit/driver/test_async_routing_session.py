@@ -34,11 +34,19 @@ async def test_async_idle_read_write_pin_and_closed(async_routing_config: Aiosql
         assert session.replica_session is None
         await session.commit()
         assert await session.select_value("SELECT origin FROM notes WHERE id=:id", id=1) == "replica"
+        leaked_replica = session.replica_session
+        assert leaked_replica is not None
         await session.execute("INSERT INTO notes VALUES (:id,:origin)", {"id": 4, "origin": "new"})
+        leaked_primary = session.primary_session
+        assert leaked_primary is not None
         await session.commit()
         assert session.pinned_to_primary
         assert cast(RoutingEntry, RoutingContext.get_entry("shop")).pinned_by_write
         assert await session.fetch_value("SELECT origin FROM notes WHERE id=1") == "primary"
+    assert session.primary_session is None
+    assert session.replica_session is None
+    assert leaked_replica.connection is None
+    assert leaked_primary.connection is None
     with pytest.raises(SQLSpecError, match="closed"):
         await session.select("SELECT 1")
 

@@ -71,6 +71,81 @@ class _RoutingSessionState:
         "_tenant",
     )
 
+    @property
+    def pinned_to_primary(self) -> bool:
+        """Return whether a write or transaction has pinned this facade to primary."""
+        return self._pinned_primary
+
+    @property
+    def statement_config(self) -> StatementConfig:
+        """Return the configuration used to prepare and classify statements."""
+        return self._statement_config
+
+    @property
+    def driver_features(self) -> dict[str, Any]:
+        """Return the primary configuration's driver features."""
+        return cast("dict[str, Any]", self._config.driver_features)
+
+    @property
+    def observability(self) -> "ObservabilityRuntime":
+        """Return the primary configuration's observability runtime."""
+        return cast("ObservabilityRuntime", self._config.get_observability_runtime())
+
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+    @overload
+    @staticmethod
+    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
+    @overload
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
+    @staticmethod
+    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
+        """Map records to a public schema without checking out a connection."""
+        return CommonDriverAttributesMixin.to_schema(data, schema_type=schema_type)
+
+    def storage_capabilities(self) -> "StorageCapabilities":
+        """Return primary driver storage capabilities without acquiring a connection."""
+        return self._preparer.storage_capabilities()
+
+    def in_transaction(self) -> bool:
+        """Return whether the acquired primary owns a transaction."""
+        primary = self._primary_driver
+        return primary is not None and bool(primary._transaction_depth or primary._connection_in_transaction())
+
+    def prepare_statement(
+        self,
+        statement: "Statement | QueryBuilder",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
+        *,
+        statement_config: StatementConfig | None = None,
+        kwargs: dict[str, Any] | None = None,
+    ) -> SQL:
+        """Prepare SQL through the shared driver pipeline without a physical checkout."""
+        return self._prepare(statement, parameters, statement_config, kwargs or {})
+
+    def split_script_statements(
+        self, script: str, statement_config: StatementConfig, strip_trailing_semicolon: bool = False
+    ) -> list[str]:
+        """Split a script using the same dialect-aware rules as native drivers."""
+        return self._preparer.split_script_statements(script, statement_config, strip_trailing_semicolon)
+
+    def convert_to_dialect(
+        self, statement: Statement, to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
+    ) -> str:
+        """Convert SQL to a target dialect without acquiring a connection."""
+        return _convert_to_dialect(statement, self.statement_config.dialect, to_dialect, pretty)
+
     def _initialize(
         self,
         config: Any,
@@ -99,29 +174,18 @@ class _RoutingSessionState:
         self._replica_streams = 0
         self._preparer = CommonDriverAttributesMixin(None, self._statement_config, config.driver_features)
 
-    @property
-    def pinned_to_primary(self) -> bool:
-        """Return whether a write or transaction has pinned this facade to primary."""
-        return self._pinned_primary
-
-    @property
-    def statement_config(self) -> StatementConfig:
-        """Return the configuration used to prepare and classify statements."""
-        return self._statement_config
-
-    @property
-    def driver_features(self) -> dict[str, Any]:
-        """Return the primary configuration's driver features."""
-        return cast("dict[str, Any]", self._config.driver_features)
-
-    @property
-    def observability(self) -> "ObservabilityRuntime":
-        """Return the primary configuration's observability runtime."""
-        return cast("ObservabilityRuntime", self._config.get_observability_runtime())
-
-    def storage_capabilities(self) -> "StorageCapabilities":
-        """Return primary driver storage capabilities without acquiring a connection."""
-        return self._preparer.storage_capabilities()
+    def _detach_connection(self) -> None:
+        """Detach underlying driver connections and mark the routing session closed."""
+        for driver in (self._primary_driver, self._replica_driver):
+            if driver is not None:
+                detach = getattr(driver, "_detach_connection", None)
+                if callable(detach):
+                    detach()
+                else:
+                    driver.connection = None
+        self._primary_driver = None
+        self._replica_driver = None
+        self._closed = True
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -131,11 +195,6 @@ class _RoutingSessionState:
     def _pin_primary(self) -> None:
         self._pinned_primary = True
         RoutingContext.mark_write(self._config.bind_key)
-
-    def in_transaction(self) -> bool:
-        """Return whether the acquired primary owns a transaction."""
-        primary = self._primary_driver
-        return primary is not None and bool(primary._transaction_depth or primary._connection_in_transaction())
 
     def _primary_only(self) -> None:
         self._ensure_open()
@@ -154,17 +213,6 @@ class _RoutingSessionState:
     ) -> SQL:
         self._ensure_open()
         return self._preparer.prepare_statement(statement, parameters, statement_config=statement_config, kwargs=kwargs)
-
-    def prepare_statement(
-        self,
-        statement: "Statement | QueryBuilder",
-        parameters: "tuple[StatementParameters | StatementFilter, ...]" = (),
-        *,
-        statement_config: StatementConfig | None = None,
-        kwargs: dict[str, Any] | None = None,
-    ) -> SQL:
-        """Prepare SQL through the shared driver pipeline without a physical checkout."""
-        return self._prepare(statement, parameters, statement_config, kwargs or {})
 
     def _choose_replica(self, read_only: bool) -> bool:
         entry = RoutingContext.get_entry(self._config.bind_key)
@@ -203,41 +251,6 @@ class _RoutingSessionState:
                 return False
         return True
 
-    def split_script_statements(
-        self, script: str, statement_config: StatementConfig, strip_trailing_semicolon: bool = False
-    ) -> list[str]:
-        """Split a script using the same dialect-aware rules as native drivers."""
-        return self._preparer.split_script_statements(script, statement_config, strip_trailing_semicolon)
-
-    def convert_to_dialect(
-        self, statement: Statement, to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
-    ) -> str:
-        """Convert SQL to a target dialect without acquiring a connection."""
-        return _convert_to_dialect(statement, self.statement_config.dialect, to_dialect, pretty)
-
-    @overload
-    @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "list[dict[str, Any]]", *, schema_type: None = None) -> "list[dict[str, Any]]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
-    @overload
-    @staticmethod
-    def to_schema(data: "dict[str, Any]", *, schema_type: None = None) -> "dict[str, Any]": ...
-    @overload
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[SchemaT]") -> Any: ...
-    @overload
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: None = None) -> Any: ...
-    @staticmethod
-    def to_schema(data: Any, *, schema_type: "type[Any] | None" = None) -> Any:
-        """Map records to a public schema without checking out a connection."""
-        return CommonDriverAttributesMixin.to_schema(data, schema_type=schema_type)
-
 
 class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     """Lazy synchronous session selecting replicas for provably safe reads."""
@@ -274,6 +287,12 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         """Return whether this facade executes asynchronously."""
         return False
 
+    @property
+    def data_dictionary(self) -> SyncDataDictionaryBase:
+        """Return the primary data dictionary for explicit metadata operations."""
+        self._primary_only()
+        return self._acquire_primary().data_dictionary
+
     def __enter__(self) -> Self:
         self._ensure_open()
         return self
@@ -284,97 +303,11 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         try:
             self._stack.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            self._closed = True
+            self._detach_connection()
 
     def close(self) -> None:
         """Release all physical checkouts and prevent further execution."""
         self.__exit__(None, None, None)
-
-    def _release_replica(self) -> None:
-        if self._replica_stack is not None:
-            if self._replica_streams:
-                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
-                raise RoutingContextError(msg)
-            try:
-                self._replica_stack.close()
-            finally:
-                if self._replica_driver is self._primary_driver:
-                    self._primary_driver = None
-                self._primary_read_stack = None
-                self._replica_stack = None
-                self._replica_driver = None
-
-    def _release_primary_read(self) -> None:
-        if self._primary_read_stack is not None:
-            self._release_replica()
-
-    def _acquire_primary(self) -> SyncDriverT:
-        self._ensure_open()
-        if self._primary_driver is None:
-            self._release_primary_read()
-            with RoutingContext.primary(self._config.bind_key):
-                context = self._config.provide_session(
-                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
-                )
-                if self._registry_lifecycle:
-                    from sqlspec.base import _RuntimeSyncContext
-
-                    context = _RuntimeSyncContext(context, self._config.get_observability_runtime(), self._config)
-                self._primary_driver = self._stack.enter_context(context)
-        return cast("SyncDriverT", self._primary_driver)
-
-    def _acquire_replica(self) -> SyncDriverT:
-        self._ensure_open()
-        entry = RoutingContext.get_entry(self._config.bind_key)
-        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
-        causal_token = entry.causal_token if entry is not None else None
-        max_staleness = entry.max_staleness_seconds if entry is not None else None
-        strict_replica = entry is not None and entry.mode == "replica"
-        if (
-            self._replica_driver is None
-            or bind_group != self._replica_bind_group
-            or causal_token != self._replica_causal_token
-            or max_staleness != self._replica_max_staleness
-            or strict_replica != self._replica_strict
-        ):
-            context = self._config.provide_read_session(
-                bind_group=bind_group,
-                statement_config=self._statement_config,
-                tenant=self._tenant,
-                bypass_tenant=self._bypass_tenant,
-            )
-            selection_receipt = getattr(context, "_selection_receipt", None)
-            if self._registry_lifecycle:
-                from sqlspec.base import _RuntimeReadSyncContext
-
-                context = _RuntimeReadSyncContext(context, session=True)
-            self._release_replica()
-            lease_stack = self._stack.enter_context(ExitStack())
-            self._replica_driver = lease_stack.enter_context(context)
-            self._replica_stack = lease_stack
-            managed_replicas = self._config.has_replicas
-            if getattr(selection_receipt, "config", None) is self._config:
-                features = self._replica_driver.driver_features
-                if features.get("read_only_session") or features.get("enable_follower_reads"):
-                    self._primary_read_stack = lease_stack
-                elif managed_replicas:
-                    self._primary_driver = self._replica_driver
-            self._replica_bind_group = bind_group
-            self._replica_causal_token = causal_token
-            self._replica_max_staleness = max_staleness
-            self._replica_strict = strict_replica
-        return cast("SyncDriverT", self._replica_driver)
-
-    def _resolve_driver(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        parameters: tuple[Any, ...],
-        statement_config: StatementConfig | None,
-        kwargs: dict[str, Any],
-    ) -> tuple[SyncDriverT, SQL]:
-        sql = self._prepare(statement, parameters, statement_config, kwargs)
-        driver = self._acquire_replica() if self._choose_replica(sql.is_read_only()) else self._acquire_primary()
-        return driver, sql
 
     def begin(self) -> None:
         """Pin to primary and begin an explicit transaction."""
@@ -449,12 +382,6 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             else self._acquire_primary()
         )
         return driver.execute_stack(stack, continue_on_error=continue_on_error)
-
-    @property
-    def data_dictionary(self) -> SyncDataDictionaryBase:
-        """Return the primary data dictionary for explicit metadata operations."""
-        self._primary_only()
-        return self._acquire_primary().data_dictionary
 
     def execute(
         self,
@@ -912,6 +839,92 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     fetch_to_arrow = select_to_arrow
     fetch_stream = select_stream
 
+    def _release_replica(self) -> None:
+        if self._replica_stack is not None:
+            if self._replica_streams:
+                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+                raise RoutingContextError(msg)
+            try:
+                self._replica_stack.close()
+            finally:
+                if self._replica_driver is self._primary_driver:
+                    self._primary_driver = None
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+
+    def _release_primary_read(self) -> None:
+        if self._primary_read_stack is not None:
+            self._release_replica()
+
+    def _acquire_primary(self) -> SyncDriverT:
+        self._ensure_open()
+        if self._primary_driver is None:
+            self._release_primary_read()
+            with RoutingContext.primary(self._config.bind_key):
+                context = self._config.provide_session(
+                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
+                )
+                if self._registry_lifecycle:
+                    from sqlspec.base import _RuntimeSyncContext
+
+                    context = _RuntimeSyncContext(context, self._config.get_observability_runtime(), self._config)
+                self._primary_driver = self._stack.enter_context(context)
+        return cast("SyncDriverT", self._primary_driver)
+
+    def _acquire_replica(self) -> SyncDriverT:
+        self._ensure_open()
+        entry = RoutingContext.get_entry(self._config.bind_key)
+        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
+        causal_token = entry.causal_token if entry is not None else None
+        max_staleness = entry.max_staleness_seconds if entry is not None else None
+        strict_replica = entry is not None and entry.mode == "replica"
+        if (
+            self._replica_driver is None
+            or bind_group != self._replica_bind_group
+            or causal_token != self._replica_causal_token
+            or max_staleness != self._replica_max_staleness
+            or strict_replica != self._replica_strict
+        ):
+            context = self._config.provide_read_session(
+                bind_group=bind_group,
+                statement_config=self._statement_config,
+                tenant=self._tenant,
+                bypass_tenant=self._bypass_tenant,
+            )
+            selection_receipt = getattr(context, "_selection_receipt", None)
+            if self._registry_lifecycle:
+                from sqlspec.base import _RuntimeReadSyncContext
+
+                context = _RuntimeReadSyncContext(context, session=True)
+            self._release_replica()
+            lease_stack = self._stack.enter_context(ExitStack())
+            self._replica_driver = lease_stack.enter_context(context)
+            self._replica_stack = lease_stack
+            managed_replicas = self._config.has_replicas
+            if getattr(selection_receipt, "config", None) is self._config:
+                features = self._replica_driver.driver_features
+                if features.get("read_only_session") or features.get("enable_follower_reads"):
+                    self._primary_read_stack = lease_stack
+                elif managed_replicas:
+                    self._primary_driver = self._replica_driver
+            self._replica_bind_group = bind_group
+            self._replica_causal_token = causal_token
+            self._replica_max_staleness = max_staleness
+            self._replica_strict = strict_replica
+        return cast("SyncDriverT", self._replica_driver)
+
+    def _resolve_driver(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: tuple[Any, ...],
+        statement_config: StatementConfig | None,
+        kwargs: dict[str, Any],
+    ) -> tuple[SyncDriverT, SQL]:
+        sql = self._prepare(statement, parameters, statement_config, kwargs)
+        driver = self._acquire_replica() if self._choose_replica(sql.is_read_only()) else self._acquire_primary()
+        return driver, sql
+
 
 class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     """Lazy asynchronous session selecting replicas for provably safe reads."""
@@ -948,6 +961,11 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         """Return whether this facade executes asynchronously."""
         return True
 
+    @property
+    def data_dictionary(self) -> "_AsyncRoutingDataDictionary[AsyncDriverT]":
+        """Return a lazy dictionary facade whose awaited operations use primary."""
+        return _AsyncRoutingDataDictionary(self)
+
     async def __aenter__(self) -> Self:
         self._ensure_open()
         return self
@@ -958,99 +976,11 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
         try:
             await self._stack.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            self._closed = True
+            self._detach_connection()
 
     async def aclose(self) -> None:
         """Release all physical checkouts and prevent further execution."""
         await self.__aexit__(None, None, None)
-
-    async def _release_replica(self) -> None:
-        if self._replica_stack is not None:
-            if self._replica_streams:
-                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
-                raise RoutingContextError(msg)
-            try:
-                await self._replica_stack.aclose()
-            finally:
-                if self._replica_driver is self._primary_driver:
-                    self._primary_driver = None
-                self._primary_read_stack = None
-                self._replica_stack = None
-                self._replica_driver = None
-
-    async def _release_primary_read(self) -> None:
-        if self._primary_read_stack is not None:
-            await self._release_replica()
-
-    async def _acquire_primary(self) -> AsyncDriverT:
-        self._ensure_open()
-        if self._primary_driver is None:
-            await self._release_primary_read()
-            with RoutingContext.primary(self._config.bind_key):
-                context = self._config.provide_session(
-                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
-                )
-                if self._registry_lifecycle:
-                    from sqlspec.base import _RuntimeAsyncContext
-
-                    context = _RuntimeAsyncContext(context, self._config.get_observability_runtime(), self._config)
-                self._primary_driver = await self._stack.enter_async_context(context)
-        return cast("AsyncDriverT", self._primary_driver)
-
-    async def _acquire_replica(self) -> AsyncDriverT:
-        self._ensure_open()
-        entry = RoutingContext.get_entry(self._config.bind_key)
-        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
-        causal_token = entry.causal_token if entry is not None else None
-        max_staleness = entry.max_staleness_seconds if entry is not None else None
-        strict_replica = entry is not None and entry.mode == "replica"
-        if (
-            self._replica_driver is None
-            or bind_group != self._replica_bind_group
-            or causal_token != self._replica_causal_token
-            or max_staleness != self._replica_max_staleness
-            or strict_replica != self._replica_strict
-        ):
-            context = self._config.provide_read_session(
-                bind_group=bind_group,
-                statement_config=self._statement_config,
-                tenant=self._tenant,
-                bypass_tenant=self._bypass_tenant,
-            )
-            selection_receipt = getattr(context, "_selection_receipt", None)
-            if self._registry_lifecycle:
-                from sqlspec.base import _RuntimeReadAsyncContext
-
-                context = _RuntimeReadAsyncContext(context, session=True)
-            await self._release_replica()
-            lease_stack = await self._stack.enter_async_context(AsyncExitStack())
-            self._replica_driver = await lease_stack.enter_async_context(context)
-            self._replica_stack = lease_stack
-            managed_replicas = self._config.has_replicas
-            if getattr(selection_receipt, "config", None) is self._config:
-                features = self._replica_driver.driver_features
-                if features.get("read_only_session") or features.get("enable_follower_reads"):
-                    self._primary_read_stack = lease_stack
-                elif managed_replicas:
-                    self._primary_driver = self._replica_driver
-            self._replica_bind_group = bind_group
-            self._replica_causal_token = causal_token
-            self._replica_max_staleness = max_staleness
-            self._replica_strict = strict_replica
-        return cast("AsyncDriverT", self._replica_driver)
-
-    async def _resolve_driver(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        parameters: tuple[Any, ...],
-        statement_config: StatementConfig | None,
-        kwargs: dict[str, Any],
-    ) -> tuple[AsyncDriverT, SQL]:
-        sql = self._prepare(statement, parameters, statement_config, kwargs)
-        driver = (
-            await self._acquire_replica() if self._choose_replica(sql.is_read_only()) else await self._acquire_primary()
-        )
-        return driver, sql
 
     async def begin(self) -> None:
         """Pin to primary and begin an explicit transaction."""
@@ -1127,11 +1057,6 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             else await self._acquire_primary()
         )
         return await driver.execute_stack(stack, continue_on_error=continue_on_error)
-
-    @property
-    def data_dictionary(self) -> "_AsyncRoutingDataDictionary[AsyncDriverT]":
-        """Return a lazy dictionary facade whose awaited operations use primary."""
-        return _AsyncRoutingDataDictionary(self)
 
     async def execute(
         self,
@@ -1592,6 +1517,94 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     fetch_to_arrow = select_to_arrow
     fetch_stream = select_stream
 
+    async def _release_replica(self) -> None:
+        if self._replica_stack is not None:
+            if self._replica_streams:
+                msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+                raise RoutingContextError(msg)
+            try:
+                await self._replica_stack.aclose()
+            finally:
+                if self._replica_driver is self._primary_driver:
+                    self._primary_driver = None
+                self._primary_read_stack = None
+                self._replica_stack = None
+                self._replica_driver = None
+
+    async def _release_primary_read(self) -> None:
+        if self._primary_read_stack is not None:
+            await self._release_replica()
+
+    async def _acquire_primary(self) -> AsyncDriverT:
+        self._ensure_open()
+        if self._primary_driver is None:
+            await self._release_primary_read()
+            with RoutingContext.primary(self._config.bind_key):
+                context = self._config.provide_session(
+                    statement_config=self._statement_config, tenant=self._tenant, bypass_tenant=self._bypass_tenant
+                )
+                if self._registry_lifecycle:
+                    from sqlspec.base import _RuntimeAsyncContext
+
+                    context = _RuntimeAsyncContext(context, self._config.get_observability_runtime(), self._config)
+                self._primary_driver = await self._stack.enter_async_context(context)
+        return cast("AsyncDriverT", self._primary_driver)
+
+    async def _acquire_replica(self) -> AsyncDriverT:
+        self._ensure_open()
+        entry = RoutingContext.get_entry(self._config.bind_key)
+        bind_group = entry.bind_group if entry is not None and entry.bind_group is not None else self._bind_group
+        causal_token = entry.causal_token if entry is not None else None
+        max_staleness = entry.max_staleness_seconds if entry is not None else None
+        strict_replica = entry is not None and entry.mode == "replica"
+        if (
+            self._replica_driver is None
+            or bind_group != self._replica_bind_group
+            or causal_token != self._replica_causal_token
+            or max_staleness != self._replica_max_staleness
+            or strict_replica != self._replica_strict
+        ):
+            context = self._config.provide_read_session(
+                bind_group=bind_group,
+                statement_config=self._statement_config,
+                tenant=self._tenant,
+                bypass_tenant=self._bypass_tenant,
+            )
+            selection_receipt = getattr(context, "_selection_receipt", None)
+            if self._registry_lifecycle:
+                from sqlspec.base import _RuntimeReadAsyncContext
+
+                context = _RuntimeReadAsyncContext(context, session=True)
+            await self._release_replica()
+            lease_stack = await self._stack.enter_async_context(AsyncExitStack())
+            self._replica_driver = await lease_stack.enter_async_context(context)
+            self._replica_stack = lease_stack
+            managed_replicas = self._config.has_replicas
+            if getattr(selection_receipt, "config", None) is self._config:
+                features = self._replica_driver.driver_features
+                if features.get("read_only_session") or features.get("enable_follower_reads"):
+                    self._primary_read_stack = lease_stack
+                elif managed_replicas:
+                    self._primary_driver = self._replica_driver
+            self._replica_bind_group = bind_group
+            self._replica_causal_token = causal_token
+            self._replica_max_staleness = max_staleness
+            self._replica_strict = strict_replica
+        return cast("AsyncDriverT", self._replica_driver)
+
+    async def _resolve_driver(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: tuple[Any, ...],
+        statement_config: StatementConfig | None,
+        kwargs: dict[str, Any],
+    ) -> tuple[AsyncDriverT, SQL]:
+        sql = self._prepare(statement, parameters, statement_config, kwargs)
+        driver = (
+            await self._acquire_replica() if self._choose_replica(sql.is_read_only()) else await self._acquire_primary()
+        )
+        return driver, sql
+
 
 class _SyncRoutingRowSource:
     """Retain the current replica lease until the native stream closes."""
@@ -1605,13 +1618,13 @@ class _SyncRoutingRowSource:
         if self._tracked:
             session._replica_streams += 1
 
-    def start(self) -> None:
-        self._inner_stream._source.start()
-
     @property
     def column_types(self) -> dict[str, str] | None:
         """Expose native stream type metadata."""
         return self._inner_stream.column_types
+
+    def start(self) -> None:
+        self._inner_stream._source.start()
 
     def fetch_chunk(self) -> list[dict[str, Any]]:
         return self._inner_stream._source.fetch_chunk()
@@ -1660,6 +1673,11 @@ class _AsyncRoutingRowSource:
         self._inner_stream: AsyncRowStream[dict[str, Any]] | None = None
         self._tracked = False
 
+    @property
+    def column_types(self) -> dict[str, str] | None:
+        """Expose native stream type metadata after lazy acquisition."""
+        return self._inner_stream.column_types if self._inner_stream is not None else None
+
     async def start(self) -> None:
         driver, sql = await self._routing_session._resolve_driver(
             self._statement, self._parameters, self._statement_config, self._kwargs
@@ -1670,11 +1688,6 @@ class _AsyncRoutingRowSource:
         if self._tracked:
             self._routing_session._replica_streams += 1
         await inner._source.start()
-
-    @property
-    def column_types(self) -> dict[str, str] | None:
-        """Expose native stream type metadata after lazy acquisition."""
-        return self._inner_stream.column_types if self._inner_stream is not None else None
 
     async def fetch_chunk(self) -> list[dict[str, Any]]:
         if self._inner_stream is None:

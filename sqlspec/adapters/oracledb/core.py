@@ -4,6 +4,7 @@ import atexit
 import contextlib
 import hashlib
 import io
+import logging
 import os
 import re
 import shutil
@@ -64,109 +65,6 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
-
-
-class OracleVersionCache:
-    """Pool-scoped cache for the resolved Oracle server version.
-
-    One instance is created per config and shared with every driver spawned from
-    that config's pool, so the server version is resolved once per pool lifetime
-    rather than once per acquired session. The cache lives and dies with the
-    pool; a server upgrade under a live pool is out of scope and picked up on the
-    next pool restart.
-    """
-
-    __slots__ = ("resolved", "version")
-
-    def __init__(self) -> None:
-        self.resolved: bool = False
-        self.version: Any | None = None
-
-    def reset(self) -> None:
-        """Clear the cached version so the next resolution re-queries the server."""
-        self.resolved = False
-        self.version = None
-
-
-def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
-    """Resolve an Oracle server major without issuing a metadata query.
-
-    Pool-scoped data-dictionary metadata is authoritative when it has already
-    been resolved. Otherwise, use the connection callback cache and finally
-    python-oracledb's connection ``version`` string. The final fallback matters
-    for reacquired pool wrappers that do not retain dynamic attributes.
-    """
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        return int(version_cache.version.major)
-    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
-    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
-        return cached_major
-    version = getattr(connection, "version", None)
-    if not version:
-        return None
-    components = parse_oracle_version_components(str(version))
-    return components[0] if components is not None else None
-
-
-def resolve_oracle_connection_compatible_major(
-    connection: Any, version_cache: "OracleVersionCache | None" = None
-) -> "int | None":
-    """Resolve an Oracle server compatible major version without issuing a metadata query."""
-    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
-        comp = version_cache.version.compatible_major
-        return int(comp) if comp is not None else None
-    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
-    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
-        return cached_compatible
-    return None
-
-
-def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
-        return fallback
-    return partial(_chained_input_handler, inner, fallback)
-
-
-def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an output type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
-        return fallback
-    return partial(_chained_output_handler, inner, fallback)
-
-
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
-def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
-    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, value, arraysize)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, value, arraysize)
-    return None
-
-
-def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
-    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, metadata)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, metadata)
-    return None
-
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -291,6 +189,75 @@ __all__ = (
     "validate_sessionless_execution_options",
     "validate_sessionless_transaction_args",
 )
+
+
+class OracleVersionCache:
+    """Pool-scoped cache for the resolved Oracle server version.
+
+    One instance is created per config and shared with every driver spawned from
+    that config's pool, so the server version is resolved once per pool lifetime
+    rather than once per acquired session. The cache lives and dies with the
+    pool; a server upgrade under a live pool is out of scope and picked up on the
+    next pool restart.
+    """
+
+    __slots__ = ("resolved", "version")
+
+    def __init__(self) -> None:
+        self.resolved: bool = False
+        self.version: Any | None = None
+
+    def reset(self) -> None:
+        """Clear the cached version so the next resolution re-queries the server."""
+        self.resolved = False
+        self.version = None
+
+
+def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersionCache | None" = None) -> "int | None":
+    """Resolve an Oracle server major without issuing a metadata query.
+
+    Pool-scoped data-dictionary metadata is authoritative when it has already
+    been resolved. Otherwise, use the connection callback cache and finally
+    python-oracledb's connection ``version`` string. The final fallback matters
+    for reacquired pool wrappers that do not retain dynamic attributes.
+    """
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return int(version_cache.version.major)
+    cached_major = getattr(connection, "_sqlspec_oracle_major", None)
+    if isinstance(cached_major, int) and not isinstance(cached_major, bool):
+        return cached_major
+    version = getattr(connection, "version", None)
+    if not version:
+        return None
+    components = parse_oracle_version_components(str(version))
+    return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        comp = version_cache.version.compatible_major
+        return int(comp) if comp is not None else None
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None
+
+
+def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an input type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
+        return fallback
+    return partial(_chained_input_handler, inner, fallback)
+
+
+def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
+    """Build an output type handler that chains ``inner`` to ``fallback``."""
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
+        return fallback
+    return partial(_chained_output_handler, inner, fallback)
 
 
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
@@ -882,45 +849,6 @@ class OracleEndUserSecurityConfig:
         return hash((self.database_access_token, self.end_user_identity, roles, attributes))
 
 
-def _validate_end_user_identity(value: Any) -> None:
-    if isinstance(value, str) and value:
-        return
-    if (
-        isinstance(value, tuple)
-        and len(value) == _QUALIFIED_TABLE_PARTS
-        and isinstance(value[0], str)
-        and value[0]
-        and (value[1] is None or (isinstance(value[1], str) and value[1]))
-    ):
-        return
-    msg = "end_user_identity must be a nonempty string or (user_name, key) pair"
-    raise ImproperConfigurationError(msg)
-
-
-def _validate_end_user_roles(value: Any) -> None:
-    if (
-        not isinstance(value, Sequence)
-        or isinstance(value, (str, bytes))
-        or any(not isinstance(role, str) or not role for role in value)
-    ):
-        msg = "data_roles must be a sequence of nonempty strings"
-        raise ImproperConfigurationError(msg)
-
-
-def _validate_end_user_attributes(value: Any) -> None:
-    if not isinstance(value, Mapping):
-        msg = "end-user attributes must be a mapping"
-        raise ImproperConfigurationError(msg)
-    for key, item in value.items():
-        if not isinstance(key, str):
-            msg = "end-user attribute names must be strings"
-            raise ImproperConfigurationError(msg)
-        _validate_oracle_identifier(key, "end-user attribute")
-        if not isinstance(item, str):
-            msg = "end-user attributes must contain string values"
-            raise ImproperConfigurationError(msg)
-
-
 def apply_end_user_security_checkout(connection: Any, config: OracleEndUserSecurityConfig) -> None:
     """Attach explicitly scoped native security credentials without a network call."""
     if not connection_is_thin(connection):
@@ -995,37 +923,6 @@ def extract_pipeline_single_row(pipeline_result: Any) -> tuple[Any, ...] | None:
     """Extract the first native fetchone result without fabricating a missing row."""
     rows = pipeline_result.rows
     return tuple(rows[0]) if rows else None
-
-
-def _copy_oracle_session_context(
-    config: "OracleSessionContextConfig", *, contexts: Any, edition: Any
-) -> "OracleSessionContextConfig":
-    return OracleSessionContextConfig(
-        contexts=contexts,
-        edition=edition,
-        module=config.module,
-        action=config.action,
-        client_identifier=config.client_identifier,
-        ecid=config.ecid,
-        time_zone=config.time_zone,
-        nls_parameters=config.nls_parameters,
-        ebs_apps_initialize=config.ebs_apps_initialize,
-        mo_global_policy=config.mo_global_policy,
-        apex_session=config.apex_session,
-        reset_package=config.reset_package,
-        clear_identifier=config.clear_identifier,
-        clear_context_namespaces=config.clear_context_namespaces,
-        apex_detach=config.apex_detach,
-        reset_on_release=config.reset_on_release,
-        standby_max_data_delay=config.standby_max_data_delay,
-        adg_redirect_dml=config.adg_redirect_dml,
-        sync_with_primary=config.sync_with_primary,
-        clientinfo=config.clientinfo,
-        current_schema=config.current_schema,
-        dbop=config.dbop,
-        transaction_priority=config.transaction_priority,
-        end_user_security=config.end_user_security,
-    )
 
 
 def prepare_session_checkout_pipeline(
@@ -1897,8 +1794,6 @@ def apply_oracle_session_trace_attributes(
             else:
                 connection.set_opentelemetry_trace_context(traceparent, tracestate)
         except Exception as exc:
-            import logging
-
             logging.getLogger(__name__).debug("Oracle trace context propagation failed: %s", exc)
 
 
@@ -1942,20 +1837,6 @@ def apply_driver_features(
         features["session_context_hook"] = OracleSessionContextConfig(**session_hook)
     features.setdefault("enable_session_tracing", False)
     return statement_config, features
-
-
-def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
-    key_items: list[tuple[object, object]] = []
-    for column in description:
-        try:
-            col_name = column[0]
-            type_code = column[1]
-        except (TypeError, IndexError, KeyError):
-            col_name = getattr(column, "name", None)
-            type_code = getattr(column, "type_code", None)
-        type_identifier = getattr(type_code, "name", None) or type_code
-        key_items.append((col_name, type_identifier))
-    return tuple(key_items)
 
 
 def resolve_row_metadata(
@@ -2052,32 +1933,6 @@ class OracleSyncStreamSource:
         self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    def _start(self) -> None:
-        self._driver._apply_session_tracing(self._driver.connection)
-        try:
-            cursor = self._driver.connection.cursor()
-            self._cursor = cursor
-            cursor.arraysize = self._chunk_size
-            cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
-                self._driver.driver_features
-            )
-            if self._fetch_lobs is not None:
-                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
-            parameters = coerce_large_parameters_sync(
-                self._driver.connection,
-                self._parameters,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=getattr(self._driver, "_oracle_version_cache", None),
-            )
-            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-        except BaseException:
-            self.close(error=True)
-            raise
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
@@ -2110,6 +1965,32 @@ class OracleSyncStreamSource:
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
+
+    def _start(self) -> None:
+        self._driver._apply_session_tracing(self._driver.connection)
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = getattr(self._driver, "_fetch_kwargs", None) or build_fetch_kwargs(
+                self._driver.driver_features
+            )
+            if self._fetch_lobs is not None:
+                fetch_kwargs = {**fetch_kwargs, "fetch_lobs": self._fetch_lobs}
+            parameters = coerce_large_parameters_sync(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            self.close(error=True)
+            raise
 
     def _caller_wants_locators(self) -> bool:
         """Report whether the caller asked to receive LOB locators.
@@ -2428,21 +2309,6 @@ def rewrite_oracle_dsn_service_name(dsn: str, service_name: str) -> str:
         raise ImproperConfigurationError(msg)
     _, query_separator, query = service.partition("?")
     return prefix + target + "/" + service_name + ("?" + query if query_separator else "")
-
-
-def _oracle_standby_error_code(error: BaseException | None) -> int | None:
-    seen: set[int] = set()
-    while error is not None and id(error) not in seen:
-        seen.add(id(error))
-        native = error.args[0] if error.args else error
-        code = getattr(native, "code", None)
-        if isinstance(code, int) and not isinstance(code, bool):
-            return code
-        match = re.search(r"ORA-(\d+)", str(native))
-        if match:
-            return int(match.group(1))
-        error = error.__cause__
-    return None
 
 
 def is_oracle_standby_lag_error(error: BaseException | None) -> bool:
@@ -2790,14 +2656,6 @@ def execute_session_checkout_sync(
                 cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
         raise create_mapped_exception(exc) from exc
-
-
-def _session_release_needs_priority_rollback(
-    connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
-) -> bool:
-    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
-    baseline = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
-    return resolved.reset_on_release and baseline is not None and connection.transaction_priority != baseline
 
 
 def execute_session_release_sync(connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]) -> None:
@@ -3175,10 +3033,6 @@ class OracleAcquireOptions:
         ))
 
 
-def _oracle_context_value(config: Any, field: str) -> Any:
-    return config.get(field) if isinstance(config, Mapping) else getattr(config, field, None)
-
-
 def synthesize_session_state_tag(
     config: OracleSessionContextConfig | Mapping[str, Any] | None, *, explicit_tag: str | None = None
 ) -> str | None:
@@ -3549,6 +3403,133 @@ def build_wallet_ssl_context_if_needed(wallet_location: Any) -> "ssl.SSLContext 
         return None
     ctx.verify_flags &= ~strict_flag
     return ctx
+
+
+async def read_oracle_lob_async(value: Any) -> Any:
+    """Read a LOB value asynchronously from an async connection or return raw data."""
+    if is_async_readable(value):
+        return await value.read()
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def read_oracle_lob_sync(value: Any) -> Any:
+    """Read a LOB value synchronously from a sync connection or return raw data."""
+    if is_readable(value):
+        return value.read()
+    return value
+
+
+def _validate_end_user_identity(value: Any) -> None:
+    if isinstance(value, str) and value:
+        return
+    if (
+        isinstance(value, tuple)
+        and len(value) == _QUALIFIED_TABLE_PARTS
+        and isinstance(value[0], str)
+        and value[0]
+        and (value[1] is None or (isinstance(value[1], str) and value[1]))
+    ):
+        return
+    msg = "end_user_identity must be a nonempty string or (user_name, key) pair"
+    raise ImproperConfigurationError(msg)
+
+
+def _validate_end_user_roles(value: Any) -> None:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or any(not isinstance(role, str) or not role for role in value)
+    ):
+        msg = "data_roles must be a sequence of nonempty strings"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_end_user_attributes(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        msg = "end-user attributes must be a mapping"
+        raise ImproperConfigurationError(msg)
+    for key, item in value.items():
+        if not isinstance(key, str):
+            msg = "end-user attribute names must be strings"
+            raise ImproperConfigurationError(msg)
+        _validate_oracle_identifier(key, "end-user attribute")
+        if not isinstance(item, str):
+            msg = "end-user attributes must contain string values"
+            raise ImproperConfigurationError(msg)
+
+
+def _copy_oracle_session_context(
+    config: "OracleSessionContextConfig", *, contexts: Any, edition: Any
+) -> "OracleSessionContextConfig":
+    return OracleSessionContextConfig(
+        contexts=contexts,
+        edition=edition,
+        module=config.module,
+        action=config.action,
+        client_identifier=config.client_identifier,
+        ecid=config.ecid,
+        time_zone=config.time_zone,
+        nls_parameters=config.nls_parameters,
+        ebs_apps_initialize=config.ebs_apps_initialize,
+        mo_global_policy=config.mo_global_policy,
+        apex_session=config.apex_session,
+        reset_package=config.reset_package,
+        clear_identifier=config.clear_identifier,
+        clear_context_namespaces=config.clear_context_namespaces,
+        apex_detach=config.apex_detach,
+        reset_on_release=config.reset_on_release,
+        standby_max_data_delay=config.standby_max_data_delay,
+        adg_redirect_dml=config.adg_redirect_dml,
+        sync_with_primary=config.sync_with_primary,
+        clientinfo=config.clientinfo,
+        current_schema=config.current_schema,
+        dbop=config.dbop,
+        transaction_priority=config.transaction_priority,
+        end_user_security=config.end_user_security,
+    )
+
+
+def _extract_column_cache_key(description: "list[Any]") -> "tuple[tuple[object, object], ...]":
+    key_items: list[tuple[object, object]] = []
+    for column in description:
+        try:
+            col_name = column[0]
+            type_code = column[1]
+        except (TypeError, IndexError, KeyError):
+            col_name = getattr(column, "name", None)
+            type_code = getattr(column, "type_code", None)
+        type_identifier = getattr(type_code, "name", None) or type_code
+        key_items.append((col_name, type_identifier))
+    return tuple(key_items)
+
+
+def _oracle_standby_error_code(error: BaseException | None) -> int | None:
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        native = error.args[0] if error.args else error
+        code = getattr(native, "code", None)
+        if isinstance(code, int) and not isinstance(code, bool):
+            return code
+        match = re.search(r"ORA-(\d+)", str(native))
+        if match:
+            return int(match.group(1))
+        error = error.__cause__
+    return None
+
+
+def _session_release_needs_priority_rollback(
+    connection: Any, config: OracleSessionContextConfig | Mapping[str, Any]
+) -> bool:
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    baseline = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
+    return resolved.reset_on_release and baseline is not None and connection.transaction_priority != baseline
+
+
+def _oracle_context_value(config: Any, field: str) -> Any:
+    return config.get(field) if isinstance(config, Mapping) else getattr(config, field, None)
 
 
 def _build_session_checkout_plan(
@@ -4236,29 +4217,13 @@ def _resolve_callable_or_str(value: "str | Callable[[], str | None] | None") -> 
     return value
 
 
-async def read_oracle_lob_async(value: Any) -> Any:
-    """Read a LOB value asynchronously from an async connection or return raw data."""
-    if is_async_readable(value):
-        return await value.read()
-    if is_readable(value):
-        return value.read()
-    return value
-
-
-def read_oracle_lob_sync(value: Any) -> Any:
-    """Read a LOB value synchronously from a sync connection or return raw data."""
-    if is_readable(value):
-        return value.read()
-    return value
-
-
 class _OracleSyncStreamDriver(Protocol):
-    def _apply_session_tracing(self, connection: Any = None) -> None: ...
-
     connection: "OracleSyncConnection"
     driver_features: dict[str, Any]
 
     def handle_database_exceptions(self) -> "SyncExceptionHandler": ...
+
+    def _apply_session_tracing(self, connection: Any = None) -> None: ...
 
     def _check_pending_exception(self, exc_handler: "SyncExceptionHandler") -> None: ...
 
@@ -4270,12 +4235,12 @@ class _OracleSyncStreamDriver(Protocol):
 
 
 class _OracleAsyncStreamDriver(Protocol):
-    def _apply_session_tracing(self, connection: Any = None) -> None: ...
-
     connection: "OracleAsyncConnection"
     driver_features: dict[str, Any]
 
     def handle_database_exceptions(self) -> "AsyncExceptionHandler": ...
+
+    def _apply_session_tracing(self, connection: Any = None) -> None: ...
 
     def _check_pending_exception(self, exc_handler: "AsyncExceptionHandler") -> None: ...
 
@@ -4745,3 +4710,36 @@ def _create_oracle_error(
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None

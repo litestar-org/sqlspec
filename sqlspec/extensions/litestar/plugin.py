@@ -382,10 +382,15 @@ class ConnectionCleanupMiddleware:
 
                 exc_override: BaseException | None = None
                 try:
-                    if connection is not None and target.commit_mode != "manual":
-                        transaction_target = (
-                            get_sqlspec_scope_state(scope, f"{target.connection_key}_session") or connection
-                        )
+                    transaction_target = (
+                        get_sqlspec_scope_state(scope, f"{target.connection_key}_session") or connection
+                    )
+                    if (
+                        connection is not None
+                        and transaction_target is not None
+                        and target.commit_mode != "manual"
+                        and getattr(transaction_target, "pinned_to_primary", True)
+                    ):
                         if effective_exc is not None:
                             with suppress(Exception):
                                 await ensure_async_(transaction_target.rollback)()
@@ -459,14 +464,6 @@ class PluginConfigState:
     before_send_handler: "BeforeMessageSendHookHandler | None" = field(default=None, init=False)
     lifespan_handler: "Callable[[Litestar], AbstractAsyncContextManager[None]] | None" = field(default=None, init=False)
     annotation: "type[DatabaseConfigProtocol[Any, Any, Any]] | None" = field(default=None, init=False)
-
-
-def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None, CommitMode], ...]:
-    return (
-        (state.read_connection_key, "manual"),
-        (state.read_session_key, "manual"),
-        (state.routing_session_key, state.commit_mode),
-    )
 
 
 class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
@@ -811,22 +808,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
-    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
-        """Return the resolution inputs of every tenant-enabled configuration."""
-        return tuple(
-            _TenantResolutionTarget(
-                config=state.config,
-                settings=state.tenant_settings,
-                receipt_state_keys=tuple(
-                    receipt_state_key(key)
-                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
-                    if isinstance(key, str) and key
-                ),
-            )
-            for state in self._plugin_configs
-            if has_tenant_strategy(state.config)
-        )
-
     def resolve_tenant_settings(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig] | None" = None
     ) -> TenantResolutionSettings:
@@ -868,47 +849,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         ):
             return self._plugin_configs[0].tenant_settings
         return TenantResolutionSettings()
-
-    def _read_request_parts(self, request: Any, key: Any = None) -> tuple[PluginConfigState, Any, Any]:
-        scope = request if isinstance(request, dict) else request.scope
-        app = scope.get("app")
-        state = app.state if app is not None else None
-        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
-        if selected is None:
-            selected = self._get_plugin_state(cast("Any", key))
-        return selected, state, scope
-
-    def _request_resource(self, key: Any, state: Any, scope: Any, kind: str) -> Any:
-        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
-        if selected is None:
-            selected = self._get_plugin_state(cast("Any", key))
-        if scope is None:
-            msg = "A request scope is required"
-            raise ImproperConfigurationError(msg)
-        resource_key = (
-            selected.read_session_key
-            if kind == "session"
-            else selected.read_connection_key
-            if kind == "connection"
-            else selected.routing_session_key
-        )
-        if resource_key is None:
-            msg = "routing_session_key must be configured to use request routing sessions"
-            raise ImproperConfigurationError(msg)
-        current = get_sqlspec_scope_state(scope, resource_key)
-        if current is not None:
-            return current
-        if selected.config.is_async:
-            if kind == "connection":
-                raise_async_connection_required("await plugin.provide_request_read_connection_async(key, state, scope)")
-            return DeferredAsyncSession(
-                selected.config,
-                lambda: _open_request_resource_async(selected.config, scope, resource_key, kind),
-                lambda: get_sqlspec_scope_state(scope, resource_key),
-                "await plugin.provide_request_read_session_async(key, state, scope)",
-                target_type=AsyncRoutingSession if kind == "routing" else None,
-            )
-        return _open_request_resource_sync(selected.config, scope, resource_key, kind)
 
     def get_read_session(self, request: Any, key: Any = None) -> Any:
         """Return the request's lazy read session view."""
@@ -1247,6 +1187,63 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """
         plugin_state = self._get_plugin_state(cast("Any", key))
         return await self._ensure_connection_async(plugin_state, state, scope)
+
+    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
+        """Return the resolution inputs of every tenant-enabled configuration."""
+        return tuple(
+            _TenantResolutionTarget(
+                config=state.config,
+                settings=state.tenant_settings,
+                receipt_state_keys=tuple(
+                    receipt_state_key(key)
+                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
+                    if isinstance(key, str) and key
+                ),
+            )
+            for state in self._plugin_configs
+            if has_tenant_strategy(state.config)
+        )
+
+    def _read_request_parts(self, request: Any, key: Any = None) -> tuple[PluginConfigState, Any, Any]:
+        scope = request if isinstance(request, dict) else request.scope
+        app = scope.get("app")
+        state = app.state if app is not None else None
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        return selected, state, scope
+
+    def _request_resource(self, key: Any, state: Any, scope: Any, kind: str) -> Any:
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        if scope is None:
+            msg = "A request scope is required"
+            raise ImproperConfigurationError(msg)
+        resource_key = (
+            selected.read_session_key
+            if kind == "session"
+            else selected.read_connection_key
+            if kind == "connection"
+            else selected.routing_session_key
+        )
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use request routing sessions"
+            raise ImproperConfigurationError(msg)
+        current = get_sqlspec_scope_state(scope, resource_key)
+        if current is not None:
+            return current
+        if selected.config.is_async:
+            if kind == "connection":
+                raise_async_connection_required("await plugin.provide_request_read_connection_async(key, state, scope)")
+            return DeferredAsyncSession(
+                selected.config,
+                lambda: _open_request_resource_async(selected.config, scope, resource_key, kind),
+                lambda: get_sqlspec_scope_state(scope, resource_key),
+                "await plugin.provide_request_read_session_async(key, state, scope)",
+                target_type=AsyncRoutingSession if kind == "routing" else None,
+            )
+        return _open_request_resource_sync(selected.config, scope, resource_key, kind)
 
     def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
         """Extract Litestar settings from config.extension_config."""
@@ -1697,6 +1694,14 @@ class _NumpySignatureNamespace:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._numpy, name)
+
+
+def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None, CommitMode], ...]:
+    return (
+        (state.read_connection_key, "manual"),
+        (state.read_session_key, "manual"),
+        (state.routing_session_key, state.commit_mode),
+    )
 
 
 def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:

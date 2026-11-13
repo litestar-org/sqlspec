@@ -2061,3 +2061,33 @@ async def test_public_providers_forward_prebuilt_acquire_options(asynchronous: b
         with context:
             pass
     pool.acquire.assert_called_once_with(cclass="ANALYTICS")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_connection_context_passes_desired_tag_on_thick_pool_release(asynchronous: bool) -> None:
+    connection = MagicMock()
+    connection.thin = False
+    connection.rollback = AsyncMock() if asynchronous else Mock()
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.execute = AsyncMock() if asynchronous else Mock()
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire = AsyncMock(return_value=connection) if asynchronous else Mock(return_value=connection)
+    pool.release = AsyncMock() if asynchronous else Mock()
+    config = cast(
+        "Any",
+        (OracleAsyncConfig if asynchronous else OracleSyncConfig)(
+            connection_instance=pool,
+            driver_features={"session_context_hook": OracleSessionContextConfig(edition="E1", time_zone="UTC")},
+        ),
+    )
+    context = config.provide_connection()
+    if asynchronous:
+        async with context:
+            pass
+    else:
+        with context:
+            pass
+    pool.release.assert_called_once_with(connection, tag="EDITION=E1;TIME_ZONE=UTC")

@@ -153,21 +153,6 @@ class ReplicaSelector(Protocol):
         ...
 
 
-def _eligible(
-    specs: tuple[ReplicaSpec, ...], breaker: ReplicaHealthBreaker | None, max_staleness_seconds: float | None
-) -> list[int]:
-    return [
-        index
-        for index, spec in enumerate(specs)
-        if (breaker is None or breaker.is_available(index))
-        and (
-            max_staleness_seconds is None
-            or spec.max_staleness_seconds is None
-            or spec.max_staleness_seconds <= max_staleness_seconds
-        )
-    ]
-
-
 @final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class RoundRobinSelector:
@@ -261,3 +246,18 @@ def build_selector(strategy: SelectionStrategy | ReplicaSelector, specs: Sequenc
         return RandomSelector(specs)
     msg = f"Unknown replica selection strategy {strategy!r}"
     raise ImproperConfigurationError(msg)
+
+
+def _eligible(
+    specs: tuple[ReplicaSpec, ...], breaker: ReplicaHealthBreaker | None, max_staleness_seconds: float | None
+) -> list[int]:
+    return [
+        index
+        for index, spec in enumerate(specs)
+        if (breaker is None or breaker.is_available(index))
+        and (
+            max_staleness_seconds is None
+            or spec.max_staleness_seconds is None
+            or spec.max_staleness_seconds <= max_staleness_seconds
+        )
+    ]

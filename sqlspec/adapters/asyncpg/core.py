@@ -537,13 +537,13 @@ class AsyncpgStreamSource:
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
+        """Close the active cursor portal before finalizing any owned transaction."""
         cursor = self._cursor
         self._cursor = None
         transaction = self._transaction
         self._transaction = None
         try:
             if cursor is not None and getattr(cursor, "_portal_name", None):
-                # asyncpg has no public cursor close; CockroachDB requires closing its portal before transaction control.
                 await cursor._close_portal(self._timeout)
             if transaction is not None:
                 if error:

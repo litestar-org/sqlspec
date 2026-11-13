@@ -371,220 +371,6 @@ class OracleDriverFeatures(TypedDict):
     """Default ``DBMS_CLOUD`` credential name used for server-side ``DBMS_CLOUD.COPY_DATA`` object-store loads."""
 
 
-def _process_oracle_wallet_and_config(
-    connection_config: "Mapping[str, Any] | None",
-) -> "tuple[dict[str, Any], Path | None]":
-    """Extract wallet zip and normalize connection configuration."""
-    normalized_conn = dict(normalize_connection_config(connection_config or {}))
-    pending_wallet_dir: Path | None = None
-    if normalized_conn.get("wallet_zip") is not None:
-        raw_wallet_source = normalized_conn.pop("wallet_zip")
-        source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
-        wallet_dir = extract_oracle_wallet_zip(
-            raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
-        )
-        if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
-            pending_wallet_dir = wallet_dir
-        normalized_conn.setdefault("config_dir", str(wallet_dir))
-        normalized_conn.setdefault("wallet_location", str(wallet_dir))
-    built_config = build_connection_config(normalized_conn)
-    return built_config, pending_wallet_dir
-
-
-def _build_standalone_connection_params(connection_config: "Mapping[str, Any]") -> dict[str, Any]:
-    """Build connection parameters for standalone (unpooled) connect calls."""
-    config = dict(connection_config)
-    config.pop("thick_mode", None)
-    config.pop("lib_dir", None)
-    config.pop("soda_metadata_cache", None)
-    config.pop("transaction_priority", None)
-    config.pop("min", None)
-    config.pop("max", None)
-    config.pop("increment", None)
-    config.pop("homogeneous", None)
-    config.pop("timeout", None)
-    config.pop("wait_timeout", None)
-    config.pop("max_lifetime_session", None)
-    config.pop("session_callback", None)
-    config.pop("threaded", None)
-    config.pop("getmode", None)
-    config.pop("ping_interval", None)
-    config.pop("ping_timeout", None)
-    config.pop("max_sessions_per_shard", None)
-    config.pop("pool_class", None)
-    connection_type = config.pop("connectiontype", None)
-    if connection_type is not None:
-        config["conn_class"] = connection_type
-    apply_wallet_ssl_context(config)
-    return config
-
-
-def _initialize_oracle_client(connection_config: "Mapping[str, Any]") -> None:
-    """Initialize requested Thick mode before creating a pool or connection."""
-    lib_dir = connection_config.get("lib_dir")
-    if (
-        not (connection_config.get("thick_mode") or lib_dir is not None or connection_config.get("soda_metadata_cache"))
-        or not oracledb.is_thin_mode()
-    ):
-        return
-    client_config = {}
-    if lib_dir is not None:
-        client_config["lib_dir"] = lib_dir
-    if connection_config.get("config_dir") is not None:
-        client_config["config_dir"] = connection_config["config_dir"]
-    try:
-        oracledb.init_oracle_client(**client_config)
-    except oracledb.Error as exc:
-        msg = f"Failed to initialize Oracle client in thick mode: {exc}"
-        raise ImproperConfigurationError(msg) from exc
-
-
-def _validate_async_oracle_mode(connection_config: "Mapping[str, Any]") -> None:
-    """Reject Thick mode settings unsupported by async connections."""
-    if (
-        connection_config.get("thick_mode")
-        or connection_config.get("lib_dir") is not None
-        or connection_config.get("soda_metadata_cache")
-    ):
-        msg = "OracleAsyncConfig only supports Thin mode; Thick mode options (thick_mode, lib_dir, soda_metadata_cache) require OracleSyncConfig."
-        raise ImproperConfigurationError(msg)
-
-
-def _derive_oracle_pool_kwargs(
-    source_config: Any,
-    connection_config_overrides: "Mapping[str, Any] | None",
-    driver_features_overrides: "Mapping[str, Any] | None",
-    statement_config: "StatementConfig | None",
-    migration_config: "dict[str, Any] | MigrationConfig | None",
-    extension_config: "ExtensionConfigs | None",
-    observability_config: "ObservabilityConfig | None",
-    bind_key: "str | None",
-    overrides: dict[str, Any],
-) -> dict[str, Any]:
-    """Derive common configuration keyword arguments for cloned Oracle pools."""
-    overrides = dict(overrides)
-    is_replica = bool(overrides.pop("is_replica", False))
-    overrides.pop("replicas", None)
-    connection_overrides = dict(connection_config_overrides or {})
-    new_conn_cfg: dict[str, Any] = dict(source_config.connection_config)
-    new_driver_features: dict[str, Any] = {
-        key: value
-        for key, value in source_config.driver_features.items()
-        if key not in {"_statement_cache_holder", "storage_capabilities"}
-    }
-    if source_config._pool_session_callback is not None and "session_callback" not in new_conn_cfg:
-        new_conn_cfg["session_callback"] = source_config._pool_session_callback
-    if source_config._user_connection_hook is not None and "on_connection_create" not in new_driver_features:
-        new_driver_features["on_connection_create"] = source_config._user_connection_hook
-    if connection_config_overrides:
-        new_conn_cfg.update(connection_config_overrides)
-    if driver_features_overrides:
-        new_driver_features.update(driver_features_overrides)
-    for key, val in overrides.items():
-        if key in VALID_ORACLE_DRIVER_FEATURE_KEYS:
-            new_driver_features[key] = val
-        else:
-            new_conn_cfg[key] = val
-            connection_overrides[key] = val
-    endpoint_keys = {"topology", "service_name", "host", "port", "sid", "tns_alias", "url", "connection_string"}
-    if (
-        source_config._source_topology is not None
-        and not endpoint_keys.intersection(connection_overrides)
-        and "dsn" not in connection_overrides
-    ):
-        new_conn_cfg["topology"] = source_config._source_topology
-    if endpoint_keys.intersection(connection_overrides):
-        source_dsn = source_config.connection_config.get("dsn")
-        topology = source_config._source_topology
-        if "topology" in connection_overrides:
-            for key in ("dsn", "host", "port", "service_name", "sid", "tns_alias", "url", "connection_string"):
-                if key not in connection_overrides:
-                    new_conn_cfg.pop(key, None)
-        elif set(connection_overrides).intersection(endpoint_keys) == {"service_name"} and isinstance(source_dsn, str):
-            service_name = str(connection_overrides["service_name"])
-            if isinstance(topology, OracleTopologyConfig):
-                new_conn_cfg.pop("dsn", None)
-                new_conn_cfg.pop("service_name", None)
-                new_conn_cfg["topology"] = topology.with_service_name(service_name)
-            else:
-                new_conn_cfg["dsn"] = rewrite_oracle_dsn_service_name(source_dsn, service_name)
-                new_conn_cfg.pop("service_name", None)
-        elif "dsn" not in connection_overrides:
-            new_conn_cfg.pop("dsn", None)
-            if (
-                isinstance(source_dsn, str)
-                and ("/" in source_dsn or source_dsn.startswith("("))
-                and not set(connection_overrides).intersection({"tns_alias", "url", "connection_string"})
-            ):
-                params = oracledb.ConnectParams()
-                params.parse_connect_string(source_dsn)
-                for key in ("host", "port", "service_name", "sid"):
-                    value = getattr(params, key, None)
-                    if value is not None:
-                        new_conn_cfg.setdefault(key, value)
-    if (
-        "tenant_strategy" in new_driver_features
-        and "tenant_strategy" not in (driver_features_overrides or {})
-        and "tenant_strategy" not in overrides
-    ):
-        new_driver_features["tenant_strategy"] = source_config._raw_tenant_strategy
-    return {
-        "is_replica": is_replica,
-        "replicas": None,
-        "connection_config": new_conn_cfg,
-        "connection_instance": None,
-        "migration_config": cast("dict[str, Any] | None", dict(source_config.migration_config))
-        if migration_config is None
-        else cast("dict[str, Any] | None", migration_config),
-        "statement_config": source_config.statement_config if statement_config is None else statement_config,
-        "driver_features": new_driver_features,
-        "bind_key": source_config.bind_key if bind_key is None else bind_key,
-        "extension_config": cast("ExtensionConfigs", dict(source_config.extension_config))
-        if extension_config is None
-        else extension_config,
-        "observability_config": source_config.observability_config
-        if observability_config is None
-        else observability_config,
-    }
-
-
-def _oracle_checkout_state(
-    config: Any, pool: Any, connection: Any, options: OracleAcquireOptions
-) -> tuple[str | None, bool, Any]:
-    """Resolve checkout state without touching Thin connection tags."""
-    hook = config.driver_features.get("session_context_hook")
-    desired = None
-    skip = False
-    if getattr(connection, "thin", None) is False and config.driver_features.get("enable_auto_state_tagging", True):
-        desired = synthesize_session_state_tag(hook, explicit_tag=options.tag)
-        skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
-    elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
-        skip = True
-    baseline = None
-    priority_type = getattr(oracledb, "TransactionPriority", None)
-    if priority_type is not None:
-        baseline = config.connection_config.get("transaction_priority")
-        if baseline is None:
-            with contextlib.suppress(oracledb.NotSupportedError):
-                candidate = getattr(connection, "transaction_priority", None)
-                if isinstance(candidate, priority_type):
-                    baseline = candidate
-    requested = options.transaction_priority
-    if requested is None:
-        requested = config.connection_config.get("transaction_priority")
-    if requested is not None:
-        apply_oracle_transaction_priority(connection, requested)
-    return desired, skip, baseline
-
-
-def _oracle_cleanup_error(body_error: BaseException | None, cleanup_error: BaseException) -> None:
-    """Preserve an active body exception while recording failed cleanup."""
-    if body_error is not None:
-        body_error.add_note(f"Oracle connection cleanup failed: {cleanup_error}")
-        return
-    raise cleanup_error
-
-
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
     """Own one sync checkout and physically discard unverified sessions."""
 
@@ -863,6 +649,122 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             raise ImproperConfigurationError(msg)
         refresh_oracle_config_cache(resolved, remove_permanently=remove_permanently)
 
+    def create_connection(self) -> "OracleSyncConnection":
+        """Create a single connection (not from pool).
+
+        Returns:
+            An Oracle Connection instance.
+        """
+        self._require_leased_tenant_connection()
+        _initialize_oracle_client(self.connection_config)
+        validate_oracle_session_callback(self._pool_session_callback, is_thin_mode=bool(oracledb.is_thin_mode()))
+        config = _build_standalone_connection_params(self.connection_config)
+        conn = oracledb.connect(**config)
+        try:
+            self._init_connection(conn, "")
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                conn.close()
+            raise
+        return conn
+
+    def provide_pool(self) -> "OracleSyncConnectionPool":
+        """Provide pool instance.
+
+        Returns:
+            The connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: "Mapping[str, Any] | None" = None,
+        driver_features_overrides: "Mapping[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: "str | None" = None,
+        **overrides: Any,
+    ) -> Self:
+        """Clone this OracleSyncConfig with overridden connection/pool or feature settings and ``connection_instance=None``."""
+        derived_kwargs = _derive_oracle_pool_kwargs(
+            self,
+            connection_config_overrides,
+            driver_features_overrides,
+            statement_config,
+            migration_config,
+            extension_config,
+            observability_config,
+            bind_key,
+            overrides,
+        )
+        derived = type(self)(**derived_kwargs)
+        if (
+            self._extracted_wallet_dir is not None
+            and derived._extracted_wallet_dir is None
+            and str(self._extracted_wallet_dir)
+            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
+        ):
+            derived._extracted_wallet_dir = self._extracted_wallet_dir
+            retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
+        return derived
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for OracleDB types.
+
+        Provides OracleDB-specific types for Litestar framework recognition.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
+            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OracleEndpoint": OracleEndpoint,
+            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
+            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
+            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
+            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
+            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
+            "OracleShardResolver": OracleShardResolver,
+            "OracleAcquireOptions": OracleAcquireOptions,
+            "OraclePluginName": OraclePluginName,
+            "OraclePoolBoundary": OraclePoolBoundary,
+            "OraclePoolParams": OraclePoolParams,
+            "OraclePurityInput": OraclePurityInput,
+            "OracleTransactionPriority": OracleTransactionPriority,
+            "OracleSessionContextConfig": OracleSessionContextConfig,
+            "OracleSyncConnectionContext": OracleSyncConnectionContext,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
+            "OracleSyncSessionContext": OracleSyncSessionContext,
+            "OracleTopologyConfig": OracleTopologyConfig,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
     def _warn_if_thin_sharding(self, pool: Any, options: OracleAcquireOptions) -> None:
         if (
             not self._thin_sharding_warned
@@ -971,126 +873,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleSyncIdentifierStrategy(self._tenant_source_hook)
 
-    def create_connection(self) -> "OracleSyncConnection":
-        """Create a single connection (not from pool).
-
-        Returns:
-            An Oracle Connection instance.
-        """
-        self._require_leased_tenant_connection()
-        _initialize_oracle_client(self.connection_config)
-        validate_oracle_session_callback(self._pool_session_callback, is_thin_mode=bool(oracledb.is_thin_mode()))
-        config = _build_standalone_connection_params(self.connection_config)
-        conn = oracledb.connect(**config)
-        try:
-            self._init_connection(conn, "")
-        except BaseException:
-            with contextlib.suppress(BaseException):
-                conn.close()
-            raise
-        return conn
-
-    def provide_pool(self) -> "OracleSyncConnectionPool":
-        """Provide pool instance.
-
-        Returns:
-            The connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = self.create_pool()
-        return self.connection_instance
-
     def _allow_replica_fallback(self, _error: Exception) -> bool:
         if is_oracle_standby_failover_error(_error):
             return bool(self.driver_features.get("retry_on_standby_lag", False))
         return super()._allow_replica_fallback(_error)
-
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this OracleSyncConfig with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        derived_kwargs = _derive_oracle_pool_kwargs(
-            self,
-            connection_config_overrides,
-            driver_features_overrides,
-            statement_config,
-            migration_config,
-            extension_config,
-            observability_config,
-            bind_key,
-            overrides,
-        )
-        derived = type(self)(**derived_kwargs)
-        if (
-            self._extracted_wallet_dir is not None
-            and derived._extracted_wallet_dir is None
-            and str(self._extracted_wallet_dir)
-            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
-        ):
-            derived._extracted_wallet_dir = self._extracted_wallet_dir
-            retain_extracted_wallet_dir(self._extracted_wallet_dir)
-        if bind_key is None or bind_key == self.bind_key:
-            derived._tenant_key = self._tenant_key
-        return derived
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for OracleDB types.
-
-        Provides OracleDB-specific types for Litestar framework recognition.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
-            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleAsyncCursor": OracleAsyncCursor,
-            "OracleAsyncDriver": OracleAsyncDriver,
-            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
-            "OracleConnectionParams": OracleConnectionParams,
-            "OracleDriverFeatures": OracleDriverFeatures,
-            "OracleEndpoint": OracleEndpoint,
-            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
-            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
-            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
-            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
-            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
-            "OracleShardResolver": OracleShardResolver,
-            "OracleAcquireOptions": OracleAcquireOptions,
-            "OraclePluginName": OraclePluginName,
-            "OraclePoolBoundary": OraclePoolBoundary,
-            "OraclePoolParams": OraclePoolParams,
-            "OraclePurityInput": OraclePurityInput,
-            "OracleTransactionPriority": OracleTransactionPriority,
-            "OracleSessionContextConfig": OracleSessionContextConfig,
-            "OracleSyncConnectionContext": OracleSyncConnectionContext,
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-            "OracleSyncDriver": OracleSyncDriver,
-            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
-            "OracleSyncSessionContext": OracleSyncSessionContext,
-            "OracleTopologyConfig": OracleTopologyConfig,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for Oracle table-backed event queues."""
-
-        return EventRuntimeHints(select_for_update=True, skip_locked=True)
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
@@ -1264,8 +1050,11 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
                 exc.add_note(f"Oracle connection disposal failed: {drop_error}")
             _oracle_cleanup_error(exc_val, exc)
             return
+        release_kwargs = (
+            {"tag": self._desired_tag} if self._desired_tag is not None and getattr(conn, "thin", None) is False else {}
+        )
         try:
-            await pool.release(conn)
+            await pool.release(conn, **release_kwargs)
         except BaseException as exc:
             try:
                 forget_oracle_session_state(conn)
@@ -1456,6 +1245,118 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             raise ImproperConfigurationError(msg)
         refresh_oracle_config_cache(resolved, remove_permanently=remove_permanently)
 
+    async def create_connection(self) -> OracleAsyncConnection:
+        """Create a single async connection (not from pool).
+
+        Returns:
+            An Oracle AsyncConnection instance.
+        """
+        self._require_leased_tenant_connection()
+        _validate_async_oracle_mode(self.connection_config)
+        config = _build_standalone_connection_params(self.connection_config)
+        conn = await oracledb.connect_async(**config)
+        try:
+            await self._init_connection(conn, "")
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                await conn.close()
+            raise
+        return cast("OracleAsyncConnection", conn)
+
+    async def provide_pool(self) -> "OracleAsyncConnectionPool":
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: "Mapping[str, Any] | None" = None,
+        driver_features_overrides: "Mapping[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: "str | None" = None,
+        **overrides: Any,
+    ) -> Self:
+        """Clone this OracleAsyncConfig with overridden connection/pool or feature settings and ``connection_instance=None``."""
+        derived_kwargs = _derive_oracle_pool_kwargs(
+            self,
+            connection_config_overrides,
+            driver_features_overrides,
+            statement_config,
+            migration_config,
+            extension_config,
+            observability_config,
+            bind_key,
+            overrides,
+        )
+        derived = type(self)(**derived_kwargs)
+        if (
+            self._extracted_wallet_dir is not None
+            and derived._extracted_wallet_dir is None
+            and str(self._extracted_wallet_dir)
+            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
+        ):
+            derived._extracted_wallet_dir = self._extracted_wallet_dir
+            retain_extracted_wallet_dir(self._extracted_wallet_dir)
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
+        return derived
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for OracleAsyncConfig types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
+            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
+            "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
+            "OracleAsyncConnection": OracleAsyncConnection,
+            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
+            "OracleAsyncCursor": OracleAsyncCursor,
+            "OracleAsyncDriver": OracleAsyncDriver,
+            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
+            "OracleAsyncSessionContext": OracleAsyncSessionContext,
+            "OracleConnectionParams": OracleConnectionParams,
+            "OracleDriverFeatures": OracleDriverFeatures,
+            "OracleEndpoint": OracleEndpoint,
+            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
+            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
+            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
+            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
+            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
+            "OracleShardResolver": OracleShardResolver,
+            "OracleAcquireOptions": OracleAcquireOptions,
+            "OraclePluginName": OraclePluginName,
+            "OraclePoolBoundary": OraclePoolBoundary,
+            "OraclePoolParams": OraclePoolParams,
+            "OraclePurityInput": OraclePurityInput,
+            "OracleTransactionPriority": OracleTransactionPriority,
+            "OracleSessionContextConfig": OracleSessionContextConfig,
+            "OracleSyncConnection": OracleSyncConnection,
+            "OracleSyncConnectionPool": OracleSyncConnectionPool,
+            "OracleSyncCursor": OracleSyncCursor,
+            "OracleSyncDriver": OracleSyncDriver,
+            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
+            "OracleTopologyConfig": OracleTopologyConfig,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for Oracle table-backed event queues."""
+
+        return EventRuntimeHints(select_for_update=True, skip_locked=True)
+
     def _warn_if_thin_sharding(self, pool: Any, options: OracleAcquireOptions) -> None:
         if (
             not self._thin_sharding_warned
@@ -1564,122 +1465,10 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
 
-    async def create_connection(self) -> OracleAsyncConnection:
-        """Create a single async connection (not from pool).
-
-        Returns:
-            An Oracle AsyncConnection instance.
-        """
-        self._require_leased_tenant_connection()
-        _validate_async_oracle_mode(self.connection_config)
-        config = _build_standalone_connection_params(self.connection_config)
-        conn = await oracledb.connect_async(**config)
-        try:
-            await self._init_connection(conn, "")
-        except BaseException:
-            with contextlib.suppress(BaseException):
-                await conn.close()
-            raise
-        return cast("OracleAsyncConnection", conn)
-
-    async def provide_pool(self) -> "OracleAsyncConnectionPool":
-        """Provide async pool instance.
-
-        Returns:
-            The async connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
-
     def _allow_replica_fallback(self, _error: Exception) -> bool:
         if is_oracle_standby_failover_error(_error):
             return bool(self.driver_features.get("retry_on_standby_lag", False))
         return super()._allow_replica_fallback(_error)
-
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this OracleAsyncConfig with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        derived_kwargs = _derive_oracle_pool_kwargs(
-            self,
-            connection_config_overrides,
-            driver_features_overrides,
-            statement_config,
-            migration_config,
-            extension_config,
-            observability_config,
-            bind_key,
-            overrides,
-        )
-        derived = type(self)(**derived_kwargs)
-        if (
-            self._extracted_wallet_dir is not None
-            and derived._extracted_wallet_dir is None
-            and str(self._extracted_wallet_dir)
-            in {derived.connection_config.get("config_dir"), derived.connection_config.get("wallet_location")}
-        ):
-            derived._extracted_wallet_dir = self._extracted_wallet_dir
-            retain_extracted_wallet_dir(self._extracted_wallet_dir)
-        if bind_key is None or bind_key == self.bind_key:
-            derived._tenant_key = self._tenant_key
-        return derived
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for OracleAsyncConfig types.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "OracleSyncSessionlessTransactionContext": OracleSyncSessionlessTransactionContext,
-            "OracleAsyncSessionlessTransactionContext": OracleAsyncSessionlessTransactionContext,
-            "OracleAsyncConnectionContext": OracleAsyncConnectionContext,
-            "OracleAsyncConnection": OracleAsyncConnection,
-            "OracleAsyncConnectionPool": OracleAsyncConnectionPool,
-            "OracleAsyncCursor": OracleAsyncCursor,
-            "OracleAsyncDriver": OracleAsyncDriver,
-            "OracleAsyncExceptionHandler": OracleAsyncExceptionHandler,
-            "OracleAsyncSessionContext": OracleAsyncSessionContext,
-            "OracleConnectionParams": OracleConnectionParams,
-            "OracleDriverFeatures": OracleDriverFeatures,
-            "OracleEndpoint": OracleEndpoint,
-            "OracleEndUserSecurityConfig": OracleEndUserSecurityConfig,
-            "OracleAsyncClientContextStrategy": OracleAsyncClientContextStrategy,
-            "OracleAsyncEndUserSecurityStrategy": OracleAsyncEndUserSecurityStrategy,
-            "OracleSyncClientContextStrategy": OracleSyncClientContextStrategy,
-            "OracleSyncEndUserSecurityStrategy": OracleSyncEndUserSecurityStrategy,
-            "OracleShardResolver": OracleShardResolver,
-            "OracleAcquireOptions": OracleAcquireOptions,
-            "OraclePluginName": OraclePluginName,
-            "OraclePoolBoundary": OraclePoolBoundary,
-            "OraclePoolParams": OraclePoolParams,
-            "OraclePurityInput": OraclePurityInput,
-            "OracleTransactionPriority": OracleTransactionPriority,
-            "OracleSessionContextConfig": OracleSessionContextConfig,
-            "OracleSyncConnection": OracleSyncConnection,
-            "OracleSyncConnectionPool": OracleSyncConnectionPool,
-            "OracleSyncCursor": OracleSyncCursor,
-            "OracleSyncDriver": OracleSyncDriver,
-            "OracleSyncExceptionHandler": OracleSyncExceptionHandler,
-            "OracleTopologyConfig": OracleTopologyConfig,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for Oracle table-backed event queues."""
-
-        return EventRuntimeHints(select_for_update=True, skip_locked=True)
 
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
@@ -1763,3 +1552,217 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                 wallet_dir = self._extracted_wallet_dir
                 self._extracted_wallet_dir = None
                 release_extracted_wallet_dir(wallet_dir)
+
+
+def _process_oracle_wallet_and_config(
+    connection_config: "Mapping[str, Any] | None",
+) -> "tuple[dict[str, Any], Path | None]":
+    """Extract wallet zip and normalize connection configuration."""
+    normalized_conn = dict(normalize_connection_config(connection_config or {}))
+    pending_wallet_dir: Path | None = None
+    if normalized_conn.get("wallet_zip") is not None:
+        raw_wallet_source = normalized_conn.pop("wallet_zip")
+        source_is_existing_dir = isinstance(raw_wallet_source, (str, Path)) and Path(raw_wallet_source).is_dir()
+        wallet_dir = extract_oracle_wallet_zip(
+            raw_wallet_source, wallet_password=normalized_conn.get("wallet_password")
+        )
+        if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
+            pending_wallet_dir = wallet_dir
+        normalized_conn.setdefault("config_dir", str(wallet_dir))
+        normalized_conn.setdefault("wallet_location", str(wallet_dir))
+    built_config = build_connection_config(normalized_conn)
+    return built_config, pending_wallet_dir
+
+
+def _build_standalone_connection_params(connection_config: "Mapping[str, Any]") -> dict[str, Any]:
+    """Build connection parameters for standalone (unpooled) connect calls."""
+    config = dict(connection_config)
+    config.pop("thick_mode", None)
+    config.pop("lib_dir", None)
+    config.pop("soda_metadata_cache", None)
+    config.pop("transaction_priority", None)
+    config.pop("min", None)
+    config.pop("max", None)
+    config.pop("increment", None)
+    config.pop("homogeneous", None)
+    config.pop("timeout", None)
+    config.pop("wait_timeout", None)
+    config.pop("max_lifetime_session", None)
+    config.pop("session_callback", None)
+    config.pop("threaded", None)
+    config.pop("getmode", None)
+    config.pop("ping_interval", None)
+    config.pop("ping_timeout", None)
+    config.pop("max_sessions_per_shard", None)
+    config.pop("pool_class", None)
+    connection_type = config.pop("connectiontype", None)
+    if connection_type is not None:
+        config["conn_class"] = connection_type
+    apply_wallet_ssl_context(config)
+    return config
+
+
+def _initialize_oracle_client(connection_config: "Mapping[str, Any]") -> None:
+    """Initialize requested Thick mode before creating a pool or connection."""
+    lib_dir = connection_config.get("lib_dir")
+    if (
+        not (connection_config.get("thick_mode") or lib_dir is not None or connection_config.get("soda_metadata_cache"))
+        or not oracledb.is_thin_mode()
+    ):
+        return
+    client_config = {}
+    if lib_dir is not None:
+        client_config["lib_dir"] = lib_dir
+    if connection_config.get("config_dir") is not None:
+        client_config["config_dir"] = connection_config["config_dir"]
+    try:
+        oracledb.init_oracle_client(**client_config)
+    except oracledb.Error as exc:
+        msg = f"Failed to initialize Oracle client in thick mode: {exc}"
+        raise ImproperConfigurationError(msg) from exc
+
+
+def _validate_async_oracle_mode(connection_config: "Mapping[str, Any]") -> None:
+    """Reject Thick mode settings unsupported by async connections."""
+    if (
+        connection_config.get("thick_mode")
+        or connection_config.get("lib_dir") is not None
+        or connection_config.get("soda_metadata_cache")
+    ):
+        msg = "OracleAsyncConfig only supports Thin mode; Thick mode options (thick_mode, lib_dir, soda_metadata_cache) require OracleSyncConfig."
+        raise ImproperConfigurationError(msg)
+
+
+def _derive_oracle_pool_kwargs(
+    source_config: Any,
+    connection_config_overrides: "Mapping[str, Any] | None",
+    driver_features_overrides: "Mapping[str, Any] | None",
+    statement_config: "StatementConfig | None",
+    migration_config: "dict[str, Any] | MigrationConfig | None",
+    extension_config: "ExtensionConfigs | None",
+    observability_config: "ObservabilityConfig | None",
+    bind_key: "str | None",
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive common configuration keyword arguments for cloned Oracle pools."""
+    overrides = dict(overrides)
+    is_replica = bool(overrides.pop("is_replica", False))
+    overrides.pop("replicas", None)
+    connection_overrides = dict(connection_config_overrides or {})
+    new_conn_cfg: dict[str, Any] = dict(source_config.connection_config)
+    new_driver_features: dict[str, Any] = {
+        key: value
+        for key, value in source_config.driver_features.items()
+        if key not in {"_statement_cache_holder", "storage_capabilities"}
+    }
+    if source_config._pool_session_callback is not None and "session_callback" not in new_conn_cfg:
+        new_conn_cfg["session_callback"] = source_config._pool_session_callback
+    if source_config._user_connection_hook is not None and "on_connection_create" not in new_driver_features:
+        new_driver_features["on_connection_create"] = source_config._user_connection_hook
+    if connection_config_overrides:
+        new_conn_cfg.update(connection_config_overrides)
+    if driver_features_overrides:
+        new_driver_features.update(driver_features_overrides)
+    for key, val in overrides.items():
+        if key in VALID_ORACLE_DRIVER_FEATURE_KEYS:
+            new_driver_features[key] = val
+        else:
+            new_conn_cfg[key] = val
+            connection_overrides[key] = val
+    endpoint_keys = {"topology", "service_name", "host", "port", "sid", "tns_alias", "url", "connection_string"}
+    if (
+        source_config._source_topology is not None
+        and not endpoint_keys.intersection(connection_overrides)
+        and "dsn" not in connection_overrides
+    ):
+        new_conn_cfg["topology"] = source_config._source_topology
+    if endpoint_keys.intersection(connection_overrides):
+        source_dsn = source_config.connection_config.get("dsn")
+        topology = source_config._source_topology
+        if "topology" in connection_overrides:
+            for key in ("dsn", "host", "port", "service_name", "sid", "tns_alias", "url", "connection_string"):
+                if key not in connection_overrides:
+                    new_conn_cfg.pop(key, None)
+        elif set(connection_overrides).intersection(endpoint_keys) == {"service_name"} and isinstance(source_dsn, str):
+            service_name = str(connection_overrides["service_name"])
+            if isinstance(topology, OracleTopologyConfig):
+                new_conn_cfg.pop("dsn", None)
+                new_conn_cfg.pop("service_name", None)
+                new_conn_cfg["topology"] = topology.with_service_name(service_name)
+            else:
+                new_conn_cfg["dsn"] = rewrite_oracle_dsn_service_name(source_dsn, service_name)
+                new_conn_cfg.pop("service_name", None)
+        elif "dsn" not in connection_overrides:
+            new_conn_cfg.pop("dsn", None)
+            if (
+                isinstance(source_dsn, str)
+                and ("/" in source_dsn or source_dsn.startswith("("))
+                and not set(connection_overrides).intersection({"tns_alias", "url", "connection_string"})
+            ):
+                params = oracledb.ConnectParams()
+                params.parse_connect_string(source_dsn)
+                for key in ("host", "port", "service_name", "sid"):
+                    value = getattr(params, key, None)
+                    if value is not None:
+                        new_conn_cfg.setdefault(key, value)
+    if (
+        "tenant_strategy" in new_driver_features
+        and "tenant_strategy" not in (driver_features_overrides or {})
+        and "tenant_strategy" not in overrides
+    ):
+        new_driver_features["tenant_strategy"] = source_config._raw_tenant_strategy
+    return {
+        "is_replica": is_replica,
+        "replicas": None,
+        "connection_config": new_conn_cfg,
+        "connection_instance": None,
+        "migration_config": cast("dict[str, Any] | None", dict(source_config.migration_config))
+        if migration_config is None
+        else cast("dict[str, Any] | None", migration_config),
+        "statement_config": source_config.statement_config if statement_config is None else statement_config,
+        "driver_features": new_driver_features,
+        "bind_key": source_config.bind_key if bind_key is None else bind_key,
+        "extension_config": cast("ExtensionConfigs", dict(source_config.extension_config))
+        if extension_config is None
+        else extension_config,
+        "observability_config": source_config.observability_config
+        if observability_config is None
+        else observability_config,
+    }
+
+
+def _oracle_checkout_state(
+    config: Any, pool: Any, connection: Any, options: OracleAcquireOptions
+) -> tuple[str | None, bool, Any]:
+    """Resolve checkout state without touching Thin connection tags."""
+    hook = config.driver_features.get("session_context_hook")
+    desired = None
+    skip = False
+    if getattr(connection, "thin", None) is False and config.driver_features.get("enable_auto_state_tagging", True):
+        desired = synthesize_session_state_tag(hook, explicit_tag=options.tag)
+        skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
+    elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
+        skip = True
+    baseline = None
+    priority_type = getattr(oracledb, "TransactionPriority", None)
+    if priority_type is not None:
+        baseline = config.connection_config.get("transaction_priority")
+        if baseline is None:
+            with contextlib.suppress(oracledb.NotSupportedError):
+                candidate = getattr(connection, "transaction_priority", None)
+                if isinstance(candidate, priority_type):
+                    baseline = candidate
+    requested = options.transaction_priority
+    if requested is None:
+        requested = config.connection_config.get("transaction_priority")
+    if requested is not None:
+        apply_oracle_transaction_priority(connection, requested)
+    return desired, skip, baseline
+
+
+def _oracle_cleanup_error(body_error: BaseException | None, cleanup_error: BaseException) -> None:
+    """Preserve an active body exception while recording failed cleanup."""
+    if body_error is not None:
+        body_error.add_note(f"Oracle connection cleanup failed: {cleanup_error}")
+        return
+    raise cleanup_error

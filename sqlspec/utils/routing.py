@@ -24,11 +24,11 @@ __all__ = (
 
 RoutingMode: TypeAlias = Literal["auto", "primary", "replica"]
 DEFAULT_BIND_KEY: Final[str] = "__default__"
+_MAX_ROUTING_TOKEN_LENGTH: Final[int] = 256
+_MIN_PRINTABLE_ASCII: Final[int] = 32
+_ASCII_DEL: Final[int] = 127
+_COOKIE_HEADER_BYTES: Final[bytes] = b"cookie"
 _ROUTING_VAR: ContextVar["RoutingContextPayload | None"] = ContextVar("sqlspec_routing_context", default=None)
-
-
-def _normalize_bind_key(bind_key: str | None) -> str:
-    return bind_key or DEFAULT_BIND_KEY
 
 
 @final
@@ -55,8 +55,11 @@ class RoutingEntry:
         if self.mode not in {"auto", "primary", "replica"}:
             msg = f"Invalid routing mode {self.mode!r}"
             raise RoutingContextError(msg)
-        if self.bind_group == "":
-            msg = "bind_group must be a non-empty string when provided"
+        if self.bind_group is not None and not _is_valid_routing_token(self.bind_group):
+            msg = "bind_group must be a non-empty printable string of at most 256 characters"
+            raise RoutingContextError(msg)
+        if self.causal_token is not None and not _is_valid_routing_token(self.causal_token):
+            msg = "causal_token must be a non-empty printable string of at most 256 characters"
             raise RoutingContextError(msg)
         if self.mode == "primary" and self.bind_group is not None and not self.pinned_by_write:
             msg = "bind_group cannot be combined with mode='primary'"
@@ -261,31 +264,48 @@ class SQLSpecRoutingMiddleware:
             await self._app(scope, receive, send)
             return
         payload = RoutingContext.current() or RoutingContextPayload()
-        headers = {key.lower(): value.decode("latin-1") for key, value in scope.get("headers", ())}
-        if self._write_pin_cookie is not None and b"cookie" in headers:
+        cookie_header: str | None = None
+        routing_header_value = ""
+        for raw_key, raw_value in scope.get("headers", ()):
+            lower_key = raw_key.lower()
+            if self._write_pin_cookie is not None and lower_key == _COOKIE_HEADER_BYTES:
+                cookie_header = raw_value.decode("latin-1")
+            elif lower_key == self._routing_header:
+                routing_header_value = raw_value.decode("latin-1").strip()
+        if self._write_pin_cookie is not None and cookie_header is not None:
             cookie = SimpleCookie()
             try:
-                cookie.load(headers[b"cookie"])
+                cookie.load(cookie_header)
             except CookieError:
                 cookie = SimpleCookie()
             morsel = cookie.get(self._write_pin_cookie)
             if morsel is not None and morsel.value:
                 value = morsel.value
-                payload = payload.with_write_pin(
-                    self._bind_key, causal_token=None if value in {"1", "true", "True"} else value
+                if value in {"1", "true", "True"}:
+                    payload = payload.with_write_pin(self._bind_key, causal_token=None)
+                elif _is_valid_routing_token(value):
+                    payload = payload.with_write_pin(self._bind_key, causal_token=value)
+                else:
+                    get_logger("sqlspec.routing").debug("Ignoring invalid write-pin cookie %r", value)
+        if routing_header_value:
+            if routing_header_value in {"auto", "primary", "replica"}:
+                entry = RoutingEntry(
+                    "primary"
+                    if routing_header_value == "primary"
+                    else "replica"
+                    if routing_header_value == "replica"
+                    else "auto"
                 )
-        value = headers.get(self._routing_header, "").strip()
-        if value:
-            if value in {"auto", "primary", "replica"}:
-                entry = RoutingEntry("primary" if value == "primary" else "replica" if value == "replica" else "auto")
                 payload = payload.with_entry(self._bind_key, entry)
-            elif value.startswith("replica:") and value[8:]:
-                payload = payload.with_entry(self._bind_key, RoutingEntry("replica", bind_group=value[8:]))
+            elif routing_header_value.startswith("replica:") and _is_valid_routing_token(routing_header_value[8:]):
+                payload = payload.with_entry(
+                    self._bind_key, RoutingEntry("replica", bind_group=routing_header_value[8:])
+                )
             elif self._strict_headers:
-                msg = f"Invalid routing header {value!r}"
+                msg = f"Invalid routing header {routing_header_value!r}"
                 raise RoutingContextError(msg)
             else:
-                get_logger("sqlspec.routing").debug("Ignoring invalid routing header %r", value)
+                get_logger("sqlspec.routing").debug("Ignoring invalid routing header %r", routing_header_value)
         if self._extractor is not None:
             result = self._extractor(scope)
             if isawaitable(result):
@@ -299,3 +319,13 @@ class SQLSpecRoutingMiddleware:
             await self._app(scope, receive, send)
         finally:
             RoutingContext.reset(token)
+
+
+def _normalize_bind_key(bind_key: str | None) -> str:
+    return bind_key or DEFAULT_BIND_KEY
+
+
+def _is_valid_routing_token(value: str) -> bool:
+    return 0 < len(value) <= _MAX_ROUTING_TOKEN_LENGTH and not any(
+        ord(ch) < _MIN_PRINTABLE_ASCII or ord(ch) == _ASCII_DEL for ch in value
+    )

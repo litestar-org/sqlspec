@@ -11,6 +11,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LitestarConfig
+from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions._deferred_session import DeferredAsyncSession
 from sqlspec.extensions.litestar import SQLSpecPlugin
@@ -121,3 +122,46 @@ def test_config_default_primary_routing_applies_to_request(tmp_path: Any) -> Non
 
     with create_test_client([read], plugins=[SQLSpecPlugin(config)]) as client:
         assert client.get("/").json() == {"origin": "primary"}
+
+
+def test_autocommit_skips_commit_and_rollback_on_unpinned_routing_session(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        extension_config={"litestar": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    commits: list[bool] = []
+    rollbacks: list[bool] = []
+    orig_commit = SyncRoutingSession.commit
+    orig_rollback = SyncRoutingSession.rollback
+
+    def spy_commit(self: SyncRoutingSession) -> None:
+        commits.append(self.pinned_to_primary)
+        orig_commit(self)
+
+    def spy_rollback(self: SyncRoutingSession) -> None:
+        rollbacks.append(self.pinned_to_primary)
+        orig_rollback(self)
+
+    monkeypatch.setattr(SyncRoutingSession, "commit", spy_commit)
+    monkeypatch.setattr(SyncRoutingSession, "rollback", spy_rollback)
+
+    @get("/read-only", sync_to_thread=False)
+    def read_only(router: NamedDependency[Any]) -> dict[str, str]:
+        return {"origin": cast(str, router.select_value("SELECT origin FROM notes WHERE id=1"))}
+
+    @post("/write", sync_to_thread=False)
+    def write_pin(router: NamedDependency[Any]) -> dict[str, str]:
+        router.execute("INSERT INTO notes VALUES (4,'autocommit')")
+        return {"status": "ok"}
+
+    with create_test_client([read_only, write_pin], plugins=[SQLSpecPlugin(config)]) as client:
+        assert client.get("/read-only").json() == {"origin": "replica"}
+        assert commits == []
+        assert rollbacks == []
+        assert client.post("/write").json() == {"status": "ok"}
+        assert commits == [True]
+        assert rollbacks == []

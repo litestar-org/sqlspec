@@ -12,9 +12,11 @@ from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncCursor,
     OracleAsyncSessionContext,
+    OracleAsyncSessionlessTransactionContext,
     OracleSyncConnection,
     OracleSyncCursor,
     OracleSyncSessionContext,
+    OracleSyncSessionlessTransactionContext,
     oracledb_module,
 )
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
@@ -102,10 +104,6 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 
-    from sqlspec.adapters.oracledb._typing import (
-        OracleAsyncSessionlessTransactionContext,
-        OracleSyncSessionlessTransactionContext,
-    )
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.core.cache import CachedQuery
@@ -431,10 +429,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     _pipeline_support: ClassVar[bool] = False
     _pipeline_support_reason: ClassVar[str] = "asyncio_thin_required"
 
-    def _pipeline_native_supported(self) -> bool:
-        """Sync Oracle connections do not support native pipelining."""
-        return False
-
     def __init__(
         self,
         connection: OracleSyncConnection,
@@ -464,6 +458,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def sessionless_transaction_id(self) -> bytes | None:
         """Return the sessionless transaction currently attached to this connection."""
         return self._sessionless_transaction_id
+
+    @property
+    def data_dictionary(self) -> "OracledbSyncDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = OracledbSyncDataDictionary()
+        return self._data_dictionary
 
     def set_transaction_priority(self, priority: Any) -> None:
         """Set native transaction priority as a zero-round-trip connection field."""
@@ -528,8 +533,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         rollback_on_error: bool = True,
     ) -> "OracleSyncSessionlessTransactionContext":
         """Scope a sessionless transaction and suspend it on successful exit."""
-        from sqlspec.adapters.oracledb._typing import OracleSyncSessionlessTransactionContext
-
         return OracleSyncSessionlessTransactionContext(
             self,
             transaction_id=transaction_id,
@@ -592,17 +595,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             self._sessionless_transaction_id = None
             self._transaction_active = False
         return result
-
-    @property
-    def data_dictionary(self) -> "OracledbSyncDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = OracledbSyncDataDictionary()
-        return self._data_dictionary
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
@@ -669,47 +661,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
-
-    def _execute_cache_hit_with_cursor(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
-        """Execute a cached query while owning only the cursor context."""
-        with self.with_cursor(self.connection) as cursor:
-            wire_sql = self._format_wire_sql(cached.compiled_sql)
-            returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = self._fetch_kwargs
-            parameters = coerce_large_parameters_sync(
-                self.connection,
-                params,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=self._oracle_version_cache,
-            )
-            cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
-            if returns_rows and cursor.description is not None:
-                fetched_data = cursor.fetchall()
-                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
-                data, column_names = collect_sync_rows(
-                    cast("list[Any] | None", fetched_data),
-                    cursor.description,
-                    self.driver_features,
-                    column_names=column_names,
-                    requires_lob_coercion=requires_lob_coercion,
-                )
-                return self.build_cached_select_result(
-                    sql,
-                    params,
-                    cached,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=len(data),
-                    row_format="tuple",
-                    compiled_sql=wire_sql,
-                )
-            affected_rows = resolve_rowcount(cursor)
-            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
@@ -1332,6 +1283,51 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
+    def _pipeline_native_supported(self) -> bool:
+        """Sync Oracle connections do not support native pipelining."""
+        return False
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a cached query while owning only the cursor context."""
+        with self.with_cursor(self.connection) as cursor:
+            wire_sql = self._format_wire_sql(cached.compiled_sql)
+            returns_rows = cached.operation_profile.returns_rows
+            fetch_kwargs = self._fetch_kwargs
+            parameters = coerce_large_parameters_sync(
+                self.connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=self._oracle_version_cache,
+            )
+            cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
+            if returns_rows and cursor.description is not None:
+                fetched_data = cursor.fetchall()
+                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+                data, column_names = collect_sync_rows(
+                    cast("list[Any] | None", fetched_data),
+                    cursor.description,
+                    self.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=len(data),
+                    row_format="tuple",
+                    compiled_sql=wire_sql,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
+
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.
 
@@ -1595,6 +1591,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Return the sessionless transaction currently attached to this connection."""
         return self._sessionless_transaction_id
 
+    @property
+    def data_dictionary(self) -> "OracledbAsyncDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = OracledbAsyncDataDictionary()
+        return self._data_dictionary
+
     def set_transaction_priority(self, priority: Any) -> None:
         """Set native transaction priority as a zero-round-trip connection field."""
         apply_oracle_transaction_priority(self.connection, priority)
@@ -1660,8 +1667,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         rollback_on_error: bool = True,
     ) -> "OracleAsyncSessionlessTransactionContext":
         """Scope a sessionless transaction and suspend it on successful exit."""
-        from sqlspec.adapters.oracledb._typing import OracleAsyncSessionlessTransactionContext
-
         return OracleAsyncSessionlessTransactionContext(
             self,
             transaction_id=transaction_id,
@@ -1726,17 +1731,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._sessionless_transaction_id = None
             self._transaction_active = False
         return result
-
-    @property
-    def data_dictionary(self) -> "OracledbAsyncDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = OracledbAsyncDataDictionary()
-        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
@@ -1803,47 +1797,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         affected_rows = resolve_rowcount(cursor)
         return self.create_execution_result(cursor, rowcount_override=affected_rows)
-
-    async def _execute_cache_hit_with_cursor(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
-        """Execute an async cached query while owning only the cursor context."""
-        async with self.with_cursor(self.connection) as cursor:
-            wire_sql = self._format_wire_sql(cached.compiled_sql)
-            returns_rows = cached.operation_profile.returns_rows
-            fetch_kwargs = self._fetch_kwargs
-            parameters = await coerce_large_parameters_async(
-                self.connection,
-                params,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=self._oracle_version_cache,
-            )
-            await cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
-            if returns_rows and cursor.description is not None:
-                fetched_data = await cursor.fetchall()
-                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
-                data, column_names = await collect_async_rows(
-                    cast("list[Any] | None", fetched_data),
-                    cursor.description,
-                    self.driver_features,
-                    column_names=column_names,
-                    requires_lob_coercion=requires_lob_coercion,
-                )
-                return self.build_cached_select_result(
-                    sql,
-                    params,
-                    cached,
-                    selected_data=data,
-                    column_names=column_names,
-                    data_row_count=len(data),
-                    row_format="tuple",
-                    compiled_sql=wire_sql,
-                )
-            affected_rows = resolve_rowcount(cursor)
-            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
 
     async def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using Oracle batch processing.
@@ -2280,45 +2233,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
-    async def _select_for_storage(
-        self,
-        statement: "Statement | QueryBuilder | SQL | str",
-        /,
-        *parameters: Any,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        """Return an Arrow result that streams Oracle frames on demand for storage exports."""
-        if "return_format" in kwargs or kwargs.get("native_only") or not supports_df_batches(self.connection):
-            return await super()._select_for_storage(
-                statement, *parameters, statement_config=statement_config, **kwargs
-            )
-
-        ensure_pyarrow()
-        batch_size = cast("int | None", kwargs.pop("batch_size", None))
-        arrow_schema = cast("ArrowSchema | None", kwargs.pop("arrow_schema", None))
-
-        config = statement_config or self.statement_config
-        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
-        prepared_parameters = await coerce_large_parameters_async(
-            self.connection,
-            prepared_parameters,
-            clob_type=DB_TYPE_CLOB,
-            blob_type=DB_TYPE_BLOB,
-            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
-            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
-            version_cache=self._oracle_version_cache,
-        )
-        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
-        self._apply_session_tracing(self.connection)
-        return create_arrow_result(
-            prepared_statement,
-            self._iter_arrow_record_batches(sql, prepared_parameters, batch_size, arrow_schema),
-            rows_affected=0,
-            metadata={"streamed": True},
-        )
-
     async def load_from_arrow(
         self,
         table: str,
@@ -2515,6 +2429,86 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from Oracle cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    async def _select_for_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Return an Arrow result that streams Oracle frames on demand for storage exports."""
+        if "return_format" in kwargs or kwargs.get("native_only") or not supports_df_batches(self.connection):
+            return await super()._select_for_storage(
+                statement, *parameters, statement_config=statement_config, **kwargs
+            )
+
+        ensure_pyarrow()
+        batch_size = cast("int | None", kwargs.pop("batch_size", None))
+        arrow_schema = cast("ArrowSchema | None", kwargs.pop("arrow_schema", None))
+
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
+        prepared_parameters = await coerce_large_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+        self._apply_session_tracing(self.connection)
+        return create_arrow_result(
+            prepared_statement,
+            self._iter_arrow_record_batches(sql, prepared_parameters, batch_size, arrow_schema),
+            rows_affected=0,
+            metadata={"streamed": True},
+        )
+
+    async def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute an async cached query while owning only the cursor context."""
+        async with self.with_cursor(self.connection) as cursor:
+            wire_sql = self._format_wire_sql(cached.compiled_sql)
+            returns_rows = cached.operation_profile.returns_rows
+            fetch_kwargs = self._fetch_kwargs
+            parameters = await coerce_large_parameters_async(
+                self.connection,
+                params,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=self._oracle_version_cache,
+            )
+            await cast("Any", cursor).execute(wire_sql, parameters or {}, **fetch_kwargs)
+            if returns_rows and cursor.description is not None:
+                fetched_data = await cursor.fetchall()
+                column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+                data, column_names = await collect_async_rows(
+                    cast("list[Any] | None", fetched_data),
+                    cursor.description,
+                    self.driver_features,
+                    column_names=column_names,
+                    requires_lob_coercion=requires_lob_coercion,
+                )
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=len(data),
+                    row_format="tuple",
+                    compiled_sql=wire_sql,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return cast("SQLResult", DMLResult(cached.operation_type, affected_rows))
 
     def _connection_in_transaction(self) -> bool:
         """Report whether a transaction is open on the connection.
