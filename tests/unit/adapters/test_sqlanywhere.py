@@ -1007,3 +1007,32 @@ def test_sqlanywhere_reconcile_end_to_end_orchestrators() -> None:
     assert any('"adk_memory"' in stmt for stmt in executed)
     assert any('"idx_adk_session_app_user"' in stmt for stmt in executed)
     assert any('"idx_adk_memory_session"' in stmt for stmt in executed)
+
+
+def test_sqlanywhere_replica_derivation_preserves_pool_options_and_replaces_aliases() -> None:
+    def connection_hook(connection: SqlanywhereConnection) -> None:
+        del connection
+
+    source = {"host": "writer", "port": 2638, "user": "dba", "database": "app", "pool_max_size": 12}
+    primary = SqlanywhereConfig(
+        connection_config=source, driver_features={"on_connection_create": connection_hook}, replicas=True
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    assert replica.connection_config["nodetype"] == "READONLY"
+    derived = primary.derive_pool(host="reader", port=2639, user="reporter")
+    assert derived.connection_config["links"] == "tcpip(host=reader;port=2639)"
+    assert derived.connection_config["uid"] == "reporter"
+    assert derived.connection_config["dbn"] == "app"
+    assert source["user"] == "dba"
+    assert getattr(derived, "_pool_max_size") == 12
+    assert getattr(derived, "_user_connection_hook") is connection_hook
+
+
+@pytest.mark.parametrize("arguments", [("25006", -757), ("25006", 757), ("25006", "read-only transaction")])
+def test_sqlanywhere_readonly_errors_preserve_native_cause(arguments: tuple[object, ...]) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    native = Exception(*arguments)
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native

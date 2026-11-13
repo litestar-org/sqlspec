@@ -1,6 +1,8 @@
 """SAP SQL Anywhere database configuration."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereConnection,
@@ -8,7 +10,12 @@ from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereRawCursor,
     SqlanywhereSessionContext,
 )
-from sqlspec.adapters.sqlanywhere.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sqlanywhere.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    merge_sqlanywhere_derive_overrides,
+)
 from sqlspec.adapters.sqlanywhere.driver import SqlanywhereDriver, SqlanywhereExceptionHandler
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.adapters.sqlanywhere.pool import SqlanywhereConnectionPool
@@ -36,6 +43,8 @@ __all__ = (
 class SqlanywhereConnectionParams(TypedDict):
     """SAP SQL Anywhere connection parameters."""
 
+    nodetype: NotRequired[str]
+    """SQL Anywhere mirror node role, including READONLY."""
     uid: NotRequired[str]
     """User ID / login name for authentication."""
     user: NotRequired[str]
@@ -192,6 +201,43 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
             observability_config=observability_config,
             **kwargs,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        merged = merge_sqlanywhere_derive_overrides(self.connection_config, overrides)
+        config.update(merged)
+        for key in ("uid", "pwd", "dbn", "eng", "host", "port", "links"):
+            if key not in merged:
+                config.pop(key, None)
+        for key, value in (
+            ("pool_min_size", self._pool_min_size),
+            ("pool_max_size", self._pool_max_size),
+            ("pool_timeout", self._pool_timeout),
+            ("pool_recycle_seconds", self._pool_recycle_seconds),
+            ("health_check_interval", self._health_check_interval),
+        ):
+            config.setdefault(key, value)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            return {"nodetype": "READONLY"}
+        if isinstance(spec_input, str):
+            parsed = urlsplit(spec_input if "://" in spec_input else f"sqlanywhere://{spec_input}")
+            connection: dict[str, Any] = {"nodetype": "READONLY", "host": parsed.hostname}
+            if parsed.port is not None:
+                connection["port"] = parsed.port
+            if parsed.username is not None:
+                connection["uid"] = unquote(parsed.username)
+            if parsed.password is not None:
+                connection["pwd"] = unquote(parsed.password)
+            if parsed.path.strip("/"):
+                connection["dbn"] = unquote(parsed.path.strip("/"))
+            return {"connection_config_overrides": connection}
+        result = dict(spec_input)
+        result.setdefault("nodetype", "READONLY")
+        return result
 
     def create_connection(self) -> "SqlanywhereConnection":
         """Open a standalone SAP SQL Anywhere connection owned by the caller."""

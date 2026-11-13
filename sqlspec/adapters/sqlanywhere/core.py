@@ -17,6 +17,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -45,6 +46,7 @@ __all__ = (
     "escape_sql_literal",
     "extract_sqlstate_and_sqlcode",
     "format_identifier",
+    "merge_sqlanywhere_derive_overrides",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "quote_double_identifier",
@@ -220,6 +222,41 @@ def apply_driver_features(
     return statement_config, features
 
 
+def merge_sqlanywhere_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge reader overrides without allowing inherited native aliases to shadow them."""
+    config = {**base_config, **overrides}
+    for canonical, aliases in (
+        ("uid", ("user", "username")),
+        ("pwd", ("password",)),
+        ("dbn", ("database", "db")),
+        ("eng", ("server", "engine", "server_name")),
+    ):
+        if canonical not in overrides and any(key in overrides for key in aliases):
+            config.pop(canonical, None)
+    if "links" in overrides:
+        config.pop("host", None)
+        config.pop("port", None)
+    elif "host" in overrides or "port" in overrides:
+        inherited_host = str(base_config.get("host", "localhost"))
+        inherited_parts = inherited_host.rsplit(":", 1)
+        host = str(overrides.get("host", inherited_parts[0]))
+        host_parts = host.rsplit(":", 1)
+        if host_parts[1:] and host_parts[1].isdigit():
+            host = host_parts[0]
+            inherited_port = int(host_parts[1])
+        else:
+            inherited_port = (
+                int(inherited_parts[1])
+                if inherited_parts[1:] and inherited_parts[1].isdigit()
+                else DEFAULT_SQLANYWHERE_PORT
+            )
+        port = overrides.get("port", inherited_port)
+        config.pop("host", None)
+        config.pop("port", None)
+        config["links"] = f"tcpip(host={host};port={port})"
+    return config
+
+
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     """Normalize connection config into ``sqlanydb.connect(**kwargs)`` parameters.
 
@@ -358,6 +395,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     """Map a sqlanydb exception into the SQLSpec exception hierarchy."""
     _ = logger
     sqlstate, sqlcode = extract_sqlstate_and_sqlcode(error)
+    if sqlcode in {-757, 757} or sqlstate == "25006":
+        return _create_error(error, sqlcode, sqlstate, ReadOnlyTransactionError, "read-only transaction")
 
     if sqlcode is not None and sqlcode in _SQLCODE_MAPPING:
         exc_cls, label = _SQLCODE_MAPPING[sqlcode]
