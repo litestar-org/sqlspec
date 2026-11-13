@@ -1,13 +1,19 @@
 """OracleDB database configuration with direct field-based configuration."""
 
 import contextlib
-from collections.abc import Awaitable, Callable, Mapping
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from inspect import isawaitable
 from pathlib import Path
 from ssl import TLSVersion
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypeAlias, TypedDict, cast
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers
+from sqlspec.adapters.oracledb._plugins import (
+    OraclePluginName,
+    ensure_oracle_config_plugins,
+    refresh_oracle_config_cache,
+)
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -26,10 +32,12 @@ from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers
 from sqlspec.adapters.oracledb.core import (
     VALID_ORACLE_DRIVER_FEATURE_KEYS,
+    OracleAcquireOptions,
     OracleEndpoint,
     OracleSessionContextConfig,
     OracleTopologyConfig,
     apply_driver_features,
+    apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
     build_connection_config,
     default_statement_config,
@@ -38,8 +46,13 @@ from sqlspec.adapters.oracledb.core import (
     execute_session_release_async,
     execute_session_release_sync,
     extract_oracle_wallet_zip,
+    extract_static_alter_session_config,
+    has_callable_alter_session_fields,
     release_extracted_wallet_dir,
     retain_extracted_wallet_dir,
+    synthesize_session_state_tag,
+    validate_oracle_drcp_and_mode_constraints,
+    validate_oracle_session_callback,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracleVersionCache,
@@ -85,10 +98,13 @@ __all__ = (
     "OracleConnectionParams",
     "OracleDriverFeatures",
     "OracleEndpoint",
+    "OraclePoolBoundary",
     "OraclePoolParams",
+    "OraclePurityInput",
     "OracleSessionContextConfig",
     "OracleSyncConfig",
     "OracleTopologyConfig",
+    "OracleTransactionPriority",
 )
 
 
@@ -99,7 +115,10 @@ OracleServerType = Literal["dedicated", "shared", "pooled"]
 OraclePoolBoundary = Literal["statement", "transaction"]
 OracleVectorReturnFormat = Literal["array", "list", "numpy"]
 OracleEventsBackend = Literal["aq", "poll_queue", "txeventq"]
+OraclePurityInput: TypeAlias = Purity | Literal["DEFAULT", "NEW", "SELF"] | int
+OracleTransactionPriority: TypeAlias = Literal["DEFAULT", "LOW", "MEDIUM", "HIGH"]
 _ORACLE_VECTOR_MIN_MAJOR = 23
+logger = logging.getLogger(__name__)
 
 
 class OracleConnectionParams(TypedDict):
@@ -177,6 +196,12 @@ class OracleConnectionParams(TypedDict):
     """Allow acquiring a pooled connection with a different tag when an exact match is unavailable."""
     appcontext: NotRequired[list[OracleAppContext]]
     """Initial ``(namespace, name, value)`` application context entries set on connect."""
+    sharding_key: NotRequired[Sequence[Any]]
+    """Primary shard key forwarded as native ``shardingkey``."""
+    super_sharding_key: NotRequired[Sequence[Any]]
+    """Super-shard key forwarded as native ``supershardingkey``."""
+    transaction_priority: NotRequired[OracleTransactionPriority]
+    """Priority applied during connection checkout on supported drivers."""
     shardingkey: NotRequired[list[Any]]
     """Primary sharding key values routing the connection to an Oracle shard."""
     supershardingkey: NotRequired[list[Any]]
@@ -256,7 +281,7 @@ class OraclePoolParams(OracleConnectionParams):
     """Maximum milliseconds to wait for an available session under ``POOL_GETMODE_TIMEDWAIT``."""
     max_lifetime_session: NotRequired[int]
     """Maximum lifetime in seconds before a pooled session is retired."""
-    session_callback: NotRequired[Callable[..., Any]]
+    session_callback: NotRequired[Callable[..., Any] | str]
     """Callback ``(connection, requested_tag)`` invoked when a pooled session is acquired."""
     max_sessions_per_shard: NotRequired[int]
     """Maximum pooled sessions allocated to any single Oracle shard."""
@@ -271,9 +296,15 @@ class OraclePoolParams(OracleConnectionParams):
 class OracleDriverFeatures(TypedDict):
     """Oracle driver feature flags controlling VECTOR/UUID codecs, LOB coercion, and enterprise hooks.
 
-    Native async pipeline execution is runtime-gated on Oracle Database 26ai+ in Thin mode and can be disabled via ``SQLSPEC_ORACLE_DISABLE_PIPELINE``.
+    Native async pipeline execution is runtime-gated on Oracle Database 23ai/26ai+ in Thin mode and opted out via ``stack_native_disabled``.
     """
 
+    plugins: NotRequired[Sequence[OraclePluginName | str]]
+    """Optional cloud configuration or token plugins imported lazily."""
+    params_hooks: NotRequired[Sequence[Callable[[Any], None]]]
+    """Native parameter hooks registered idempotently before connecting."""
+    enable_auto_state_tagging: NotRequired[bool]
+    """Synthesize and reuse Thick pool session state tags (defaults to True)."""
     enable_numpy_vectors: NotRequired[bool]
     """Register bidirectional NumPy ``ndarray`` handlers for Oracle 23ai+ ``VECTOR`` columns (defaults to ``True`` when NumPy is installed)."""
     enable_lowercase_column_names: NotRequired[bool]
@@ -338,6 +369,7 @@ def _build_standalone_connection_params(connection_config: "Mapping[str, Any]") 
     config.pop("thick_mode", None)
     config.pop("lib_dir", None)
     config.pop("soda_metadata_cache", None)
+    config.pop("transaction_priority", None)
     config.pop("min", None)
     config.pop("max", None)
     config.pop("increment", None)
@@ -417,6 +449,12 @@ def _derive_oracle_pool_kwargs(
             new_driver_features[key] = val
         else:
             new_conn_cfg[key] = val
+    if (
+        "tenant_strategy" in new_driver_features
+        and "tenant_strategy" not in (driver_features_overrides or {})
+        and "tenant_strategy" not in overrides
+    ):
+        new_driver_features["tenant_strategy"] = source_config._raw_tenant_strategy
     return {
         "connection_config": new_conn_cfg,
         "connection_instance": None,
@@ -435,72 +473,141 @@ def _derive_oracle_pool_kwargs(
     }
 
 
+def _oracle_checkout_state(
+    config: Any, pool: Any, connection: Any, options: OracleAcquireOptions
+) -> tuple[str | None, bool, Any]:
+    """Resolve checkout state without touching Thin connection tags."""
+    hook = config.driver_features.get("session_context_hook")
+    desired = None
+    skip = False
+    if getattr(connection, "thin", None) is False and config.driver_features.get("enable_auto_state_tagging", True):
+        desired = synthesize_session_state_tag(hook, explicit_tag=options.tag)
+        skip = desired is not None and connection.tag == desired
+    elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
+        skip = True
+    baseline = None
+    priority_type = getattr(oracledb, "TransactionPriority", None)
+    if priority_type is not None:
+        baseline = config.connection_config.get("transaction_priority")
+        if baseline is None:
+            candidate = getattr(connection, "transaction_priority", None)
+            if isinstance(candidate, priority_type):
+                baseline = candidate
+    requested = options.transaction_priority
+    if requested is None:
+        requested = config.connection_config.get("transaction_priority")
+    if requested is not None:
+        apply_oracle_transaction_priority(connection, requested)
+    return desired, skip, baseline
+
+
+def _oracle_cleanup_error(body_error: BaseException | None, cleanup_error: BaseException) -> None:
+    """Preserve an active body exception while recording failed cleanup."""
+    if body_error is not None:
+        body_error.add_note(f"Oracle connection cleanup failed: {cleanup_error}")
+        return
+    raise cleanup_error
+
+
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
-    """Context manager for Oracle sync connections."""
+    """Own one sync checkout and physically discard unverified sessions."""
 
-    __slots__ = ("_conn",)
+    __slots__ = ("_acquire_options", "_conn", "_desired_tag", "_priority_baseline")
 
-    def __init__(self, config: "OracleSyncConfig", tenant_lease: Any = None) -> None:
+    def __init__(
+        self, config: "OracleSyncConfig", tenant_lease: Any = None, acquire_options: OracleAcquireOptions | None = None
+    ) -> None:
         super().__init__(config, tenant_lease)
-        self._conn: OracleSyncConnection | None = None
+        self._conn: Any = None
+        self._desired_tag: str | None = None
+        self._priority_baseline: Any = None
+        self._acquire_options = acquire_options or OracleAcquireOptions()
 
-    def acquire_connection(self) -> "OracleSyncConnection":
+    def acquire_connection(self) -> OracleSyncConnection:
         if self._tenant_lease is not None:
             return cast("OracleSyncConnection", self._tenant_lease.acquire())
-        if self._config.connection_instance is None:
-            self._config.connection_instance = self._config.create_pool()
-        conn = self._config.connection_instance.acquire()
+        pool = self._config.provide_pool()
+        hook = self._config.driver_features.get("session_context_hook")
+        conn = pool.acquire(
+            **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
+        )
         self._conn = conn
-        session_hook = self._config.driver_features.get("session_context_hook")
-        if session_hook is not None:
+        try:
+            self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
+                self._config, pool, conn, self._acquire_options
+            )
+            if hook is not None:
+                execute_session_checkout_sync(conn, hook, skip_alter_session=skip)
+        except BaseException as exc:
+            self._conn = None
             try:
-                execute_session_checkout_sync(conn, session_hook)
-            except BaseException:
-                self._conn = None
-                self._config.connection_instance.release(conn)
-                raise
+                pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            raise
         return cast("OracleSyncConnection", conn)
 
-    def release_connection(self, _conn: "OracleSyncConnection | None" = None, **kwargs: Any) -> None:
+    def release_connection(self, _conn: Any = None, **kwargs: Any) -> None:
         if self._tenant_lease is not None:
             self._tenant_lease.release(_conn, **kwargs)
             return
-        if self._conn is None:
+        conn, self._conn = self._conn, None
+        if conn is None:
             return
-        conn = self._conn
-        self._conn = None
-        session_hook = self._config.driver_features.get("session_context_hook")
+        pool = self._config.connection_instance
+        body_error = kwargs.get("exc_val")
         try:
-            if session_hook is not None:
-                execute_session_release_sync(conn, session_hook)
-        finally:
-            if self._config.connection_instance:
-                self._config.connection_instance.release(conn)
+            if kwargs.get("exc_type") is not None:
+                conn.rollback()
+            hook = self._config.driver_features.get("session_context_hook")
+            if hook is not None:
+                execute_session_release_sync(conn, hook)
+            if self._priority_baseline is not None:
+                apply_oracle_transaction_priority(conn, self._priority_baseline)
+        except BaseException as exc:
+            if kwargs.get("exc_type") is None:
+                try:
+                    conn.rollback()
+                except BaseException as rollback_error:
+                    exc.add_note(f"Oracle rollback failed: {rollback_error}")
+            try:
+                pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(body_error, exc)
+            return
+        release_kwargs = (
+            {"tag": self._desired_tag} if self._desired_tag is not None and getattr(conn, "thin", None) is False else {}
+        )
+        try:
+            pool.release(conn, **release_kwargs)
+        except BaseException as exc:
+            try:
+                pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(body_error, exc)
 
-    def __enter__(self) -> "OracleSyncConnection":
+    def __enter__(self) -> OracleSyncConnection:
         return self.acquire_connection()
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> bool | None:
-        if self._conn is not None and exc_type is not None:
-            with contextlib.suppress(Exception):
-                self._conn.rollback()
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: "TracebackType | None"
+    ) -> None:
         self.release_connection(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-        return None
 
 
 class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
-    def __init__(self, config: "OracleSyncConfig") -> None:
+    def __init__(self, config: "OracleSyncConfig", acquire_options: OracleAcquireOptions | None = None) -> None:
         super().__init__(config)
-        self._ctx = OracleSyncConnectionContext(config, self._tenant_lease)
+        self._ctx = OracleSyncConnectionContext(config, self._tenant_lease, acquire_options)
 
-    def acquire_connection(self) -> "OracleSyncConnection":
+    def acquire_connection(self) -> OracleSyncConnection:
         return cast("OracleSyncConnection", self._ctx.acquire_connection())
 
-    def release_connection(self, _conn: "OracleSyncConnection", **kwargs: Any) -> None:
+    def release_connection(self, _conn: OracleSyncConnection, **kwargs: Any) -> None:
         self._ctx.release_connection(_conn, **kwargs)
 
 
@@ -510,8 +617,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     __slots__ = (
         "_extracted_wallet_dir",
         "_oracle_version_cache",
+        "_owns_pool_session_callback",
         "_pool_session_callback",
+        "_raw_tenant_strategy",
         "_tenant_source_hook",
+        "_thin_sharding_warned",
         "_user_connection_hook",
     )
 
@@ -563,37 +673,158 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             **kwargs: Additional keyword arguments.
         """
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
-        self._extracted_wallet_dir: Path | None = None
-        self._oracle_version_cache = OracleVersionCache()
-        self._pool_session_callback = cast(
-            "Callable[[OracleSyncConnection, str], None] | None", connection_config.pop("session_callback", None)
-        )
-        statement_config = statement_config or default_statement_config
-        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-        features_dict = dict(driver_features) if driver_features else {}
-        self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
-        self._user_connection_hook: Callable[[OracleSyncConnection, str], None] | None = features_dict.pop(
-            "on_connection_create", None
-        )
+        try:
+            self._extracted_wallet_dir: Path | None = None
+            self._oracle_version_cache = OracleVersionCache()
+            self._owns_pool_session_callback = False
+            self._thin_sharding_warned = False
+            self._pool_session_callback = validate_oracle_session_callback(
+                connection_config.pop("session_callback", None), is_thin_mode=False
+            )
+            statement_config = statement_config or default_statement_config
+            statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+            features_dict = dict(driver_features) if driver_features else {}
+            self._raw_tenant_strategy: Any = features_dict.get("tenant_strategy")
+            self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
+            self._user_connection_hook: Callable[[OracleSyncConnection, str], None] | None = features_dict.pop(
+                "on_connection_create", None
+            )
 
-        super().__init__(
-            connection_config=connection_config,
-            connection_instance=connection_instance,
-            migration_config=migration_config,
-            statement_config=statement_config,
-            driver_features=features_dict,
-            bind_key=bind_key,
-            extension_config=extension_config,
-            **kwargs,
+            ensure_oracle_config_plugins(
+                dsn=connection_config.get("dsn"),
+                plugins=features_dict.get("plugins"),
+                params_hooks=features_dict.get("params_hooks"),
+            )
+            super().__init__(
+                connection_config=connection_config,
+                connection_instance=connection_instance,
+                migration_config=migration_config,
+                statement_config=statement_config,
+                driver_features=features_dict,
+                bind_key=bind_key,
+                extension_config=extension_config,
+                **kwargs,
+            )
+            bound_strategy = bind_oracle_tenant_hook(
+                self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+            )
+            if bound_strategy is not None:
+                self.driver_features["tenant_strategy"] = bound_strategy
+            self.connection_config = validate_oracle_drcp_and_mode_constraints(
+                self.connection_config, self.driver_features
+            )
+            if pending_wallet_dir is not None:
+                self._extracted_wallet_dir = pending_wallet_dir
+                retain_extracted_wallet_dir(pending_wallet_dir)
+        except BaseException:
+            if pending_wallet_dir is not None:
+                retain_extracted_wallet_dir(pending_wallet_dir)
+                release_extracted_wallet_dir(pending_wallet_dir)
+            raise
+
+    def refresh_config_cache(self, *, dsn: str | None = None, remove_permanently: bool = False) -> None:
+        """Expire centralized provider configuration for this pool's DSN."""
+        resolved = dsn if dsn is not None else self.connection_config.get("dsn")
+        if not isinstance(resolved, str) or not resolved:
+            msg = "refresh_config_cache requires a configured DSN or an explicit dsn"
+            raise ImproperConfigurationError(msg)
+        refresh_oracle_config_cache(resolved, remove_permanently=remove_permanently)
+
+    def _warn_if_thin_sharding(self, pool: Any, options: OracleAcquireOptions) -> None:
+        if (
+            not self._thin_sharding_warned
+            and getattr(pool, "thin", None) is not False
+            and (
+                options.sharding_key is not None
+                or self.connection_config.get("shardingkey")
+                or self.connection_config.get("max_sessions_per_shard")
+            )
+        ):
+            logger.warning(
+                "Oracle Thin mode ignores sharding keys and max_sessions_per_shard; use Thick mode for shard routing"
+            )
+            self._thin_sharding_warned = True
+
+    def _build_pool_acquire_kwargs(
+        self, options: OracleAcquireOptions | None = None, *, pool: Any = None, session_hook: Any = None
+    ) -> dict[str, Any]:
+        options = options or OracleAcquireOptions()
+        self._warn_if_thin_sharding(pool, options)
+        result: dict[str, Any] = {}
+        for attr, key in (
+            ("sharding_key", "shardingkey"),
+            ("super_sharding_key", "supershardingkey"),
+            ("cclass", "cclass"),
+            ("purity", "purity"),
+        ):
+            value = getattr(options, attr)
+            if value is not None:
+                result[key] = value
+        if getattr(pool, "thin", None) is False:
+            if options.tag is not None:
+                result["tag"] = options.tag
+                result["matchanytag"] = options.match_any_tag
+            elif self.driver_features.get("enable_auto_state_tagging", True):
+                desired = synthesize_session_state_tag(session_hook)
+                if desired is not None:
+                    result.update(tag=desired, matchanytag=True)
+            elif options.match_any_tag:
+                result["matchanytag"] = True
+        return result
+
+    def _provide_connection_impl(
+        self,
+        *args: Any,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: OraclePurityInput | None = None,
+        transaction_priority: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        options = OracleAcquireOptions(
+            sharding_key=sharding_key,
+            super_sharding_key=super_sharding_key,
+            tag=tag,
+            match_any_tag=match_any_tag,
+            cclass=cclass,
+            purity=purity,
+            transaction_priority=transaction_priority,
         )
-        bound_strategy = bind_oracle_tenant_hook(
-            self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+        return OracleSyncConnectionContext(self, acquire_options=options)
+
+    def _provide_session_impl(
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: OraclePurityInput | None = None,
+        transaction_priority: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        options = OracleAcquireOptions(
+            sharding_key=sharding_key,
+            super_sharding_key=super_sharding_key,
+            tag=tag,
+            match_any_tag=match_any_tag,
+            cclass=cclass,
+            purity=purity,
+            transaction_priority=transaction_priority,
         )
-        if bound_strategy is not None:
-            self.driver_features["tenant_strategy"] = bound_strategy
-        if pending_wallet_dir is not None:
-            self._extracted_wallet_dir = pending_wallet_dir
-            retain_extracted_wallet_dir(pending_wallet_dir)
+        handler = _OracleSyncSessionConnectionHandler(self, acquire_options=options)
+        return self._session_context_class(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleSyncIdentifierStrategy(self._tenant_source_hook)
@@ -606,6 +837,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """
         self._require_leased_tenant_connection()
         _initialize_oracle_client(self.connection_config)
+        validate_oracle_session_callback(self._pool_session_callback, is_thin_mode=bool(oracledb.is_thin_mode()))
         config = _build_standalone_connection_params(self.connection_config)
         conn = oracledb.connect(**config)
         try:
@@ -680,7 +912,12 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
+            "OracleAcquireOptions": OracleAcquireOptions,
+            "OraclePluginName": OraclePluginName,
+            "OraclePoolBoundary": OraclePoolBoundary,
             "OraclePoolParams": OraclePoolParams,
+            "OraclePurityInput": OraclePurityInput,
+            "OracleTransactionPriority": OracleTransactionPriority,
             "OracleSessionContextConfig": OracleSessionContextConfig,
             "OracleSyncConnectionContext": OracleSyncConnectionContext,
             "OracleSyncConnection": OracleSyncConnection,
@@ -708,7 +945,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         apply_wallet_ssl_context(config)
 
         config.pop("threaded", None)
+        validate_oracle_session_callback(self._pool_session_callback, is_thin_mode=bool(oracledb.is_thin_mode()))
+        config.pop("transaction_priority", None)
         config["session_callback"] = self._init_connection
+        self._owns_pool_session_callback = True
 
         return oracledb.create_pool(**config)
 
@@ -741,7 +981,21 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
-        if self._pool_session_callback is not None:
+        if (
+            self._owns_pool_session_callback
+            and getattr(connection, "thin", None) is not False
+            and not self.driver_features.get("tenant_strategy")
+        ):
+            static_hook = extract_static_alter_session_config(self.driver_features.get("session_context_hook"))
+            if static_hook is not None:
+                execute_session_checkout_sync(connection, static_hook)
+        if isinstance(self._pool_session_callback, str):
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"BEGIN {self._pool_session_callback}(:requested_tag, :actual_tag); END;",
+                    {"requested_tag": tag, "actual_tag": connection.tag},
+                )
+        elif self._pool_session_callback is not None:
             self._pool_session_callback(connection, tag)
 
         if self._user_connection_hook is not None:
@@ -760,6 +1014,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
                 self.connection_instance.close()
                 self.connection_instance = None
             self._oracle_version_cache.reset()
+            self._owns_pool_session_callback = False
+            self._thin_sharding_warned = False
         finally:
             if self._extracted_wallet_dir is not None:
                 wallet_dir = self._extracted_wallet_dir
@@ -768,69 +1024,96 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
 
 
 class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
-    """Async context manager for Oracle connections."""
+    """Own one async checkout and physically discard unverified sessions."""
 
-    __slots__ = ()
+    __slots__ = ("_acquire_options", "_desired_tag", "_priority_baseline")
+
+    def __init__(
+        self, config: "OracleAsyncConfig", acquire_options: OracleAcquireOptions | None = None, tenant_lease: Any = None
+    ) -> None:
+        super().__init__(config)
+        if tenant_lease is not None:
+            self._tenant_lease = tenant_lease
+        self._acquire_options = acquire_options or OracleAcquireOptions()
+        self._desired_tag: str | None = None
+        self._priority_baseline: Any = None
 
     async def __aenter__(self) -> Any:
         if self._tenant_lease is not None:
             return await self._tenant_lease.acquire()
-        conn = await super().__aenter__()
-        session_hook = self._config.driver_features.get("session_context_hook")
-        if session_hook is not None:
+        pool = await self._config.provide_pool()
+        self._pool = pool
+        hook = self._config.driver_features.get("session_context_hook")
+        conn = await pool.acquire(
+            **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
+        )
+        self._connection = conn
+        try:
+            self._desired_tag, skip, self._priority_baseline = _oracle_checkout_state(
+                self._config, pool, conn, self._acquire_options
+            )
+            if hook is not None:
+                await execute_session_checkout_async(conn, hook, skip_alter_session=skip)
+        except BaseException as exc:
+            self._connection = None
+            self._pool = None
             try:
-                await execute_session_checkout_async(conn, session_hook)
-            except BaseException:
-                await super().__aexit__(None, None, None)
-                raise
+                await pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            raise
         return conn
 
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
-    ) -> "bool | None":
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
         if self._tenant_lease is not None:
             await self._tenant_lease.release(exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            return None
-        conn = self._connection
-        if conn is not None and exc_type is not None:
-            with contextlib.suppress(Exception):
-                await conn.rollback()
-        session_hook = self._config.driver_features.get("session_context_hook") if conn is not None else None
+            return
+        conn, self._connection = self._connection, None
+        pool, self._pool = self._pool, None
+        if conn is None:
+            return
         try:
-            if conn is not None and session_hook is not None:
-                await execute_session_release_async(conn, session_hook)
-        finally:
-            await super().__aexit__(exc_type, exc_val, exc_tb)
-        return None
+            if exc_type is not None:
+                await conn.rollback()
+            hook = self._config.driver_features.get("session_context_hook")
+            if hook is not None:
+                await execute_session_release_async(conn, hook)
+            if self._priority_baseline is not None:
+                apply_oracle_transaction_priority(conn, self._priority_baseline)
+        except BaseException as exc:
+            if exc_type is None:
+                try:
+                    await conn.rollback()
+                except BaseException as rollback_error:
+                    exc.add_note(f"Oracle rollback failed: {rollback_error}")
+            try:
+                await pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(exc_val, exc)
+            return
+        try:
+            await pool.release(conn)
+        except BaseException as exc:
+            try:
+                await pool.drop(conn)
+            except BaseException as drop_error:
+                exc.add_note(f"Oracle connection disposal failed: {drop_error}")
+            _oracle_cleanup_error(exc_val, exc)
 
 
 class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
-    __slots__ = ()
+    __slots__ = ("_ctx",)
+
+    def __init__(self, config: "OracleAsyncConfig", acquire_options: OracleAcquireOptions | None = None) -> None:
+        super().__init__(config)
+        self._ctx = OracleAsyncConnectionContext(config, acquire_options, self._tenant_lease)
 
     async def acquire_connection(self) -> Any:
-        if self._tenant_lease is not None:
-            return await self._tenant_lease.acquire()
-        conn = await super().acquire_connection()
-        session_hook = self._config.driver_features.get("session_context_hook")
-        if session_hook is not None:
-            try:
-                await execute_session_checkout_async(conn, session_hook)
-            except BaseException:
-                await super().release_connection(conn)
-                raise
-        return conn
+        return await self._ctx.__aenter__()
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
-        if self._tenant_lease is not None:
-            await self._tenant_lease.release(_conn, **kwargs)
-            return
-        conn = self._connection
-        session_hook = self._config.driver_features.get("session_context_hook") if conn is not None else None
-        try:
-            if conn is not None and session_hook is not None:
-                await execute_session_release_async(conn, session_hook)
-        finally:
-            await super().release_connection(_conn, **kwargs)
+        await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
@@ -839,8 +1122,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     __slots__ = (
         "_extracted_wallet_dir",
         "_oracle_version_cache",
+        "_owns_pool_session_callback",
         "_pool_session_callback",
+        "_raw_tenant_strategy",
         "_tenant_source_hook",
+        "_thin_sharding_warned",
         "_user_connection_hook",
     )
 
@@ -894,38 +1180,159 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             **kwargs: Additional keyword arguments.
         """
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
-        self._extracted_wallet_dir: Path | None = None
-        self._oracle_version_cache = OracleVersionCache()
-        self._pool_session_callback = cast(
-            "Callable[[OracleAsyncConnection, str], Any] | None", connection_config.pop("session_callback", None)
-        )
+        try:
+            self._extracted_wallet_dir: Path | None = None
+            self._oracle_version_cache = OracleVersionCache()
+            self._owns_pool_session_callback = False
+            self._thin_sharding_warned = False
+            self._pool_session_callback = validate_oracle_session_callback(
+                connection_config.pop("session_callback", None), is_thin_mode=True
+            )
 
-        statement_config = statement_config or default_statement_config
-        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-        features_dict = dict(driver_features) if driver_features else {}
-        self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
-        self._user_connection_hook: Callable[[OracleAsyncConnection, str], Awaitable[None]] | None = features_dict.pop(
-            "on_connection_create", None
-        )
+            statement_config = statement_config or default_statement_config
+            statement_config, driver_features = apply_driver_features(statement_config, driver_features)
+            features_dict = dict(driver_features) if driver_features else {}
+            self._raw_tenant_strategy: Any = features_dict.get("tenant_strategy")
+            self._tenant_source_hook: OracleSessionContextConfig | None = features_dict.get("session_context_hook")
+            self._user_connection_hook: Callable[[OracleAsyncConnection, str], Awaitable[None]] | None = (
+                features_dict.pop("on_connection_create", None)
+            )
 
-        super().__init__(
-            connection_config=connection_config,
-            connection_instance=connection_instance,
-            migration_config=migration_config,
-            statement_config=statement_config,
-            driver_features=features_dict,
-            bind_key=bind_key,
-            extension_config=extension_config,
-            **kwargs,
+            ensure_oracle_config_plugins(
+                dsn=connection_config.get("dsn"),
+                plugins=features_dict.get("plugins"),
+                params_hooks=features_dict.get("params_hooks"),
+            )
+            super().__init__(
+                connection_config=connection_config,
+                connection_instance=connection_instance,
+                migration_config=migration_config,
+                statement_config=statement_config,
+                driver_features=features_dict,
+                bind_key=bind_key,
+                extension_config=extension_config,
+                **kwargs,
+            )
+            bound_strategy = bind_oracle_tenant_hook(
+                self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+            )
+            if bound_strategy is not None:
+                self.driver_features["tenant_strategy"] = bound_strategy
+            self.connection_config = validate_oracle_drcp_and_mode_constraints(
+                self.connection_config, self.driver_features
+            )
+            if pending_wallet_dir is not None:
+                self._extracted_wallet_dir = pending_wallet_dir
+                retain_extracted_wallet_dir(pending_wallet_dir)
+        except BaseException:
+            if pending_wallet_dir is not None:
+                retain_extracted_wallet_dir(pending_wallet_dir)
+                release_extracted_wallet_dir(pending_wallet_dir)
+            raise
+
+    def refresh_config_cache(self, *, dsn: str | None = None, remove_permanently: bool = False) -> None:
+        """Expire centralized provider configuration for this pool's DSN."""
+        resolved = dsn if dsn is not None else self.connection_config.get("dsn")
+        if not isinstance(resolved, str) or not resolved:
+            msg = "refresh_config_cache requires a configured DSN or an explicit dsn"
+            raise ImproperConfigurationError(msg)
+        refresh_oracle_config_cache(resolved, remove_permanently=remove_permanently)
+
+    def _warn_if_thin_sharding(self, pool: Any, options: OracleAcquireOptions) -> None:
+        if (
+            not self._thin_sharding_warned
+            and getattr(pool, "thin", None) is not False
+            and (
+                options.sharding_key is not None
+                or self.connection_config.get("shardingkey")
+                or self.connection_config.get("max_sessions_per_shard")
+            )
+        ):
+            logger.warning(
+                "Oracle Thin mode ignores sharding keys and max_sessions_per_shard; use Thick mode for shard routing"
+            )
+            self._thin_sharding_warned = True
+
+    def _build_pool_acquire_kwargs(
+        self, options: OracleAcquireOptions | None = None, *, pool: Any = None, session_hook: Any = None
+    ) -> dict[str, Any]:
+        options = options or OracleAcquireOptions()
+        self._warn_if_thin_sharding(pool, options)
+        result: dict[str, Any] = {}
+        for attr, key in (
+            ("sharding_key", "shardingkey"),
+            ("super_sharding_key", "supershardingkey"),
+            ("cclass", "cclass"),
+            ("purity", "purity"),
+        ):
+            value = getattr(options, attr)
+            if value is not None:
+                result[key] = value
+        if getattr(pool, "thin", None) is False:
+            if options.tag is not None:
+                result["tag"] = options.tag
+                result["matchanytag"] = options.match_any_tag
+            elif self.driver_features.get("enable_auto_state_tagging", True):
+                desired = synthesize_session_state_tag(session_hook)
+                if desired is not None:
+                    result.update(tag=desired, matchanytag=True)
+            elif options.match_any_tag:
+                result["matchanytag"] = True
+        return result
+
+    def _provide_connection_impl(
+        self,
+        *args: Any,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: OraclePurityInput | None = None,
+        transaction_priority: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        options = OracleAcquireOptions(
+            sharding_key=sharding_key,
+            super_sharding_key=super_sharding_key,
+            tag=tag,
+            match_any_tag=match_any_tag,
+            cclass=cclass,
+            purity=purity,
+            transaction_priority=transaction_priority,
         )
-        bound_strategy = bind_oracle_tenant_hook(
-            self.driver_features.get("tenant_strategy"), self.driver_features.get("session_context_hook")
+        return OracleAsyncConnectionContext(self, acquire_options=options)
+
+    def _provide_session_impl(
+        self,
+        *args: Any,
+        statement_config: "StatementConfig | None" = None,
+        sharding_key: Sequence[Any] | None = None,
+        super_sharding_key: Sequence[Any] | None = None,
+        tag: str | None = None,
+        match_any_tag: bool = False,
+        cclass: str | None = None,
+        purity: OraclePurityInput | None = None,
+        transaction_priority: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        options = OracleAcquireOptions(
+            sharding_key=sharding_key,
+            super_sharding_key=super_sharding_key,
+            tag=tag,
+            match_any_tag=match_any_tag,
+            cclass=cclass,
+            purity=purity,
+            transaction_priority=transaction_priority,
         )
-        if bound_strategy is not None:
-            self.driver_features["tenant_strategy"] = bound_strategy
-        if pending_wallet_dir is not None:
-            self._extracted_wallet_dir = pending_wallet_dir
-            retain_extracted_wallet_dir(pending_wallet_dir)
+        handler = _OracleAsyncSessionConnectionHandler(self, acquire_options=options)
+        return self._session_context_class(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
 
     def _default_tenant_strategy(self) -> TenantStrategy:
         return OracleAsyncIdentifierStrategy(self._tenant_source_hook)
@@ -1011,7 +1418,12 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             "OracleConnectionParams": OracleConnectionParams,
             "OracleDriverFeatures": OracleDriverFeatures,
             "OracleEndpoint": OracleEndpoint,
+            "OracleAcquireOptions": OracleAcquireOptions,
+            "OraclePluginName": OraclePluginName,
+            "OraclePoolBoundary": OraclePoolBoundary,
             "OraclePoolParams": OraclePoolParams,
+            "OraclePurityInput": OraclePurityInput,
+            "OracleTransactionPriority": OracleTransactionPriority,
             "OracleSessionContextConfig": OracleSessionContextConfig,
             "OracleSyncConnection": OracleSyncConnection,
             "OracleSyncConnectionPool": OracleSyncConnectionPool,
@@ -1037,7 +1449,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         apply_wallet_ssl_context(config)
 
         config.pop("threaded", None)
+        config.pop("transaction_priority", None)
         config["session_callback"] = self._init_connection
+        self._owns_pool_session_callback = True
 
         return oracledb.create_pool_async(**config)
 
@@ -1070,7 +1484,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
-        if self._pool_session_callback is not None:
+        if self._owns_pool_session_callback and not self.driver_features.get("tenant_strategy"):
+            static_hook = extract_static_alter_session_config(self.driver_features.get("session_context_hook"))
+            if static_hook is not None:
+                await execute_session_checkout_async(connection, static_hook)
+        if callable(self._pool_session_callback):
             session_callback_result = self._pool_session_callback(connection, tag)
             if isawaitable(session_callback_result):
                 await session_callback_result
@@ -1093,6 +1511,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                 await self.connection_instance.close()
                 self.connection_instance = None
             self._oracle_version_cache.reset()
+            self._owns_pool_session_callback = False
+            self._thin_sharding_warned = False
         finally:
             if self._extracted_wallet_dir is not None:
                 wallet_dir = self._extracted_wallet_dir

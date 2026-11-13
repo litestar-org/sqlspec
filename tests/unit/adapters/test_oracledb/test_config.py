@@ -839,6 +839,7 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     cursor_async.execute = AsyncMock(side_effect=rec_async)
     conn_async = MagicMock()
     conn_async.cursor.return_value = cursor_async
+    conn_async.rollback = AsyncMock()
     pool_async = MagicMock()
     pool_async.acquire = AsyncMock(return_value=conn_async)
     pool_async.release = AsyncMock()
@@ -1390,3 +1391,172 @@ def test_oracle_plugins_validation_and_cache_refresh(monkeypatch: pytest.MonkeyP
         _plugins.register_oracle_protocol("", None)
     _plugins.register_oracle_protocol("config-testmissing", None)
     _plugins.register_oracle_protocol("config-testmissing", None)
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_config_refresh_and_derive_rebind(config_type: type[Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    update = Mock()
+    monkeypatch.setattr(oracle_config_module, "refresh_oracle_config_cache", update)
+    config = config_type(connection_config={"dsn": "file://config.json"})
+    config.refresh_config_cache(remove_permanently=True)
+    update.assert_called_once_with("config-file://config.json", remove_permanently=True)
+    with pytest.raises(ImproperConfigurationError):
+        config_type().refresh_config_cache()
+    parent = config_type(driver_features={"tenant_strategy": "identifier", "session_context_hook": {"module": "a"}})
+    child = parent.derive_pool(session_context_hook={"module": "b"})
+    assert child.driver_features["tenant_strategy"].source_hook.module == "b"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_config_drcp_rejects_stateful_statement_boundary(config_type: type[Any]) -> None:
+    for params in [
+        {"pool_boundary": "statement"},
+        {"dsn": "host/service?pool_boundary=statement"},
+        {"dsn": "(DESCRIPTION=(CONNECT_DATA=(POOL_BOUNDARY=STATEMENT)))"},
+    ]:
+        with pytest.raises(ImproperConfigurationError):
+            config_type(connection_config=params, driver_features={"session_context_hook": {"edition": "V2"}})
+    config = config_type(
+        connection_config={"pool_boundary": "STATEMENT"}, driver_features={"session_context_hook": {"module": "api"}}
+    )
+    assert config.connection_config["pool_boundary"] == "statement"
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config={"edition": "V2", "cclass": "APP"})
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("session_mode", [False, True])
+async def test_oracle_checkout_forwards_options_and_restores_priority(async_mode: bool, session_mode: bool) -> None:
+    from oracledb import TransactionPriority
+
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = None
+    connection.transaction_priority = TransactionPriority.MEDIUM
+    pool = MagicMock()
+    pool.thin = False
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        pool.drop = AsyncMock()
+        connection.rollback = AsyncMock()
+        config = OracleAsyncConfig(connection_instance=pool)
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(connection_instance=pool)
+    context = (config.provide_session if session_mode else config.provide_connection)(
+        sharding_key=("tenant",),
+        super_sharding_key=("region",),
+        cclass="APP",
+        purity="SELF",
+        transaction_priority="HIGH",
+    )
+    if async_mode:
+        async with context:
+            assert connection.transaction_priority == TransactionPriority.HIGH
+    else:
+        with context:
+            assert connection.transaction_priority == TransactionPriority.HIGH
+    pool.acquire.assert_called_once_with(
+        shardingkey=["tenant"], supershardingkey=["region"], cclass="APP", purity=Purity.SELF
+    )
+    assert connection.transaction_priority == TransactionPriority.MEDIUM
+    pool.release.assert_called_once_with(connection)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("session_mode", [False, True])
+async def test_oracle_cleanup_failure_drops_and_preserves_body_exception(async_mode: bool, session_mode: bool) -> None:
+    connection = MagicMock()
+    connection.thin = True
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = True
+    hook = OracleSessionContextConfig(client_identifier="user", clear_identifier=True)
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        pool.drop = AsyncMock()
+        connection.rollback = AsyncMock()
+        cursor.execute = AsyncMock(side_effect=[None, RuntimeError("reset failed")])
+        config = OracleAsyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    else:
+        pool.acquire.return_value = connection
+        cursor.execute.side_effect = [None, RuntimeError("reset failed")]
+        config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    context = (config.provide_session if session_mode else config.provide_connection)()
+    with pytest.raises(ValueError, match="body failed") as raised:
+        if async_mode:
+            async with context:
+                raise ValueError("body failed")
+        else:
+            with context:
+                raise ValueError("body failed")
+    assert "reset failed" in raised.value.__notes__[0]
+    connection.rollback.assert_called_once_with()
+    pool.drop.assert_called_once_with(connection)
+    pool.release.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_thin_checkout_never_accesses_tag(async_mode: bool) -> None:
+    class ThinConnection:
+        thin = True
+        version = "23.0"
+        transaction_priority = None
+
+        @property
+        def tag(self) -> str:
+            msg = "Thin tag must not be read"
+            raise AssertionError(msg)
+
+    connection = ThinConnection()
+    pool = MagicMock()
+    pool.thin = True
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        config = OracleAsyncConfig(connection_instance=pool)
+        async with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
+            assert acquired is connection
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(connection_instance=pool)
+        with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
+            assert acquired is connection
+    pool.acquire.assert_called_once_with()
+    pool.release.assert_called_once_with(connection)
+
+
+def test_thick_warm_tag_skips_alter_session_and_retags() -> None:
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = "EDITION=V2;TIME_ZONE=UTC"
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire.return_value = connection
+    hook = OracleSessionContextConfig(edition="V2", time_zone="UTC", module="api", client_identifier="user")
+    config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    with config.provide_connection():
+        assert connection.module == "api"
+        assert connection.client_identifier == "user"
+    cursor.execute.assert_not_called()
+    pool.acquire.assert_called_once_with(tag="EDITION=V2;TIME_ZONE=UTC", matchanytag=True)
+    pool.release.assert_called_once_with(connection, tag="EDITION=V2;TIME_ZONE=UTC")
+
+
+@pytest.mark.parametrize("callback", ["", "pkg.proc; DROP TABLE t", "a.b.c.d"])
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_plsql_session_callback_rejects_invalid_names(callback: str, config_type: type[Any]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config={"session_callback": callback})
+
+
+def test_async_rejects_plsql_session_callback() -> None:
+    with pytest.raises(ImproperConfigurationError):
+        OracleAsyncConfig(connection_config={"session_callback": "app_pkg.initialize"})
