@@ -47,6 +47,11 @@ class SanicConfigState:
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "sanic"
+    read_session_key: str = "read_session"
+    read_connection_key: str = "read_connection"
+    read_pool_key: str = "read_pool"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate transaction status overrides and tenant extractor callability."""

@@ -319,7 +319,7 @@ def test_fastapi_deferred_tenant_depends_skips_public_routes_and_handles_transac
         assert checkouts[1].commits == []
         assert checkouts[1].rollbacks == ["acme"]
 
-    with TestClient(app, raise_server_exceptions=True) as strict_client, pytest.raises(TenantContextError):
-        strict_client.get("/unguarded")
+    with TestClient(app, raise_server_exceptions=True) as strict_client:
+        assert strict_client.get("/unguarded").status_code == 401
     assert len(checkouts) == 2
     assert TenantContext.get() is None
