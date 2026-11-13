@@ -54,7 +54,7 @@ if TYPE_CHECKING:
         Update,
         sql,
     )
-    from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+    from sqlspec.config import AsyncDatabaseConfig, ReadReplicaGroup, SyncDatabaseConfig
     from sqlspec.core import (
         SQL,
         ArrowResult,
@@ -86,7 +86,13 @@ if TYPE_CHECKING:
         RoundRobinSelector,
         SelectionStrategy,
     )
-    from sqlspec.driver import AsyncDriverAdapterBase, ExecutionResult, SyncDriverAdapterBase
+    from sqlspec.driver import (
+        AsyncDriverAdapterBase,
+        AsyncRoutingSession,
+        ExecutionResult,
+        SyncDriverAdapterBase,
+        SyncRoutingSession,
+    )
     from sqlspec.exceptions import (
         ReadOnlyTransactionError,
         ReplicaUnavailableError,
@@ -135,6 +141,7 @@ __all__ = (
     "AsyncDriverAdapterBase",
     "AsyncEventChannel",
     "AsyncEventListener",
+    "AsyncRoutingSession",
     "CacheConfig",
     "CacheStats",
     "Column",
@@ -162,6 +169,7 @@ __all__ = (
     "QueryBuilder",
     "RandomSelector",
     "ReadOnlyTransactionError",
+    "ReadReplicaGroup",
     "RedactionConfig",
     "ReplicaHealthBreaker",
     "ReplicaSelector",
@@ -197,6 +205,7 @@ __all__ = (
     "SyncDriverAdapterBase",
     "SyncEventChannel",
     "SyncEventListener",
+    "SyncRoutingSession",
     "TelemetryConfig",
     "TenantCleanupError",
     "TenantContext",
@@ -237,6 +246,7 @@ suppress_erroneous_sqlglot_log_messages()
 
 
 _EXPORTS: dict[str, tuple[str, str | None]] = {
+    "ReadReplicaGroup": ("sqlspec.config", "ReadReplicaGroup"),
     "RandomSelector": ("sqlspec.core.routing", "RandomSelector"),
     "ReplicaHealthBreaker": ("sqlspec.core.routing", "ReplicaHealthBreaker"),
     "ReplicaSelector": ("sqlspec.core.routing", "ReplicaSelector"),
@@ -255,6 +265,7 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "ArrowResult": ("sqlspec.core", "ArrowResult"),
     "AsyncDatabaseConfig": ("sqlspec.config", "AsyncDatabaseConfig"),
     "AsyncDriverAdapterBase": ("sqlspec.driver", "AsyncDriverAdapterBase"),
+    "AsyncRoutingSession": ("sqlspec.driver", "AsyncRoutingSession"),
     "AsyncEventChannel": ("sqlspec.extensions.events", "AsyncEventChannel"),
     "AsyncEventListener": ("sqlspec.extensions.events", "AsyncEventListener"),
     "CacheConfig": ("sqlspec.core", "CacheConfig"),
@@ -303,6 +314,7 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "SupportedSchemaModel": ("sqlspec.typing", "SupportedSchemaModel"),
     "SyncDatabaseConfig": ("sqlspec.config", "SyncDatabaseConfig"),
     "SyncDriverAdapterBase": ("sqlspec.driver", "SyncDriverAdapterBase"),
+    "SyncRoutingSession": ("sqlspec.driver", "SyncRoutingSession"),
     "SyncEventChannel": ("sqlspec.extensions.events", "SyncEventChannel"),
     "SyncEventListener": ("sqlspec.extensions.events", "SyncEventListener"),
     "TelemetryConfig": ("sqlspec.observability", "TelemetryConfig"),
