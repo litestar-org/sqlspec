@@ -2,7 +2,7 @@
 
 import inspect
 import re
-from contextlib import suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
@@ -18,10 +18,12 @@ from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_crdb as
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_set_json_dumps as set_json_dumps
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_set_json_loads as set_json_loads
 from sqlspec.adapters.cockroach_psycopg.core import (
+    DEFAULT_FOLLOWER_READ_STALENESS,
     CockroachPsycopgRetryConfig,
     apply_driver_features,
     build_connection_config,
     build_statement_config,
+    resolve_follower_read_options,
     validate_follower_read_staleness,
 )
 from sqlspec.adapters.cockroach_psycopg.driver import (
@@ -37,7 +39,14 @@ from sqlspec.adapters.cockroach_psycopg.tenant import (
     CockroachPsycopgSyncTenantLease,
     validate_cockroach_psycopg_tenant_config,
 )
-from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.config import (
+    AsyncDatabaseConfig,
+    ExtensionConfigs,
+    SyncDatabaseConfig,
+    _ReadAsyncContext,
+    _ReadSelectionReceipt,
+    _ReadSyncContext,
+)
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.core.tenant import AsyncTenantStrategy, SyncTenantStrategy, TenantStrategyShorthand, require_session_pooler
@@ -52,7 +61,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from types import TracebackType
     from uuid import UUID
@@ -196,6 +205,8 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     """Emit structured debug/warning logs when serialization retries occur."""
     enable_follower_reads: NotRequired[bool]
     """Allow ``AS OF SYSTEM TIME`` follower-read clauses on read queries."""
+    statement_timeout_ms: NotRequired[int]
+    """Statement execution timeout forwarded to the managed libpq session option."""
     default_staleness: NotRequired[str]
     """Default ``AS OF SYSTEM TIME`` staleness expression (such as ``'-5s'`` or ``follower_read_timestamp()``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -297,9 +308,20 @@ class CockroachPsycopgSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        if kwargs.get("replicas") is True:
+            kwargs.pop("replicas")
+            driver_features = dict(driver_features or {})
+            driver_features.setdefault("enable_follower_reads", True)
+            driver_features.setdefault("default_staleness", DEFAULT_FOLLOWER_READ_STALENESS)
         raw_strategy = (driver_features or {}).get("tenant_strategy")
         if raw_strategy is not None and raw_strategy is not False:
             require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
+        connection_config = dict(connection_config or {})
+        if driver_features is not None:
+            if driver_features.get("enable_follower_reads") is False:
+                connection_config["default_transaction_use_follower_reads"] = False
+            if "statement_timeout_ms" in driver_features:
+                connection_config["statement_timeout"] = driver_features["statement_timeout_ms"]
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
@@ -361,6 +383,7 @@ class CockroachPsycopgSyncConfig(
         bypass_tenant: Literal[False] = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachPsycopgSyncSessionContext": ...
 
@@ -373,6 +396,7 @@ class CockroachPsycopgSyncConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[CockroachPsycopgSyncDriver]": ...
 
@@ -384,6 +408,7 @@ class CockroachPsycopgSyncConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachPsycopgSyncSessionContext | AbstractContextManager[CockroachPsycopgSyncDriver]":
         if bypass_tenant:
@@ -396,6 +421,7 @@ class CockroachPsycopgSyncConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         if tenant is not None:
@@ -405,14 +431,21 @@ class CockroachPsycopgSyncConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         handler = _CockroachPsycopgSyncSessionConnectionHandler(self)
         driver_features = dict(self.driver_features)
-        if follower_reads is not None:
-            driver_features["enable_follower_reads"] = follower_reads
-        if staleness is not None:
-            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
+        enabled, resolved_staleness, read_only = resolve_follower_read_options(
+            driver_features,
+            follower_reads=follower_reads,
+            staleness=staleness,
+            read_only_session=read_only_session,
+            bind_key=self.bind_key,
+        )
+        driver_features.update(
+            enable_follower_reads=enabled, default_staleness=resolved_staleness, read_only_session=read_only
+        )
 
         return CockroachPsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
@@ -422,6 +455,58 @@ class CockroachPsycopgSyncConfig(
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        staleness: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[CockroachPsycopgSyncDriver]":
+        """Provide read-only follower or strongly consistent sessions."""
+        if self.has_replicas or bind_group is not None:
+            return super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                follower_reads=True,
+                staleness=staleness,
+                read_only_session=True,
+                **kwargs,
+            )
+        receipt = _ReadSelectionReceipt()
+        context = self.provide_session(
+            *args,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            follower_reads=True,
+            staleness=staleness,
+            read_only_session=True,
+            **kwargs,
+        )
+        return _ReadSyncContext(self._primary_read_sync(context, receipt), receipt)
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractContextManager[Any]":
+        """Provide a native connection inside a read-only transaction."""
+        context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
+        return _ReadSyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
+
+    @contextmanager
+    def _read_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
+        with context as session:
+            session.begin()
+            try:
+                yield session.connection
+            finally:
+                session.rollback()
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         if not self.connection_instance:
@@ -613,9 +698,20 @@ class CockroachPsycopgAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        if kwargs.get("replicas") is True:
+            kwargs.pop("replicas")
+            driver_features = dict(driver_features or {})
+            driver_features.setdefault("enable_follower_reads", True)
+            driver_features.setdefault("default_staleness", DEFAULT_FOLLOWER_READ_STALENESS)
         raw_strategy = (driver_features or {}).get("tenant_strategy")
         if raw_strategy is not None and raw_strategy is not False:
             require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
+        connection_config = dict(connection_config or {})
+        if driver_features is not None:
+            if driver_features.get("enable_follower_reads") is False:
+                connection_config["default_transaction_use_follower_reads"] = False
+            if "statement_timeout_ms" in driver_features:
+                connection_config["statement_timeout"] = driver_features["statement_timeout_ms"]
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
@@ -677,6 +773,7 @@ class CockroachPsycopgAsyncConfig(
         bypass_tenant: Literal[False] = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachPsycopgAsyncSessionContext": ...
 
@@ -689,6 +786,7 @@ class CockroachPsycopgAsyncConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]": ...
 
@@ -700,6 +798,7 @@ class CockroachPsycopgAsyncConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachPsycopgAsyncSessionContext | AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]":
         if bypass_tenant:
@@ -712,6 +811,7 @@ class CockroachPsycopgAsyncConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         if tenant is not None:
@@ -721,14 +821,21 @@ class CockroachPsycopgAsyncConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         handler = _CockroachPsycopgAsyncSessionConnectionHandler(self)
         driver_features = dict(self.driver_features)
-        if follower_reads is not None:
-            driver_features["enable_follower_reads"] = follower_reads
-        if staleness is not None:
-            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
+        enabled, resolved_staleness, read_only = resolve_follower_read_options(
+            driver_features,
+            follower_reads=follower_reads,
+            staleness=staleness,
+            read_only_session=read_only_session,
+            bind_key=self.bind_key,
+        )
+        driver_features.update(
+            enable_follower_reads=enabled, default_staleness=resolved_staleness, read_only_session=read_only
+        )
 
         return CockroachPsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
@@ -738,6 +845,60 @@ class CockroachPsycopgAsyncConfig(
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        staleness: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]":
+        """Provide read-only follower or strongly consistent sessions."""
+        if self.has_replicas or bind_group is not None:
+            return super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                follower_reads=True,
+                staleness=staleness,
+                read_only_session=True,
+                **kwargs,
+            )
+        receipt = _ReadSelectionReceipt()
+        context = self.provide_session(
+            *args,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            follower_reads=True,
+            staleness=staleness,
+            read_only_session=True,
+            **kwargs,
+        )
+        return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[Any]":
+        """Provide a native connection inside a read-only transaction."""
+        context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
+        return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
+
+    @asynccontextmanager
+    async def _read_connection(
+        self, context: "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]"
+    ) -> "AsyncIterator[Any]":
+        async with context as session:
+            await session.begin()
+            try:
+                yield session.connection
+            finally:
+                await session.rollback()
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         if not self.connection_instance:

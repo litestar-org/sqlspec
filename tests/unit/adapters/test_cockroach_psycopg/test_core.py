@@ -1,8 +1,17 @@
 # pyright: reportArgumentType=false
 """Unit tests for CockroachDB psycopg retry helpers."""
 
+import pytest
+
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
-from sqlspec.adapters.cockroach_psycopg.core import calculate_backoff_seconds, is_retryable_error
+from sqlspec.adapters.cockroach_psycopg.core import (
+    calculate_backoff_seconds,
+    create_mapped_exception,
+    is_retryable_error,
+    resolve_follower_read_options,
+)
+from sqlspec.exceptions import ReadOnlyTransactionError
+from sqlspec.utils.routing import RoutingContext
 
 
 def test_cockroach_psycopg_retry_config_default_values() -> None:
@@ -139,3 +148,37 @@ def test_calculate_backoff_seconds_jitter_variation() -> None:
     config = CockroachPsycopgRetryConfig(base_delay_ms=100.0, max_delay_ms=5000.0)
     delays = [calculate_backoff_seconds(1, config) for _ in range(20)]
     assert len(set(delays)) > 1
+
+
+@pytest.mark.parametrize("pin", [False, True])
+def test_primary_consistency_overrides_explicit_follower_bound(pin: bool) -> None:
+    scope = RoutingContext.scope() if pin else RoutingContext.primary("orders")
+    with scope:
+        if pin:
+            RoutingContext.mark_write("orders")
+        assert resolve_follower_read_options(
+            {}, follower_reads=True, staleness="'-10s'", read_only_session=True, bind_key="orders"
+        ) == (False, None, True)
+
+
+def test_follower_defaults_and_context_bounds() -> None:
+    assert resolve_follower_read_options({}, follower_reads=True) == (True, "follower_read_timestamp()", False)
+    with RoutingContext.replica("orders", max_staleness_seconds=3):
+        assert resolve_follower_read_options({}, bind_key="orders") == (True, "'-3s'", False)
+        assert resolve_follower_read_options({}, follower_reads=True, staleness="'-8s'", bind_key="orders") == (
+            True,
+            "'-8s'",
+            False,
+        )
+    with RoutingContext.replica("orders", max_staleness_seconds=0):
+        assert resolve_follower_read_options({}, follower_reads=True, bind_key="orders") == (False, None, False)
+
+
+def test_native_read_only_exception_keeps_cause() -> None:
+    class NativeReadOnlyError(Exception):
+        sqlstate = "25006"
+
+    native = NativeReadOnlyError("read-only transaction")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is native

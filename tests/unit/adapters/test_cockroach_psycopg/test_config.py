@@ -630,7 +630,7 @@ def test_cockroach_psycopg_follower_reads_apply_once_at_transaction_start(monkey
     driver.begin()
 
     assert connection.execute.call_count == 1
-    assert connection.execute.call_args.args[0] == "SET TRANSACTION AS OF SYSTEM TIME '-10s'"
+    assert connection.execute.call_args.args[0] == "SET TRANSACTION AS OF SYSTEM TIME '-10s', READ ONLY"
 
 
 def test_cockroach_psycopg_follower_reads_stay_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1424,3 +1424,32 @@ async def test_tenant_session_entry_failure_releases_once(asynchronous: bool, st
     release.assert_called_once()
     assert release.call_args.args == (connection,)
     assert release.call_args.kwargs["exc_val"] is error
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> None:
+    config = config_type(replicas=True)
+    assert not config.has_replicas
+    assert config.supports_read_routing
+    assert config.driver_features["enable_follower_reads"] is True
+    assert config.driver_features["default_staleness"] == "follower_read_timestamp()"
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_derive_replaces_managed_options_without_duplicating_user_options(config_type: Any) -> None:
+    primary = config_type(
+        connection_config={
+            "options": "-c search_path=app -c statement_timeout=1000 -c statement_timeout=2000",
+            "default_transaction_use_follower_reads": True,
+        }
+    )
+    derived = primary.derive_pool(
+        driver_features_overrides={"enable_follower_reads": False, "statement_timeout_ms": 5000}
+    )
+    options = derived.connection_config["options"]
+    assert options.count("search_path=app") == 1
+    assert options.count("statement_timeout=") == 1
+    assert "statement_timeout=5000" in options
+    assert "default_transaction_use_follower_reads=on" not in options
+    assert "default_transaction_use_follower_reads=off" in options
+    assert "statement_timeout=2000" in primary.connection_config["options"]
