@@ -91,6 +91,8 @@ Pass `Db2ConnectionParams`, `Db2PoolParams`, and `Db2AsyncPoolParams` keys insid
 <!-- GENERATED:START config-table:sqlspec.adapters.db2.config.Db2ConnectionParams,sqlspec.adapters.db2.config.Db2PoolParams,sqlspec.adapters.db2.config.Db2AsyncPoolParams -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `conn_options` | `dict[int, Any]` | - | Native CLI connection attributes copied for each connection. |
+| `read_only` | `bool` | - | Open connections using native CLI read-only access mode. |
 | `database` | `str` | - | Database name or cataloged alias mapped to the `DATABASE` CLI keyword. |
 | `hostname` | `str` | - | Db2 server hostname mapped to `HOSTNAME` (omit for cataloged local aliases). |
 | `port` | `int` | `50000` | Db2 TCP listener port mapped to `PORT` (defaults to `50000` when `hostname` is set). |

@@ -95,6 +95,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
     | `connection_string` | `str` | - | Full ODBC/TDS semicolon-delimited connection string passed to `mssql_python.connect`. |
+    | `host` | `str` | - | Alias for the SQL Server endpoint. |
     | `server` | `str` | - | SQL Server hostname, `host,port`, or `host\instance` target. |
     | `address` | `str` | - | ODBC `Address` alias for `server`. |
     | `addr` | `str` | - | ODBC `Addr` alias for `server`. |
