@@ -639,3 +639,75 @@ def test_oracle_plsql_callback_validation(callback: str) -> None:
 
     with pytest.raises(ImproperConfigurationError):
         validate_oracle_session_callback(callback, is_thin_mode=False)
+
+
+def test_clientcontext_checkout_and_release_uses_native_piggybacks() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import (
+        OracleSessionContextConfig,
+        execute_session_checkout_sync,
+        execute_session_release_sync,
+    )
+
+    connection = SimpleNamespace(
+        set_app_context=Mock(), clear_app_context=Mock(), current_schema="", username="APP", cursor=Mock()
+    )
+    hook = OracleSessionContextConfig(
+        contexts={"clientcontext": {"TENANT_ID": "a", "OPTIONAL": lambda: None}},
+        client_identifier="user",
+        module="界" * 30,
+        clientinfo="info",
+        dbop="read",
+        current_schema="TENANT_A",
+    )
+    execute_session_checkout_sync(connection, hook)
+    connection.set_app_context.assert_called_once_with("CLIENTCONTEXT", TENANT_ID="a")
+    assert connection.current_schema == "TENANT_A"
+    assert len(connection.module.encode()) == 48
+    assert connection.clientinfo == "info"
+    connection.cursor.assert_not_called()
+    execute_session_release_sync(connection, hook)
+    connection.clear_app_context.assert_called_once_with("CLIENTCONTEXT")
+    assert connection.current_schema == "APP"
+    assert connection.client_identifier is None
+    assert connection.clientinfo == ""
+    connection.cursor.assert_not_called()
+
+
+def test_oracle_release_context_names_are_bound_and_sequential() -> None:
+    from sqlspec.adapters.oracledb.core import build_session_release_plsql
+
+    sql, binds = build_session_release_plsql({
+        "contexts": {"CLIENTCONTEXT": {"A": "v"}, "PRIVATE_CTX": {"B": "v"}},
+        "clear_context_namespaces": ["OTHER_CTX", "clientcontext"],
+    })
+    assert sql == "BEGIN DBMS_SESSION.CLEAR_ALL_CONTEXT(:p_clr_ns_0); DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_1); END;"
+    assert binds == {"p_clr_ns_0": "OTHER_CTX", "p_clr_ns_1": "PRIVATE_CTX"}
+
+
+def test_end_user_security_redacts_and_validates_credentials() -> None:
+    from sqlspec.adapters.oracledb.core import OracleEndUserSecurityConfig
+
+    security = OracleEndUserSecurityConfig(
+        "token-secret",
+        end_user_identity=("alice", "key-secret"),
+        data_roles=("ANALYST",),
+        attributes={"TENANT_ID": "a"},
+    )
+    assert security.data_roles == ["ANALYST"]
+    assert security == OracleEndUserSecurityConfig(
+        "token-secret", end_user_identity=("alice", "key-secret"), data_roles=["ANALYST"], attributes={"TENANT_ID": "a"}
+    )
+    assert (
+        repr(security)
+        == "OracleEndUserSecurityConfig(database_access_token='***', end_user_identity='***', data_roles=<redacted>, attributes=<redacted>)"
+    )
+    for kwargs in (
+        {"database_access_token": ""},
+        {"database_access_token": "token", "data_roles": "ADMIN"},
+        {"database_access_token": "token", "attributes": {"BAD;KEY": "x"}},
+    ):
+        with pytest.raises(ImproperConfigurationError):
+            OracleEndUserSecurityConfig(**kwargs)

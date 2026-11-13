@@ -68,13 +68,11 @@ class _StubPipelineResult:
         columns: list[Any] | None = None,
         warning: Any | None = None,
         error: Exception | None = None,
-        rowcount: int | None = None,
     ) -> None:
         self.rows = rows
         self.columns = columns
         self.warning = warning
         self.error = error
-        self.rowcount = rowcount
         self.return_value = None
 
 
@@ -118,11 +116,11 @@ def test_stack_native_blocker_allows_standard_operations() -> None:
     assert driver._stack_native_blocker(stack) is None
 
 
-def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
+def test_pipeline_result_to_stack_result_counts_selected_rows() -> None:
     driver = _make_driver()
     stack = StatementStack().push_execute("SELECT 1 FROM dual")
     compiled = driver._prepare_pipeline_operation(stack.operations[0])
-    pipeline_result = _StubPipelineResult(rows=[(1,)], columns=[_StubColumn("VALUE")], warning="warn", rowcount=7)
+    pipeline_result = _StubPipelineResult(rows=[(1,)], columns=[_StubColumn("VALUE")], warning="warn")
     stack_result = build_pipeline_stack_result(
         compiled.statement,
         compiled.method,
@@ -131,7 +129,7 @@ def test_pipeline_result_to_stack_result_uses_rowcount_attr() -> None:
         pipeline_result,
         driver.driver_features,
     )
-    assert stack_result.rows_affected == 7
+    assert stack_result.rows_affected == 1
     assert stack_result.warning == "warn"
     result = stack_result.result
     assert result is not None

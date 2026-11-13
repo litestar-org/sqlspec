@@ -6,7 +6,7 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import importlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import oracledb as oracledb_module
 from oracledb import (
@@ -73,6 +73,7 @@ __all__ = (
     "OracleAsyncCursor",
     "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
+    "OracleAsyncSessionlessTransactionContext",
     "OracleAuthMode",
     "OraclePoolGetMode",
     "OraclePurity",
@@ -82,6 +83,7 @@ __all__ = (
     "OracleSyncCursor",
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
+    "OracleSyncSessionlessTransactionContext",
     "oracledb_create_pipeline",
     "oracledb_module",
 )
@@ -201,13 +203,19 @@ class OracleSyncSessionContext:
                 statement_config=self._statement_config,
                 driver_features=self._driver_features,
             )
-            return self._prepare_driver(self._driver)
+            self._driver = self._prepare_driver(self._driver)
+            owner = getattr(self._acquire_connection, "__self__", None)
+            prepare = getattr(owner, "prepare_driver", None)
+            if callable(prepare):
+                prepare(self._driver)
         except BaseException as exc:
             try:
                 self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
             finally:
                 self._connection = None
             raise
+        else:
+            return self._driver
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -264,7 +272,11 @@ class OracleAsyncSessionContext:
                 statement_config=self._statement_config,
                 driver_features=self._driver_features,
             )
-            return self._prepare_driver(self._driver)
+            self._driver = self._prepare_driver(self._driver)
+            owner = getattr(self._acquire_connection, "__self__", None)
+            prepare = getattr(owner, "prepare_driver", None)
+            if callable(prepare):
+                prepare(self._driver)
         except BaseException as exc:
             try:
                 await self._release_connection(
@@ -273,6 +285,8 @@ class OracleAsyncSessionContext:
             finally:
                 self._connection = None
             raise
+        else:
+            return self._driver
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -296,3 +310,117 @@ def _resolve_async_driver_type() -> "Callable[..., OracleAsyncDriver]":
         "Callable[..., OracleAsyncDriver]",
         importlib.import_module("sqlspec.adapters.oracledb.driver").OracleAsyncDriver,
     )
+
+
+class OracleSyncSessionlessTransactionContext:
+    """Begin or resume a transaction and suspend it when its request scope exits."""
+
+    __slots__ = ("_defer_round_trip", "_driver", "_resume", "_rollback_on_error", "_timeout", "_transaction_id")
+
+    def __init__(
+        self,
+        driver: "OracleSyncDriver",
+        *,
+        transaction_id: str | bytes | None = None,
+        timeout: int = 60,
+        defer_round_trip: bool = True,
+        resume: bool = False,
+        rollback_on_error: bool = True,
+    ) -> None:
+        from sqlspec.adapters.oracledb.core import validate_sessionless_transaction_args
+        from sqlspec.exceptions import ImproperConfigurationError
+
+        if not isinstance(resume, bool) or not isinstance(rollback_on_error, bool):
+            msg = "resume and rollback_on_error must be bool"
+            raise ImproperConfigurationError(msg)
+        self._transaction_id = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, is_resume=resume, defer_round_trip=defer_round_trip
+        )
+        self._driver = driver
+        self._timeout = timeout
+        self._defer_round_trip = defer_round_trip
+        self._resume = resume
+        self._rollback_on_error = rollback_on_error
+
+    def __enter__(self) -> bytes:
+        if self._resume:
+            return self._driver.resume_sessionless_transaction(
+                cast("str | bytes", self._transaction_id),
+                timeout=self._timeout,
+                defer_round_trip=self._defer_round_trip,
+            )
+        return self._driver.begin_sessionless_transaction(
+            self._transaction_id, timeout=self._timeout, defer_round_trip=self._defer_round_trip
+        )
+
+    def __exit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> Literal[False]:
+        if self._driver.sessionless_transaction_id is None:
+            return False
+        if exc_type is None:
+            self._driver.suspend_sessionless_transaction()
+        else:
+            with contextlib.suppress(Exception):
+                if self._rollback_on_error:
+                    self._driver.rollback()
+                else:
+                    self._driver.suspend_sessionless_transaction()
+        return False
+
+
+class OracleAsyncSessionlessTransactionContext:
+    """Begin or resume a transaction and suspend it when its request scope exits."""
+
+    __slots__ = ("_defer_round_trip", "_driver", "_resume", "_rollback_on_error", "_timeout", "_transaction_id")
+
+    def __init__(
+        self,
+        driver: "OracleAsyncDriver",
+        *,
+        transaction_id: str | bytes | None = None,
+        timeout: int = 60,
+        defer_round_trip: bool = True,
+        resume: bool = False,
+        rollback_on_error: bool = True,
+    ) -> None:
+        from sqlspec.adapters.oracledb.core import validate_sessionless_transaction_args
+        from sqlspec.exceptions import ImproperConfigurationError
+
+        if not isinstance(resume, bool) or not isinstance(rollback_on_error, bool):
+            msg = "resume and rollback_on_error must be bool"
+            raise ImproperConfigurationError(msg)
+        self._transaction_id = validate_sessionless_transaction_args(
+            transaction_id, timeout=timeout, is_resume=resume, defer_round_trip=defer_round_trip
+        )
+        self._driver = driver
+        self._timeout = timeout
+        self._defer_round_trip = defer_round_trip
+        self._resume = resume
+        self._rollback_on_error = rollback_on_error
+
+    async def __aenter__(self) -> bytes:
+        if self._resume:
+            return await self._driver.resume_sessionless_transaction(
+                cast("str | bytes", self._transaction_id),
+                timeout=self._timeout,
+                defer_round_trip=self._defer_round_trip,
+            )
+        return await self._driver.begin_sessionless_transaction(
+            self._transaction_id, timeout=self._timeout, defer_round_trip=self._defer_round_trip
+        )
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> Literal[False]:
+        if self._driver.sessionless_transaction_id is None:
+            return False
+        if exc_type is None:
+            await self._driver.suspend_sessionless_transaction()
+        else:
+            with contextlib.suppress(Exception):
+                if self._rollback_on_error:
+                    await self._driver.rollback()
+                else:
+                    await self._driver.suspend_sessionless_transaction()
+        return False

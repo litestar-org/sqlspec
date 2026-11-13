@@ -48,6 +48,8 @@ def test_apply_oracle_session_trace_attributes_ecid_fallback() -> None:
     """apply_oracle_session_trace_attributes falls back to conn.ecid when conn.econtext_id is absent."""
 
     class _StrictConn:
+        thin = False
+
         __slots__ = ("action", "client_identifier", "ecid", "module")
 
         def __init__(self) -> None:
@@ -71,7 +73,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
     """OracleSyncDriver and OracleAsyncDriver piggyback trace attributes on slow and cached fast paths without SQL comments."""
     sync_executed: list[tuple[str, dict[str, str | None]]] = []
     sync_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _SyncFakeCursor:
@@ -147,7 +149,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
 
     async_executed: list[tuple[str, dict[str, str | None]]] = []
     async_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _AsyncFakeCursor:
@@ -669,3 +671,20 @@ def test_oracle_aq_commit_at_dequeue_and_noop_ack_nack() -> None:
     backend._hub = hub
     backend.ack("ev-pinned")
     backend.nack("ev-pinned")
+
+
+def test_oracle_thin_trace_context_uses_native_api_without_ecid() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import apply_oracle_session_trace_attributes, clear_oracle_otel_trace_context
+
+    setter = Mock()
+    connection = SimpleNamespace(thin=True, supports_opentelemetry_tracing=True, set_opentelemetry_trace_context=setter)
+    with SQLCommenterContext.scope({"traceparent": "00-parent", "tracestate": "vendor=state"}):
+        apply_oracle_session_trace_attributes(
+            connection, econtext_id="ecid", enable_session_attributes=False, enable_otel_trace_context=True
+        )
+    setter.assert_called_once_with("00-parent", "vendor=state")
+    clear_oracle_otel_trace_context(connection)
+    assert setter.call_args.args == (None,)

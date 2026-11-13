@@ -1,6 +1,6 @@
 """Public observability exports."""
 
-from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
+from sqlspec.observability._common import compute_sql_hash, get_trace_context, get_w3c_trace_context, resolve_db_system
 from sqlspec.observability._config import (
     LifecycleHook,
     LoggingConfig,
@@ -53,5 +53,6 @@ __all__ = (
     "default_statement_observer",
     "format_statement_event",
     "get_trace_context",
+    "get_w3c_trace_context",
     "resolve_db_system",
 )
