@@ -3,9 +3,15 @@
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
-from sqlspec.adapters.snowflake.core import apply_driver_features, default_statement_config, normalize_connection_params
+from sqlspec.adapters.snowflake.core import (
+    apply_driver_features,
+    default_statement_config,
+    merge_snowflake_derive_overrides,
+    normalize_connection_params,
+)
 from sqlspec.adapters.snowflake.driver import SnowflakeDriver
 from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
@@ -230,6 +236,39 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
             observability_config=observability_config,
             **kwargs,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_snowflake_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(spec_input, str):
+            return super()._build_replica_spec_overrides(spec_input)
+        if spec_input.startswith("snowflake://"):
+            parsed = urlsplit(spec_input)
+            if not parsed.hostname:
+                msg = "Snowflake replica URLs require an account"
+                raise ImproperConfigurationError(msg)
+            options: dict[str, Any] = {"account": parsed.hostname}
+            if parsed.username is not None:
+                options["user"] = unquote(parsed.username)
+            if parsed.password is not None:
+                options["password"] = unquote(parsed.password)
+                options["auth_type"] = "password"
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+            path_keys = ("database", "schema")
+            if len(parts) > len(path_keys):
+                msg = "Snowflake replica URLs support database and schema path segments"
+                raise ImproperConfigurationError(msg)
+            options.update(dict(zip(path_keys, parts, strict=False)))
+            options.update(parse_qsl(parsed.query))
+        else:
+            if not spec_input or "://" in spec_input:
+                msg = "Snowflake replicas require a warehouse name or snowflake:// URL"
+                raise ImproperConfigurationError(msg)
+            options = {"warehouse": spec_input}
+        return {"connection_config_overrides": options}
 
     def create_connection(self) -> "SnowflakeConnection":
         """Open a standalone connection whose lifecycle belongs to the caller."""

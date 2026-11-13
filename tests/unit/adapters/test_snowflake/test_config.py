@@ -241,3 +241,69 @@ def test_derive_pool_routes_query_tag_to_session_parameters() -> None:
     assert derived.connection_config["query_tag"] == "etl"
     assert "query_tag" not in derived.driver_features
     assert normalize_connection_params(derived.connection_config)["session_parameters"]["QUERY_TAG"] == "etl"
+
+
+def test_derive_aliases_replace_inherited_auth_and_session_settings() -> None:
+    primary = SnowflakeConfig(
+        connection_config={
+            "account": "acct",
+            "user": "writer",
+            "auth_type": "jwt",
+            "session_parameters": {"QUERY_TAG": "etl", "TIMEZONE": "America/New_York"},
+        }
+    )
+    replica = primary.derive_pool(
+        username="reader", auth_type="password", password="pw", query_tag="bi_ro", timezone="UTC"
+    )
+    assert replica.connection_config["user"] == "reader"
+    assert "authenticator" not in replica.connection_config
+    normalized = normalize_connection_params(replica.connection_config)
+    assert normalized["session_parameters"] == {"QUERY_TAG": "bi_ro", "TIMEZONE": "UTC"}
+    assert primary.connection_config["session_parameters"] == {"QUERY_TAG": "etl", "TIMEZONE": "America/New_York"}
+
+
+def test_replica_warehouse_and_url_shorthands() -> None:
+    primary = SnowflakeConfig(
+        connection_config={"account": "acct", "user": "writer"},
+        replicas=["COMPUTE_WH_RO", "snowflake://reader:pw@acct/db/public?warehouse=WH2&role=ANALYST"],
+    )
+    first, second = primary.replica_groups["default"].configs
+    assert first.connection_config["warehouse"] == "COMPUTE_WH_RO"
+    assert second.connection_config["warehouse"] == "WH2"
+    assert second.connection_config["role"] == "ANALYST"
+    assert second.connection_config["user"] == "reader"
+    with pytest.raises(ImproperConfigurationError):
+        SnowflakeConfig(replicas=True)
+
+
+def test_derived_auth_and_passphrase_aliases_do_not_mutate_parent_or_eagerly_resolve_tokens() -> None:
+    calls: list[str] = []
+
+    def token() -> str:
+        calls.append("token")
+        return "credential"
+
+    primary = SnowflakeConfig(
+        connection_config={
+            "account": "acct",
+            "user": "writer",
+            "auth_type": "jwt",
+            "private_key_file": "writer.pem",
+            "private_key_file_pwd": "old",
+            "session_parameters": {"QUERY_TAG": "parent"},
+            "auth_token_provider": token,
+        }
+    )
+    password = primary.derive_pool(auth_type="password", password="pw")
+    assert normalize_connection_params(password.connection_config)["password"] == "pw"
+    assert calls == []
+    changed = primary.derive_pool(
+        private_key_passphrase="new",
+        query_tag="shortcut",
+        connection_config_overrides={"session_parameters": {"QUERY_TAG": "explicit"}},
+    )
+    normalized = normalize_connection_params(changed.connection_config)
+    assert normalized["private_key_file_pwd"] == "new"
+    assert normalized["session_parameters"]["QUERY_TAG"] == "explicit"
+    assert primary.connection_config["private_key_file_pwd"] == "old"
+    assert primary.connection_config["session_parameters"]["QUERY_TAG"] == "parent"
