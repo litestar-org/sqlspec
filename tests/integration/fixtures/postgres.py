@@ -356,8 +356,10 @@ def paradedb_config_psycopg(paradedb_service: PostgresService) -> "Generator[Psy
 
 @pytest.fixture(scope="session")
 def alloydb_omni_command() -> list[str]:
-    """Keep SQLSpec AlloyDB columnar configuration at postmaster startup."""
-    return build_alloydb_omni_command(extra_gucs={"google_columnar_engine.enable_columnar_scan": "off"})
+    """Bound AlloyDB test memory while preserving columnar startup configuration."""
+    return build_alloydb_omni_command(
+        extra_gucs={"google_columnar_engine.enable_columnar_scan": "off", "shared_buffers": "256MB"}
+    )
 
 
 @pytest.fixture(scope="session")
