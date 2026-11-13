@@ -383,9 +383,12 @@ class ConnectionCleanupMiddleware:
                 exc_override: BaseException | None = None
                 try:
                     if connection is not None and target.commit_mode != "manual":
+                        transaction_target = (
+                            get_sqlspec_scope_state(scope, f"{target.connection_key}_session") or connection
+                        )
                         if effective_exc is not None:
                             with suppress(Exception):
-                                await ensure_async_(connection.rollback)()
+                                await ensure_async_(transaction_target.rollback)()
                         else:
                             commit_range = range(
                                 200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
@@ -397,13 +400,13 @@ class ConnectionCleanupMiddleware:
                             )
                             if should_commit:
                                 try:
-                                    await ensure_async_(connection.commit)()
+                                    await ensure_async_(transaction_target.commit)()
                                 except BaseException:
                                     with suppress(Exception):
-                                        await ensure_async_(connection.rollback)()
+                                        await ensure_async_(transaction_target.rollback)()
                                     raise
                             else:
-                                await ensure_async_(connection.rollback)()
+                                await ensure_async_(transaction_target.rollback)()
                 except BaseException as finalization_exc:
                     exc_override = finalization_exc
                     raise
@@ -1410,6 +1413,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None and getattr(session, "connection", None) is connection:
+            set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
             return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
         session = plugin_state.config.driver_type(
@@ -1418,6 +1422,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             driver_features=plugin_state.config.driver_features,
         )
         set_sqlspec_scope_state(scope, session_scope_key, session)
+        set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
         return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
     def _registry_state(self, name: Any) -> "PluginConfigState | None":

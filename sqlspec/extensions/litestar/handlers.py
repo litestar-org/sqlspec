@@ -17,6 +17,7 @@ from litestar.constants import HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_D
 from litestar.di import NamedDependency
 from litestar.enums import ScopeType
 from litestar.params import SkipValidation
+from litestar.types import Scope
 from litestar.utils.scope.state import ScopeState
 
 from sqlspec.exceptions import ImproperConfigurationError
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
     from litestar import Litestar
     from litestar.datastructures.state import State
-    from litestar.types import Message, Scope
+    from litestar.types import Message
 
     from sqlspec.config import DatabaseConfigProtocol, DriverT
     from sqlspec.typing import ConnectionT, PoolT
@@ -145,6 +146,7 @@ def autocommit_handler_maker(
             scope: ASGI Scope.
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
+        transaction_target = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session") or connection
         exc_override: BaseException | None = None
         try:
             if connection is not None and message["type"] == HTTP_RESPONSE_START:
@@ -155,13 +157,13 @@ def autocommit_handler_maker(
                     and message["status"] not in extra_rollback_statuses
                 ):
                     try:
-                        await ensure_async_(connection.commit)()
+                        await ensure_async_(transaction_target.commit)()
                     except BaseException:
                         with contextlib.suppress(Exception):
-                            await ensure_async_(connection.rollback)()
+                            await ensure_async_(transaction_target.rollback)()
                         raise
                 else:
-                    await ensure_async_(connection.rollback)()
+                    await ensure_async_(transaction_target.rollback)()
         except BaseException as finalization_exc:
             exc_override = finalization_exc
             raise
@@ -350,14 +352,13 @@ def session_provider_maker(
 
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
-        yield cast(
-            "DriverT",
-            config.driver_type(
-                connection=connection_obj,
-                statement_config=config.statement_config,
-                driver_features=config.driver_features,
-            ),
-        )  # pyright: ignore
+        session = config.driver_type(
+            connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
+        )
+        scope = args[1] if len(args) > 1 else kwargs.get("scope")
+        if scope is not None:
+            set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
+        yield cast("DriverT", session)
 
     conn_type_annotation = config.connection_type
     injected_conn_annotation = SkipValidation[NamedDependency[conn_type_annotation]]  # type: ignore[valid-type]
@@ -369,7 +370,10 @@ def session_provider_maker(
     )
 
     provider_signature = inspect.Signature(
-        parameters=[db_conn_param],
+        parameters=[
+            db_conn_param,
+            inspect.Parameter("scope", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Scope),
+        ],
         return_annotation=AsyncGenerator[config.driver_type, None],  # type: ignore[name-defined]
     )
 
@@ -378,6 +382,7 @@ def session_provider_maker(
     if provide_session.__annotations__ is None:
         provide_session.__annotations__ = {}
 
+    provide_session.__annotations__["scope"] = Scope
     provide_session.__annotations__[connection_dependency_key] = injected_conn_annotation
     provide_session.__annotations__["return"] = AsyncGenerator[config.driver_type, None]  # type: ignore[name-defined]
 
@@ -433,13 +438,17 @@ async def _exit_connection_context(
         if connection_key is not None
         else None
     )
-    with TenantContext.bind(payload):
-        if isinstance(connection_cm, AbstractAsyncContextManager):
-            await connection_cm.__aexit__(*exit_args)
-        elif isinstance(connection_cm, AbstractContextManager):
-            await with_ensure_async_(connection_cm).__aexit__(*exit_args)
-        else:
-            await ensure_async_(connection.close)()
+    try:
+        with TenantContext.bind(payload):
+            if isinstance(connection_cm, AbstractAsyncContextManager):
+                await connection_cm.__aexit__(*exit_args)
+            elif isinstance(connection_cm, AbstractContextManager):
+                await with_ensure_async_(connection_cm).__aexit__(*exit_args)
+            else:
+                await ensure_async_(connection.close)()
+    finally:
+        if connection_key is not None:
+            delete_sqlspec_scope_state(scope, f"{connection_key}_session")
 
 
 def _capture_connection_tenant_sync(config: Any, scope: "Scope", connection_key: str) -> TenantContextPayload | None:
