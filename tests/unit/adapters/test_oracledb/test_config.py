@@ -1513,7 +1513,7 @@ async def test_thin_checkout_never_accesses_tag(async_mode: bool) -> None:
             msg = "Thin tag must not be read"
             raise AssertionError(msg)
 
-    connection = ThinConnection()
+    connection: Any = ThinConnection()
     pool = MagicMock()
     pool.thin = True
     if async_mode:

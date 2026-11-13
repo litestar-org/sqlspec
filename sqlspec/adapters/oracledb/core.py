@@ -2702,7 +2702,9 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
         _validate_tns_token(ep.host, "host")
     desc_parts: list[str] = []
     if resolved.address_lists:
-        desc_parts.extend(["(LOAD_BALANCE=OFF)", "(FAILOVER=ON)"])
+        desc_parts.append("(LOAD_BALANCE=OFF)")
+        if resolved.failover is not None:
+            desc_parts.append(f"(FAILOVER={'ON' if resolved.failover else 'OFF'})")
     if resolved.connect_timeout is not None:
         desc_parts.append(f"(CONNECT_TIMEOUT={resolved.connect_timeout})")
     if resolved.sdu is not None:

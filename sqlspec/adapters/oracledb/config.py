@@ -465,7 +465,11 @@ def _derive_oracle_pool_kwargs(
     overrides.pop("replicas", None)
     connection_overrides = dict(connection_config_overrides or {})
     new_conn_cfg: dict[str, Any] = dict(source_config.connection_config)
-    new_driver_features: dict[str, Any] = dict(source_config.driver_features)
+    new_driver_features: dict[str, Any] = {
+        key: value
+        for key, value in source_config.driver_features.items()
+        if key not in {"_statement_cache_holder", "storage_capabilities"}
+    }
     if source_config._pool_session_callback is not None and "session_callback" not in new_conn_cfg:
         new_conn_cfg["session_callback"] = source_config._pool_session_callback
     if source_config._user_connection_hook is not None and "on_connection_create" not in new_driver_features:
@@ -481,6 +485,12 @@ def _derive_oracle_pool_kwargs(
             new_conn_cfg[key] = val
             connection_overrides[key] = val
     endpoint_keys = {"topology", "service_name", "host", "port", "sid", "tns_alias", "url", "connection_string"}
+    if (
+        source_config._source_topology is not None
+        and not endpoint_keys.intersection(connection_overrides)
+        and "dsn" not in connection_overrides
+    ):
+        new_conn_cfg["topology"] = source_config._source_topology
     if endpoint_keys.intersection(connection_overrides):
         source_dsn = source_config.connection_config.get("dsn")
         topology = source_config._source_topology
