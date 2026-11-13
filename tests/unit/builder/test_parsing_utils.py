@@ -621,6 +621,7 @@ def test_value_sites_reject_positional_sql_objects(site: Any, fragment: SQL) -> 
 def test_coerce_column_splits_qualified_dotted_identifiers() -> None:
     """Dotted column strings split into table and column components."""
     col = parsing_utils._coerce_column("t.col")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(col, exp.Column)
     assert col.table == "t"
     assert col.name == "col"
 

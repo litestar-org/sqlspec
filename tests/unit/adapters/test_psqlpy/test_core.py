@@ -32,6 +32,7 @@ from sqlspec.exceptions import (
     PermissionDeniedError,
     SQLSpecError,
 )
+from sqlspec.utils.serializers import to_json
 
 
 @pytest.mark.parametrize(
@@ -415,8 +416,6 @@ def test_psqlpy_json_parameter_serializes_string_scalars_and_uses_custom_seriali
     cast_type: str, scalar: str
 ) -> None:
     """Plain Python strings bound to JSON/JSONB casts serialize via the configured JSON serializer."""
-    from sqlspec.utils.serializers import to_json
-
     seen: list[object] = []
 
     def custom_serializer(val: object) -> str:
@@ -427,6 +426,28 @@ def test_psqlpy_json_parameter_serializes_string_scalars_and_uses_custom_seriali
     prepared = prepare_parameters_with_casts([scalar], {1: cast_type}, stmt_config)
     assert prepared == [to_json(scalar)]
     assert seen == [scalar]
+
+
+def test_psqlpy_driver_prepare_driver_parameters_is_many_serializes_string_scalars() -> None:
+    """execute_many parameter preparation serializes string scalars for JSON/JSONB casts while coerce_json_columns decodes Arrow JSON."""
+    stmt_config = build_statement_config()
+    driver = PsqlpyDriver(connection=cast("Any", SimpleNamespace()), statement_config=stmt_config)
+    stmt = driver.prepare_statement(
+        "INSERT INTO events (payload) VALUES ($1::jsonb)",
+        [("123",), ('{"a": 1}',)],
+        statement_config=stmt_config,
+        kwargs={"is_many": True},
+    )
+    stmt.compile()
+
+    prepared = driver.prepare_driver_parameters(
+        [("123",), ('{"a": 1}',)], stmt_config, is_many=True, prepared_statement=stmt
+    )
+    assert prepared == [(to_json("123"),), (to_json('{"a": 1}'),)]
+    assert psqlpy_core.coerce_json_columns([('{"a": 1}',), ("123",)], ["payload"], {"payload"}) == [
+        ({"a": 1},),
+        ("123",),
+    ]
 
 
 def test_psqlpy_json_parameter_preserves_none_and_structured_containers() -> None:

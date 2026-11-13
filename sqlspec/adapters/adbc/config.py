@@ -312,7 +312,7 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
                 pool.release(connection, discard=discard)
             elif connection is not self._config.connection_instance:
                 connection.close()
-            else:
+            elif not kwargs.get("already_rolled_back", False):
                 _rollback_connection_instance(self._config, connection, kwargs.get("exc_type"))
         finally:
             try:

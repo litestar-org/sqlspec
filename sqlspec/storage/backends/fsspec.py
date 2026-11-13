@@ -459,11 +459,7 @@ class FSSpecBackend:
 
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching a glob pattern synchronously."""
-        if self.protocol in _LOCAL_PROTOCOLS:
-            reject_parent_traversal(pattern)
-            resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
-        else:
-            resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
         raw_results = execute_sync_storage_operation(
             partial(self.fs.glob, resolved_pattern, **kwargs),
             backend=self.backend_type,

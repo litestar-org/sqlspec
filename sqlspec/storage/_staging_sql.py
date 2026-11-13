@@ -220,21 +220,28 @@ def validate_sql_cast_type(type_sql: str, dialect: str | None = None) -> str:
         or "'" in stripped
         or '"' in stripped
         or "`" in stripped
-        or "[" in stripped
-        or "]" in stripped
+        or stripped.startswith("[")
     ):
         msg = f"Invalid SQL cast type: {type_sql!r}"
         raise ValueError(msg)
-    depth = 0
+    paren_depth = 0
+    bracket_depth = 0
     for ch in stripped:
         if ch == "(":
-            depth += 1
+            paren_depth += 1
         elif ch == ")":
-            depth -= 1
-            if depth < 0:
+            paren_depth -= 1
+            if paren_depth < 0:
                 msg = f"Invalid SQL cast type: {type_sql!r}"
                 raise ValueError(msg)
-    if depth != 0:
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth -= 1
+            if bracket_depth < 0:
+                msg = f"Invalid SQL cast type: {type_sql!r}"
+                raise ValueError(msg)
+    if paren_depth != 0 or bracket_depth != 0:
         msg = f"Invalid SQL cast type: {type_sql!r}"
         raise ValueError(msg)
 

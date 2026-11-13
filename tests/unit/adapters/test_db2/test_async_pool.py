@@ -422,21 +422,18 @@ async def test_async_pool_discards_failed_rollback_and_closed_handle(
     """Failed async rollback or closed conn_handler discards the connection and frees semaphore capacity."""
     pool = Db2AsyncConnectionPool({"database": "TESTDB", "autocommit": False}, max_size=1, acquire_timeout=0.1)
     try:
-        first = _as_fake(await pool.acquire())
 
         def fail_rollback() -> None:
             raise RuntimeError("async db2 rollback failed")
 
-        monkeypatch.setattr(first.sync_connection, "rollback", fail_rollback)
-        await pool.release(first) if False else None
-        ctx = pool.get_connection()
-        ctx._connection = first  # pyright: ignore[reportPrivateUsage]
         expected_exc = ValueError if body_raises else RuntimeError
+        first: Any = None
         with pytest.raises(expected_exc):
-            if body_raises:
-                await ctx.__aexit__(ValueError, ValueError("body error"), None)
-                raise ValueError("body error")
-            await ctx.__aexit__(None, None, None)
+            async with pool.get_connection() as raw_first:
+                first = _as_fake(raw_first)
+                monkeypatch.setattr(first.sync_connection, "rollback", fail_rollback)
+                if body_raises:
+                    raise ValueError("body error")
 
         assert pool.checked_out() == 0
         assert pool.size() == 0

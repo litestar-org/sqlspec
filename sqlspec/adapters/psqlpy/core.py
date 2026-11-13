@@ -407,7 +407,7 @@ def coerce_json_columns(
     for record in records:
         row = list(record)
         for index in indexes:
-            row[index] = _coerce_json_text_for_execute_many(row[index], deserializer=deserializer)
+            row[index] = _decode_arrow_json_column_value(row[index], deserializer=deserializer)
         coerced.append(tuple(row))
     return coerced
 
@@ -850,7 +850,8 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+def _decode_arrow_json_column_value(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+    """Decode Arrow UTF-8 JSON document cells into dict/list values for psqlpy binary COPY."""
     if not isinstance(value, str):
         return value
     stripped = value.lstrip()

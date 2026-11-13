@@ -164,7 +164,12 @@ class _ArrowOdbcSessionConnectionHandler(SyncPoolSessionFactory):
             return
         connection = self._connection
         self._connection = None
-        _release_arrow_odbc_connection(self._config, connection, kwargs.get("exc_type"))
+        _release_arrow_odbc_connection(
+            self._config,
+            connection,
+            kwargs.get("exc_type"),
+            already_rolled_back=bool(kwargs.get("already_rolled_back", False)),
+        )
 
 
 class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
@@ -342,14 +347,18 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
 
 
 def _release_arrow_odbc_connection(
-    config: "ArrowOdbcConfig", connection: "ArrowOdbcConnection", exc_type: "type[BaseException] | None"
+    config: "ArrowOdbcConfig",
+    connection: "ArrowOdbcConnection",
+    exc_type: "type[BaseException] | None",
+    *,
+    already_rolled_back: bool = False,
 ) -> None:
     """Close an owned connection, or roll back and preserve a caller-supplied connection_instance."""
     if config.connection_instance is None or connection is not config.connection_instance:
         _close_arrow_odbc_connection(connection)
         return
     assert connection is not None
-    if config.driver_features.get("connection_autocommit", True):
+    if already_rolled_back or config.driver_features.get("connection_autocommit", True):
         return
     try:
         connection.rollback()

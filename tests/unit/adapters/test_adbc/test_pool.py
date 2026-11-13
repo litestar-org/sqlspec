@@ -531,3 +531,5 @@ def test_adbc_session_context_rolls_back_active_driver_transaction(body_raises: 
         assert caught.value is rollback_err
     fake_driver.rollback.assert_called_once_with()
     release.assert_called_once()
+    assert release.call_args.kwargs["exc_type"] is (ValueError if body_raises else RuntimeError)
+    assert release.call_args.kwargs["already_rolled_back"] is True

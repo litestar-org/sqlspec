@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("arrow_odbc")
 
+from arrow_odbc import Error as ArrowOdbcError
 from arrow_odbc import TextEncoding
 
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
@@ -431,3 +432,28 @@ def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transa
 
     assert owned.executed == ["BEGIN", "ROLLBACK"]
     assert owned.closed is True
+
+
+def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection_instance() -> None:
+    """Failed driver rollback on a caller connection_instance propagates the mapped error without a duplicate raw rollback."""
+
+    class _FakeArrowOdbcError(ArrowOdbcError):
+        def __init__(self, message: str) -> None:
+            Exception.__init__(self, message)
+
+    class _FailingCallerConnection:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+            raise _FakeArrowOdbcError("State: 08003, Native error: 0, Message: connection lost")
+
+    caller = _FailingCallerConnection()
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics", "autocommit": False}, connection_instance=cast("Any", caller)
+    )
+    with pytest.raises(DatabaseConnectionError), config.provide_session() as session:
+        session.begin()
+
+    assert caller.rollbacks == 1

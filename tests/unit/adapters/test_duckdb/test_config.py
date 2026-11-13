@@ -1,5 +1,6 @@
 """DuckDB configuration tests covering statement config builders."""
 
+from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
 from uuid import UUID
@@ -266,6 +267,32 @@ def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) 
             with config.provide_session() as session:
                 session.begin()
                 session.execute("INSERT INTO items VALUES (1)")
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()
+
+
+def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean-exit rollback failure forwards error metadata to pool release so uncommitted writes never commit."""
+    db_file = tmp_path / "failed_rollback.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_file)})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE items (id INTEGER)")
+
+        def fail_rollback(_self: DuckDBDriver) -> None:
+            raise RuntimeError("duckdb rollback failed")
+
+        monkeypatch.setattr(DuckDBDriver, "rollback", fail_rollback)
+        with pytest.raises(RuntimeError, match="duckdb rollback failed"), config.provide_session() as session:
+            session.begin()
+            session.execute("INSERT INTO items VALUES (42)")
+
+        assert config.provide_pool().size() == 0
+        monkeypatch.undo()
         with config.provide_session() as check_session:
             assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
     finally:

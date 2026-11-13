@@ -8,12 +8,14 @@ Tests focused on MigrationCommands class behavior including:
 - Command routing and parameter passing
 """
 
+import gzip
 import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import sqlspec.migrations.commands as commands_module
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
@@ -21,7 +23,12 @@ from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfi
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationCommands
-from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+from sqlspec.migrations.commands import (
+    AsyncMigrationCommands,
+    MigrationCommandsCore,
+    SyncMigrationCommands,
+    create_migration_commands,
+)
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.utils.tenant import TenantContext
 
@@ -1722,11 +1729,6 @@ def test_read_data_file_records_enforces_size_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compressed: bool
 ) -> None:
     """MigrationCommandsCore._read_data_file_records rejects oversized plain and gzipped data files."""
-    import gzip
-
-    import sqlspec.migrations.commands as commands_module
-    from sqlspec.migrations.commands import MigrationCommandsCore
-
     monkeypatch.setattr(commands_module, "_MAX_DATA_FILE_BYTES", 64)
     payload = b'[{"id": "' + (b"a" * 128) + b'"}]'
     suffix = ".json.gz" if compressed else ".json"

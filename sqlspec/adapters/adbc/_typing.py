@@ -149,19 +149,31 @@ class AdbcSessionContext:
             self._connection = None
             self._driver = None
             first_error: BaseException | None = None
+            driver_rolled_back = False
             if driver is not None:
                 try:
                     driver.close_streams()
                 except BaseException as exc:
                     first_error = exc
                 if driver._connection_in_transaction():
+                    driver_rolled_back = True
                     try:
                         driver.rollback()
                     except BaseException as exc:
                         if first_error is None:
                             first_error = exc
+            release_type = exc_type if exc_type is not None else (type(first_error) if first_error else None)
+            release_val = exc_val if exc_val is not None else first_error
+            release_tb = exc_tb if exc_tb is not None else (first_error.__traceback__ if first_error else None)
             try:
-                self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb, driver=driver)
+                self._release_connection(
+                    connection,
+                    exc_type=release_type,
+                    exc_val=release_val,
+                    exc_tb=release_tb,
+                    driver=driver,
+                    already_rolled_back=driver_rolled_back,
+                )
             except BaseException as exc:
                 if first_error is None:
                     first_error = exc

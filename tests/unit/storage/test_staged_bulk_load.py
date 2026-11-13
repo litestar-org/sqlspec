@@ -6,6 +6,7 @@ from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
@@ -497,16 +498,30 @@ def test_dialect_native_storage_quoting_and_checkpoint_sql(
     assert expected_ident in build_checkpoint_insert_sql(dialect, raw_ident)
 
 
-@pytest.mark.parametrize("valid_type", ["INTEGER", "DECIMAL(18, 4)", "VARCHAR(255)", "JSONB"])
+@pytest.mark.parametrize(
+    "valid_type", ["INTEGER", "DECIMAL(18, 4)", "VARCHAR(255)", "JSONB", "TEXT[]", "INTEGER[]", "VARCHAR(20)[]"]
+)
 def test_validate_sql_cast_type_accepts_standard_types(valid_type: str) -> None:
-    """validate_sql_cast_type normalizes valid scalar and parameterized SQL data types."""
+    """validate_sql_cast_type normalizes valid scalar, parameterized, and array SQL data types."""
     rendered = validate_sql_cast_type(valid_type, dialect="postgres")
     assert rendered
 
 
 @pytest.mark.parametrize(
     "invalid_type",
-    ["", "   ", "INT\x00", "INT; SELECT 1", "INT) FROM users --", "INT /* comment */", "VARCHAR('x')", "DECIMAL((18)"],
+    [
+        "",
+        "   ",
+        "INT\x00",
+        "INT; SELECT 1",
+        "INT) FROM users --",
+        "INT /* comment */",
+        "VARCHAR('x')",
+        "DECIMAL((18)",
+        "[INT]",
+        "TEXT][",
+        "TEXT[",
+    ],
 )
 def test_validate_sql_cast_type_rejects_malformed_or_compound_expressions(invalid_type: str) -> None:
     """validate_sql_cast_type rejects empty, comment-bearing, unbalanced, or multi-clause cast strings."""
@@ -520,8 +535,6 @@ async def test_multi_shard_storage_ingest_skips_empty_shards_quotes_delete_and_v
     tmp_path: Path, asynchronous: bool
 ) -> None:
     """Multi-shard ingestion skips leading 0-row shards, records checkpoints, quotes DELETE FROM, and checks column parity."""
-    import pyarrow.parquet as pq
-
     empty_shard = tmp_path / "00_empty.parquet"
     valid_shard_1 = tmp_path / "01_part.parquet"
     valid_shard_2 = tmp_path / "02_part.parquet"
@@ -593,5 +606,41 @@ async def test_multi_shard_storage_ingest_skips_empty_shards_quotes_delete_and_v
                         stage_table=True,
                         conflict_keys=["id"],
                     )
+        finally:
+            sync_cfg.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_staged_storage_ingest_rejects_columns_absent_from_target_table(
+    tmp_path: Path, asynchronous: bool
+) -> None:
+    """Staged ingestion clones the target schema onto the stage table and rejects unknown shard columns cleanly."""
+    unknown_col_shard = tmp_path / "unknown_col.parquet"
+    pq.write_table(pa.table({"id": [1], "label": ["ok"], "unexpected_col": ["extra"]}), unknown_col_shard)
+    db_file = tmp_path / f"catalog_check_{'async' if asynchronous else 'sync'}.db"
+
+    if asynchronous:
+        aio_cfg = AiosqliteConfig(connection_config={"database": str(db_file)})
+        try:
+            async with aio_cfg.provide_session() as aio_drv:
+                await aio_drv.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)")
+                with pytest.raises(SQLSpecError):
+                    await aio_drv.load_from_storage(
+                        "items", [unknown_col_shard], file_format="parquet", stage_table=True, conflict_keys=["id"]
+                    )
+                assert await aio_drv.select("SELECT id, label FROM items") == []
+        finally:
+            await aio_cfg.close_pool()
+    else:
+        sync_cfg = SqliteConfig(connection_config={"database": str(db_file)})
+        try:
+            with sync_cfg.provide_session() as sync_drv:
+                sync_drv.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)")
+                with pytest.raises(SQLSpecError):
+                    sync_drv.load_from_storage(
+                        "items", [unknown_col_shard], file_format="parquet", stage_table=True, conflict_keys=["id"]
+                    )
+                assert sync_drv.select("SELECT id, label FROM items") == []
         finally:
             sync_cfg.close_pool()
