@@ -64,7 +64,13 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
 
     app = Starlette(routes=[Route("/read", read), Route("/route", route)])
     plugin = SQLSpecPlugin(config, app)
-    assert sum(middleware.cls is SQLSpecRequestLeaseMiddleware for middleware in app.user_middleware) == 1
+    assert (
+        sum(
+            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecRequestLeaseMiddleware)
+            for middleware in app.user_middleware
+        )
+        == 1
+    )
     with TestClient(app) as client:
         assert client.get("/read").json() == {"origin": "replica"}
         assert client.get("/route").json() == {"before": "replica", "after": "primary"}
@@ -113,7 +119,13 @@ def test_multi_config_lease_layer_and_cross_key_collision() -> None:
     ]
     app = Starlette()
     SQLSpecPlugin(configs, app)
-    assert sum(middleware.cls is SQLSpecRequestLeaseMiddleware for middleware in app.user_middleware) == 1
+    assert (
+        sum(
+            isinstance(middleware.cls, type) and issubclass(middleware.cls, SQLSpecRequestLeaseMiddleware)
+            for middleware in app.user_middleware
+        )
+        == 1
+    )
     invalid = SqliteConfig(extension_config={"starlette": {"read_session_key": "db_session"}})
     with pytest.raises(ImproperConfigurationError, match="Duplicate"):
         SQLSpecPlugin(invalid, Starlette())
