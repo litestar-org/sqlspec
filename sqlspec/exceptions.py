@@ -217,8 +217,6 @@ class TransactionError(SQLSpecError):
 class ReadOnlyTransactionError(TransactionError):
     """A database rejected a write or locking operation in a read-only transaction."""
 
-    __slots__ = ()
-
 
 class SerializationConflictError(TransactionError):
     """Serialization conflict (SQLSTATE 40001) requiring retry."""
@@ -289,13 +287,9 @@ class OperationalError(SQLSpecError):
 class ReplicaUnavailableError(OperationalError):
     """No healthy replica is available and primary fallback is disabled."""
 
-    __slots__ = ()
-
 
 class RoutingContextError(ImproperConfigurationError):
     """Invalid routing mode, bind group, or primary-only operation."""
-
-    __slots__ = ()
 
 
 class QueryTimeoutError(OperationalError):

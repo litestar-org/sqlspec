@@ -173,7 +173,7 @@ def _eligible(
 class RoundRobinSelector:
     """Smooth weighted round-robin using storage proportional to replica count."""
 
-    __slots__ = ("_current_weights", "_lock", "_specs", "_total_weight")
+    __slots__ = ("_current_weights", "_lock", "_specs")
 
     def __init__(self, specs: Sequence[ReplicaSpec]) -> None:
         """Configure a nonempty, fixed replica sequence."""
@@ -182,7 +182,6 @@ class RoundRobinSelector:
             raise ImproperConfigurationError(msg)
         self._specs = tuple(specs)
         self._current_weights = [0] * len(specs)
-        self._total_weight = sum(spec.weight for spec in specs)
         self._lock = threading.Lock()
 
     @property

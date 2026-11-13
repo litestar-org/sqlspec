@@ -77,17 +77,19 @@ def test_invalid_weights_are_rejected(weight: int) -> None:
         ReplicaSpec("a", weight=weight)
 
 
-def test_invalid_selector_and_health_configuration() -> None:
-    for constructor in (RoundRobinSelector, RandomSelector):
-        with pytest.raises(ImproperConfigurationError):
-            constructor([])
-    for kwargs in (
-        {"replica_count": 0},
-        {"replica_count": 1, "failure_threshold": 0},
-        {"replica_count": 1, "recovery_seconds": 0},
-    ):
-        with pytest.raises(ImproperConfigurationError):
-            ReplicaHealthBreaker(**cast(Any, kwargs))
+@pytest.mark.parametrize("constructor", [RoundRobinSelector, RandomSelector])
+def test_empty_selector_is_rejected(constructor: type[RoundRobinSelector] | type[RandomSelector]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        constructor([])
+
+
+@pytest.mark.parametrize(("replica_count", "failure_threshold", "recovery_seconds"), [(0, 1, 1), (1, 0, 1), (1, 1, 0)])
+def test_invalid_health_configuration(replica_count: int, failure_threshold: int, recovery_seconds: float) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        ReplicaHealthBreaker(replica_count, failure_threshold=failure_threshold, recovery_seconds=recovery_seconds)
+
+
+def test_unknown_selector_is_rejected() -> None:
     with pytest.raises(ImproperConfigurationError):
         build_selector(cast(Any, "unknown"), [ReplicaSpec("a")])
 
