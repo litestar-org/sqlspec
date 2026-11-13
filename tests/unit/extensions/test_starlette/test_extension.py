@@ -12,7 +12,7 @@ pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -398,6 +398,9 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             gate.set()
             if failure is None:
                 await asyncio.wait_for(task, timeout=3)
+            elif failure == "send":
+                with pytest.raises(ClientDisconnect):
+                    await asyncio.wait_for(task, timeout=3)
             else:
                 with pytest.raises((ValueError, OSError), match=f"{failure} failure"):
                     await asyncio.wait_for(task, timeout=3)
@@ -443,7 +446,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
     middleware = SQLSpecAutocommitMiddleware(app=app, config_state=state)
     scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
     await middleware(scope, receive, send)
-    assert messages[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert messages[-1] == {"type": "http.response.body", "body": b"partial", "more_body": True}
     assert connection.rolled_back is True
     assert connection.committed is False
 

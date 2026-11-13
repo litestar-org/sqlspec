@@ -46,6 +46,11 @@ class SQLSpecConfigState:
     sqlcommenter_framework: str = "starlette"
     tenant_extractor: Callable[[Any], Any] | None = None
     tenant_receipt_keys: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
+    read_session_key: str = "read_session"
+    read_connection_key: str = "read_connection"
+    read_pool_key: str = "read_pool"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate transaction status overrides."""

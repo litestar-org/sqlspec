@@ -18,11 +18,12 @@ from sqlspec.extensions.starlette._utils import (
 from sqlspec.extensions.starlette.middleware import (
     CorrelationMiddleware,
     SQLCommenterMiddleware,
-    SQLSpecAutocommitMiddleware,
-    SQLSpecManualMiddleware,
+    SQLSpecRequestLeaseMiddleware,
     SQLSpecTenantRequestMiddleware,
     acquire_pending_connection_async,
     acquire_pending_connection_sync,
+    get_request_resource,
+    get_request_resource_async,
     has_tenant_strategy,
 )
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -133,9 +134,9 @@ class SQLSpecPlugin:
 
         app.router.lifespan_context = combined_lifespan
 
-        for config_state in self._config_states:
-            if not config_state.disable_di:
-                self._add_middleware(app, config_state)
+        active_states = [state for state in self._config_states if not state.disable_di]
+        if active_states:
+            app.add_middleware(SQLSpecRequestLeaseMiddleware, config_states=active_states)
         if any(has_tenant_strategy(state.config) for state in self._config_states):
             app.user_middleware.append(Middleware(SQLSpecTenantRequestMiddleware, config_states=self._config_states))
 
@@ -165,6 +166,12 @@ class SQLSpecPlugin:
             if config_state.config.supports_connection_pooling:
                 pool = await ensure_async_(config_state.config.create_pool)()
                 setattr(app.state, config_state.pool_key, pool)
+                if config_state.config.has_replicas:
+                    setattr(
+                        app.state,
+                        config_state.read_pool_key,
+                        config_state.config.replica_groups.get("default", config_state.config.replica_groups),
+                    )
                 log_with_context(
                     logger,
                     logging.DEBUG,
@@ -247,7 +254,15 @@ class SQLSpecPlugin:
                 if getattr(state.config, "bind_key", None) == name:
                     return state.config
             for state in self._config_states:
-                if name in {state.session_key, state.connection_key, state.pool_key}:
+                if name in {
+                    state.session_key,
+                    state.connection_key,
+                    state.pool_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.routing_session_key,
+                }:
                     return state.config
             msg = f"No configuration found for key '{name}'."
             raise KeyError(msg)
@@ -339,6 +354,60 @@ class SQLSpecPlugin:
             return await acquire_pending_connection_async(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
+    def get_read_session(self, request: "Request", key: Any = None) -> Any:
+        """Return a request-owned read session."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.read_session_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return get_request_resource(request, selected, resource_key, "session")
+
+    async def get_read_session_async(self, request: "Request", key: Any = None) -> Any:
+        """Open and return a request-owned read session."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.read_session_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return await get_request_resource_async(request, selected, resource_key, "session")
+
+    def get_read_connection(self, request: "Request", key: Any = None) -> Any:
+        """Return a request-owned read connection."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.read_connection_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return get_request_resource(request, selected, resource_key, "connection")
+
+    async def get_read_connection_async(self, request: "Request", key: Any = None) -> Any:
+        """Open and return a request-owned read connection."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.read_connection_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return await get_request_resource_async(request, selected, resource_key, "connection")
+
+    def get_routing_session(self, request: "Request", key: Any = None) -> Any:
+        """Return a request-owned routing session."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.routing_session_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return get_request_resource(request, selected, resource_key, "routing")
+
+    async def get_routing_session_async(self, request: "Request", key: Any = None) -> Any:
+        """Open and return a request-owned routing session."""
+        selected = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = selected.routing_session_key
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return await get_request_resource_async(request, selected, resource_key, "routing")
+
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Starlette settings from config.extension_config.
 
@@ -352,11 +421,25 @@ class SQLSpecPlugin:
         pool_key = framework_config.get("pool_key", DEFAULT_POOL_KEY)
         if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
             pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
+        connection_key = framework_config.get("connection_key", DEFAULT_CONNECTION_KEY)
+        session_key = framework_config.get("session_key", DEFAULT_SESSION_KEY)
         correlation_headers = framework_config.get("correlation_headers")
         return {
             "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
-            "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "session_key": session_key,
+            "read_connection_key": framework_config.get(
+                "read_connection_key",
+                "read_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_read",
+            ),
+            "read_pool_key": framework_config.get(
+                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            ),
+            "read_session_key": framework_config.get(
+                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            ),
+            "routing_session_key": framework_config.get("routing_session_key"),
+            "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
             "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
@@ -402,6 +485,22 @@ class SQLSpecPlugin:
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
             tenant_extractor=settings.get("tenant_extractor"),
+            read_connection_key=settings.get(
+                "read_connection_key",
+                "read_connection"
+                if settings["connection_key"] == DEFAULT_CONNECTION_KEY
+                else f"{settings['connection_key']}_read",
+            ),
+            read_pool_key=settings.get(
+                "read_pool_key",
+                "read_pool" if settings["pool_key"] == DEFAULT_POOL_KEY else f"{settings['pool_key']}_read",
+            ),
+            read_session_key=settings.get(
+                "read_session_key",
+                "read_session" if settings["session_key"] == DEFAULT_SESSION_KEY else f"{settings['session_key']}_read",
+            ),
+            routing_session_key=settings.get("routing_session_key"),
+            default_routing_mode=settings.get("default_routing_mode", "auto"),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -412,24 +511,24 @@ class SQLSpecPlugin:
         """
         all_keys: set[str] = set()
         for state in self._config_states:
-            keys = {state.connection_key, state.pool_key, state.session_key}
-            duplicates = all_keys & keys
-            if duplicates:
-                msg = f"Duplicate state keys found: {duplicates}"
+            keys = [
+                key
+                for key in (
+                    state.connection_key,
+                    state.pool_key,
+                    state.session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.read_session_key,
+                    state.routing_session_key,
+                )
+                if key is not None
+            ]
+            duplicates = all_keys.intersection(keys)
+            if duplicates or len(keys) != len(set(keys)):
+                msg = f"Duplicate state keys found: {duplicates or keys}"
                 raise ImproperConfigurationError(msg)
             all_keys.update(keys)
-
-    def _add_middleware(self, app: "Starlette", config_state: SQLSpecConfigState) -> None:
-        """Add transaction middleware for configuration.
-
-        Args:
-            app: Starlette application instance.
-            config_state: Configuration state.
-        """
-        if config_state.commit_mode == "manual":
-            app.add_middleware(SQLSpecManualMiddleware, config_state=config_state)
-        elif config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}:
-            app.add_middleware(SQLSpecAutocommitMiddleware, config_state=config_state)
 
     def _add_correlation_middleware(self, app: "Starlette") -> None:
         """Add correlation middleware if any config enables it.
@@ -500,7 +599,15 @@ class SQLSpecPlugin:
                 if state.session_key == key:
                     return state
             for state in self._config_states:
-                if key in {state.connection_key, state.pool_key, getattr(state.config, "bind_key", None)}:
+                if key in {
+                    state.connection_key,
+                    state.pool_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.routing_session_key,
+                    getattr(state.config, "bind_key", None),
+                }:
                     return state
             msg = f"No configuration found with session_key: {key}"
             raise ValueError(msg)
