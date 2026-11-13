@@ -27,6 +27,14 @@ CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "
 SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
+    "sqlspec/core/routing.py": {
+        "classification": "compile_now",
+        "reason": "Weighted selectors and passive health breaker compile with core.",
+    },
+    "sqlspec/utils/routing.py": {
+        "classification": "keep_interpreted",
+        "reason": "Pure ASGI middleware and request routing contexts preserve Python callable boundaries.",
+    },
     "sqlspec/data_dictionary/dialects/teradata/config.py": {
         "classification": "compile_now",
         "reason": "Teradata catalog configuration compiles with dialect helpers.",
