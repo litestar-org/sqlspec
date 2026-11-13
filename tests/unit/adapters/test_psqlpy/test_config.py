@@ -697,3 +697,20 @@ def test_native_replica_enums_and_uppercase_strings_are_supported() -> None:
     uppercase = PsqlpyConfig(connection_config={"target_session_attrs": "READ-ONLY", "load_balance_hosts": "DISABLE"})
     assert native.connection_config["target_session_attrs"] == uppercase.connection_config["target_session_attrs"]
     assert native.connection_config["load_balance_hosts"] == uppercase.connection_config["load_balance_hosts"]
+
+
+def test_replica_session_attributes_preserve_inherited_endpoint() -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app"})
+    reader = primary.derive_pool(
+        connection_config_overrides={
+            "options": "-c default_transaction_read_only=on",
+            "target_session_attrs": "read-only",
+            "load_balance_hosts": "random",
+        }
+    )
+    assert reader.connection_config["dsn"] == "postgresql://writer/app"
+    assert reader.connection_config["target_session_attrs"] == TargetSessionAttrs.ReadOnly
+    assert reader.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
+    assert reader.connection_config["options"] == "-c default_transaction_read_only=on"

@@ -369,7 +369,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
     ) -> dict[str, Any]:
         aliases = ("dsn", "conninfo", "url", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in (*aliases, "host", "hosts", "target_session_attrs")):
+        if any(key in overrides for key in (*aliases, "host", "hosts")):
             for key in aliases:
                 config.pop(key, None)
             if explicit_dsn is not None:
