@@ -1088,3 +1088,60 @@ async def test_tenant_prepare_failure_releases_native_context(
         strategy.checkin.assert_called_once()
         connection.rollback.assert_called_once()
         context.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+@pytest.mark.parametrize("explicit_threshold", (False, True))
+def test_replica_derivation_preserves_explicit_prepare_threshold(config_type: Any, explicit_threshold: bool) -> None:
+    connection: dict[str, Any] = {"conninfo": "postgresql://writer/app"}
+    if explicit_threshold:
+        connection["prepare_threshold"] = None
+    primary = config_type(connection_config=connection, driver_features={"pooler_mode": "transaction"})
+    replica = primary.derive_pool(host="reader-a,reader-b", port="5432,5433", pooler_mode="session")
+    assert replica.connection_config.get("conninfo") is None
+    assert ("prepare_threshold" in replica.connection_config) is explicit_threshold
+    assert replica.connection_config["host"] == "reader-a,reader-b"
+    assert primary.connection_config["conninfo"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_replica_alias_overrides_replace_primary_values(config_type: Any) -> None:
+    primary = config_type(connection_config={"conninfo": "postgresql://writer/app", "dbname": "app"})
+    replica = primary.derive_pool(url="postgresql://reader/reader_app", database="reader_app")
+    assert replica.connection_config["conninfo"] == "postgresql://reader/reader_app"
+    assert replica.connection_config["dbname"] == "reader_app"
+
+
+@pytest.mark.parametrize("async_mode", (False, True))
+@pytest.mark.parametrize("mapping_rows", (False, True))
+async def test_wal_helpers_handle_row_factories_validate_and_map_errors(async_mode: bool, mapping_rows: bool) -> None:
+    import inspect
+
+    from psycopg.errors import InvalidTextRepresentation
+
+    from sqlspec.exceptions import DataError, SQLSpecError
+
+    connection = MagicMock()
+    cursor = AsyncMock() if async_mode else MagicMock()
+    connection.cursor.return_value = cursor
+    config = PsycopgAsyncConfig() if async_mode else PsycopgSyncConfig()
+    driver_type = PsycopgAsyncDriver if async_mode else PsycopgSyncDriver
+    driver = driver_type(connection, statement_config=config.statement_config)
+
+    async def invoke(function: Any, *args: Any) -> Any:
+        result = function(*args)
+        return await result if inspect.isawaitable(result) else result
+
+    cursor.fetchone.return_value = {"lsn": "0/16B3748"} if mapping_rows else ("0/16B3748",)
+    assert await invoke(driver.current_wal_lsn) == "0/16B3748"
+    cursor.fetchone.return_value = {"coalesce": True} if mapping_rows else (True,)
+    assert await invoke(driver.has_replayed_wal_lsn, "0/16B3748") is True
+    assert cursor.execute.call_args.args[1] == ("0/16B3748",)
+    with pytest.raises(ImproperConfigurationError):
+        await invoke(driver.has_replayed_wal_lsn, " ")
+    cursor.fetchone.return_value = None
+    with pytest.raises(SQLSpecError):
+        await invoke(driver.current_wal_lsn)
+    cursor.execute.side_effect = InvalidTextRepresentation("invalid WAL location")
+    with pytest.raises(DataError):
+        await invoke(driver.has_replayed_wal_lsn, "bad-lsn")

@@ -1,6 +1,6 @@
 """PostgreSQL psycopg driver implementation."""
 
-from collections.abc import Sized
+from collections.abc import Mapping, Sized
 from contextlib import AsyncExitStack, ExitStack, suppress
 from itertools import chain
 from time import perf_counter
@@ -62,7 +62,7 @@ from sqlspec.driver import (
     SyncRowStream,
     describe_stack_statement,
 )
-from sqlspec.exceptions import SQLSpecError, StackExecutionError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import is_readable, resolve_row_format
@@ -494,6 +494,34 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
             )
         )
+
+    def current_wal_lsn(self) -> str:
+        """Return the primary server's current write-ahead-log location."""
+        row = None
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT pg_current_wal_lsn()::text")
+            row = cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        if value is None:
+            msg = "PostgreSQL returned no current WAL location"
+            raise SQLSpecError(msg)
+        return str(value)
+
+    def has_replayed_wal_lsn(self, lsn: str) -> bool:
+        """Check whether this server has replayed a bound WAL location."""
+        if not isinstance(lsn, str) or not lsn.strip():
+            msg = "WAL location must be a nonempty string"
+            raise ImproperConfigurationError(msg)
+        row = None
+        handler = self.handle_database_exceptions()
+        with handler, self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT COALESCE(pg_last_wal_replay_lsn() >= %s::pg_lsn, NOT pg_is_in_recovery())", (lsn,))
+            row = cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        return bool(value)
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -1078,6 +1106,36 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
                 self, sql, prepared_parameters, chunk_size, column_types_resolver=_resolve_column_types
             )
         )
+
+    async def current_wal_lsn(self) -> str:
+        """Return the primary server's current write-ahead-log location."""
+        row = None
+        handler = self.handle_database_exceptions()
+        async with handler, self.with_cursor(self.connection) as cursor:
+            await cursor.execute("SELECT pg_current_wal_lsn()::text")
+            row = await cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        if value is None:
+            msg = "PostgreSQL returned no current WAL location"
+            raise SQLSpecError(msg)
+        return str(value)
+
+    async def has_replayed_wal_lsn(self, lsn: str) -> bool:
+        """Check whether this server has replayed a bound WAL location."""
+        if not isinstance(lsn, str) or not lsn.strip():
+            msg = "WAL location must be a nonempty string"
+            raise ImproperConfigurationError(msg)
+        row = None
+        handler = self.handle_database_exceptions()
+        async with handler, self.with_cursor(self.connection) as cursor:
+            await cursor.execute(
+                "SELECT COALESCE(pg_last_wal_replay_lsn() >= %s::pg_lsn, NOT pg_is_in_recovery())", (lsn,)
+            )
+            row = await cursor.fetchone()
+        self._check_pending_exception(handler)
+        value = next(iter(row.values())) if isinstance(row, Mapping) else row[0] if row else None
+        return bool(value)
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""

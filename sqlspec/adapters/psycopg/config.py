@@ -125,8 +125,12 @@ class PsycopgConnectionParams(TypedDict):
     """PostgreSQL libpq connection URI or keyword/value conninfo string."""
     host: NotRequired[str]
     """Database server hostname or Unix socket directory."""
-    port: NotRequired[int]
-    """Database server TCP port (defaults to ``5432``)."""
+    port: NotRequired[int | str]
+    """Server port or comma-separated multi-host ports (defaults to ``5432``)."""
+    target_session_attrs: NotRequired[Literal["any", "read-write", "read-only", "primary", "standby", "prefer-standby"]]
+    """Required server role for multi-host libpq connections."""
+    load_balance_hosts: NotRequired[Literal["disable", "random"]]
+    """Host connection ordering policy across multi-host targets."""
     user: NotRequired[str]
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
@@ -382,6 +386,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
         pooler_mode = features_dict.get("pooler_mode", "session")
         is_transaction_pooler = pooler_mode in {"transaction", "statement"}
+        self._explicit_prepare_threshold = "prepare_threshold" in connection_config
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -415,6 +420,24 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.driver_features["pooler_mode"] = validate_psycopg_tenant_config(
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgSyncConfig"
             )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases) or "host" in overrides:
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+        return config
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -907,6 +930,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         )
         pooler_mode = features_dict.get("pooler_mode", "session")
         is_transaction_pooler = pooler_mode in {"transaction", "statement"}
+        self._explicit_prepare_threshold = "prepare_threshold" in connection_config
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -937,6 +961,24 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             self.driver_features["pooler_mode"] = validate_psycopg_tenant_config(
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgAsyncConfig"
             )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases) or "host" in overrides:
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+        return config
 
     @property
     def pg_textsearch_available(self) -> bool:
