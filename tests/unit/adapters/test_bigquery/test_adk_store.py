@@ -5,6 +5,7 @@ import inspect
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import Any, NotRequired, cast, get_args, get_origin
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -138,7 +139,7 @@ def test_bigquery_adk_explicit_partition_filter_adds_partition_predicates(monkey
         statements.append(sql)
         return []
 
-    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+    _capture_client(monkeypatch, store, capture)
 
     store.get_session("app", "user", "session")
     store._update_session_touch("app", "user", "session")
@@ -176,7 +177,7 @@ def test_bigquery_adk_get_events_reads_full_event_blob_without_json_value(monkey
             }
         ]
 
-    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+    _capture_client(monkeypatch, store, capture)
 
     events = store.get_events("app", "user", "session")
 
@@ -204,7 +205,7 @@ def test_bigquery_adk_create_session_includes_owner_column_when_configured(monke
         statements.append((sql, parameters))
         return []
 
-    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+    _capture_client(monkeypatch, store, capture)
 
     store.create_session("session", "app", "user", {}, owner_id="tenant-1")
 
@@ -227,7 +228,7 @@ def _capture_session_list(monkeypatch: Any, store: BigQueryADKStore) -> "list[tu
         calls.append((sql, list(parameters or [])))
         return []
 
-    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+    _capture_client(monkeypatch, store, capture)
     return calls
 
 
@@ -461,3 +462,17 @@ def test_bigquery_adk_reconcile_adds_nullable_column_and_refuses_not_null() -> N
     with pytest.raises(MigrationError, match="update_time") as exc_info:
         adk_reconcile(MigrationContext(config=config, dialect="bigquery", driver=bad_driver))
     assert 'migration_mode="versioned"' in str(exc_info.value)
+
+
+def _capture_client(monkeypatch: Any, store: BigQueryADKStore, capture: Any) -> None:
+    client = MagicMock()
+
+    def query(sql: str, *, job_config: Any = None) -> MagicMock:
+        job = MagicMock()
+        parameters = job_config.query_parameters if job_config is not None else None
+        job.result.return_value = capture(store, sql, parameters)
+        job.num_dml_affected_rows = 0
+        return job
+
+    client.query.side_effect = query
+    monkeypatch.setattr(store._config, "provide_connection", lambda: nullcontext(client))

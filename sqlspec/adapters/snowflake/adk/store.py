@@ -107,7 +107,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     ) -> StoredSession | None:
         """Read a session and optionally refresh its update timestamp."""
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=renew_for is not None) as driver:
                 row = driver.select_one_or_none(
                     f"SELECT id, app_name, user_id, state, create_time, update_time FROM {self._session_table} "
                     "WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -169,7 +169,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 sql += " OFFSET ?"
                 parameters.append(offset)
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 return [_session(row) for row in driver.select(sql, parameters)]
         except SQLSpecError as exc:
             if _missing_table(exc):
@@ -281,7 +281,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             sql += " LIMIT ?"
             parameters.append(limit)
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 rows = driver.select(sql, parameters)
             events: list[StoredEvent] = []
             for raw in rows:
@@ -577,7 +577,7 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
         parameters.extend((f"%{query.strip()}%", self._max_results if limit is None else limit))
         columns = "id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at"
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 rows = driver.select(
                     f"SELECT {columns} FROM {self._memory_table} WHERE {predicate} "
                     "AND content_text ILIKE ? ORDER BY timestamp DESC, id DESC LIMIT ?",

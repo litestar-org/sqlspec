@@ -123,6 +123,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -131,6 +132,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                 WHERE app_name = ? AND user_id = ? AND id = ?
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except Exception as exc:
             if _is_teradata_table_missing(exc):
@@ -169,7 +171,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
@@ -244,7 +246,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
@@ -435,18 +437,18 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
     ) -> "tuple[str, tuple[Any, ...]]":
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = ()) -> "Any | None":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return cursor.fetchone()
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit and getattr(conn, "autocommit", True) is False:
@@ -610,7 +612,7 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
         ORDER BY timestamp DESC
         """
         try:
-            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%"))
+            rows = self._execute_fetchall(sql, (*scope_params, f"%{escaped_query}%"), read=True)
         except Exception as exc:
             if _is_teradata_table_missing(exc):
                 return []
@@ -691,8 +693,8 @@ class TeradataADKMemoryStore(BaseSyncADKMemoryStore["TeradataConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE {format_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, TeradataCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, TeradataCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
