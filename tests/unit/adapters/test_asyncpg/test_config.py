@@ -630,3 +630,73 @@ async def test_tenant_failed_restore_terminates_before_release() -> None:
         async with config.provide_connection():
             pass
     assert events == ["terminate", "release"]
+
+
+@pytest.mark.parametrize("explicit_cache", (False, True))
+def test_replica_derivation_preserves_explicit_cache_and_clears_primary_dsn(explicit_cache: bool) -> None:
+    connection: dict[str, Any] = {"dsn": "postgresql://writer/app"}
+    if explicit_cache:
+        connection["statement_cache_size"] = 0
+    primary = AsyncpgConfig(connection_config=connection, driver_features={"pooler_mode": "transaction"})
+    replica = primary.derive_pool(host=["reader-a", "reader-b"], port=[5432, 5433], pooler_mode="session")
+    assert replica.connection_config.get("dsn") is None
+    assert replica.connection_config["host"] == ["reader-a", "reader-b"]
+    assert replica.connection_config.get("statement_cache_size") == (0 if explicit_cache else None)
+    assert primary.connection_config["dsn"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize("alias", ("url", "conninfo"))
+def test_replica_uri_override_replaces_inherited_dsn(alias: str) -> None:
+    primary = AsyncpgConfig(connection_config={"dsn": "postgresql://writer/app"})
+    overrides: dict[str, Any] = {alias: "postgresql://reader/app"}
+    replica = primary.derive_pool(**overrides)
+    assert replica.connection_config["dsn"] == "postgresql://reader/app"
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from asyncpg.exceptions import ReadOnlySQLTransactionError
+
+    from sqlspec.adapters.asyncpg.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = ReadOnlySQLTransactionError("cannot write")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()
+
+
+async def test_wal_helpers_bind_locations_validate_and_map_native_errors() -> None:
+    from asyncpg.exceptions import InvalidTextRepresentationError
+
+    from sqlspec.exceptions import DataError, SQLSpecError
+
+    connection = AsyncMock()
+    config = AsyncpgConfig()
+    driver = AsyncpgDriver(connection, statement_config=config.statement_config)
+    connection.fetchval.return_value = "0/16B3748"
+    assert await driver.current_wal_lsn() == "0/16B3748"
+    connection.fetchval.return_value = False
+    assert await driver.has_replayed_wal_lsn("0/16B3748") is False
+    assert connection.fetchval.call_args.args[1] == "0/16B3748"
+    with pytest.raises(ImproperConfigurationError):
+        await driver.has_replayed_wal_lsn(" ")
+    connection.fetchval.return_value = None
+    with pytest.raises(SQLSpecError):
+        await driver.current_wal_lsn()
+    connection.fetchval.side_effect = InvalidTextRepresentationError("invalid WAL location")
+    with pytest.raises(DataError):
+        await driver.has_replayed_wal_lsn("bad-lsn")
+
+
+def test_replica_derivation_distinguishes_explicit_and_injected_server_settings() -> None:
+    primary = AsyncpgConfig(driver_features={"enable_alloydb_columnar": True})
+    replica = primary.derive_pool(pooler_mode="transaction")
+    assert replica.connection_config.get("server_settings") is None
+    explicit = AsyncpgConfig(
+        connection_config={"server_settings": {"application_name": "explicit"}},
+        driver_features={"enable_alloydb_columnar": True},
+    )
+    replica = explicit.derive_pool(pooler_mode="transaction")
+    assert replica.connection_config["server_settings"] == {"application_name": "explicit"}

@@ -1,7 +1,7 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
 
@@ -98,10 +98,10 @@ class AsyncpgConnectionConfig(TypedDict):
 
     dsn: NotRequired[str]
     """PostgreSQL connection URI (``postgresql://user:pass@host:port/dbname``)."""
-    host: NotRequired[str]
-    """Database server hostname or Unix domain socket directory."""
-    port: NotRequired[int]
-    """Database server TCP port (defaults to ``5432``)."""
+    host: NotRequired[str | Sequence[str]]
+    """Database hostname, socket directory, or sequence of failover hosts."""
+    port: NotRequired[int | Sequence[int]]
+    """Server port or sequence of ports matching the hosts (defaults to ``5432``)."""
     user: NotRequired[str]
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
@@ -399,6 +399,25 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self._extension_probe_lock = asyncio.Lock()
 
         self._validate_connector_config()
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_statement_cache_size and "statement_cache_size" not in overrides:
+            config.pop("statement_cache_size", None)
+        if "server_settings" not in overrides:
+            if self._explicit_server_settings is None:
+                config.pop("server_settings", None)
+            else:
+                config["server_settings"] = dict(self._explicit_server_settings)
+        aliases = ("dsn", "url", "conninfo", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases) or "host" in overrides:
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        return config
 
     @property
     def pg_textsearch_available(self) -> bool:

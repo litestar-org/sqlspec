@@ -23,6 +23,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -367,6 +368,9 @@ def resolve_many_rowcount(parameter_sets: Any, *, fallback_count: "int | None" =
 
 
 _EXCEPTION_MAPPING_DISPATCHER.register(
+    asyncpg.exceptions.ReadOnlySQLTransactionError, ("25006", ReadOnlyTransactionError, "read-only transaction")
+)
+_EXCEPTION_MAPPING_DISPATCHER.register(
     asyncpg.exceptions.UniqueViolationError, ("23505", UniqueViolationError, "unique constraint violation")
 )
 _EXCEPTION_MAPPING_DISPATCHER.register(
@@ -447,6 +451,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     sqlstate_code: str | None = sqlstate_attr if sqlstate_attr is not None else None
+    if sqlstate_code == "25006":
+        return _create_postgres_error(error, sqlstate_code, ReadOnlyTransactionError, "read-only transaction")
     if sqlstate_code:
         if sqlstate_code == "57014":
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
