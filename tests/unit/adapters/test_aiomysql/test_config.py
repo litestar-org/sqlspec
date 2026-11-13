@@ -9,6 +9,8 @@ import pytest
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor, AiomysqlRawCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig, build_connection_config
 from sqlspec.adapters.aiomysql.core import build_statement_config
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -348,3 +350,17 @@ async def test_aiomysql_create_connection_closes_socket_on_error(monkeypatch: py
         await config.create_connection()
 
     assert mock_conn.close.called
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    mock_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx))
+    config = AiomysqlConfig(connection_instance=pool)
+
+    async with config.provide_session() as session:
+        assert session.connection is mock_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await session.execute("SELECT 1")

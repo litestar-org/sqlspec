@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterator
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlspec.driver import AsyncDriverAdapterBase
+from sqlspec.driver._common import _DETACHED_CONNECTION_MESSAGE
 from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ class DeferredAsyncSession:
     Once the connection is open, every attribute is read from the real driver session.
     """
 
-    __slots__ = ("_accessor", "_config", "_current", "_open")
+    __slots__ = ("_accessor", "_closed", "_config", "_current", "_open")
 
     def __init__(
         self,
@@ -66,6 +67,7 @@ class DeferredAsyncSession:
         self._open = open_session
         self._current = current_session
         self._accessor = accessor
+        self._closed = False
 
     async def resolve(self) -> Any:
         """Return the real driver session, checking out the request connection when needed.
@@ -73,12 +75,16 @@ class DeferredAsyncSession:
         Returns:
             The driver session bound to the request connection.
         """
+        if self._closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
         session = self._current()
         if session is not None:
             return session
         return await self._open()
 
     def __getattr__(self, name: str) -> Any:
+        if self._closed:
+            raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
         session = self._current()
         if session is not None:
             return getattr(session, name)
@@ -103,6 +109,15 @@ class DeferredAsyncSession:
 
     def __repr__(self) -> str:
         return f"<DeferredAsyncSession {self._config.driver_type.__name__}>"
+
+    def _detach_connection(self) -> None:
+        """Mark the deferred session closed and detach the underlying driver session when open."""
+        self._closed = True
+        session = self._current()
+        if session is not None:
+            detach = getattr(session, "_detach_connection", None)
+            if detach is not None:
+                detach()
 
     def _raise_not_open(self, name: str) -> NoReturn:
         msg = (
@@ -143,21 +158,6 @@ class _DeferredCall(Coroutine[Any, Any, Any]):
         self._coroutine: Coroutine[Any, Any, Any] | None = None
         self._target: Any = None
 
-    async def _invoke(self) -> Any:
-        session = await self._session.resolve()
-        return getattr(session, self._name)(*self._args, **self._kwargs)
-
-    async def _run(self) -> Any:
-        result = await self._invoke()
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    def _ensure_coroutine(self) -> "Coroutine[Any, Any, Any]":
-        if self._coroutine is None:
-            self._coroutine = self._run()
-        return self._coroutine
-
     def __await__(self) -> "Generator[Any, None, Any]":
         return self._ensure_coroutine().__await__()
 
@@ -187,6 +187,21 @@ class _DeferredCall(Coroutine[Any, Any, Any]):
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         return await self._target.__aexit__(exc_type, exc, tb)
+
+    async def _invoke(self) -> Any:
+        session = await self._session.resolve()
+        return getattr(session, self._name)(*self._args, **self._kwargs)
+
+    async def _run(self) -> Any:
+        result = await self._invoke()
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    def _ensure_coroutine(self) -> "Coroutine[Any, Any, Any]":
+        if self._coroutine is None:
+            self._coroutine = self._run()
+        return self._coroutine
 
 
 def raise_async_connection_required(accessor: str) -> NoReturn:
@@ -246,6 +261,12 @@ class PortalSession:
 
     def __repr__(self) -> str:
         return f"<PortalSession {type(self._session).__name__}>"
+
+    def _detach_connection(self) -> None:
+        """Detach the wrapped asynchronous driver session directly without dispatching via the portal."""
+        detach = getattr(self._session, "_detach_connection", None)
+        if detach is not None:
+            detach()
 
 
 class _PortalResource:

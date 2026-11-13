@@ -20,6 +20,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -695,3 +696,16 @@ async def test_tenant_preparation_failure_releases_once(monkeypatch: pytest.Monk
     assert caught.value is error
     context.__aexit__.assert_awaited_once()
     strategy.checkin.assert_awaited_once()
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.in_transaction = AsyncMock(return_value=False)
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = AsyncMock()
+    pool.acquire = lambda: context
+    config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool))
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _DETACHED_CONNECTION

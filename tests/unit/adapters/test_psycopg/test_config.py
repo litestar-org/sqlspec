@@ -24,6 +24,7 @@ from sqlspec.adapters.psycopg.core import build_statement_config, default_statem
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
@@ -1116,11 +1117,13 @@ async def test_psycopg_session_context_rolls_back_active_transaction_on_clean_ex
     if isinstance(ctx, PsycopgAsyncSessionContext):
         async with ctx as driver:
             driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert driver.connection is _DETACHED_CONNECTION
         conn.rollback.assert_awaited_once()
         release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
     else:
         with ctx as sync_driver:
             sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert sync_driver.connection is _DETACHED_CONNECTION
         conn.rollback.assert_called_once()
         release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
 

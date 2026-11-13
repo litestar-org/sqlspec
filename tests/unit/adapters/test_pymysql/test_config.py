@@ -12,7 +12,8 @@ from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
-from sqlspec.exceptions import DatabaseConnectionError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -334,5 +335,20 @@ def test_pool_health_check_bypassed_when_interval_zero() -> None:
     try:
         pool.acquire()
         assert not raw_conn.ping.called
+    finally:
+        pool.close()
+
+
+def test_provide_session_detaches_driver_on_exit() -> None:
+    raw_conn = MagicMock(server_status=0)
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    config = PyMysqlConfig(connection_instance=pool)
+    try:
+        with config.provide_session() as session:
+            assert session.connection is raw_conn
+
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
     finally:
         pool.close()

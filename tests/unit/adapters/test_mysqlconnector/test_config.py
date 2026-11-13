@@ -22,6 +22,8 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorSyncConnectionParams,
     build_connection_config,
 )
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
@@ -575,3 +577,29 @@ def test_mysqlconnector_async_config_inherited_methods() -> None:
 
 def test_mysqlconnector_sync_dispatch_execute_script_counts_statements() -> None:
     """dispatch_execute_script runs each split statement and reports accurate counts."""
+
+
+def test_sync_provide_session_detaches_driver_on_exit() -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False)
+    fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
+    config = MysqlConnectorSyncConfig(connection_instance=fake_pool)
+
+    with config.provide_session() as session:
+        assert session.connection is pooled_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        session.execute("SELECT 1")
+
+
+async def test_async_provide_session_detaches_driver_on_exit() -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False, close=AsyncMock(), rollback=AsyncMock())
+    fake_pool = MagicMock(get_connection=AsyncMock(return_value=pooled_conn))
+    config = MysqlConnectorAsyncConfig(connection_instance=fake_pool)
+
+    async with config.provide_session() as session:
+        assert session.connection is pooled_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await session.execute("SELECT 1")

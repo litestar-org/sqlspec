@@ -37,6 +37,7 @@ from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.adapters.cockroach_psycopg.core import build_native_export
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
@@ -1456,11 +1457,13 @@ async def test_cockroach_psycopg_session_context_rolls_back_active_transaction_o
     if isinstance(ctx, CockroachPsycopgAsyncSessionContext):
         async with ctx as driver:
             driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert driver.connection is _DETACHED_CONNECTION
         conn.rollback.assert_awaited_once()
         release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
     else:
         with ctx as sync_driver:
             sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert sync_driver.connection is _DETACHED_CONNECTION
         conn.rollback.assert_called_once()
         release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
 

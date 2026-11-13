@@ -11,6 +11,7 @@ import sqlspec.adapters.sqlite.core as sqlite_core
 from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.core import build_connection_config
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -309,3 +310,15 @@ def test_filter_connection_params_with_hoisted_helper() -> None:
     raw = {"database": ":memory:", "extra": {}, "pool_min_size": 10, "timeout": 30.0, "isolation_level": None}
     filtered = _filter_connection_params(raw)
     assert filtered == {"database": ":memory:", "timeout": 30.0, "isolation_level": None}
+
+
+def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "detach.sqlite")})
+    try:
+        with config.provide_session() as session:
+            assert session.select_value("SELECT 1") == 1
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+    finally:
+        config.close_pool()

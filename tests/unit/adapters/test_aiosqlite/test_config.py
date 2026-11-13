@@ -12,6 +12,7 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import build_connection_config
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -339,3 +340,17 @@ async def test_create_pool_preserves_zero_timeouts(tmp_path: Path) -> None:
         assert pool._operation_timeout == 0.0
     finally:
         await pool.close()
+
+
+async def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "detach.sqlite")})
+    try:
+        async with config.provide_session() as session:
+            assert await session.select_value("SELECT 1") == 1
+            assert session.connection is not _DETACHED_CONNECTION
+
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await session.execute("SELECT 1")
+    finally:
+        await config.close_pool()
