@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "OPERATION_PROFILE_SLOTS",
     "CompiledSQL",
     "OperationProfile",
     "OperationType",
@@ -42,6 +43,8 @@ __all__ = (
     "is_copy_operation",
     "is_copy_to_operation",
 )
+
+OPERATION_PROFILE_SLOTS: Final[tuple[str, ...]] = ("is_read_only", "modifies_rows", "returns_rows")
 
 VOLATILE_FUNCTIONS: Final[frozenset[str]] = frozenset({
     "NEXTVAL",
@@ -175,7 +178,7 @@ def is_copy_to_operation(operation_type: "OperationType") -> bool:
 class OperationProfile:
     """Semantic characteristics derived from the parsed SQL expression."""
 
-    __slots__ = ("is_read_only", "modifies_rows", "returns_rows")
+    __slots__ = OPERATION_PROFILE_SLOTS
 
     def __init__(self, returns_rows: bool = False, modifies_rows: bool = False, is_read_only: bool = False) -> None:
         self.returns_rows = returns_rows
