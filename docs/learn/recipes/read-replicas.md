@@ -104,7 +104,7 @@ with RoutingContext.scope():
         pass
 ```
 
-An explicit `RoutingContext.replica()` choice requires a reader. It never falls back to the primary; missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Automatic read providers retain the group's configured primary fallback. A historical write pin can keep work on the primary even inside an explicit replica scope outside an active transaction.
+An explicit `RoutingContext.replica()` choice requires a reader. It never falls back to the primary; missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Automatic read providers retain the group's configured primary fallback. Outside an active transaction, an explicit replica scope can override a historical write pin; normal automatic routing remains pinned.
 
 Each scope works with `with` or `async with` and restores its caller's state. `primary`, `replica`, and `auto` can target a `bind_key`. A write pins only the active logical bind in the active request scope. An explicit conflicting replica choice during a primary transaction fails rather than splitting that transaction across sockets.
 
