@@ -9,7 +9,13 @@ from sqlspec.adapters.teradata._typing import (
     TeradataRawCursor,
     TeradataSessionContext,
 )
-from sqlspec.adapters.teradata.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.teradata.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    merge_teradata_derive_overrides,
+    parse_teradata_replica_endpoint,
+)
 from sqlspec.adapters.teradata.driver import TeradataDriver, TeradataExceptionHandler
 from sqlspec.adapters.teradata.migrations import TeradataSyncMigrationTracker
 from sqlspec.adapters.teradata.pool import TeradataConnectionPool
@@ -222,6 +228,16 @@ class TeradataConfig(SyncDatabaseConfig[TeradataConnection, TeradataConnectionPo
             observability_config=observability_config,
             **kwargs,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_teradata_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": parse_teradata_replica_endpoint(spec_input)}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def create_connection(self) -> "TeradataConnection":
         """Open a standalone Teradata Vantage connection owned by the caller."""

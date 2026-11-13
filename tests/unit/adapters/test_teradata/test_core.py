@@ -338,3 +338,16 @@ def test_native_statement_config_uses_vantage_sqlglot_dialect() -> None:
     from sqlspec.adapters.teradata.core import default_statement_config
 
     assert default_statement_config.dialect == "vantage"
+
+
+@pytest.mark.parametrize(
+    "message", ("[SQLState 25006] read-only transaction", "cannot write in a read-only transaction")
+)
+def test_replica_error_mapping_preserves_native_cause(message: str) -> None:
+    from sqlspec.adapters.teradata.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = Exception(message)
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
