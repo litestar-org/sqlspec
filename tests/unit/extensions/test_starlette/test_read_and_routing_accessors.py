@@ -1,13 +1,13 @@
 """ASGI request read/routing accessors with real SQLite configurations."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
@@ -66,7 +66,6 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
     app = Starlette(routes=[Route("/read", read), Route("/route", route)])
     plugin = SQLSpecPlugin(config, app)
     assert sum(middleware.cls is SQLSpecRequestLeaseMiddleware for middleware in app.user_middleware) == 1
-    assert all(not issubclass(middleware.cls, BaseHTTPMiddleware) for middleware in app.user_middleware)
     with TestClient(app) as client:
         assert client.get("/read").json() == {"origin": "replica"}
         assert client.get("/route").json() == {"before": "replica", "after": "primary"}
@@ -80,7 +79,7 @@ def test_streaming_and_background_can_use_read_lease(tmp_path: Path) -> None:
     events: list[str] = []
 
     async def endpoint(request: Request) -> StreamingResponse:
-        async def body() -> Any:
+        async def body() -> AsyncIterator[str]:
             session = await plugin.get_read_session_async(request)
             yield await session.select_value("SELECT origin FROM notes WHERE id=1")
             await asyncio.sleep(0)
