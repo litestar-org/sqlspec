@@ -875,6 +875,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_migration_lock",
         "_observability_runtime",
         "_storage_capabilities",
+        "_tenant_key",
         "bind_key",
         "connection_config",
         "connection_instance",
@@ -884,6 +885,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "statement_config",
     )
 
+    _tenant_key: Any
     _migration_loader: "SQLFileLoader | None"
     _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] | None"
     _migration_lock: "threading.RLock"
@@ -930,6 +932,56 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     _storage_capabilities: "StorageCapabilities | None"
     observability_config: "ObservabilityConfig | None"
     _observability_runtime: "ObservabilityRuntime | None"
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: "Mapping[str, Any] | None" = None,
+        driver_features_overrides: "Mapping[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: "str | None" = None,
+        **overrides: Any,
+    ) -> Self:
+        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
+        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
+        new_driver_features: dict[str, Any] = {
+            key: value for key, value in self.driver_features.items()
+            if key not in {"_statement_cache_holder", "storage_capabilities"}
+        }
+        pool_session_cb = getattr(self, "_pool_session_callback", None)
+        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
+            new_conn_cfg["session_callback"] = pool_session_cb
+        user_conn_hook = getattr(self, "_user_connection_hook", None)
+        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
+            new_driver_features["on_connection_create"] = user_conn_hook
+        if connection_config_overrides:
+            new_conn_cfg.update(connection_config_overrides)
+        if driver_features_overrides:
+            new_driver_features.update(driver_features_overrides)
+        for key, val in overrides.items():
+            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
+                new_driver_features[key] = val
+            else:
+                new_conn_cfg[key] = val
+        derived = type(self)(
+            connection_config=new_conn_cfg,
+            connection_instance=None,
+            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
+            statement_config=self.statement_config if statement_config is None else statement_config,
+            driver_features=new_driver_features,
+            bind_key=self.bind_key if bind_key is None else bind_key,
+            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
+            if extension_config is None
+            else extension_config,
+            observability_config=self.observability_config if observability_config is None else observability_config,
+        )
+
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
+        return derived
 
     def __hash__(self) -> int:
         return id(self)
@@ -1576,7 +1628,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
             raise ImproperConfigurationError(msg)
         lease = lease_type(self, strategy)
-        lease.tenant_key = self
+        lease.tenant_key = self._tenant_key
         return lease
 
     def _require_leased_tenant_connection(self) -> None:
@@ -1649,6 +1701,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._migration_loader = None
         self._migration_commands = None
         self.bind_key = bind_key
+        self._tenant_key = self
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
@@ -2060,49 +2113,6 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
         )
 
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
-        new_driver_features: dict[str, Any] = dict(self.driver_features)
-        pool_session_cb = getattr(self, "_pool_session_callback", None)
-        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
-            new_conn_cfg["session_callback"] = pool_session_cb
-        user_conn_hook = getattr(self, "_user_connection_hook", None)
-        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
-            new_driver_features["on_connection_create"] = user_conn_hook
-        if connection_config_overrides:
-            new_conn_cfg.update(connection_config_overrides)
-        if driver_features_overrides:
-            new_driver_features.update(driver_features_overrides)
-        for key, val in overrides.items():
-            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
-                new_driver_features[key] = val
-            else:
-                new_conn_cfg[key] = val
-        return type(self)(
-            connection_config=new_conn_cfg,
-            connection_instance=None,
-            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
-            statement_config=self.statement_config if statement_config is None else statement_config,
-            driver_features=new_driver_features,
-            bind_key=self.bind_key if bind_key is None else bind_key,
-            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
-            if extension_config is None
-            else extension_config,
-            observability_config=self.observability_config if observability_config is None else observability_config,
-        )
-
     @abstractmethod
     def _create_pool(self) -> PoolT:
         """Actual pool creation implementation."""
@@ -2222,49 +2232,6 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         return cast(
             "AbstractAsyncContextManager[DriverT]",
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
-        )
-
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
-        new_driver_features: dict[str, Any] = dict(self.driver_features)
-        pool_session_cb = getattr(self, "_pool_session_callback", None)
-        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
-            new_conn_cfg["session_callback"] = pool_session_cb
-        user_conn_hook = getattr(self, "_user_connection_hook", None)
-        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
-            new_driver_features["on_connection_create"] = user_conn_hook
-        if connection_config_overrides:
-            new_conn_cfg.update(connection_config_overrides)
-        if driver_features_overrides:
-            new_driver_features.update(driver_features_overrides)
-        for key, val in overrides.items():
-            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
-                new_driver_features[key] = val
-            else:
-                new_conn_cfg[key] = val
-        return type(self)(
-            connection_config=new_conn_cfg,
-            connection_instance=None,
-            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
-            statement_config=self.statement_config if statement_config is None else statement_config,
-            driver_features=new_driver_features,
-            bind_key=self.bind_key if bind_key is None else bind_key,
-            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
-            if extension_config is None
-            else extension_config,
-            observability_config=self.observability_config if observability_config is None else observability_config,
         )
 
     @abstractmethod
