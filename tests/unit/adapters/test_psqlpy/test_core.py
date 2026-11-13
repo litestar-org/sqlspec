@@ -407,3 +407,17 @@ async def test_psqlpy_dispatch_execute_strips_sqlcommenter_before_dml_count_cach
     assert "1111111111111111" in fetched_queries[0]
     assert "2222222222222222" in fetched_queries[1]
     assert "1111111111111111" not in fetched_queries[1]
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from psqlpy.exceptions import DatabaseError
+
+    from sqlspec.adapters.psqlpy.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = DatabaseError("SQLSTATE 25006: cannot execute INSERT in a read-only transaction")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()

@@ -649,3 +649,51 @@ async def test_tenant_preparation_failure_releases_once(monkeypatch: pytest.Monk
     assert caught.value is error
     context.__aexit__.assert_awaited_once()
     strategy.checkin.assert_awaited_once()
+
+
+@pytest.mark.parametrize("session", ("any", "read-write", "read-only", "primary", "standby", "prefer-standby"))
+def test_replica_derivation_normalizes_native_session_enums(session: str) -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app"})
+    replica = primary.derive_pool(
+        hosts=["reader-a", "reader-b"], target_session_attrs=session, load_balance_hosts="random"
+    )
+    expected = (
+        TargetSessionAttrs.Any
+        if session == "any"
+        else (TargetSessionAttrs.ReadWrite if session in {"read-write", "primary"} else TargetSessionAttrs.ReadOnly)
+    )
+    assert replica.connection_config.get("dsn") is None
+    assert replica.connection_config["target_session_attrs"] == expected
+    assert replica.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
+    assert primary.connection_config["dsn"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize("field", ("target_session_attrs", "load_balance_hosts"))
+@pytest.mark.parametrize("value", ("invalid", True, 1))
+def test_invalid_replica_enum_options_fail_configuration(field: str, value: Any) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        PsqlpyConfig(connection_config={field: value})
+
+
+def test_replica_alias_overrides_replace_primary_values() -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app", "db_name": "app", "username": "writer"})
+    replica = primary.derive_pool(host="reader", database="reader_app", user="reader")
+    assert replica.connection_config.get("dsn") is None
+    assert replica.connection_config["db_name"] == "reader_app"
+    assert replica.connection_config["username"] == "reader"
+
+
+def test_native_replica_enums_and_uppercase_strings_are_supported() -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    native = PsqlpyConfig(
+        connection_config={
+            "target_session_attrs": TargetSessionAttrs.ReadOnly,
+            "load_balance_hosts": LoadBalanceHosts.Disable,
+        }
+    )
+    uppercase = PsqlpyConfig(connection_config={"target_session_attrs": "READ-ONLY", "load_balance_hosts": "DISABLE"})
+    assert native.connection_config["target_session_attrs"] == uppercase.connection_config["target_session_attrs"]
+    assert native.connection_config["load_balance_hosts"] == uppercase.connection_config["load_balance_hosts"]

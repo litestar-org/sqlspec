@@ -16,10 +16,12 @@ from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
 from sqlspec.adapters.psqlpy._typing import (
+    LoadBalanceHosts,
     PsqlpyConnectionExecuteError,
     PsqlpyDataError,
     PsqlpyIntegrityError,
     PsqlpyOperationalError,
+    TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
@@ -49,6 +51,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -208,6 +211,33 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
+    enum_fields = (
+        (
+            "target_session_attrs",
+            TargetSessionAttrs,
+            {
+                "any": TargetSessionAttrs.Any,
+                "read-write": TargetSessionAttrs.ReadWrite,
+                "primary": TargetSessionAttrs.ReadWrite,
+                "read-only": TargetSessionAttrs.ReadOnly,
+                "standby": TargetSessionAttrs.ReadOnly,
+                "prefer-standby": TargetSessionAttrs.ReadOnly,
+            },
+        ),
+        (
+            "load_balance_hosts",
+            LoadBalanceHosts,
+            {"disable": LoadBalanceHosts.Disable, "random": LoadBalanceHosts.Random},
+        ),
+    )
+    for key, enum_type, choices in enum_fields:
+        value = config.get(key)
+        if value is None or isinstance(value, enum_type):
+            continue
+        if not isinstance(value, str) or value.lower() not in choices:
+            msg = f"Invalid {key}: {value!r}"
+            raise ImproperConfigurationError(msg)
+        config[key] = choices[value.lower()]
     if "auth_token_provider" in config and config["auth_token_provider"] is None:
         config.pop("auth_token_provider", None)
     return config
@@ -518,6 +548,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     """
     _ = logger
     error_msg = str(error).lower()
+    if getattr(error, "sqlstate", None) == "25006" or any(
+        value in error_msg for value in ("25006", "read-only transaction", "read-only sql transaction")
+    ):
+        return _create_postgres_error(error, ReadOnlyTransactionError, "read-only transaction")
 
     if isinstance(error, PsqlpyDataError):
         return _create_postgres_error(error, DataError, "data error")

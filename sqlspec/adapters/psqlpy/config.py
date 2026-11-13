@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Se
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import (
+    LoadBalanceHosts,
+    PsqlpyConnection,
+    PsqlpyCursor,
+    PsqlpySessionContext,
+    TargetSessionAttrs,
+)
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
 from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
@@ -83,7 +89,9 @@ class PsqlpyConnectionParams(TypedDict):
     """TLS negotiation policy (``disable``, ``prefer``, ``require``, ``verify-ca``, or ``verify-full``)."""
     ca_file: NotRequired[str]
     """Path to a PEM root CA bundle used to verify server certificates."""
-    target_session_attrs: NotRequired[str]
+    target_session_attrs: NotRequired[
+        Literal["any", "read-write", "read-only", "primary", "standby", "prefer-standby"] | TargetSessionAttrs
+    ]
     """Required server session state for multi-host routing (such as ``read-write``)."""
     options: NotRequired[str]
     """Command-line startup GUC options sent to the PostgreSQL backend."""
@@ -119,7 +127,7 @@ class PsqlpyConnectionParams(TypedDict):
     """Whether to delegate GSSAPI credentials to the PostgreSQL server."""
     service: NotRequired[str]
     """Service profile name defined in ``pg_service.conf``."""
-    load_balance_hosts: NotRequired[str]
+    load_balance_hosts: NotRequired[Literal["disable", "random"] | LoadBalanceHosts]
     """Host ordering policy across multi-host configurations (``disable`` or ``random``)."""
 
 
@@ -355,6 +363,29 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             self.driver_features["pooler_mode"] = require_session_pooler(
                 self.driver_features.get("pooler_mode"), "PsqlpyConfig"
             )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("dsn", "conninfo", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in (*aliases, "host", "hosts", "target_session_attrs")):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        for canonical, aliases_for_field in (("db_name", ("database", "dbname", "db")), ("username", ("user",))):
+            if canonical not in overrides:
+                for key in aliases_for_field:
+                    if key in overrides:
+                        config[canonical] = overrides[key]
+                        break
+        if "options" not in overrides:
+            if self._explicit_options is None:
+                config.pop("options", None)
+            else:
+                config["options"] = self._explicit_options
+        return config
 
     @property
     def pg_textsearch_available(self) -> bool:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from psqlpy import Connection as PsqlpyConnection
 from psqlpy import ConnectionPool as PsqlpyConnectionPool
 from psqlpy import Listener as PsqlpyListener
+from psqlpy import LoadBalanceHosts, TargetSessionAttrs
 from psqlpy.exceptions import ConnectionExecuteError as PsqlpyConnectionExecuteError
 from psqlpy.exceptions import DatabaseError as PsqlpyDatabaseError
 from psqlpy.exceptions import DataError as PsqlpyDataError
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "PSQLPY_JSONB",
+    "LoadBalanceHosts",
     "PsqlpyConnection",
     "PsqlpyConnectionExecuteError",
     "PsqlpyConnectionPool",
@@ -44,6 +46,7 @@ __all__ = (
     "PsqlpyOperationalError",
     "PsqlpySessionContext",
     "RustPSQLDriverPyBaseError",
+    "TargetSessionAttrs",
 )
 
 
