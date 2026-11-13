@@ -31,6 +31,9 @@ class SmokeImport(NamedTuple):
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
+    SmokeImport("oracle_core", "sqlspec.adapters.oracledb.core", "OracleAcquireOptions", True, "oracledb"),
+    SmokeImport("oracle_type_converter", "sqlspec.adapters.oracledb.type_converter", None, True, "oracledb"),
+    SmokeImport("observability_common", "sqlspec.observability._common", "get_w3c_trace_context", True),
     SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Vantage"),
     SmokeImport("teradata_generators", "sqlspec.dialects.teradata._generators", "teradata_dispatch", True),
     SmokeImport("teradata_dd_config", "sqlspec.data_dictionary.dialects.teradata.config", "TERADATA_CONFIG", True),
@@ -1899,6 +1902,119 @@ def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str,
     return result
 
 
+def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise Oracle native helpers through interpreted config and SDK boundaries."""
+    result = _new_smoke_result(
+        name="oracle_26ai_boundary",
+        module="sqlspec.adapters.oracledb.core",
+        attribute="OracleAcquireOptions",
+        compiled_required=require_compiled,
+    )
+    try:
+        sdk = importlib.import_module("oracledb")
+    except ImportError:
+        result.update(skipped=True, skip_reason="oracledb not installed")
+        return result
+    try:
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, Mock
+
+        from opentelemetry import trace
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+        oracle = importlib.import_module("sqlspec.adapters.oracledb")
+        core = importlib.import_module("sqlspec.adapters.oracledb.core")
+        tenant = importlib.import_module("sqlspec.adapters.oracledb.tenant")
+        common = importlib.import_module("sqlspec.observability._common")
+        contracts = importlib.import_module("sqlspec.utils.tenant")
+        errors = importlib.import_module("sqlspec.exceptions")
+        result["imported"] = True
+        result["compiled"] = all(is_compiled_module(module) for module in (core, tenant, common))
+        if require_compiled and not result["compiled"]:
+            raise AssertionError("Oracle core, tenant strategies and observability helpers must be native")
+        options = oracle.OracleAcquireOptions(sharding_key=("tenant",), purity="SELF")
+        assert options.sharding_key == ["tenant"]
+        assert options == core.OracleAcquireOptions(sharding_key=["tenant"], purity="SELF")
+        assert core.synthesize_session_state_tag(core.OracleSessionContextConfig(time_zone="UTC")) == "TIME_ZONE=UTC"
+        assert common.get_w3c_trace_context() == (None, "")
+        propagated = SpanContext(trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(0))
+        with trace.use_span(NonRecordingSpan(propagated)):
+            assert common.get_w3c_trace_context()[0].endswith("-00")
+
+        class FailedSyncStrategy(oracle.OracleSyncClientContextStrategy):
+            __slots__ = ()
+
+            def checkin(self, connection: Any, state: Any) -> None:
+                raise RuntimeError("cleanup failed")
+
+        class FailedAsyncStrategy(oracle.OracleAsyncClientContextStrategy):
+            __slots__ = ()
+
+            async def checkin(self, connection: Any, state: Any) -> None:
+                raise RuntimeError("cleanup failed")
+
+        async def cases() -> None:
+            for asynchronous in (False, True):
+                native = AsyncMock if asynchronous else Mock
+                for failure in (False, True):
+                    connection = SimpleNamespace(
+                        thin=True,
+                        version="23.26.3",
+                        transaction_priority=sdk.TransactionPriority.HIGH,
+                        set_app_context=Mock(),
+                        clear_app_context=Mock(),
+                        rollback=native(),
+                        begin_sessionless_transaction=native(return_value=b"txn"),
+                        suspend_sessionless_transaction=native(),
+                        transaction_in_progress=False,
+                        run_pipeline=None,
+                    )
+                    pool = MagicMock()
+                    pool.thin = True
+                    pool.acquire = native(return_value=connection)
+                    pool.release, pool.drop = native(), native()
+                    if asynchronous:
+                        strategy = FailedAsyncStrategy() if failure else oracle.OracleAsyncClientContextStrategy()
+                        config = oracle.OracleAsyncConfig(
+                            connection_instance=pool, driver_features={"tenant_strategy": strategy}
+                        )
+                    else:
+                        strategy = FailedSyncStrategy() if failure else oracle.OracleSyncClientContextStrategy()
+                        config = oracle.OracleSyncConfig(
+                            connection_instance=pool, driver_features={"tenant_strategy": strategy}
+                        )
+                    failed = False
+                    with contracts.TenantContext.scope("tenant"):
+                        try:
+                            if asynchronous:
+                                async with (
+                                    config.provide_session() as session,
+                                    session.sessionless_transaction() as transaction_id,
+                                ):
+                                    assert transaction_id == b"txn"
+                            else:
+                                with (
+                                    config.provide_session() as session,
+                                    session.sessionless_transaction() as transaction_id,
+                                ):
+                                    assert transaction_id == b"txn"
+                        except errors.TenantCleanupError:
+                            failed = True
+                    assert failed is failure
+                    if failure:
+                        pool.drop.assert_called_once_with(connection)
+                        pool.release.assert_not_called()
+                    else:
+                        pool.release.assert_called_once_with(connection)
+                        connection.clear_app_context.assert_called_once_with("CLIENTCONTEXT")
+                    connection.suspend_sessionless_transaction.assert_called_once_with()
+
+        asyncio.run(cases())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -1913,6 +2029,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
         _check_tenant_lease_boundary(require_compiled=require_compiled),
+        _check_oracle_26ai_boundary(require_compiled=require_compiled),
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
