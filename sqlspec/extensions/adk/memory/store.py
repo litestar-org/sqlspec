@@ -2,11 +2,12 @@
 
 import logging
 from abc import ABC, abstractmethod
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
-from sqlspec.extensions.adk.store import _reconcile_adk_schema_sync
+from sqlspec.extensions.adk.store import _adk_read_enabled, _adk_read_provider, _reconcile_adk_schema_sync
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -43,6 +44,8 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         "_memory_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
+        "_read_config",
+        "_read_config_enabled",
         "_scann_num_leaves",
         "_scann_quantizer",
         "_use_fts",
@@ -54,13 +57,16 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
     adapter_name: ClassVar[str | None] = None
     extension_config_options: ClassVar[frozenset[str]] = frozenset()
 
-    def __init__(self, config: ConfigT) -> None:
+    def __init__(self, config: ConfigT, *, read_config: ConfigT | None = None) -> None:
         """Initialize the ADK memory store.
 
         Args:
             config: SQLSpec database configuration.
+            read_config: Optional compatible configuration for pure reads.
         """
         self._config = config
+        self._read_config = read_config
+        self._read_config_enabled = _adk_read_enabled(config, read_config)
         store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
@@ -76,6 +82,26 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._owner_id_column_name: str | None = (
             owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
+
+    @property
+    def read_config(self) -> ConfigT | None:
+        """Return the explicitly configured reader, when supplied."""
+        return self._read_config
+
+    @property
+    def read_config_enabled(self) -> bool:
+        """Return whether this store opts into pure-read offload."""
+        return self._read_config_enabled
+
+    def _provide_read_connection(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(self._config, self._read_config, self._read_config_enabled, primary, False, kwargs)
+
+    def _provide_read_session(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(self._config, self._read_config, self._read_config_enabled, primary, True, kwargs)
 
     @property
     def config(self) -> ConfigT:
@@ -187,6 +213,12 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     """
 
     __slots__ = ()
+
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
 
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
@@ -381,6 +413,12 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK memory stores."""
 
     __slots__ = ()
+
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with a synchronous driver."""

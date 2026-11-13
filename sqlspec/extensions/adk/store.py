@@ -3,21 +3,27 @@
 import inspect
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
 from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 
-__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "normalize_session_list_options")
+__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "adk_primary_read_scope", "normalize_session_list_options")
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
@@ -31,6 +37,58 @@ ADK_RESET_TABLE_PROFILES: Final = (
     ("adk_sessions", "adk_events", "adk_app_states", "adk_user_states", "adk_internal_metadata"),
     ("adk_sessions", "adk_events", "adk_app_states", "adk_user_states", "adk_metadata"),
 )
+
+
+_ADK_PRIMARY_READ: ContextVar[bool] = ContextVar("sqlspec_adk_primary_read", default=False)
+
+
+@contextmanager
+def adk_primary_read_scope() -> Iterator[None]:
+    """Keep reads inside a mutating ADK operation on the primary.
+
+    Yields:
+        None while the primary read directive is bound to this context.
+    """
+    token = _ADK_PRIMARY_READ.set(True)
+    try:
+        yield
+    finally:
+        _ADK_PRIMARY_READ.reset(token)
+
+
+def _adk_read_enabled(
+    config: "DatabaseConfigProtocol[Any, Any, Any]", read_config: "DatabaseConfigProtocol[Any, Any, Any] | None"
+) -> bool:
+    settings = config.extension_config.get("adk", {})
+    enabled = settings.get("read_config_enabled", read_config is not None)
+    if not isinstance(enabled, bool):
+        msg = "ADK read_config_enabled must be a boolean"
+        raise ImproperConfigurationError(msg)
+    if read_config is not None and (
+        config.is_async != read_config.is_async or resolve_adapter_name(config) != resolve_adapter_name(read_config)
+    ):
+        msg = "ADK reader configuration must use the same adapter and execution mode as the primary"
+        raise ImproperConfigurationError(msg)
+    return enabled
+
+
+def _adk_read_provider(
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
+    read_config: "DatabaseConfigProtocol[Any, Any, Any] | None",
+    enabled: bool,
+    primary: bool,
+    session: bool,
+    kwargs: dict[str, Any],
+) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+    entry = RoutingContext.get_entry(config.bind_key)
+    force_primary = (
+        primary or _ADK_PRIMARY_READ.get() or (entry is not None and (entry.mode == "primary" or entry.pinned_by_write))
+    )
+    if force_primary or not enabled:
+        return config.provide_session(**kwargs) if session else config.provide_connection(**kwargs)
+    if read_config is not None:
+        return read_config.provide_session(**kwargs) if session else read_config.provide_connection(**kwargs)
+    return config.provide_read_session(**kwargs) if session else config.provide_read_connection(**kwargs)
 
 
 class _ADKStoreCommon(Generic[ConfigT]):
@@ -47,6 +105,8 @@ class _ADKStoreCommon(Generic[ConfigT]):
         "_metadata_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
+        "_read_config",
+        "_read_config_enabled",
         "_session_table",
         "_user_state_table",
     )
@@ -55,11 +115,12 @@ class _ADKStoreCommon(Generic[ConfigT]):
     adapter_name: ClassVar[str | None] = None
     extension_config_options: ClassVar[frozenset[str]] = frozenset()
 
-    def __init__(self, config: ConfigT) -> None:
+    def __init__(self, config: ConfigT, *, read_config: ConfigT | None = None) -> None:
         """Initialize the ADK store.
 
         Args:
             config: SQLSpec database configuration.
+            read_config: Optional compatible configuration for pure reads.
 
         Notes:
             Reads configuration from config.extension_config["adk"]:
@@ -71,6 +132,8 @@ class _ADKStoreCommon(Generic[ConfigT]):
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
+        self._read_config = read_config
+        self._read_config_enabled = _adk_read_enabled(config, read_config)
         store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
@@ -86,6 +149,26 @@ class _ADKStoreCommon(Generic[ConfigT]):
         ensure_table_name(self._app_state_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._user_state_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._metadata_table, max_parts=self._max_table_name_parts)
+
+    @property
+    def read_config(self) -> ConfigT | None:
+        """Return the explicitly configured reader, when supplied."""
+        return self._read_config
+
+    @property
+    def read_config_enabled(self) -> bool:
+        """Return whether this store opts into pure-read offload."""
+        return self._read_config_enabled
+
+    def _provide_read_connection(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(self._config, self._read_config, self._read_config_enabled, primary, False, kwargs)
+
+    def _provide_read_session(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(self._config, self._read_config, self._read_config_enabled, primary, True, kwargs)
 
     @property
     def config(self) -> ConfigT:
@@ -262,6 +345,12 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     """
 
     __slots__ = ()
+
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
 
     @abstractmethod
     async def create_tables(self) -> None:
@@ -726,6 +815,12 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     """
 
     __slots__ = ()
+
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
 
     @abstractmethod
     def create_tables(self) -> None:
