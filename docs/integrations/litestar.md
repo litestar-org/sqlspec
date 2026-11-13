@@ -79,6 +79,14 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
+| `read_session_key` | `str` | - | Request key for a read session. |
+| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | - | Default request routing mode. |
+| `enable_routing_middleware` | `bool` | - | Install request-scoped routing middleware. |
+| `routing_header` | `str` | - | Trusted application routing header name. |
+| `write_pin_cookie` | `str or None` | - | Optional application write-pin cookie name. |
+| `read_pool_key` | `str` | - | Request key for the selected read pool. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -100,6 +108,14 @@ In custom guards, middleware, streaming iterators, or event hooks where standard
 ## Tenant-Aware Requests
 
 With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, injected `db_session` and `db_connection` dependencies and `guards=[require_tenant()]` resolve the request tenant from verified authentication state, using the selector and user attribute names set once in `extension_config["litestar"]`. Mark public routes with `opt={"tenant_bypass": True}`. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) for JWT, server-side session, separate auth database, and `litestar-security` examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
+#### Reader and routing dependencies
+
+A config with replicas exposes `read_session`, `read_connection`, and `read_pool`. Rename them with `read_session_key`, `read_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
+
+For direct access, use `get_read_session(request)` or `provide_request_read_session` and its `_sync`/`_async` forms. The `provide_request_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
+
+Tenant middleware binds the captured `TenantContextPayload` around each physical checkout, including readers. `SQLSpecRoutingMiddleware` scopes primary pins and reads stateless hints. Check tenant access in the normal request path. See [Read Replicas](../learn/recipes/read-replicas.md) for fallback and freshness choices.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 

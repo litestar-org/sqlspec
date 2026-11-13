@@ -107,6 +107,24 @@ In long-running web workers or CLI tools, verify connectivity and pre-initialize
 
 When you integrate SQLSpec through `SQLSpecPlugin` (Litestar), an ASGI lifespan context manager (FastAPI / Starlette), or Dishka `Scope.APP` providers, pool creation and `close_pool()` are handled for you automatically.
 
+## Read Replicas and Pool Derivation
+
+Add `replicas=` to a primary config for reader endpoints. Pass a DSN, a list, per-reader overrides, weighted `ReplicaSpec` values, named groups, or a `ReadReplicaGroup`. Use `True` only where the adapter defines a native read intent or local-reader shortcut.
+
+```python
+from sqlspec.adapters.asyncpg import AsyncpgConfig
+
+config = AsyncpgConfig(
+    connection_config={"dsn": "postgresql://app:secret@writer/app"},
+    replicas=["postgresql://app:secret@reader/app"],
+)
+reader = config.derive_pool(host="reporting", is_replica=True)
+```
+
+`derive_pool()` is available on pooled and no-pool configs. It creates a fresh config with the chosen overrides and no open socket. It keeps hooks, tenant setup, and statement settings. It does not create a remote database or replicate its data.
+
+Use `config.provide_read_session()` or `spec.provide_read_session(config)` for the read path. They keep the concrete driver type. The generic path falls back to primary if no group is configured. Owned readers share pool startup, shutdown, and trace hooks; `await spec.close_all_pools()` closes the topology. `spec.telemetry_snapshot()` labels readers separately, including named groups. See [Read Replicas](recipes/read-replicas.md) for selection and failover.
+
 ## Recap
 
 - Prefer `config.provide_session()` or `spec.provide_session(config)` over constructing driver instances directly so per-config statement caches and lifecycle hooks remain attached.

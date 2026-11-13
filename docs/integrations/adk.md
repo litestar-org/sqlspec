@@ -73,6 +73,8 @@ Configure table names, full-text indexing, artifact storage URIs, and optional o
 | `memory_max_results` | `int` | `20` | Maximum number of results for memory search queries. Default: 20. Limits the number of memory entries returned by search_memory(). Can be overridden per-query via the limit parameter. |
 | `owner_id_column` | `str` | - | Optional owner ID column definition to link sessions/memories to a user, tenant, team, or other entity. Format: "column_name TYPE [NOT NULL] REFERENCES table(column) [options...]". The entire definition is passed through to DDL verbatim. We only parse the column name (first word) for use in INSERT/SELECT statements. This column is added to both session and memory tables for consistent multi-tenant isolation. Supports: Foreign key constraints: REFERENCES table(column); Nullable or NOT NULL; CASCADE options: ON DELETE CASCADE, ON UPDATE CASCADE; Dialect-specific options (DEFERRABLE, ENABLE VALIDATE, etc.); Plain columns without FK (just extra column storage) |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
+| `read_config_enabled` | `bool` | - | Enable optional read configuration for ADK lookups. |
+| `read_bind_group` | `str or None` | - | Named replica group used for ADK reads. |
 <!-- GENERATED:END config-table:sqlspec.config.ADKConfig -->
 
 ### Adapter-Specific ADKConfig Subclasses
@@ -282,6 +284,14 @@ async def run_daily_adk_retention(
         ),
     ]
 ```
+
+## Read Replica Offload
+
+Pass a compatible `read_config=` to a session, memory, or artifact store for lag-tolerant reads. To use a config's replica topology instead, set `extension_config={"adk": {"read_config_enabled": True}}`; `read_bind_group` can select a named reader group. Without an explicit reader or that flag, stores keep their primary path.
+
+Pure reads such as memory search, session lists, external non-renewing session fetches, and artifact loads/lists may use the reader. `append_event`, `create_session`, state updates, `get_session(..., renew_for=...)`, artifact saves, and deletes remain primary. Reads inside a write or lease-renewal operation stay with that primary work too.
+
+Reader lag can hide a recent event or artifact version. Use primary for read-after-write paths that cannot accept that delay. Schema setup and migrations always use the primary config. See [Replica Operations](../learn/recipes/read-replicas-operations.md) for consistency and tenant limits.
 
 ## Recap
 

@@ -171,6 +171,14 @@ Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support 
 - `autocommit`: Commits automatically on `2xx` HTTP responses and rolls back on `4xx`/`5xx` responses or unhandled exceptions.
 - `autocommit_include_redirect`: Commits on both `2xx` and `3xx` redirect responses (`301`–`308`), useful for HTML form and HTMX workflows.
 
+## Read-Only Sessions and Primary Pinning
+
+A routing session pins to one physical primary driver when `begin()` or `transaction()` starts. All reads and writes in that unit use that driver. `service.begin_transaction()` follows the same rule, even when the service has a separate reader config. An explicit conflicting replica scope raises `RoutingContextError`; it cannot move an active transaction.
+
+Direct reader sessions rely on native read-only options, a reader role, or server policy. A rejected write maps to `ReadOnlyTransactionError` (`25006` where supplied). Generic primary fallback is still a primary session and may accept writes. Use ordinary `provide_session()` for intentional writes.
+
+After an outermost successful service commit, `RoutingContext.mark_write()` pins the active request bind to primary. The scope ends with the request or explicit worker scope. See [Replica Operations](recipes/read-replicas-operations.md) for cross-request tokens and lag barriers.
+
 ## Recap
 
 - Prefer `with session.transaction():` / `async with session.transaction():` (including nested savepoint blocks) or `service.begin_transaction()` for atomic writes.

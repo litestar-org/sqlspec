@@ -69,9 +69,23 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starle
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+| `read_session_key` | `str` | - | Request key for a read session. |
+| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | - | Default request routing mode. |
+| `enable_routing_middleware` | `bool` | - | Install request-scoped routing middleware. |
+| `routing_header` | `str` | - | Trusted application routing header name. |
+| `write_pin_cookie` | `str or None` | - | Optional application write-pin cookie name. |
+| `read_pool_key` | `str` | - | Request key for the selected read pool. |
 <!-- GENERATED:END config-table:sqlspec.config.StarletteConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
+
+## Read Replica and Routing Sessions
+
+`db_ext.get_read_session(request, key=...)` returns a reader session. For an async config it is a `DeferredAsyncSession`: the first awaited database call opens the physical connection. Use `await db_ext.get_read_session_async(request, key=...)` when the handler needs an acquired session immediately. The raw helpers are `get_read_connection` and `get_read_connection_async`.
+
+`get_routing_session` and `get_routing_session_async` create an opt-in facade that selects a reader or pins primary as work requires. Pure ASGI middleware scopes the request and closes owned checkouts. Add `SQLSpecRoutingMiddleware` from `sqlspec.utils.routing` to read routing hints and scope write pins. Tenant identity remains a separate access check. See [Read Replicas](../learn/recipes/read-replicas.md).
 
 ## Recap
 

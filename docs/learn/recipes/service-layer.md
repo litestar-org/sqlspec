@@ -19,7 +19,8 @@ When constructed with `config=`, a service checks out a short-lived pooled sessi
 | `paginate(statement, *filters, session=None, **params)` | Dispatch automatically to limit/offset or cursor pagination based on attached filters. |
 | `paginate_limit_offset(statement, filter, ...)` | Return an `OffsetPagination` envelope (`items`, `limit`, `offset`, `total`). |
 | `paginate_cursor(statement, filter, ...)` | Return a `CursorPagination` envelope (`items`, `next_cursor`, `previous_cursor`). |
-| `provide_session()` | Context manager yielding a pooled read/write driver session. |
+| `provide_session(session=None, *, read_only=False)` | Use a supplied/bound session or open the selected primary/read session. |
+| `provide_read_session(session=None)` | Request a concrete read driver while retaining active transaction ownership. |
 | `begin_transaction()` | Context manager yielding a session inside an active transaction that commits on exit and rolls back on exception. |
 
 ## Service Session Lifetimes
@@ -190,6 +191,14 @@ worker_db = db_manager.add_config(
 )
 db_manager.load_sql_files(BASE_DIR / "db" / "sql")
 ```
+
+## Automatic Read Replica Routing
+
+Standalone `get_one`, `exists`, `paginate`, `paginate_limit_offset`, and `paginate_cursor` ask for a reader. Pass `read_config=` when reads should use a separate compatible config; otherwise the primary config's `provide_read_session()` chooses its reader topology.
+
+`provide_session(session=None, *, read_only=False)` stays primary by default. `provide_read_session(session=None)` is the explicit read helper. A supplied session takes precedence, followed by the service's bound session, then its active transaction driver. Only an unbound read opens a new reader session. This keeps an existing unit of work on one connection.
+
+`begin_transaction()` always selects primary. A separate `read_config` cannot override that choice. The outermost successful commit calls `RoutingContext.mark_write()` for the writer's bind, so later reads in the same scope stay primary. See [Read Replicas](read-replicas.md) for direct sessions and opt-in routing sessions.
 
 ## Recap
 
