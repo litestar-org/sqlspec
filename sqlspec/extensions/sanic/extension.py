@@ -241,21 +241,6 @@ class SQLSpecPlugin:
             self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
-        """Return a session that opens the asynchronous request connection on its first awaited call."""
-
-        def current_session() -> Any:
-            if has_context_value(request.ctx, config_state.connection_key):
-                return get_or_create_session(request, config_state)
-            return None
-
-        return DeferredAsyncSession(
-            config_state.config,
-            lambda: self.get_session_async(request, config_state.config),
-            current_session,
-            "await plugin.get_session_async(request)",
-        )
-
     async def get_session_async(self, request: Any, key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
@@ -296,6 +281,21 @@ class SQLSpecPlugin:
                         await self._acquire_request_connection(request, config_state, payload, bind_payload=tenant)
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
+
+    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+        """Return a session that opens the asynchronous request connection on its first awaited call."""
+
+        def current_session() -> Any:
+            if has_context_value(request.ctx, config_state.connection_key):
+                return get_or_create_session(request, config_state)
+            return None
+
+        return DeferredAsyncSession(
+            config_state.config,
+            lambda: self.get_session_async(request, config_state.config),
+            current_session,
+            "await plugin.get_session_async(request)",
+        )
 
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
@@ -486,11 +486,10 @@ class SQLSpecPlugin:
             set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exception)
 
     async def _on_lifecycle_response(self, request: Any = None, response: Any = None, **_: Any) -> None:
-        """Finalize request state when an earlier response middleware short-circuits ``_on_response``.
+        """Finalize request connections after the handler returns and restore tenant context.
 
-        Sanic stops running response middleware once one returns a response, so this per-request
-        signal repeats the idempotent finalization before the response is sent. The signal fires
-        after the handler returns, so it also restores the caller's tenant context.
+        Sanic dispatches ``http.lifecycle.response`` once the handler finishes, including after
+        handler-driven ``request.respond()`` streaming, before transmitting the terminal frame.
 
         Args:
             request: Sanic request instance.
@@ -500,7 +499,10 @@ class SQLSpecPlugin:
         if request is None or not hasattr(request, "ctx"):
             return
         try:
-            await self._on_response(request, response)
+            binding = TenantContext.current_binding()
+            if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                await binding.afreeze()
+            await self._finalize_request(request, response)
         finally:
             self._reset_tenant(request)
 
@@ -595,19 +597,25 @@ class SQLSpecPlugin:
                     self._reset_tenant(request)
 
     async def _on_response(self, request: Any, response: Any) -> None:
-        """Finalize request-scoped connections.
+        """Freeze pending tenant resolutions and restore observability contexts for the response.
 
-        Pending tenant resolutions finish first, so streaming bodies keep the request tenant.
-        The tenant binding itself stays active until the handler returns.
+        Request connections remain active on ``request.ctx`` until ``http.lifecycle.response``
+        runs after the handler returns, so handler-driven streaming keeps its connection.
 
         Args:
             request: Sanic request instance.
             response: Sanic response instance.
         """
+        try:
+            binding = TenantContext.current_binding()
+            if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                await binding.afreeze()
+        finally:
+            self._restore_observability_contexts(request, response)
+
+    async def _finalize_request(self, request: Any, response: Any) -> None:
+        """Finalize and release all request-scoped database connections."""
         primary_exc: BaseException | None = None
-        binding = TenantContext.current_binding()
-        if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-            await binding.afreeze()
         try:
             for config_state in self._config_states[::-1]:
                 if config_state.disable_di:
@@ -874,6 +882,12 @@ class SQLSpecPlugin:
     async def _commit_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
         """Commit transaction using active session or connection."""
         session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         target = session if session is not None and hasattr(session, "commit") else connection
         if hasattr(target, "commit"):
             await ensure_async_(target.commit)()
@@ -881,6 +895,12 @@ class SQLSpecPlugin:
     async def _rollback_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
         """Roll back transaction using active session or connection."""
         session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         target = session if session is not None and hasattr(session, "rollback") else connection
         if hasattr(target, "rollback"):
             await ensure_async_(target.rollback)()
@@ -897,33 +917,52 @@ class SQLSpecPlugin:
         """
         pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = pop_context_value(request.ctx, config_state.connection_key)
-        pop_context_value(request.ctx, f"{config_state.session_key}_instance")
-        pop_context_value(request.ctx, self._deferred_session_key(config_state))
+        session = pop_context_value(request.ctx, f"{config_state.session_key}_instance")
+        deferred = pop_context_value(request.ctx, self._deferred_session_key(config_state))
         connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
         payload_key = self._tenant_payload_key(config_state)
         has_payload = has_context_value(request.ctx, payload_key)
         captured_payload = pop_context_value(request.ctx, payload_key)
 
-        if connection is None and connection_manager is None:
+        if deferred is not None:
+            deferred_detach = getattr(deferred, "_detach_connection", None)
+            if deferred_detach is not None:
+                deferred_detach()
+
+        if connection is None and connection_manager is None and session is None:
             return
 
-        exc = exc_override if exc_override is not None else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
-        exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
+        try:
+            if session is not None:
+                try:
+                    runtime = getattr(session, "observability", None)
+                    if runtime is not None and not runtime.is_idle:
+                        await runtime.emit_session_end_async(session)
+                finally:
+                    detach = getattr(session, "_detach_connection", None)
+                    if detach is not None:
+                        detach()
+        finally:
+            if connection is not None or connection_manager is not None:
+                exc = (
+                    exc_override
+                    if exc_override is not None
+                    else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+                )
+                exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
 
-        if connection_manager is not None:
-            if has_payload:
-                with TenantContext.bind(captured_payload):
-                    await connection_manager.__aexit__(*exit_args)
-            else:
-                await connection_manager.__aexit__(*exit_args)
-            return
-
-        if connection is not None:
-            if has_payload:
-                with TenantContext.bind(captured_payload):
-                    await ensure_async_(connection.close)()
-            else:
-                await ensure_async_(connection.close)()
+                if connection_manager is not None:
+                    if has_payload:
+                        with TenantContext.bind(captured_payload):
+                            await connection_manager.__aexit__(*exit_args)
+                    else:
+                        await connection_manager.__aexit__(*exit_args)
+                elif connection is not None:
+                    if has_payload:
+                        with TenantContext.bind(captured_payload):
+                            await ensure_async_(connection.close)()
+                    else:
+                        await ensure_async_(connection.close)()
 
     def _should_commit(self, config_state: SanicConfigState, status_code: int) -> bool:
         """Determine whether a response status should commit.

@@ -46,16 +46,18 @@ async def test_request_middleware_acquires_pooled_connection() -> None:
 
 
 async def test_manual_response_middleware_cleans_connection_without_transaction() -> None:
-    """Manual mode should release connection state without commit or rollback."""
+    """Manual mode should release connection state on lifecycle response without commit or rollback."""
     connection = _make_connection()
     config = _make_config(connection=connection)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
     connection.rollback.assert_not_awaited()
@@ -64,48 +66,54 @@ async def test_manual_response_middleware_cleans_connection_without_transaction(
 
 
 async def test_autocommit_response_commits_success_status() -> None:
-    """Autocommit mode should commit 2xx responses."""
+    """Autocommit mode should commit 2xx responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=201)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=201))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
     connection.rollback.assert_not_awaited()
 
 
 async def test_autocommit_response_rolls_back_error_status() -> None:
-    """Autocommit mode should rollback non-success responses."""
+    """Autocommit mode should rollback non-success responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=500)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=500))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
     connection.rollback.assert_awaited_once_with()
 
 
 async def test_autocommit_include_redirect_commits_redirect_status() -> None:
-    """autocommit_include_redirect should commit 3xx responses."""
+    """autocommit_include_redirect should commit 3xx responses on lifecycle response."""
     connection = _make_connection()
     config = _make_config(connection=connection, commit_mode="autocommit_include_redirect")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=302)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=302))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_awaited_once_with()
     connection.rollback.assert_not_awaited()
@@ -117,11 +125,13 @@ async def test_non_pooled_response_closes_connection() -> None:
     config = _make_config(connection=connection, supports_connection_pooling=False)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=None)
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     config.create_connection.assert_awaited_once_with()
     connection.close.assert_awaited_once_with()
@@ -136,11 +146,13 @@ async def test_request_middleware_wraps_sync_connection_manager() -> None:
     config.provide_connection = MagicMock(return_value=manager)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
+    response = SimpleNamespace(status=200)
 
     await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
 
     await _touch_connections(plugin, request)
-    await plugin._on_response(request, SimpleNamespace(status=200))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     assert manager.entered == 1
     assert manager.exited == 1
@@ -195,6 +207,7 @@ def _make_config(
     config.create_connection = AsyncMock(return_value=connection)
     config.statement_config = {}
     config.driver_features = {}
+    config._prepare_driver.side_effect = lambda driver: driver
     return config
 
 
@@ -203,7 +216,13 @@ def _make_request(*, pool: object | None) -> SimpleNamespace:
     if pool is not None:
         app_ctx.db_pool = pool
     return SimpleNamespace(
-        app=SimpleNamespace(ctx=app_ctx), ctx=SimpleNamespace(db_session_instance=object()), headers={}
+        app=SimpleNamespace(ctx=app_ctx),
+        ctx=SimpleNamespace(
+            db_session_instance=SimpleNamespace(
+                observability=SimpleNamespace(is_idle=True), _detach_connection=lambda: None
+            )
+        ),
+        headers={},
     )
 
 
@@ -277,7 +296,13 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     config = _make_config(connection=connection, commit_mode="autocommit")
     config.driver_features["tenant_strategy"] = object()
     config.driver_type = lambda *, connection, statement_config, driver_features: SimpleNamespace(
-        connection=connection, statement_config=statement_config, driver_features=driver_features
+        connection=connection,
+        statement_config=statement_config,
+        driver_features=driver_features,
+        observability=SimpleNamespace(is_idle=True),
+        commit=connection.commit,
+        rollback=connection.rollback,
+        _detach_connection=lambda: None,
     )
     original = config.provide_connection
 
@@ -290,8 +315,10 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     plugin.init_app(Sanic("deferred_" + uuid4().hex))
 
     untouched = _make_request(pool=object())
+    response = SimpleNamespace(status=status)
     await plugin._on_request(untouched)  # pyright: ignore[reportPrivateUsage]
-    await plugin._on_response(untouched, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(untouched, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=untouched, response=response)  # pyright: ignore[reportPrivateUsage]
     assert seen == []
     connection.commit.assert_not_awaited()
     connection.rollback.assert_not_awaited()
@@ -304,7 +331,8 @@ async def test_sanic_defers_tenant_connection_until_handler_sets_tenant(status: 
     session = await plugin.get_session_async(active)
     assert session.connection is connection
     assert seen == [TenantContextPayload("acme", {"role": "editor"})]
-    await plugin._on_response(active, SimpleNamespace(status=status))  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_response(active, response)  # pyright: ignore[reportPrivateUsage]
+    await plugin._on_lifecycle_response(request=active, response=response)  # pyright: ignore[reportPrivateUsage]
     if status == 200:
         connection.commit.assert_awaited_once_with()
         connection.rollback.assert_not_awaited()

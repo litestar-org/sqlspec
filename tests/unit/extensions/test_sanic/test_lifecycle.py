@@ -11,9 +11,12 @@ pytest.importorskip("sanic")
 
 from sanic import Sanic
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.base import SQLSpec
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin
-from sqlspec.extensions.sanic._utils import has_context_value
+from sqlspec.extensions.sanic._utils import get_or_create_session, has_context_value, set_context_value
 
 pytestmark = pytest.mark.anyio
 
@@ -267,6 +270,10 @@ async def test_on_request_complete_releases_residual_connection_on_cancellation_
 
         await _touch_connections(plugin, request2)
         await plugin._on_response(request2, response2)
+        assert cm2.exit_args is None
+        assert has_context_value(request2.ctx, "db_connection")
+
+        await plugin._on_lifecycle_response(request=request2, response=response2)
         assert cm2.exit_args == (None, None, None)
 
         cm2.exit_args = ("sentinel", None, None)
@@ -427,8 +434,14 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
         await plugin._on_request(request)
 
         await _touch_connections(plugin, request)
+        await plugin._on_response(request, response)
+        assert has_context_value(request.ctx, "conn1")
+        assert has_context_value(request.ctx, "conn2")
+        assert CorrelationContext.get() == "outer-cid"
+        assert SQLCommenterContext.get() == {"framework": "outer"}
+
         with pytest.raises(RuntimeError, match="db2 commit boom"):
-            await plugin._on_response(request, response)
+            await plugin._on_lifecycle_response(request=request, response=response)
 
         conn2.rollback.assert_awaited_once_with()
         assert cm2.exit_args is not None
@@ -437,8 +450,6 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
         assert cm1.exit_args == (None, None, None)
         assert not has_context_value(request.ctx, "conn1")
         assert not has_context_value(request.ctx, "conn2")
-        assert CorrelationContext.get() == "outer-cid"
-        assert SQLCommenterContext.get() == {"framework": "outer"}
         assert not has_context_value(conn_info.ctx, "_sqlspec_active_request")
 
         cm1_b = _AsyncConnectionManagerFake(
@@ -456,10 +467,12 @@ async def test_on_response_multi_db_isolates_failure_releases_sibling_and_restor
             headers={"x-request-id": "req-cid-2"},
             path="/multi-cancel",
         )
+        resp_b = SimpleNamespace(status=200, headers={})
         await plugin._on_request(request_b)
         await _touch_connections(plugin, request_b)
+        await plugin._on_response(request_b, resp_b)
         with pytest.raises(asyncio.CancelledError):
-            await plugin._on_response(request_b, SimpleNamespace(status=200, headers={}))
+            await plugin._on_lifecycle_response(request=request_b, response=resp_b)
         assert cm1_b.exit_args is not None
         assert cm1_b.exit_args[0] is asyncio.CancelledError
     finally:
@@ -652,3 +665,104 @@ async def test_failed_lazy_acquisition_publishes_nothing_and_finalization_releas
     await plugin._on_lifecycle_response(request=request, response=SimpleNamespace(status=500))
     assert cm1.exit_args is not None
     assert not has_context_value(request.ctx, "conn1")
+
+
+@pytest.mark.parametrize(
+    ("status", "record_exc", "expected_op"), [(200, False, "commit"), (500, False, "rollback"), (200, True, "rollback")]
+)
+async def test_on_response_keeps_session_open_until_on_lifecycle_response_finalizes(
+    status: int, record_exc: bool, expected_op: str
+) -> None:
+    """_on_response leaves connection and session active for streaming, and _on_lifecycle_response finalizes and detaches."""
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"}, extension_config={"sanic": {"commit_mode": "autocommit"}}
+    )
+    plugin = SQLSpecPlugin(config)
+    conn = AsyncMock(_conn=None, autocommit=False, in_transaction=True)
+    cm = _AsyncConnectionManagerFake(conn)
+    config.provide_connection = MagicMock(return_value=cm)  # type: ignore[method-assign]
+
+    request = SimpleNamespace(
+        ctx=SimpleNamespace(),
+        conn_info=SimpleNamespace(ctx=SimpleNamespace()),
+        app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())),
+        headers={},
+        path="/stream",
+    )
+    response = SimpleNamespace(status=status, headers={})
+
+    await plugin._on_request(request)
+    session = await plugin.get_session_async(request)
+
+    await plugin._on_response(request, response)
+    assert has_context_value(request.ctx, "db_connection")
+    assert has_context_value(request.ctx, "db_session_instance")
+    assert session.connection is conn
+    conn.commit.assert_not_awaited()
+    conn.rollback.assert_not_awaited()
+
+    if record_exc:
+        await plugin._on_lifecycle_exception(request, RuntimeError("stream failed"))
+
+    await plugin._on_lifecycle_response(request=request, response=response)
+    if expected_op == "commit":
+        conn.commit.assert_awaited_once()
+        conn.rollback.assert_not_awaited()
+    else:
+        conn.rollback.assert_awaited_once()
+        conn.commit.assert_not_awaited()
+    assert not has_context_value(request.ctx, "db_connection")
+    assert not has_context_value(request.ctx, "db_session_instance")
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = session.connection.cursor
+
+
+@pytest.mark.parametrize(
+    ("adapter_kind", "commit_mode", "in_tx", "op", "expect_auto_begin", "expect_called"),
+    [
+        ("asyncpg", "autocommit", False, "commit", True, False),
+        ("asyncpg", "autocommit", False, "rollback", True, False),
+        ("asyncpg", "autocommit", True, "commit", True, True),
+        ("asyncpg", "autocommit", True, "rollback", True, True),
+        ("asyncpg", "autocommit_include_redirect", False, "commit", True, False),
+        ("asyncpg", "manual", False, "commit", False, True),
+        ("aiosqlite", "autocommit", False, "commit", False, True),
+    ],
+)
+async def test_sanic_armed_and_unarmed_session_commit_and_rollback_targets(
+    adapter_kind: str, commit_mode: str, in_tx: bool, op: str, expect_auto_begin: bool, expect_called: bool
+) -> None:
+    """Sanic arms _auto_begin_on_write on lazy-begin adapters and skips _commit_target/_rollback_target when idle."""
+    config: Any = (
+        AsyncpgConfig(
+            connection_config={"dsn": "postgresql://localhost/db"},
+            extension_config={"sanic": {"commit_mode": commit_mode}},
+        )
+        if adapter_kind == "asyncpg"
+        else AiosqliteConfig(
+            connection_config={"database": ":memory:"}, extension_config={"sanic": {"commit_mode": commit_mode}}
+        )
+    )
+    plugin = SQLSpecPlugin(config)
+    config_state = plugin._config_states[0]
+    tx = AsyncMock()
+    if adapter_kind == "asyncpg":
+        conn: Any = AsyncMock(is_in_transaction=MagicMock(return_value=in_tx))
+    else:
+        conn = AsyncMock(_conn=None, autocommit=False, in_transaction=in_tx)
+    request = SimpleNamespace(ctx=SimpleNamespace())
+    set_context_value(request.ctx, config_state.connection_key, conn)
+
+    session = get_or_create_session(request, config_state)
+    assert session._auto_begin_on_write is expect_auto_begin
+    if adapter_kind == "asyncpg":
+        session._transaction = tx
+
+    if op == "commit":
+        await plugin._commit_target(request, conn, config_state)
+    else:
+        await plugin._rollback_target(request, conn, config_state)
+
+    target_mock = tx if adapter_kind == "asyncpg" else conn
+    actual_called = (target_mock.commit.await_count > 0) if op == "commit" else (target_mock.rollback.await_count > 0)
+    assert actual_called is expect_called

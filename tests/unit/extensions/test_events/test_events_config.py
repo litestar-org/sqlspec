@@ -11,6 +11,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import EventsConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel
+from sqlspec.extensions.events._store import BaseEventQueueStore
 
 
 def test_events_backend_literal_uses_canonical_transport_names() -> None:
@@ -216,3 +217,13 @@ def test_observability_extensions_no_migrations(tmp_path) -> None:
 
     include_extensions = config.migration_config.get("include_extensions")
     assert include_extensions is None
+
+
+def test_events_config_declares_retry_and_attempt_settings() -> None:
+    """EventsConfig TypedDict declares max_attempts and retry_backoff_seconds matching BaseEventQueueStore."""
+    hints = get_type_hints(EventsConfig)
+    assert "max_attempts" in EventsConfig.__annotations__
+    assert "retry_backoff_seconds" in EventsConfig.__annotations__
+    assert hints["max_attempts"] is int
+    assert hints["retry_backoff_seconds"] is float
+    assert {"max_attempts", "retry_backoff_seconds"} <= BaseEventQueueStore.extension_config_options

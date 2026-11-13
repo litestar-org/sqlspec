@@ -777,6 +777,12 @@ class EventsConfig(TypedDict):
     retention_seconds: NotRequired[int]
     """Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours)."""
 
+    max_attempts: NotRequired[int]
+    """Maximum claims per event before ``nack`` marks it failed. Defaults to 5."""
+
+    retry_backoff_seconds: NotRequired[float]
+    """Base delay for exponential redelivery backoff after ``nack``. Defaults to 1.0."""
+
     poll_interval: NotRequired[float]
     """Compatibility alias for event_poll_interval. Defaults to 1.0."""
 

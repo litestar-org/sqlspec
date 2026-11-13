@@ -328,21 +328,6 @@ class SQLSpecTenantRequestMiddleware:
         return None
 
 
-def _reject_missing_tenant(scope: "Scope") -> NoReturn:
-    """Raise the Starlette response for a request without an authorized tenant."""
-    from starlette.exceptions import HTTPException, WebSocketException
-
-    user = scope.get("user")
-    authenticated = user is not None and bool(getattr(user, "is_authenticated", True))
-    if scope.get("type") == "websocket":
-        if authenticated:
-            raise WebSocketException(code=4003, reason="An authorized tenant is required")
-        raise WebSocketException(code=4001, reason="Authentication required")
-    if authenticated:
-        raise HTTPException(status_code=403, detail="An authorized tenant is required")
-    raise HTTPException(status_code=401, detail="Authentication required")
-
-
 async def acquire_pending_connection_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Acquire the deferred request connection asynchronously if not yet checked out."""
     if has_state_value(request.state, config_state.connection_key):
@@ -433,6 +418,27 @@ def deferred_request_session(request: "Request", config_state: "SQLSpecConfigSta
     )
 
 
+def has_tenant_strategy(config: Any) -> bool:
+    """Return whether a configuration enables an active tenant strategy."""
+    features = getattr(config, "driver_features", None)
+    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
+
+
+def _reject_missing_tenant(scope: "Scope") -> NoReturn:
+    """Raise the Starlette response for a request without an authorized tenant."""
+    from starlette.exceptions import HTTPException, WebSocketException
+
+    user = scope.get("user")
+    authenticated = user is not None and bool(getattr(user, "is_authenticated", True))
+    if scope.get("type") == "websocket":
+        if authenticated:
+            raise WebSocketException(code=4003, reason="An authorized tenant is required")
+        raise WebSocketException(code=4001, reason="Authentication required")
+    if authenticated:
+        raise HTTPException(status_code=403, detail="An authorized tenant is required")
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
 class _PendingConnection:
     """Deferred request-scoped connection slot checked out on first access."""
 
@@ -445,18 +451,21 @@ class _PendingConnection:
         self.lock = asyncio.Lock()
 
 
+class _ResponseCompletion:
+    """Downstream response completion flag shared through request state."""
+
+    __slots__ = ("complete",)
+
+    def __init__(self) -> None:
+        self.complete = False
+
+
 def _response_owner_key(connection_key: str) -> str:
     return f"sqlspec_response_owner_{connection_key}"
 
 
 def _pending_connection_key(connection_key: str) -> str:
     return f"sqlspec_pending_connection_{connection_key}"
-
-
-def has_tenant_strategy(config: Any) -> bool:
-    """Return whether a configuration enables an active tenant strategy."""
-    features = getattr(config, "driver_features", None)
-    return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
 def _completes_response(message: "Message") -> bool:
@@ -466,10 +475,28 @@ def _completes_response(message: "Message") -> bool:
 
 
 def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
-    pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
-    pop_state_value(request.state, f"{config_state.session_key}_instance")
-    pop_state_value(request.state, deferred_session_key(config_state))
-    pop_state_value(request.state, config_state.connection_key)
+    session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
+    if session is None:
+        session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
+    try:
+        if session is not None:
+            try:
+                runtime = getattr(session, "observability", None)
+                if runtime is not None and not runtime.is_idle:
+                    runtime.emit_session_end_sync(session)
+            finally:
+                detach = getattr(session, "_detach_connection", None)
+                if detach is not None:
+                    detach()
+    finally:
+        pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
+        pop_state_value(request.state, f"{config_state.session_key}_instance")
+        deferred = pop_state_value(request.state, deferred_session_key(config_state))
+        pop_state_value(request.state, config_state.connection_key)
+        if deferred is not None:
+            deferred_detach = getattr(deferred, "_detach_connection", None)
+            if deferred_detach is not None:
+                deferred_detach()
 
 
 @contextmanager
@@ -543,12 +570,14 @@ def _track_downstream_completion(app: "ASGIApp", config_state: "SQLSpecConfigSta
         if scope["type"] != "http":
             await app(scope, receive, send)
             return
-        completion = scope.get("state", {}).get(_response_owner_key(config_state.connection_key))
+        completion = cast(
+            "_ResponseCompletion | None", scope.get("state", {}).get(_response_owner_key(config_state.connection_key))
+        )
 
         async def tracked_send(message: "Message") -> None:
             await send(message)
             if completion is not None and _completes_response(message):
-                completion["complete"] = True
+                completion.complete = True
 
         await app(scope, receive, tracked_send)
 
@@ -581,7 +610,7 @@ async def _run_connection_lifecycle(
             response_complete = True
 
     async with middleware._connection_cm(request):
-        completion = {"complete": False}
+        completion = _ResponseCompletion()
         set_state_value(request.state, owner_key, completion)
         try:
             try:
@@ -604,9 +633,7 @@ async def _run_connection_lifecycle(
                             request,
                             state,
                             active_connection,
-                            commit=response_complete
-                            and completion["complete"]
-                            and middleware._should_commit(status_code),
+                            commit=response_complete and completion.complete and middleware._should_commit(status_code),
                         )
         finally:
             pop_state_value(request.state, owner_key)
@@ -619,6 +646,12 @@ async def _finalize_request_transaction(
     session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
     if session is None:
         session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
+    if (
+        session is not None
+        and getattr(session, "_auto_begin_on_write", False) is True
+        and not session._connection_in_transaction()
+    ):
+        return
     operation = "commit" if commit else "rollback"
     target = session if session is not None and hasattr(session, operation) else connection
     callback = getattr(target, operation, None)

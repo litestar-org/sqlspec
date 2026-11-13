@@ -41,8 +41,10 @@ from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
     _REQUEST_EXCEPTION_KEY,
     _capture_connection_tenant,
-    _exit_connection_context,
+    _finalize_request_session,
+    _release_request_session,
     autocommit_handler_maker,
+    build_request_session,
     connection_provider_maker,
     has_tenant_strategy,
     lifespan_handler_maker,
@@ -62,7 +64,6 @@ from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
-from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantRequestBinding
 
 if TYPE_CHECKING:
@@ -139,13 +140,13 @@ _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
 
 def not_found_error_handler(request: "Request[Any, Any, Any]", exc: NotFoundError) -> "Response[Any]":
-    """Return a 404 response whose detail is the :class:`~sqlspec.exceptions.NotFoundError` message.
+    """Return a 404 response with the static detail ``"Not Found"``.
 
     A handler for status 404 or for the HTTP exception type renders it, otherwise Litestar's
     default exception response. Handlers for :class:`~sqlspec.exceptions.NotFoundError` or a
     subclass take precedence; handlers for its base classes or status 500 do not.
     """
-    http_exc = NotFoundException(detail=str(exc) or "Not Found")
+    http_exc = NotFoundException(detail="Not Found")
     http_exc.__cause__ = exc
     return _render_http_exception(request, http_exc, _resolve_exception_handlers(request))
 
@@ -306,13 +307,18 @@ class ConnectionCleanupMiddleware:
             return
 
         response_started = False
+        response_complete = False
         response_status: int | None = None
 
         async def send_wrapper(message: "Message") -> None:
-            nonlocal response_started, response_status
+            nonlocal response_complete, response_started, response_status
             if message["type"] == HTTP_RESPONSE_START:
                 response_started = True
                 response_status = message["status"]
+            elif str(message["type"]) == "http.response.pathsend" or (
+                message["type"] == "http.response.body" and not message.get("more_body", False)
+            ):
+                response_complete = True
             await send(message)
 
         caught_exc: BaseException | None = None
@@ -325,21 +331,31 @@ class ConnectionCleanupMiddleware:
             started = response_started or bool(ScopeState.from_scope(scope).response_started)
             try:
                 await self._cleanup_scope(
-                    scope, caught_exc=caught_exc, response_started=started, response_status=response_status
+                    scope,
+                    caught_exc=caught_exc,
+                    response_started=started,
+                    response_complete=response_complete,
+                    response_status=response_status,
                 )
             except Exception:
                 if caught_exc is None or isinstance(caught_exc, Exception):
                     raise
 
     async def _cleanup_scope(
-        self, scope: "Scope", *, caught_exc: BaseException | None, response_started: bool, response_status: int | None
+        self,
+        scope: "Scope",
+        *,
+        caught_exc: BaseException | None,
+        response_started: bool,
+        response_complete: bool,
+        response_status: int | None,
     ) -> None:
         recorded_exc = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
         if caught_exc is not None:
             effective_exc: BaseException | None = caught_exc
         elif recorded_exc is not None:
             effective_exc = recorded_exc
-        elif not response_started:
+        elif not response_started or not response_complete:
             effective_exc = asyncio.CancelledError()
         else:
             effective_exc = None
@@ -348,58 +364,41 @@ class ConnectionCleanupMiddleware:
         for target in self._targets:
             try:
                 ctx_scope_key = f"{target.connection_key}_ctx"
-                provider_owned_key = f"{target.connection_key}_provider_owned"
                 session_scope_key = f"{target.session_key}_instance"
                 connection = get_sqlspec_scope_state(scope, target.connection_key)
-                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key)
 
                 if connection is None and connection_cm is None:
                     delete_sqlspec_scope_state(scope, session_scope_key)
+                    delete_sqlspec_scope_state(scope, f"{target.connection_key}_stream_deferred")
                     continue
 
                 if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
                     set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, effective_exc)
 
+                session = get_sqlspec_scope_state(scope, session_scope_key)
                 exc_override: BaseException | None = None
                 try:
                     if connection is not None and target.commit_mode != "manual":
+                        commit_range = range(200, 400 if target.commit_mode == "autocommit_include_redirect" else 300)
+                        should_commit = (
+                            effective_exc is None
+                            and response_status is not None
+                            and (response_status in commit_range or response_status in target.extra_commit_statuses)
+                            and response_status not in target.extra_rollback_statuses
+                        )
                         if effective_exc is not None:
                             with suppress(Exception):
-                                await ensure_async_(connection.rollback)()
+                                await _finalize_request_session(session, connection, commit=False)
                         else:
-                            commit_range = range(
-                                200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
-                            )
-                            should_commit = (
-                                response_status is not None
-                                and (response_status in commit_range or response_status in target.extra_commit_statuses)
-                                and response_status not in target.extra_rollback_statuses
-                            )
-                            if should_commit:
-                                try:
-                                    await ensure_async_(connection.commit)()
-                                except BaseException:
-                                    with suppress(Exception):
-                                        await ensure_async_(connection.rollback)()
-                                    raise
-                            else:
-                                await ensure_async_(connection.rollback)()
+                            await _finalize_request_session(session, connection, commit=should_commit)
                 except BaseException as finalization_exc:
                     exc_override = finalization_exc
                     raise
                 finally:
-                    try:
-                        await _exit_connection_context(
-                            connection_cm,
-                            connection,
-                            scope,
-                            exc_override=exc_override,
-                            connection_key=target.connection_key,
-                        )
-                    finally:
-                        delete_sqlspec_scope_state(scope, target.connection_key)
-                        delete_sqlspec_scope_state(scope, provider_owned_key)
-                        delete_sqlspec_scope_state(scope, session_scope_key)
+                    await _release_request_session(
+                        scope, target.connection_key, session_scope_key, connection, exc_override=exc_override
+                    )
             except BaseException as exc:
                 primary_exc = _select_teardown_exception(primary_exc, exc)
 
@@ -741,22 +740,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
-    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
-        """Return the resolution inputs of every tenant-enabled configuration."""
-        return tuple(
-            _TenantResolutionTarget(
-                config=state.config,
-                settings=state.tenant_settings,
-                receipt_state_keys=tuple(
-                    receipt_state_key(key)
-                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
-                    if isinstance(key, str) and key
-                ),
-            )
-            for state in self._plugin_configs
-            if has_tenant_strategy(state.config)
-        )
-
     def resolve_tenant_settings(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig] | None" = None
     ) -> TenantResolutionSettings:
@@ -1065,6 +1048,22 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         plugin_state = self._get_plugin_state(key)
         return await self._ensure_connection_async(plugin_state, state, scope)
 
+    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
+        """Return the resolution inputs of every tenant-enabled configuration."""
+        return tuple(
+            _TenantResolutionTarget(
+                config=state.config,
+                settings=state.tenant_settings,
+                receipt_state_keys=tuple(
+                    receipt_state_key(key)
+                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
+                    if isinstance(key, str) and key
+                ),
+            )
+            for state in self._plugin_configs
+            if has_tenant_strategy(state.config)
+        )
+
     def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
         """Extract Litestar settings from config.extension_config."""
         litestar_config = cast("LitestarConfig", config.extension_config.get("litestar", {}))
@@ -1130,19 +1129,26 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """Build the dependency providers and before-send handler for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
+        session_scope_key = f"{state.session_key}_instance"
         commit_mode = state.commit_mode
         config = state.config
 
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
-        state.session_provider = session_provider_maker(config, connection_key)
+        state.session_provider = session_provider_maker(
+            config, connection_key, session_scope_key=session_scope_key, commit_mode=commit_mode
+        )
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key)
+            state.before_send_handler = manual_handler_maker(connection_key, session_scope_key=session_scope_key)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+                connection_key,
+                commit_on_redirect,
+                state.extra_commit_statuses,
+                state.extra_rollback_statuses,
+                session_scope_key=session_scope_key,
             )
 
     def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
@@ -1215,12 +1221,11 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if session is not None and getattr(session, "connection", None) is connection:
             return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
-        session = plugin_state.config.driver_type(
-            connection=connection,
-            statement_config=plugin_state.config.statement_config,
-            driver_features=plugin_state.config.driver_features,
-        )
+        session = build_request_session(plugin_state.config, connection, plugin_state.commit_mode)
         set_sqlspec_scope_state(scope, session_scope_key, session)
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
         return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
     def _registry_state(self, name: Any) -> "PluginConfigState | None":

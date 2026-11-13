@@ -20,7 +20,7 @@ REPOSITORY_ERRORS = pytest.mark.parametrize(
     ("error", "status_code", "detail", "http_exception"),
     [
         (UniqueViolationError("duplicate key value violates users_email_key"), 409, "Conflict", "ClientException"),
-        (NotFoundError("gone"), 404, "gone", "NotFoundException"),
+        (NotFoundError("Row missing in accounts"), 404, "Not Found", "NotFoundException"),
     ],
     ids=["integrity", "not_found"],
 )
@@ -201,3 +201,26 @@ def test_broader_router_handler_takes_precedence_over_integrity_default() -> Non
 
     assert response.status_code == 418
     assert response.json() == {"handled": "UniqueViolationError"}
+
+
+def test_not_found_error_handler_returns_static_detail_and_preserves_cause() -> None:
+    """not_found_error_handler masks internal table details in 404 responses while keeping __cause__."""
+    original = NotFoundError("Row missing in accounts")
+    captured_causes: list[BaseException | None] = []
+    captured_details: list[str] = []
+
+    def _inspect_404(_request: Any, exc: Exception) -> "Response[dict[str, str]]":
+        captured_causes.append(exc.__cause__)
+        captured_details.append(getattr(exc, "detail", ""))
+        return Response(content={"detail": getattr(exc, "detail", "")}, status_code=404)
+
+    with create_test_client(
+        route_handlers=[_raising_route(original)], plugins=[_build_plugin()], exception_handlers={404: _inspect_404}
+    ) as client:
+        response = client.get("/error")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+    assert "accounts" not in response.text
+    assert captured_details == ["Not Found"]
+    assert captured_causes == [original]

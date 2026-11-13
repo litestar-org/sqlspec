@@ -78,7 +78,7 @@ class AsyncpgListenerHub:
             self._queues[channel] = WeakKeyDictionary()
             self._callbacks[channel] = _callback
             try:
-                await connection.execute(f"LISTEN {validated}")
+                await connection.execute(f"LISTEN {_quote_channel_identifier(validated)}")
                 await connection.add_listener(channel, _callback)
             except Exception:
                 self._queues.pop(channel, None)
@@ -99,7 +99,7 @@ class AsyncpgListenerHub:
                     await connection.remove_listener(channel, callback)
             validated = normalize_event_channel_name(channel)
             with contextlib.suppress(Exception):
-                await connection.execute(f"UNLISTEN {validated}")
+                await connection.execute(f"UNLISTEN {_quote_channel_identifier(validated)}")
 
     async def dequeue(self, channel: str, poll_interval: float) -> "str | None":
         if channel not in self._queues:
@@ -139,7 +139,7 @@ class AsyncpgListenerHub:
                         await connection.remove_listener(channel, callback)
                 validated = normalize_event_channel_name(channel)
                 with contextlib.suppress(Exception):
-                    await connection.execute(f"UNLISTEN {validated}")
+                    await connection.execute(f"UNLISTEN {_quote_channel_identifier(validated)}")
         if connection_cm is not None:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
@@ -220,7 +220,7 @@ class AsyncpgListenerHub:
         try:
             for channel, callback in self._callbacks.items():
                 validated = normalize_event_channel_name(channel)
-                await listener_connection.execute(f"LISTEN {validated}")
+                await listener_connection.execute(f"LISTEN {_quote_channel_identifier(validated)}")
                 await listener_connection.add_listener(channel, callback)
         except Exception:
             self._connection = None
@@ -256,6 +256,11 @@ class AsyncpgListenerHub:
     def _record_queue_depth(self) -> None:
         depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
         self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
+
+
+def _quote_channel_identifier(channel: str) -> str:
+    """Return a double-quoted PostgreSQL identifier for a validated channel name."""
+    return '"' + channel.replace('"', '""') + '"'
 
 
 def _record_listener_lifecycle(config: "AsyncpgConfig", backend_name: str, status: str) -> None:

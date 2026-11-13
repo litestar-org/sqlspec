@@ -1,7 +1,8 @@
 """Tests for Sanic correlation and SQLCommenter middleware."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -10,10 +11,16 @@ pytest.importorskip("sanic")
 
 from sanic import Sanic
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic import SQLSpecPlugin
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.correlation import CorrelationContext
+
+if TYPE_CHECKING:
+    from sqlspec.config import LifecycleConfig
 
 pytestmark = pytest.mark.anyio
 
@@ -103,3 +110,65 @@ def _make_request(
         path=path,
         uri_template=uri_template,
     )
+
+
+async def test_sanic_session_prepares_driver_emits_lifecycle_events_and_detaches() -> None:
+    """Sanic prepares request sessions via _prepare_driver, emits session start and end, and detaches on release."""
+    events: list[tuple[str, Any]] = []
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"sanic": {"commit_mode": "manual"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast(
+                "LifecycleConfig",
+                {
+                    "on_session_start": [lambda ctx: events.append(("start", ctx["session"]))],
+                    "on_session_end": [lambda ctx: events.append(("end", ctx["session"]))],
+                },
+            )
+        ),
+    )
+    prepared: list[Any] = []
+    original_prepare = config._prepare_driver
+
+    def _tracking_prepare(driver: Any) -> Any:
+        prepared.append(driver)
+        return original_prepare(driver)
+
+    config._prepare_driver = _tracking_prepare  # type: ignore[method-assign]
+
+    class _ConnCM:
+        def __init__(self, conn: Any) -> None:
+            self._conn = conn
+
+        async def __aenter__(self) -> Any:
+            return self._conn
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    conn = AsyncMock()
+    config.provide_connection = MagicMock(return_value=_ConnCM(conn))  # type: ignore[method-assign]
+    plugin = SQLSpecPlugin(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(ctx=SimpleNamespace(db_pool=object())),
+        conn_info=SimpleNamespace(ctx=SimpleNamespace()),
+        ctx=SimpleNamespace(),
+        headers={},
+        path="/items",
+    )
+    response = SimpleNamespace(status=200, headers={})
+
+    await plugin._on_request(request)  # pyright: ignore[reportPrivateUsage]
+    session = await plugin.get_session_async(request)
+    assert len(prepared) == 1
+    assert events == [("start", session)]
+
+    await plugin._on_response(request, response)  # pyright: ignore[reportPrivateUsage]
+    assert events == [("start", session)]
+    assert session.connection is conn
+
+    await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
+    assert events == [("start", session), ("end", session)]
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = session.connection.cursor

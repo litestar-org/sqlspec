@@ -382,7 +382,7 @@ class SyncEventChannel:
             self._backend.ack(event_id)
 
     def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery."""
+        """Return a leased event to the queue with exponential backoff, or mark it failed at ``max_attempts``."""
         if not self._backend.supports_sync:
             msg = "Current events backend does not support sync nack"
             raise ImproperConfigurationError(msg)
@@ -689,7 +689,7 @@ class AsyncEventChannel:
             await self._backend.ack(event_id)
 
     async def nack(self, event_id: str) -> None:
-        """Return an event to the queue for redelivery."""
+        """Return a leased event to the queue with exponential backoff, or mark it failed at ``max_attempts``."""
         if not self._backend.supports_async:
             msg = "Current events backend does not support async nack"
             raise ImproperConfigurationError(msg)

@@ -1,20 +1,23 @@
 # pyright: reportArgumentType=false
 """Tests for Flask SQLSpec plugin lifecycle and configuration."""
 
+import sqlite3
 import tempfile
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from flask import Flask, g
+from flask import Flask, Response, g
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.flask import FlaskConfigState, SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.flask._utils import get_or_create_session
 from sqlspec.extensions.flask.extension import DEFAULT_SESSION_KEY
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.portal import PortalProvider
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 from tests.unit.extensions._tenant_configs import SyncRecordingStrategy, TenantSqliteConfig
@@ -22,7 +25,7 @@ from tests.unit.extensions._tenant_configs import SyncRecordingStrategy, TenantS
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol, LifecycleConfig
 
 pytest.importorskip("flask")
 
@@ -101,17 +104,27 @@ def test_respects_custom_session_key() -> None:
 pytest.importorskip("flask")
 
 
+class _IdleRuntime:
+    is_idle = True
+
+
 class _Driver:
     def __init__(self, *, connection: Any, statement_config: Any, driver_features: dict[str, Any]) -> None:
         self.connection = connection
         self.statement_config = statement_config
         self.driver_features = driver_features
+        self.observability = _IdleRuntime()
+        self._auto_begin_on_write = False
 
 
 class _Config:
     driver_type = _Driver
     driver_features = {"returning_support": True}
     statement_config = object()
+
+    @staticmethod
+    def _prepare_driver(driver: Any) -> Any:
+        return driver
 
 
 def _make_state() -> FlaskConfigState:
@@ -485,5 +498,198 @@ def test_flask_request_connection_is_checked_out_on_first_access_only() -> None:
         reader = sqlite3.connect(database)
         try:
             assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
+        finally:
+            reader.close()
+
+
+@pytest.mark.parametrize(
+    ("adapter_kind", "commit_mode", "expect_auto_begin"),
+    [
+        ("duckdb", "autocommit", True),
+        ("duckdb", "autocommit_include_redirect", True),
+        ("duckdb", "manual", False),
+        ("sqlite", "autocommit", False),
+    ],
+)
+def test_flask_prepares_session_arms_lazy_begin_emits_events_and_detaches(
+    adapter_kind: str, commit_mode: str, expect_auto_begin: bool
+) -> None:
+    """Flask builds sessions via _prepare_driver, arms lazy begin on target adapters, emits start/end, skips idle armed commits, and detaches."""
+    events: list[tuple[str, Any]] = []
+    obs = ObservabilityConfig(
+        lifecycle=cast(
+            "LifecycleConfig",
+            {
+                "on_session_start": [lambda ctx: events.append(("start", ctx["session"]))],
+                "on_session_end": [lambda ctx: events.append(("end", ctx["session"]))],
+            },
+        )
+    )
+    config: Any = (
+        DuckDBConfig(
+            connection_config={"database": f":memory:flask_{commit_mode}"},
+            extension_config={"flask": {"commit_mode": commit_mode}},
+            observability_config=obs,
+        )
+        if adapter_kind == "duckdb"
+        else SqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"flask": {"commit_mode": commit_mode}},
+            observability_config=obs,
+        )
+    )
+    prepare_calls = 0
+    original_prepare = config._prepare_driver
+
+    def _prepare(driver: Any) -> Any:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return original_prepare(driver)
+
+    config._prepare_driver = _prepare
+
+    class _ConnProxy:
+        __slots__ = ("_conn", "commits")
+
+        def __init__(self, conn: Any) -> None:
+            self._conn = conn
+            self.commits = 0
+
+        def commit(self) -> None:
+            self.commits += 1
+            self._conn.commit()
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._conn, name)
+
+    proxies: list[_ConnProxy] = []
+    original_provide = config.provide_connection
+
+    @contextmanager
+    def _proxy_provide(*args: Any, **kwargs: Any) -> "Iterator[Any]":
+        with original_provide(*args, **kwargs) as raw_conn:
+            proxy = _ConnProxy(raw_conn)
+            proxies.append(proxy)
+            yield proxy
+
+    config.provide_connection = _proxy_provide
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+    retained: list[Any] = []
+
+    @app.get("/read")
+    def read_only() -> str:
+        session = plugin.get_session()
+        assert session._auto_begin_on_write is expect_auto_begin
+        value = session.select_value("SELECT 1")
+        retained.append(session)
+        return str(value)
+
+    try:
+        resp = app.test_client().get("/read")
+        assert resp.status_code == 200
+        assert resp.get_data(as_text=True) == "1"
+        assert prepare_calls == 1
+        assert len(retained) == 1
+        assert events == [("start", retained[0]), ("end", retained[0])]
+        if expect_auto_begin:
+            assert proxies[0].commits == 0
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = retained[0].connection.cursor
+    finally:
+        plugin.shutdown()
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("fully_iterated", "status", "expected_rows"),
+    [(True, 200, [(1,), (2,)]), (False, 200, []), (True, 500, [])],
+    ids=["completed_200_commits", "abandoned_200_rolls_back", "completed_500_rolls_back"],
+)
+def test_flask_streamed_response_defers_finalization_and_release_to_close(
+    fully_iterated: bool, status: int, expected_rows: "list[tuple[int]]"
+) -> None:
+    """Streamed Flask responses keep their connection past appcontext teardown, commit only when exhausted with commit status, and detach on close."""
+    with tempfile.TemporaryDirectory() as directory:
+        database = f"{directory}/stream.db"
+        setup = sqlite3.connect(database)
+        setup.execute("CREATE TABLE stream_items (value INTEGER)")
+        setup.commit()
+        setup.close()
+
+        lifecycle_events: list[str] = []
+        active_connections = 0
+        original_provide = SqliteConfig.provide_connection
+
+        @contextmanager
+        def _tracking_provide(self: SqliteConfig, *args: Any, **kwargs: Any) -> "Iterator[Any]":
+            nonlocal active_connections
+            with original_provide(self, *args, **kwargs) as conn:
+                active_connections += 1
+                try:
+                    yield conn
+                finally:
+                    active_connections -= 1
+
+        config = SqliteConfig(
+            connection_config={"database": database},
+            extension_config={"flask": {"commit_mode": "autocommit"}},
+            observability_config=ObservabilityConfig(
+                lifecycle=cast(
+                    "LifecycleConfig",
+                    {
+                        "on_session_start": [lambda _ctx: lifecycle_events.append("start")],
+                        "on_session_end": [lambda _ctx: lifecycle_events.append("end")],
+                    },
+                )
+            ),
+        )
+        config.provide_connection = _tracking_provide.__get__(config, SqliteConfig)  # type: ignore[method-assign]
+        app = Flask(__name__)
+        plugin = SQLSpecPlugin(config, app)
+        retained: list[Any] = []
+
+        @app.get("/stream")
+        def stream_view() -> Response:
+            session = plugin.get_session()
+            retained.append(session)
+            session.begin()
+            session.execute("INSERT INTO stream_items VALUES (1)")
+
+            def generate() -> "Iterator[bytes]":
+                assert active_connections == 1
+                yield b"chunk-1:"
+                session.execute("INSERT INTO stream_items VALUES (2)")
+                yield b"chunk-2"
+
+            return Response(generate(), status=status, mimetype="text/plain")
+
+        try:
+            response = app.test_client().get("/stream", buffered=False)
+            assert response.status_code == status
+            assert active_connections == 1
+            assert lifecycle_events == ["start"]
+
+            iterator = iter(response.response)
+            first_chunk = next(iterator)
+            assert first_chunk == b"chunk-1:"
+            assert active_connections == 1
+
+            if fully_iterated:
+                remaining = list(iterator)
+                assert remaining == [b"chunk-2"]
+
+            response.close()
+            assert active_connections == 0
+            assert lifecycle_events == ["start", "end"]
+            with pytest.raises(ImproperConfigurationError, match="already closed"):
+                _ = retained[0].connection.cursor
+        finally:
+            plugin.shutdown()
+            config.close_pool()
+
+        reader = sqlite3.connect(database)
+        try:
+            assert reader.execute("SELECT value FROM stream_items ORDER BY value").fetchall() == expected_rows
         finally:
             reader.close()
