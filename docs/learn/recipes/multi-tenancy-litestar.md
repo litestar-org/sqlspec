@@ -166,7 +166,8 @@ When user accounts and sessions live in a dedicated authentication database,
 pass a list of configs to `SQLSpecPlugin([auth_config, tenant_config])`. The
 authentication store and login routes read `auth_config` without any bypass
 scope, and organization switching verifies membership before updating the
-server-side session:
+server-side session. Sizing the dedicated `auth_config` pool (`min_size` /
+`max_size`) isolates `SessionAuth` lookups from tenant query load:
 
 ```python
 import os
