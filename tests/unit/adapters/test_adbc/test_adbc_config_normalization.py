@@ -1478,11 +1478,29 @@ def test_snowflake_duration_normalization(value: Any, expected: str) -> None:
     assert normalized["db_kwargs"]["adbc.snowflake.sql.client_option.login_timeout"] == expected
 
 
+@pytest.mark.parametrize(
+    ("field", "option_key"),
+    [
+        ("connection_timeout", "adbc.snowflake.sql.client_option.login_timeout"),
+        ("query_timeout", "adbc.snowflake.sql.client_option.request_timeout"),
+    ],
+)
+def test_snowflake_timeout_aliases_lift_and_respect_canonical_precedence(field: str, option_key: str) -> None:
+    """Generic ADBC timeout fields map to Snowflake Go durations and yield to canonical keys."""
+    aliased = build_connection_config({"driver": "snowflake", field: 12.5})
+    assert aliased == {"db_kwargs": {option_key: "12500ms"}}
+
+    canonical_field = "login_timeout" if field == "connection_timeout" else "request_timeout"
+    canonical_wins = build_connection_config({"driver": "snowflake", field: 12, canonical_field: 30})
+    assert canonical_wins == {"db_kwargs": {option_key: "30s"}}
+
+
+@pytest.mark.parametrize("field", ["login_timeout", "connection_timeout", "request_timeout", "query_timeout"])
 @pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "later", "-1s"])
-def test_snowflake_rejects_invalid_duration(value: Any) -> None:
+def test_snowflake_rejects_invalid_duration(field: str, value: Any) -> None:
     """Invalid durations fail before an external connection is attempted."""
     with pytest.raises(ImproperConfigurationError, match="duration"):
-        build_connection_config({"driver": "snowflake", "login_timeout": value})
+        build_connection_config({"driver": "snowflake", field: value})
 
 
 @pytest.mark.parametrize(

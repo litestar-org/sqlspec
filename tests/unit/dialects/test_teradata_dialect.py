@@ -41,6 +41,9 @@ def test_teradata_pagination_preserves_ast() -> None:
     [
         ("SELECT CAST(x AS TEXT)", "SELECT CAST(x AS CLOB)"),
         ("SELECT CAST(x AS VARBINARY)", "SELECT CAST(x AS VARBYTE(32000))"),
+        ("SELECT CAST(x AS TIME WITH TIME ZONE)", "SELECT CAST(x AS TIME WITH TIME ZONE)"),
+        ("SELECT CAST(x AS TIME(6) WITH TIME ZONE)", "SELECT CAST(x AS TIME(6) WITH TIME ZONE)"),
+        ("SELECT CAST(x AS TIMETZ)", "SELECT CAST(x AS TIME WITH TIME ZONE)"),
         ("SELECT CAST(x AS TIMESTAMP(6) WITH TIME ZONE)", "SELECT CAST(x AS TIMESTAMP(6) WITH TIME ZONE)"),
         (
             "SELECT id FROM users LIMIT :limit OFFSET :offset",

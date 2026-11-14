@@ -20,6 +20,7 @@ TERADATA_TYPE_MAPPING: Final[dict[exp.DType, str]] = {
     exp.DType.VARBINARY: "VARBYTE",
     exp.DType.BINARY: "BYTE",
     exp.DType.BLOB: "BLOB",
+    exp.DType.TIMETZ: "TIME",
 }
 TERADATA_DEFAULT_TYPE_LENGTHS: Final[dict[exp.DType, int]] = {exp.DType.VARCHAR: 32000, exp.DType.VARBINARY: 32000}
 
@@ -35,6 +36,7 @@ def teradata_datatype_sql(gen: generator.Generator, expression: exp.DataType) ->
         exp.DType.BINARY,
         exp.DType.BLOB,
         exp.DType.VARCHAR,
+        exp.DType.TIMETZ,
     }:
         return gen.datatype_sql(expression)
     name = TERADATA_TYPE_MAPPING.get(kind, "VARCHAR")
@@ -42,6 +44,8 @@ def teradata_datatype_sql(gen: generator.Generator, expression: exp.DataType) ->
     if not parameters and kind in TERADATA_DEFAULT_TYPE_LENGTHS:
         parameters = str(TERADATA_DEFAULT_TYPE_LENGTHS[kind])
     rendered = f"{name}({parameters})" if parameters else name
+    if kind == exp.DType.TIMETZ and gen.TZ_TO_WITH_TIME_ZONE:
+        rendered = f"{rendered} WITH TIME ZONE"
     collate = gen.sql(expression, "collate")
     return f"{rendered} COLLATE {collate}" if collate else rendered
 

@@ -2405,11 +2405,13 @@ _SNOWFLAKE_BOOLEAN_OPTIONS: Final[tuple[str, ...]] = (
     "tls_skip_verify",
     "use_high_precision",
 )
-_SNOWFLAKE_DURATION_OPTIONS: Final[tuple[str, ...]] = (
-    "login_timeout",
-    "request_timeout",
-    "client_timeout",
-    "jwt_expire_timeout",
+_SNOWFLAKE_DURATION_OPTIONS: Final[tuple[tuple[str, str], ...]] = (
+    ("login_timeout", "login_timeout"),
+    ("connection_timeout", "login_timeout"),
+    ("request_timeout", "request_timeout"),
+    ("query_timeout", "request_timeout"),
+    ("client_timeout", "client_timeout"),
+    ("jwt_expire_timeout", "jwt_expire_timeout"),
 )
 _GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+\Z")
 _SNOWFLAKE_ERROR_MARKER: Final = "[snowflake]"
@@ -2560,11 +2562,11 @@ def _lift_snowflake_db_kwargs(config: dict[str, Any]) -> None:
                 msg = f"Snowflake {field} must be a boolean."
                 raise ImproperConfigurationError(msg)
             options.setdefault("adbc.snowflake.sql.client_option." + field, _snowflake_option_text(value).lower())
-    for field in _SNOWFLAKE_DURATION_OPTIONS:
+    for field, option in _SNOWFLAKE_DURATION_OPTIONS:
         if field in config:
             value = config.pop(field)
             options.setdefault(
-                "adbc.snowflake.sql.client_option." + field, _format_go_duration(value, field_name=field)
+                "adbc.snowflake.sql.client_option." + option, _format_go_duration(value, field_name=field)
             )
     auth = config.pop("auth_type", None)
     if auth is not None:
