@@ -41,17 +41,26 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityRuntime
     from sqlspec.storage.registry import StorageRegistry
 
-__all__ = ("NamedStatement", "SQLFile", "SQLFileCacheEntry", "SQLFileLoader", "SlotDeclaration")
+__all__ = (
+    "MAX_EXPANDED_SQL_BYTES",
+    "NamedStatement",
+    "SQLFile",
+    "SQLFileCacheEntry",
+    "SQLFileLoader",
+    "SlotDeclaration",
+)
 
 logger = get_logger("sqlspec.loader")
 
+MAX_EXPANDED_SQL_BYTES: Final[int] = 1_048_576
+
 SECTION_MARKER_PATTERN = re.compile(
-    r"^\s*--\s*(?:name\s*:\s*(?P<name>[\w-]+[^\w\s]*)|fragment\s*:\s*(?P<fragment>[\w-]+))\s*$",
+    r"^[ \t]*--\s*(?:name\s*:\s*(?P<name>[\w-]+[^\w\s]*)|fragment\s*:\s*(?P<fragment>[\w-]+))[ \t\r]*$",
     re.MULTILINE | re.IGNORECASE,
 )
 
 SLOT_DIRECTIVE_PATTERN = re.compile(
-    r"^\s*--\s*slot\s*:\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(?P<default>.*\S))?\s*$", re.IGNORECASE
+    r"^[ \t]*--\s*slot\s*:\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(?P<default>.*\S))?\s*$", re.IGNORECASE
 )
 
 SLOT_COMMENT_PATTERN = re.compile(r"--\s*slot\s*:", re.IGNORECASE)
@@ -62,14 +71,16 @@ SLOT_MARKER_PATTERN = re.compile(r"/\*\s*slot\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\
 
 INCLUDE_MARKER_PATTERN = re.compile(r"/\*\s*include\s*:\s*([\w.-]+)\s*\*/")
 
-DIALECT_PATTERN = re.compile(r"^\s*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)\s*$", re.IGNORECASE | re.MULTILINE)
+DIALECT_PATTERN = re.compile(
+    r"^[ \t]*--\s*dialect\s*:\s*(?P<dialect>[a-zA-Z0-9_]+)[ \t\r]*$", re.IGNORECASE | re.MULTILINE
+)
 
 PARAM_PATTERN = re.compile(
-    r"^\s*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?P<optional>\?)?(?:\s+(?P<desc>.*\S))?\s*$",
+    r"^[ \t]*--\s*param\s*:\s*(?P<name>\w+)\s+(?P<type>[\w.]+(?:\[[\w., ]+\])?)(?P<optional>\?)?(?:\s+(?P<desc>.*\S))?\s*$",
     re.IGNORECASE,
 )
 
-PARAM_PREFIX_PATTERN = re.compile(r"^\s*--\s*param\s*:", re.IGNORECASE)
+PARAM_PREFIX_PATTERN = re.compile(r"^[ \t]*--\s*param\s*:", re.IGNORECASE)
 PARAM_OPTIONAL_DESCRIPTION_PATTERN = re.compile(r"(?:^|\s)\(optional\)\s*$", re.IGNORECASE)
 
 
@@ -1440,30 +1451,69 @@ class SQLFileLoader:
 
         Raises:
             SQLStatementNotFoundError: If an included fragment does not exist.
-            SQLFileParseError: If the includes form a cycle.
+            SQLFileParseError: If the includes form a cycle or exceed MAX_EXPANDED_SQL_BYTES.
         """
+        expanded_bytes = [0]
+        parts: list[str] = []
+        self._resolve_includes_into(
+            text,
+            namespace=namespace,
+            stack=stack,
+            parts=parts,
+            expanded_bytes=expanded_bytes,
+            source_name=stack[-1] if stack else "<statement>",
+        )
+        return "".join(parts)
+
+    def _resolve_includes_into(
+        self,
+        text: str,
+        *,
+        namespace: "str | None",
+        stack: "tuple[str, ...]",
+        parts: "list[str]",
+        expanded_bytes: "list[int]",
+        source_name: str,
+    ) -> None:
         include_markers = _include_markers(text)
         if not include_markers:
-            return text
-        parts: list[str] = []
+            self._append_bounded_fragment_text(parts, text, expanded_bytes, source_name)
+            return
         last_end = 0
         for match in include_markers:
+            prefix = text[last_end : match.start()]
+            if prefix:
+                self._append_bounded_fragment_text(parts, prefix, expanded_bytes, source_name)
             fragment_name = self._find_fragment_name(match.group(1), namespace)
             if fragment_name in stack:
                 file_path = self._fragment_to_file.get(fragment_name, "<directly added>")
                 cycle = " -> ".join((*stack, fragment_name))
                 raise SQLFileParseError(fragment_name, file_path, ValueError(f"Include cycle detected: {cycle}"))
-            parts.append(text[last_end : match.start()])
-            parts.append(
-                self._resolve_includes(
-                    self._fragments[fragment_name].sql,
-                    namespace=_namespace_of(fragment_name),
-                    stack=(*stack, fragment_name),
-                )
+            self._resolve_includes_into(
+                self._fragments[fragment_name].sql,
+                namespace=_namespace_of(fragment_name),
+                stack=(*stack, fragment_name),
+                parts=parts,
+                expanded_bytes=expanded_bytes,
+                source_name=fragment_name,
             )
             last_end = match.end()
-        parts.append(text[last_end:])
-        return "".join(parts)
+        suffix = text[last_end:]
+        if suffix:
+            self._append_bounded_fragment_text(parts, suffix, expanded_bytes, source_name)
+
+    def _append_bounded_fragment_text(
+        self, parts: "list[str]", chunk: str, expanded_bytes: "list[int]", source_name: str
+    ) -> None:
+        expanded_bytes[0] += len(chunk.encode("utf-8"))
+        if expanded_bytes[0] > MAX_EXPANDED_SQL_BYTES:
+            file_path = self._fragment_to_file.get(source_name, "<directly added>")
+            raise SQLFileParseError(
+                source_name,
+                file_path,
+                ValueError(f"Expanded SQL size exceeds maximum of {MAX_EXPANDED_SQL_BYTES} bytes"),
+            )
+        parts.append(chunk)
 
     def _find_fragment_name(self, name: str, namespace: "str | None") -> str:
         """Find the registered name of an included fragment.

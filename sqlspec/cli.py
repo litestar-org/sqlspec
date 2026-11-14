@@ -49,7 +49,7 @@ def get_sqlspec_group() -> "Group":
         The SQLSpec CLI group.
     """
 
-    @click.group(name="sqlspec")
+    @click.group(name="sqlspec", cls=_SQLSpecGroup, context_settings={"help_option_names": ["-h", "--help"]})
     @click.option(
         "--config",
         help="Dotted path to SQLSpec config(s) or callable function (env: SQLSPEC_CONFIG)",
@@ -71,6 +71,9 @@ def get_sqlspec_group() -> "Group":
         """
         console = get_console()
         ctx.ensure_object(dict)
+
+        if _should_skip_config_resolution(ctx):
+            return
 
         if config is None:
             config = discover_config_from_pyproject()
@@ -1602,6 +1605,28 @@ def _quote_verified_table_identifier(config: Any, memory_table: str, dialect: st
         if adapter_name == "sqlanywhere":
             return _quote_identifier_for_dialect(f'"DBA".{cleaned_table}', dialect)
     return _quote_identifier_for_dialect(memory_table, dialect)
+
+
+class _SQLSpecGroup(click.RichGroup):
+    """Click group that records raw CLI arguments prior to subcommand resolution."""
+
+    def parse_args(self, ctx: "click.Context", args: "list[str]") -> "list[str]":
+        ctx.ensure_object(dict)
+        raw_args = args[: args.index("--")] if "--" in args else args
+        ctx.obj["_raw_cli_args"] = tuple(raw_args)
+        return super().parse_args(ctx, args)
+
+
+def _should_skip_config_resolution(ctx: "click.Context") -> bool:
+    if ctx.resilient_parsing:
+        return True
+    help_flags = set(ctx.help_option_names) | {"--help", "-h"}
+    raw_args = ctx.obj.get("_raw_cli_args") if isinstance(ctx.obj, dict) else None
+    if raw_args is not None:
+        return any(arg in help_flags for arg in raw_args)
+    argv_tail = sys.argv[1:]
+    argv_args = argv_tail[: argv_tail.index("--")] if "--" in argv_tail else argv_tail
+    return any(arg in help_flags for arg in argv_args)
 
 
 def _safe_group_command(
