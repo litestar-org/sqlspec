@@ -1297,3 +1297,66 @@ def test_shared_expression_skips_ast_copy_on_compiler_and_parse_cache_hits(
             res = parse_only_processor.compile(sql, [1, i])
             assert res.expression is not None
         assert copy_calls == 0
+
+
+@requires_interpreted
+def test_cold_compile_walks_ast_once_and_copies_once_without_transformers(
+    postgres_statement_config: "StatementConfig",
+) -> None:
+    """Cold compile without AST transformers walks and copies the AST at most once."""
+    processor = SQLProcessor(postgres_statement_config)
+    walk_calls = 0
+    copy_calls = 0
+    original_walk = exp.Expression.walk
+    original_copy = exp.Expression.copy
+
+    def counting_walk(self: "exp.Expression", *args: Any, **kwargs: Any) -> Any:
+        nonlocal walk_calls
+        walk_calls += 1
+        return original_walk(self, *args, **kwargs)
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with patch.object(exp.Expression, "walk", counting_walk), patch.object(exp.Expression, "copy", counting_copy):
+        res = processor.compile("SELECT id, CAST($1 AS TEXT) FROM users WHERE org_id = $2", [1, 2])
+
+    assert res.parameter_casts == {1: "TEXT"}
+    assert res.operation_profile.is_read_only is True
+    assert walk_calls == 1
+    assert copy_calls == 1
+
+
+@requires_interpreted
+def test_dynamic_sqlcommenter_skips_expression_copy_on_hits() -> None:
+    """Dynamic SQLCommenter appends comments without copying the cached AST."""
+    from sqlspec.core.sqlcommenter import SQLCommenterContext
+
+    config = StatementConfig(
+        dialect="sqlite", enable_caching=True, enable_sqlcommenter=True, sqlcommenter_enable_context=True
+    )
+    processor = SQLProcessor(config)
+    with SQLCommenterContext.scope({"route": "/items"}):
+        processor.compile("SELECT id FROM users WHERE id = ?", [1])
+
+    copy_calls = 0
+    original_copy = exp.Expression.copy
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with SQLCommenterContext.scope({"route": "/orders"}), patch.object(exp.Expression, "copy", counting_copy):
+        res = processor.compile("SELECT id FROM users WHERE id = ?", [2])
+
+    assert "route" in res.compiled_sql
+    assert copy_calls == 0
+
+
+def test_parameter_casts_assigns_distinct_positions_for_multiple_qmark() -> None:
+    """Multiple anonymous '?' placeholders advance positions instead of collapsing onto index 1."""
+    expression = sqlglot.parse_one("SELECT ?, CAST(? AS INT)")
+    assert SQLProcessor._parameter_casts(expression) == {2: "INT"}
