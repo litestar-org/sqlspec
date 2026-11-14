@@ -1,6 +1,7 @@
 """Unit tests for without_indexes context manager and drop_indexes bulk load orchestration."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -624,3 +625,57 @@ def test_index_ddl_quotes_dotted_catalog_schema_name_as_single_identifier(
     meta = {"index_name": "idx_cust", "columns": ["cust"], "schema_name": "My.Schema"}
     assert build_drop_index_sql(dialect, meta, "orders") == expected_drop
     assert build_create_index_sql(dialect, meta, "orders") == expected_create
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_without_indexes_preserves_rebuild_diagnostics_when_body_raises(
+    is_async: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When body raises and index rebuild also fails, context preserves primary error, logs, and attaches note."""
+    caplog.set_level(logging.ERROR, logger="sqlspec.data_dictionary.index_ddl")
+
+    if is_async:
+
+        class _AsyncRebuildFailDD:
+            async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                return ({"index_name": "idx_a", "columns": ["a"]},)
+
+            async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _AsyncRebuildFailDriver:
+            dialect = "postgres"
+            data_dictionary = _AsyncRebuildFailDD()
+
+            async def execute(self, sql: str) -> None:
+                if "CREATE INDEX" in sql:
+                    raise OSError("disk full during index rebuild")
+
+        with pytest.raises(RuntimeError, match="bulk load failed") as exc_info:
+            async with AsyncWithoutIndexesContext(_AsyncRebuildFailDriver(), "orders", concurrent=False):
+                raise RuntimeError("bulk load failed")
+    else:
+
+        class _SyncRebuildFailDD:
+            def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                return ({"index_name": "idx_a", "columns": ["a"]},)
+
+            def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _SyncRebuildFailDriver:
+            dialect = "postgres"
+            data_dictionary = _SyncRebuildFailDD()
+
+            def execute(self, sql: str) -> None:
+                if "CREATE INDEX" in sql:
+                    raise OSError("disk full during index rebuild")
+
+        with pytest.raises(RuntimeError, match="bulk load failed") as exc_info:
+            with SyncWithoutIndexesContext(_SyncRebuildFailDriver(), "orders", concurrent=False):
+                raise RuntimeError("bulk load failed")
+
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("disk full during index rebuild" in note for note in notes)
+    assert any("disk full during index rebuild" in rec.message for rec in caplog.records)

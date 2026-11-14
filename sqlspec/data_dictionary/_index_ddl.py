@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Self, final
 
 from sqlspec.data_dictionary._registry import normalize_adapter_dialect_name
 from sqlspec.exceptions import TransactionError
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ __all__ = (
     "filter_droppable_table_indexes",
 )
 
+logger = get_logger("sqlspec.data_dictionary.index_ddl")
 _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
 _BACKTICK_INDEX_DIALECTS: Final[frozenset[str]] = _MYSQL_FAMILY_DIALECTS | frozenset({"spanner"})
 _SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
@@ -246,17 +248,12 @@ class SyncWithoutIndexesContext:
         in_tx = _safe_driver_in_transaction(self._driver)
         rebuild_errors: list[Exception] = []
         for stmt in self._rebuild_statements:
-            effective_stmt = stmt
-            if in_tx and " INDEX CONCURRENTLY " in effective_stmt.upper():
-                effective_stmt = re.sub(
-                    r"\bINDEX\s+CONCURRENTLY\s+", "INDEX ", effective_stmt, count=1, flags=re.IGNORECASE
-                )
+            effective_stmt = _rewrite_rebuild_statement_for_tx(stmt, in_tx=in_tx)
             try:
                 self._driver.execute(effective_stmt)
             except Exception as err:
                 rebuild_errors.append(err)
-        if exc_type is None and rebuild_errors:
-            raise rebuild_errors[0]
+        _handle_rebuild_exit_errors(rebuild_errors, exc_type, exc_val)
         return False
 
     def _restore_dropped_indexes(self) -> None:
@@ -336,17 +333,12 @@ class AsyncWithoutIndexesContext:
         in_tx = await _safe_driver_in_transaction_async(self._driver)
         rebuild_errors: list[Exception] = []
         for stmt in self._rebuild_statements:
-            effective_stmt = stmt
-            if in_tx and " INDEX CONCURRENTLY " in effective_stmt.upper():
-                effective_stmt = re.sub(
-                    r"\bINDEX\s+CONCURRENTLY\s+", "INDEX ", effective_stmt, count=1, flags=re.IGNORECASE
-                )
+            effective_stmt = _rewrite_rebuild_statement_for_tx(stmt, in_tx=in_tx)
             try:
                 await self._driver.execute(effective_stmt)
             except Exception as err:
                 rebuild_errors.append(err)
-        if exc_type is None and rebuild_errors:
-            raise rebuild_errors[0]
+        _handle_rebuild_exit_errors(rebuild_errors, exc_type, exc_val)
         return False
 
     async def _restore_dropped_indexes(self) -> None:
@@ -528,6 +520,28 @@ async def _safe_driver_in_transaction_async(driver: Any) -> bool:
                 res = await res
             return bool(res)
     return False
+
+
+def _rewrite_rebuild_statement_for_tx(stmt: str, *, in_tx: bool) -> str:
+    """Strip CONCURRENTLY when rebuilding an index inside an active transaction."""
+    if in_tx and " INDEX CONCURRENTLY " in stmt.upper():
+        return re.sub(r"\bINDEX\s+CONCURRENTLY\s+", "INDEX ", stmt, count=1, flags=re.IGNORECASE)
+    return stmt
+
+
+def _handle_rebuild_exit_errors(
+    rebuild_errors: list[Exception], exc_type: "type[BaseException] | None", exc_val: "BaseException | None"
+) -> None:
+    """Raise on clean exit or log and attach rebuild failure diagnostics onto the active error."""
+    if not rebuild_errors:
+        return
+    if exc_type is None:
+        raise rebuild_errors[0]
+    details = "; ".join(f"{type(err).__name__}: {err}" for err in rebuild_errors)
+    note = f"Index rebuild failed during exit ({len(rebuild_errors)} error(s)): {details}"
+    logger.error("%s", note)
+    if exc_val is not None:
+        exc_val.add_note(note)
 
 
 def _split_schema_and_table(table: str, explicit_schema: str | None) -> tuple[str | None, str]:
