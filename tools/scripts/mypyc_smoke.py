@@ -114,6 +114,101 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
 )
 
 
+def is_compiled_module(module: Any) -> bool:
+    """Return whether an imported module appears to be a compiled extension."""
+    module_file = getattr(module, "__file__", "") or ""
+    return module_file.endswith(COMPILED_SUFFIXES)
+
+
+def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
+    """Import the compiled-wheel smoke matrix and return per-entry results."""
+    results: list[dict[str, Any]] = []
+    for entry in SMOKE_IMPORTS:
+        result: dict[str, Any] = {
+            "name": entry.name,
+            "module": entry.module,
+            "attribute": entry.attribute,
+            "imported": False,
+            "compiled": False,
+            "compiled_required": require_compiled and entry.require_compiled,
+            "error": None,
+            "skipped": False,
+            "skip_reason": None,
+        }
+        try:
+            module = importlib.import_module(entry.module)
+            if entry.attribute is not None:
+                getattr(module, entry.attribute)
+            result["imported"] = True
+            result["compiled"] = is_compiled_module(module)
+            if require_compiled and entry.require_compiled and not result["compiled"]:
+                result["error"] = "module was imported from Python source, not a compiled extension"
+        except ModuleNotFoundError as exc:
+            missing_name = exc.name or ""
+            optional_dependency = entry.optional_dependency
+            if _is_missing_optional_dependency(missing_name, optional_dependency):
+                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
+                    result["error"] = "compiled extension is missing from the installed package"
+                else:
+                    result["skipped"] = True
+                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+            else:
+                result["error"] = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        results.append(result)
+    return results
+
+
+def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
+    """Run construction-time smoke checks for provider classes."""
+    return [
+        *[
+            _check_public_import_order(order, require_compiled=require_compiled)
+            for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
+        ],
+        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
+        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
+        _check_migration_first_use(require_compiled=require_compiled),
+        _check_extension_reconciliation(require_compiled=require_compiled),
+        _check_litestar_openapi(require_compiled=require_compiled),
+        _check_sqlspec_construction(),
+        _check_tenant_lease_boundary(require_compiled=require_compiled),
+        _check_session_routing_boundary(require_compiled=require_compiled),
+        _check_oracle_26ai_boundary(require_compiled=require_compiled),
+        _check_adapter_config_construction(),
+        _check_statement_sentinel_identity(require_compiled=require_compiled),
+        _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_obstore_arrow_reads(require_compiled=require_compiled),
+        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
+        _check_service_subclasses(require_compiled=require_compiled),
+        _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
+        _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
+        _check_fastapi_filter_construction(require_compiled=require_compiled),
+        _check_litestar_filter_construction(require_compiled=require_compiled),
+    ]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the mypyc smoke CLI."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--require-compiled", action="store_true", help="Fail when compiled-surface modules import from Python source."
+    )
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
+    args = parser.parse_args(argv)
+
+    results = run_smoke(require_compiled=args.require_compiled)
+    results.extend(run_construction_checks(require_compiled=args.require_compiled))
+    if args.json:
+        json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(_format_text(results))
+        sys.stdout.write("\n")
+    return 1 if _failed_results(results) else 0
+
+
 def _new_smoke_result(
     *, name: str, module: str, attribute: str | None, compiled_required: bool = False
 ) -> dict[str, Any]:
@@ -128,12 +223,6 @@ def _new_smoke_result(
         "skipped": False,
         "skip_reason": None,
     }
-
-
-def is_compiled_module(module: Any) -> bool:
-    """Return whether an imported module appears to be a compiled extension."""
-    module_file = getattr(module, "__file__", "") or ""
-    return module_file.endswith(COMPILED_SUFFIXES)
 
 
 def _has_compiled_module_file(module_name: str) -> bool:
@@ -919,46 +1008,6 @@ print("ambient:ok")
             f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
         )
     return result
-
-
-def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Import the compiled-wheel smoke matrix and return per-entry results."""
-    results: list[dict[str, Any]] = []
-    for entry in SMOKE_IMPORTS:
-        result: dict[str, Any] = {
-            "name": entry.name,
-            "module": entry.module,
-            "attribute": entry.attribute,
-            "imported": False,
-            "compiled": False,
-            "compiled_required": require_compiled and entry.require_compiled,
-            "error": None,
-            "skipped": False,
-            "skip_reason": None,
-        }
-        try:
-            module = importlib.import_module(entry.module)
-            if entry.attribute is not None:
-                getattr(module, entry.attribute)
-            result["imported"] = True
-            result["compiled"] = is_compiled_module(module)
-            if require_compiled and entry.require_compiled and not result["compiled"]:
-                result["error"] = "module was imported from Python source, not a compiled extension"
-        except ModuleNotFoundError as exc:
-            missing_name = exc.name or ""
-            optional_dependency = entry.optional_dependency
-            if _is_missing_optional_dependency(missing_name, optional_dependency):
-                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
-                    result["error"] = "compiled extension is missing from the installed package"
-                else:
-                    result["skipped"] = True
-                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
-            else:
-                result["error"] = f"{type(exc).__name__}: {exc}"
-        except Exception as exc:
-            result["error"] = f"{type(exc).__name__}: {exc}"
-        results.append(result)
-    return results
 
 
 def _check_litestar_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
@@ -1931,9 +1980,6 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, Mock
 
-        from opentelemetry import trace
-        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
-
         from sqlspec.adapters.oracledb import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
 
         oracle = importlib.import_module("sqlspec.adapters.oracledb")
@@ -1959,9 +2005,15 @@ def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, 
         assert options == core.OracleAcquireOptions(sharding_key=["tenant"], purity="SELF")
         assert core.synthesize_session_state_tag(core.OracleSessionContextConfig(time_zone="UTC")) == "TIME_ZONE=UTC"
         assert common.get_w3c_trace_context() == (None, "")
-        propagated = SpanContext(trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(0))
-        with trace.use_span(NonRecordingSpan(propagated)):
-            assert common.get_w3c_trace_context()[0].endswith("-00")
+        if importlib.util.find_spec("opentelemetry") is not None:
+            from opentelemetry import trace
+            from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+            propagated = SpanContext(trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(0))
+            with trace.use_span(NonRecordingSpan(propagated)):
+                traceparent, _ = common.get_w3c_trace_context()
+                assert traceparent is not None
+                assert traceparent.endswith("-00")
 
         class FailedSyncStrategy(OracleSyncClientContextStrategy):
             __slots__ = ()
@@ -2130,35 +2182,6 @@ def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[s
     return result
 
 
-def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Run construction-time smoke checks for provider classes."""
-    return [
-        *[
-            _check_public_import_order(order, require_compiled=require_compiled)
-            for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
-        ],
-        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
-        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
-        _check_migration_first_use(require_compiled=require_compiled),
-        _check_extension_reconciliation(require_compiled=require_compiled),
-        _check_litestar_openapi(require_compiled=require_compiled),
-        _check_sqlspec_construction(),
-        _check_tenant_lease_boundary(require_compiled=require_compiled),
-        _check_session_routing_boundary(require_compiled=require_compiled),
-        _check_oracle_26ai_boundary(require_compiled=require_compiled),
-        _check_adapter_config_construction(),
-        _check_statement_sentinel_identity(require_compiled=require_compiled),
-        _check_statement_cache_rebind(require_compiled=require_compiled),
-        _check_obstore_arrow_reads(require_compiled=require_compiled),
-        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
-        _check_service_subclasses(require_compiled=require_compiled),
-        _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
-        _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
-        _check_fastapi_filter_construction(require_compiled=require_compiled),
-        _check_litestar_filter_construction(require_compiled=require_compiled),
-    ]
-
-
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         result
@@ -2181,26 +2204,6 @@ def _format_text(results: list[dict[str, Any]]) -> str:
         if result["error"] is not None:
             lines.append(f"  {result['error']}")
     return "\n".join(lines)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the mypyc smoke CLI."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--require-compiled", action="store_true", help="Fail when compiled-surface modules import from Python source."
-    )
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
-    args = parser.parse_args(argv)
-
-    results = run_smoke(require_compiled=args.require_compiled)
-    results.extend(run_construction_checks(require_compiled=args.require_compiled))
-    if args.json:
-        json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-    else:
-        sys.stdout.write(_format_text(results))
-        sys.stdout.write("\n")
-    return 1 if _failed_results(results) else 0
 
 
 if __name__ == "__main__":  # pragma: no cover
