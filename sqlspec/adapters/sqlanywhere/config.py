@@ -22,10 +22,16 @@ from sqlspec.adapters.sqlanywhere.core import (
 from sqlspec.adapters.sqlanywhere.driver import SqlanywhereDriver, SqlanywhereExceptionHandler
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.adapters.sqlanywhere.pool import SqlanywhereConnectionPool
-from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.config import DRIVER_FEATURE_LIFECYCLE_HOOKS, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
-from sqlspec.exceptions import DatabaseConnectionError, OperationalError, ReadOnlyTransactionError, SQLSpecError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -272,12 +278,23 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
 
     def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(spec_input, bool):
-            return {"nodetype": "READONLY"}
+            if not spec_input:
+                msg = f"{type(self).__name__} does not support False replica entries; pass True or explicit overrides"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"nodetype": "READONLY"}}
         if isinstance(spec_input, str):
-            parsed = urlsplit(spec_input if "://" in spec_input else f"sqlanywhere://{spec_input}")
-            connection: dict[str, Any] = {"nodetype": "READONLY", "host": parsed.hostname}
-            if parsed.port is not None:
-                connection["port"] = parsed.port
+            try:
+                parsed = urlsplit(spec_input if "://" in spec_input else f"sqlanywhere://{spec_input}")
+                hostname, port = parsed.hostname, parsed.port
+            except ValueError as exc:
+                msg = "Invalid SQL Anywhere replica endpoint"
+                raise ImproperConfigurationError(msg) from exc
+            if not hostname or (parsed.scheme and parsed.scheme != "sqlanywhere"):
+                msg = "Invalid SQL Anywhere replica endpoint"
+                raise ImproperConfigurationError(msg)
+            connection: dict[str, Any] = {"nodetype": "READONLY", "host": hostname}
+            if port is not None:
+                connection["port"] = port
             if parsed.username is not None:
                 connection["uid"] = unquote(parsed.username)
             if parsed.password is not None:
@@ -285,9 +302,28 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
             if parsed.path.strip("/"):
                 connection["dbn"] = unquote(parsed.path.strip("/"))
             return {"connection_config_overrides": connection}
-        result = dict(spec_input)
-        result.setdefault("nodetype", "READONLY")
-        return result
+        values = dict(spec_input)
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {
+            key: values.pop(key)
+            for key in tuple(values)
+            if key in config_keys or key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS
+        }
+        connection = dict(values.pop("connection_config_overrides", {}))
+        connection.update(values)
+        extra = connection.get("extra")
+        has_extra_nodetype = isinstance(extra, Mapping) and "nodetype" in extra
+        if "nodetype" not in connection and not has_extra_nodetype:
+            connection["nodetype"] = "READONLY"
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
 
     def _create_pool(self) -> "SqlanywhereConnectionPool":
         try:

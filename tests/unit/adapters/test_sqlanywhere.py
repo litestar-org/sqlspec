@@ -1062,6 +1062,30 @@ def test_sqlanywhere_replica_derivation_preserves_pool_options_and_replaces_alia
     assert getattr(derived, "_user_connection_hook") is connection_hook
 
 
+@pytest.mark.parametrize("bad_spec", [False, "", "sqlanywhere:///app", "postgresql://reader/app", "reader:invalid"])
+def test_sqlanywhere_replica_rejects_invalid_specs(bad_spec: Any) -> None:
+    """Boolean False and malformed endpoint strings should fail fast with ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        SqlanywhereConfig(connection_config={"host": "writer", "port": 2638}, replicas=[bad_spec])
+
+
+@pytest.mark.parametrize(
+    ("replica_spec", "expected_nodetype"),
+    [
+        ({"host": "reader"}, "READONLY"),
+        ({"host": "reader", "extra": {"nodetype": "PRIMARY"}}, "PRIMARY"),
+        ({"connection_config_overrides": {"host": "reader", "nodetype": "PRIMARY"}}, "PRIMARY"),
+    ],
+)
+def test_sqlanywhere_replica_mapping_nodetype_defaults_and_overrides(
+    replica_spec: dict[str, Any], expected_nodetype: str
+) -> None:
+    """Replica mappings default nodetype to READONLY inside connection_config_overrides while honoring explicit values."""
+    config = SqlanywhereConfig(connection_config={"host": "writer", "port": 2638}, replicas=[replica_spec])
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["nodetype"] == expected_nodetype
+
+
 @pytest.mark.parametrize("arguments", [("25006", -757), ("25006", 757), ("25006", "read-only transaction")])
 def test_sqlanywhere_readonly_errors_preserve_native_cause(arguments: tuple[object, ...]) -> None:
     from sqlspec.exceptions import ReadOnlyTransactionError
