@@ -15,6 +15,7 @@ from sqlglot import exp, maybe_parse
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.errors import SqlglotError
 from sqlglot.tokenizer_core import TokenType
+from sqlglot.tokens import Tokenizer
 
 from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
@@ -111,6 +112,8 @@ _SQLSPEC_DIALECT_MODULES: Final[dict[str, str]] = {
     "sybase": "sqlspec.dialects.sybase",
     "vantage": "sqlspec.dialects.teradata",
 }
+_LOADED_SQLSPEC_DIALECTS: Final[set[str]] = set()
+_SQL_KEYWORDS: Final[frozenset[str]] = frozenset(Tokenizer.KEYWORDS)
 _DIALECT_ALIASES: Final[dict[str, str]] = {
     "ase": "sybase",
     "teradata": "vantage",
@@ -159,6 +162,20 @@ def extract_column_name(column: str | exp.Column) -> str:
         Column name as string for use as parameter name
     """
     if isinstance(column, str):
+        if _is_simple_identifier(column):
+            stripped = column.strip()
+            if "." not in stripped:
+                if stripped.upper() not in _SQL_KEYWORDS:
+                    return stripped
+            else:
+                parts = stripped.split(".")
+                is_keyword = False
+                for part in parts:
+                    if part.upper() in _SQL_KEYWORDS:
+                        is_keyword = True
+                        break
+                if not is_keyword:
+                    return parts[-1]
         col_expr: exp.Expr | None = exp.maybe_parse(column)
         if isinstance(col_expr, exp.Column):
             return col_expr.name
@@ -531,8 +548,9 @@ def extract_sql_object_expression(
         msg = f"Value is not a SQL object: {type(value)}"
         raise TypeError(msg)
 
-    if value.expression is not None and isinstance(value.expression, exp.Expr):
-        expr = value.expression.copy()
+    raw_expr = value._peek_expression()  # pyright: ignore[reportPrivateUsage]
+    if raw_expr is not None and isinstance(raw_expr, exp.Expr):
+        expr = raw_expr.copy()
         param_mapping = _merge_sql_parameters(value, builder)
         if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
             expr = builder._update_placeholders(expr, param_mapping)
@@ -1027,11 +1045,12 @@ def _resolve_dialect(dialect: "DialectType | None", default: "DialectType | None
 
 def _ensure_sqlspec_dialects_loaded(dialect_name: str) -> None:
     """Register SQLSpec dialects that sqlglot does not ship before resolving their names."""
-    if dialect_name in Dialect.classes:
-        return
     module_name = _SQLSPEC_DIALECT_MODULES.get(dialect_name)
-    if module_name is not None:
+    if module_name is None or dialect_name in _LOADED_SQLSPEC_DIALECTS:
+        return
+    if dialect_name not in Dialect.classes:
         importlib.import_module(module_name)
+    _LOADED_SQLSPEC_DIALECTS.add(dialect_name)
 
 
 def _normalize_dialect(dialect: "DialectType | None") -> str | None:

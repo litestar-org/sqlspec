@@ -9,6 +9,7 @@ import contextlib
 from datetime import date
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 from sqlglot import exp
@@ -24,7 +25,7 @@ from sqlspec.builder import (
     parse_order_expression,
     parse_table_expression,
 )
-from sqlspec.core import SQL, get_cache
+from sqlspec.core import SQL, StatementConfig, get_cache
 from sqlspec.exceptions import SQLBuilderError
 
 
@@ -667,3 +668,35 @@ def test_parse_condition_expression_rejects_multi_statement_and_non_conditions(i
     """Condition expression parser rejects empty strings, NUL bytes, semicolons, and command nodes."""
     with pytest.raises(SQLBuilderError):
         parse_condition_expression(invalid_cond)
+
+
+@pytest.mark.parametrize(("column", "expected"), [("id", "id"), ("users.id", "id"), ("db.users.org_id", "org_id")])
+def test_extract_column_name_simple_identifier_skips_maybe_parse(column: str, expected: str) -> None:
+    """Simple column names avoid invoking sqlglot maybe_parse."""
+    with patch("sqlspec.builder._parsing_utils.exp.maybe_parse", side_effect=AssertionError("unexpected parse")):
+        assert parsing_utils.extract_column_name(column) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"), [("postgres", "postgres"), ("postgresql", "postgres"), ("sqlite", "sqlite")]
+)
+def test_normalize_dialect_skips_try_load_for_builtin_dialects(dialect: str, expected: str) -> None:
+    """Built-in SQLGlot dialects do not probe Dialect.classes on every lookup."""
+    with patch.object(parsing_utils.Dialect, "_try_load", side_effect=AssertionError("unexpected _try_load")):
+        assert parsing_utils._normalize_dialect(dialect) == expected
+
+
+def test_extract_sql_object_expression_copies_once_without_breaking_sharing() -> None:
+    """Extracting an expression from a compiled SQL keeps its shared state intact."""
+    stmt = SQL(
+        "SELECT id FROM users WHERE org_id = 1",
+        statement_config=StatementConfig(dialect="postgres", enable_caching=True),
+    )
+    stmt.compile()
+    state = stmt.get_processed_state()
+    assert state.expression_is_shared is True
+
+    extracted = parsing_utils.extract_sql_object_expression(stmt)
+    assert isinstance(extracted, exp.Expr)
+    assert extracted is not state.parsed_expression
+    assert state.expression_is_shared is True

@@ -1649,9 +1649,6 @@ class SQL:
         parsed_expression = state.parsed_expression if state is not Empty else None
         if parsed_expression is not None:
             return parsed_expression.copy()
-        statement_expression = self.statement_expression
-        if statement_expression is not None:
-            return statement_expression.copy()
         raw_expression = self._raw_expression
         if raw_expression is not None:
             return raw_expression.copy()
