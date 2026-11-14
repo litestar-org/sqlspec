@@ -42,7 +42,8 @@ from sqlspec.core import (
 from sqlspec.core._pipeline import compile_with_pipeline, reset_statement_pipeline_cache
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.core.parameters._processor import _make_cache_key_tuple
-from sqlspec.core.statement import get_default_config
+from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.core.statement import SQL, get_default_config
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
 
@@ -1332,8 +1333,6 @@ def test_cold_compile_walks_ast_once_and_copies_once_without_transformers(
 @requires_interpreted
 def test_dynamic_sqlcommenter_skips_expression_copy_on_hits() -> None:
     """Dynamic SQLCommenter appends comments without copying the cached AST."""
-    from sqlspec.core.sqlcommenter import SQLCommenterContext
-
     config = StatementConfig(
         dialect="sqlite", enable_caching=True, enable_sqlcommenter=True, sqlcommenter_enable_context=True
     )
@@ -1367,8 +1366,6 @@ def test_expression_override_skips_reparse_on_placeholder_conversion(
     basic_statement_config: "StatementConfig", postgres_statement_config: "StatementConfig"
 ) -> None:
     """Pre-parsed SQL(expr) avoids calling sqlglot.parse_one again during placeholder conversion."""
-    from sqlspec.core.statement import SQL
-
     sqlite_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="sqlite")
     pg_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="postgres")
 

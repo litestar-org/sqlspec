@@ -8,6 +8,7 @@ from sqlglot import exp
 
 import sqlspec.core.sqlcommenter as sqlcommenter_module
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.core._pipeline import StatementPipelineRegistry
 from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
@@ -626,8 +627,6 @@ def test_enable_sqlcommenter_preserves_stmt_cache_enabled_and_updates_traceparen
 
 def test_equal_sqlcommenter_statement_configs_share_hash_and_pipeline_fingerprint() -> None:
     """Equal sqlcommenter StatementConfigs produce identical hashes and pipeline keys."""
-    from sqlspec.core._pipeline import StatementPipelineRegistry
-
     c1 = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"app": "api"})
     c2 = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"app": "api"})
     c3 = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"app": "worker"})

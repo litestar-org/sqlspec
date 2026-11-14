@@ -3525,15 +3525,11 @@ def test_static_literal_rejects_unknown_string_dialect() -> None:
 
 def test_type_coercion_dispatcher_cache_is_bounded() -> None:
     """Global type coercion dispatcher cache stays bounded by _FALLBACK_CACHE_MAX_SIZE."""
-    from sqlspec.core.parameters._processor import (
-        _FALLBACK_CACHE_MAX_SIZE,
-        _TYPE_COERCION_DISPATCHERS,
-        _TYPE_COERCION_DISPATCHERS_BY_ID,
-        type_coercion_dispatcher,
-    )
-
-    _TYPE_COERCION_DISPATCHERS.clear()
-    _TYPE_COERCION_DISPATCHERS_BY_ID.clear()
-    _ = [type_coercion_dispatcher(((int, lambda value, idx=i: idx),)) for i in range(_FALLBACK_CACHE_MAX_SIZE + 50)]
-    assert len(_TYPE_COERCION_DISPATCHERS) <= _FALLBACK_CACHE_MAX_SIZE
-    assert len(_TYPE_COERCION_DISPATCHERS_BY_ID) <= _FALLBACK_CACHE_MAX_SIZE
+    _processor_module._TYPE_COERCION_DISPATCHERS.clear()
+    _processor_module._TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+    _ = [
+        _processor_module.type_coercion_dispatcher(((int, lambda value, idx=i: idx),))
+        for i in range(_processor_module._FALLBACK_CACHE_MAX_SIZE + 50)
+    ]
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS_BY_ID) <= _processor_module._FALLBACK_CACHE_MAX_SIZE

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import sqlspec.core._pipeline as pipeline_module
 from sqlspec.core import SQL, get_pipeline_metrics, reset_pipeline_registry
 from sqlspec.core._pipeline import StatementPipelineRegistry
-from sqlspec.core.parameters import ParameterConverter, ParameterValidator
+from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.core.statement import StatementConfig
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
@@ -116,8 +116,6 @@ def test_fingerprint_uses_config_hash_plus_unhashed_parameter_discriminators() -
 
 def test_fingerprint_distinguishes_type_coercion_map_callables() -> None:
     """Distinct coercion callables under the same key types produce distinct hashes and fingerprints."""
-    from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
-
     registry = StatementPipelineRegistry()
     config_a = StatementConfig(
         parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: str})
