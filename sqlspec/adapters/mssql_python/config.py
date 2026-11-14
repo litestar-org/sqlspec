@@ -1,6 +1,7 @@
 """mssql-python database configuration."""
 
 import contextlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
@@ -15,7 +16,7 @@ from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy, MssqlPythonTenantLease
-from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.config import DRIVER_FEATURE_LIFECYCLE_HOOKS, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -24,7 +25,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_odbc_connection_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -335,19 +336,32 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         if isinstance(spec_input, str):
             options: dict[str, Any] = {"connection_string" if "=" in spec_input else "host": spec_input}
         else:
-            result = dict(spec_input)
-            options = dict(result.pop("connection_config_overrides", {}))
-            for key in tuple(result):
-                if key in MssqlPythonPoolParams.__annotations__:
-                    options[key] = result.pop(key)
+            values = dict(spec_input)
+            options = dict(values.pop("connection_config_overrides", {}))
+            config_keys = {
+                "driver_features_overrides",
+                "statement_config",
+                "migration_config",
+                "extension_config",
+                "observability_config",
+                "bind_key",
+            }
+            for key in tuple(values):
+                if key in config_keys or key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
+                    result[key] = values.pop(key)
+            options.update(values)
         string_options = dict(parse_odbc_connection_string(str(options.get("connection_string", ""))))
         intent = next(
             (value for key, value in string_options.items() if key.lower() == "applicationintent"), "ReadOnly"
         )
         failover = next((value for key, value in string_options.items() if key.lower() == "multisubnetfailover"), True)
-        if "applicationintent" not in options:
+        normalized_keys = {key.lower().replace("_", "") for key in options}
+        extra_options = options.get("extra")
+        if isinstance(extra_options, Mapping):
+            normalized_keys.update(str(key).lower().replace("_", "") for key in extra_options)
+        if "applicationintent" not in normalized_keys:
             options.setdefault("application_intent", intent)
-        if "multisubnetfailover" not in options:
+        if "multisubnetfailover" not in normalized_keys:
             options.setdefault("multi_subnet_failover", failover)
         return {**result, "connection_config_overrides": options}
 

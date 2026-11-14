@@ -1440,3 +1440,20 @@ def test_sqlanywhere_pool_nested_acquire_rolls_back_only_on_outermost_release(mo
         assert conn.rollbacks == 1
     finally:
         pool.close()
+
+
+def test_sqlanywhere_derive_pool_does_not_double_escape_delimiter_values() -> None:
+    """Chained pool/replica derivations quote delimiter-bearing connection values only once."""
+    primary = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "a;b", "database": "app"},
+        replicas=True,
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(host="reader", port=2639)
+    derived_twice = derived.derive_pool(database="reporting")
+    assert primary.connection_config["pwd"] == "'a;b'"
+    assert replica.connection_config["pwd"] == "'a;b'"
+    assert derived.connection_config["pwd"] == "'a;b'"
+    assert derived_twice.connection_config["pwd"] == "'a;b'"
+    assert derived_twice.connection_config["links"] == "tcpip(host=reader;port=2639)"
+    assert derived_twice.connection_config["dbn"] == "reporting"

@@ -669,7 +669,7 @@ class MysqlConnectorAsyncConfig(
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: "Mapping[str, Any]"
     ) -> dict[str, Any]:
-        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+        return merge_derive_overrides(config, overrides, clear_pool_name=True)
 
     def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
         values = parse_mysql_replica_shorthand(spec_input)
@@ -690,6 +690,7 @@ class MysqlConnectorAsyncConfig(
             connection["init_command"] = append_read_only_init_command(
                 connection.get("init_command", self.connection_config.get("init_command"))
             )
+            connection.setdefault("pool_reset_session", False)
         forwarded["connection_config_overrides"] = connection
         return forwarded
 

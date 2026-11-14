@@ -277,60 +277,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     - ``database_file`` -> ``dbf``
     - ``host`` + ``port`` -> ``host="host:port"`` (default port ``2638``)
     """
-    normalized: dict[str, Any] = dict(connection_config)
-
-    extra = normalized.pop("extra", None)
-    if isinstance(extra, Mapping):
-        for key, value in extra.items():
-            if value is not None:
-                normalized.setdefault(key, value)
-
-    for pool_key in _POOL_CONFIG_KEYS:
-        normalized.pop(pool_key, None)
-
-    for alias_key in ("user", "username"):
-        alias_val = normalized.pop(alias_key, None)
-        if alias_val is not None and "uid" not in normalized:
-            normalized["uid"] = alias_val
-
-    password_val = normalized.pop("password", None)
-    if password_val is not None and "pwd" not in normalized:
-        normalized["pwd"] = password_val
-
-    for db_key in ("database", "db"):
-        db_val = normalized.pop(db_key, None)
-        if db_val is not None and "dbn" not in normalized:
-            normalized["dbn"] = db_val
-
-    for eng_key in ("server", "engine", "server_name"):
-        eng_val = normalized.pop(eng_key, None)
-        if eng_val is not None and "eng" not in normalized:
-            normalized["eng"] = eng_val
-
-    dbf_val = normalized.pop("database_file", None)
-    if dbf_val is not None and "dbf" not in normalized:
-        normalized["dbf"] = dbf_val
-
-    port_val = normalized.pop("port", None)
-    if port_val is not None:
-        if isinstance(port_val, bool):
-            msg = "SQL Anywhere port must be an integer between 1 and 65535."
-            raise ImproperConfigurationError(msg)
-        try:
-            parsed_port = int(port_val)
-        except (TypeError, ValueError) as exc:
-            msg = "SQL Anywhere port must be an integer between 1 and 65535."
-            raise ImproperConfigurationError(msg) from exc
-        if not 1 <= parsed_port <= _MAX_SQLANYWHERE_PORT:
-            msg = "SQL Anywhere port must be an integer between 1 and 65535."
-            raise ImproperConfigurationError(msg)
-    else:
-        parsed_port = DEFAULT_SQLANYWHERE_PORT
-
-    host_val = normalized.get("host")
-    if isinstance(host_val, str) and host_val and ":" not in host_val:
-        normalized["host"] = f"{host_val}:{parsed_port}"
-
+    normalized = _normalize_raw_connection_config(connection_config)
     return {
         str(key): _format_sqlanywhere_connection_value(str(key), value)
         for key, value in normalized.items()
@@ -442,6 +389,65 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
             return _create_error(error, sqlcode, sqlstate, IntegrityError, "integrity constraint violation")
 
     return _create_error(error, sqlcode, sqlstate, SQLSpecError, "database error")
+
+
+def _normalize_raw_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Resolve SQL Anywhere aliases, extra params, and host:port defaults before quoting values."""
+    normalized: dict[str, Any] = dict(connection_config)
+
+    extra = normalized.pop("extra", None)
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            if value is not None:
+                normalized.setdefault(key, value)
+
+    for pool_key in _POOL_CONFIG_KEYS:
+        normalized.pop(pool_key, None)
+
+    for alias_key in ("user", "username"):
+        alias_val = normalized.pop(alias_key, None)
+        if alias_val is not None and "uid" not in normalized:
+            normalized["uid"] = alias_val
+
+    password_val = normalized.pop("password", None)
+    if password_val is not None and "pwd" not in normalized:
+        normalized["pwd"] = password_val
+
+    for db_key in ("database", "db"):
+        db_val = normalized.pop(db_key, None)
+        if db_val is not None and "dbn" not in normalized:
+            normalized["dbn"] = db_val
+
+    for eng_key in ("server", "engine", "server_name"):
+        eng_val = normalized.pop(eng_key, None)
+        if eng_val is not None and "eng" not in normalized:
+            normalized["eng"] = eng_val
+
+    dbf_val = normalized.pop("database_file", None)
+    if dbf_val is not None and "dbf" not in normalized:
+        normalized["dbf"] = dbf_val
+
+    port_val = normalized.pop("port", None)
+    if port_val is not None:
+        if isinstance(port_val, bool):
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+        try:
+            parsed_port = int(port_val)
+        except (TypeError, ValueError) as exc:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg) from exc
+        if not 1 <= parsed_port <= _MAX_SQLANYWHERE_PORT:
+            msg = "SQL Anywhere port must be an integer between 1 and 65535."
+            raise ImproperConfigurationError(msg)
+    else:
+        parsed_port = DEFAULT_SQLANYWHERE_PORT
+
+    host_val = normalized.get("host")
+    if isinstance(host_val, str) and host_val and ":" not in host_val:
+        normalized["host"] = f"{host_val}:{parsed_port}"
+
+    return normalized
 
 
 def _format_sqlanywhere_connection_value(key: str, value: Any) -> Any:

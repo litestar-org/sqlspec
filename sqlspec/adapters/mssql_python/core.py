@@ -1,7 +1,7 @@
 """mssql-python adapter core helpers."""
 
 import re
-from collections.abc import Sized
+from collections.abc import Mapping, Sized
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -35,7 +35,7 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
     from logging import Logger
 
     from sqlspec.core import StatementConfig
@@ -520,10 +520,15 @@ def merge_connection_overrides(raw_config: "Mapping[str, Any]", overrides: "Mapp
             result.pop("port", None)
         if "extra" not in overrides:
             result.pop("extra", None)
+    overrides_lower = {str(key).lower() for key in overrides}
+    extra_overrides = overrides.get("extra")
+    if isinstance(extra_overrides, Mapping):
+        for key in extra_overrides:
+            overrides_lower.add(str(key).lower())
     extra = dict(result.get("extra") or {})
     for aliases in groups:
-        if any(alias in overrides for alias in aliases):
-            canonical = _CANONICAL_KEY_LOOKUP[aliases[0]]
+        canonical = _CANONICAL_KEY_LOOKUP[aliases[0]]
+        if canonical.lower() in overrides_lower or any(alias in overrides_lower for alias in aliases):
             for key in tuple(result):
                 if _CANONICAL_KEY_LOOKUP.get(key.lower(), key) == canonical and key not in overrides:
                     result.pop(key, None)

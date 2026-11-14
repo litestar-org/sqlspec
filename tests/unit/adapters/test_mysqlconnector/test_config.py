@@ -777,3 +777,16 @@ async def test_async_provide_session_releases_and_detaches_when_prepare_driver_f
 
     pooled_conn.close.assert_awaited_once()
     assert seen[0].connection is _DETACHED_CONNECTION
+
+
+def test_mysqlconnector_async_derived_pools_own_distinct_native_names_and_readonly_state() -> None:
+    primary = MysqlConnectorAsyncConfig(
+        connection_config={"pool_name": "primary", "pool_reset_session": True}, replicas=["reader"]
+    )
+    derived = primary.derive_pool()
+    assert derived.connection_config.get("pool_name") is None
+    assert primary.derive_pool(pool_name="other").connection_config["pool_name"] == "other"
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config.get("pool_name") is None
+    assert reader.connection_config["pool_reset_session"] is False
+    assert primary.connection_config["pool_reset_session"] is True

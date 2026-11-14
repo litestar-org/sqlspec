@@ -1018,3 +1018,34 @@ def test_ag_clone_replaces_inherited_extra_endpoint_without_mutation() -> None:
     assert "KeepAlive=60" in text
     assert extra == {"Server": "primary", "KeepAlive": 60}
     assert parent.connection_config["server"] == "primary"
+
+
+def test_ag_replica_mixed_case_intent_overrides_omit_readonly_defaults() -> None:
+    config = MssqlPythonConfig(
+        connection_config={"server": "primary", "database": "app"},
+        replicas=[{"host": "reader", "ApplicationIntent": "ReadWrite", "MultiSubnetFailover": False}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "ApplicationIntent=ReadWrite" in text
+    assert "ApplicationIntent=ReadOnly" not in text
+    assert "MultiSubnetFailover=no" in text
+    assert "MultiSubnetFailover=yes" not in text
+
+
+def test_ag_replica_mixed_case_intent_replaces_inherited_parent_options() -> None:
+    config = MssqlPythonConfig(
+        connection_config={
+            "server": "primary",
+            "database": "app",
+            "application_intent": "ReadOnly",
+            "extra": {"MultiSubnetFailover": True},
+        },
+        replicas=[{"host": "reader", "ApplicationIntent": "ReadWrite", "MultiSubnetFailover": False}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert text.count("ApplicationIntent=") == 1
+    assert "ApplicationIntent=ReadWrite" in text
+    assert text.count("MultiSubnetFailover=") == 1
+    assert "MultiSubnetFailover=no" in text

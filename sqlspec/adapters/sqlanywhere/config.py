@@ -11,6 +11,7 @@ from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereSessionContext,
 )
 from sqlspec.adapters.sqlanywhere.core import (
+    _normalize_raw_connection_config,
     apply_driver_features,
     build_connection_config,
     default_statement_config,
@@ -136,6 +137,7 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         "_pool_min_size",
         "_pool_recycle_seconds",
         "_pool_timeout",
+        "_raw_connection_config",
         "_user_connection_hook",
     )
 
@@ -180,7 +182,9 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         self._pool_timeout = float(raw_config.pop("pool_timeout", 30.0))
         self._pool_recycle_seconds = int(raw_config.pop("pool_recycle_seconds", 86400))
         self._health_check_interval = float(raw_config.pop("health_check_interval", 30.0))
-        normalized_connection_config = build_connection_config(raw_config)
+        unformatted_config = _normalize_raw_connection_config(raw_config)
+        self._raw_connection_config = dict(unformatted_config)
+        normalized_connection_config = build_connection_config(unformatted_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -230,7 +234,7 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
-        merged = merge_sqlanywhere_derive_overrides(self.connection_config, overrides)
+        merged = merge_sqlanywhere_derive_overrides(self._raw_connection_config, overrides)
         config.update(merged)
         for key in ("uid", "pwd", "dbn", "eng", "host", "port", "links"):
             if key not in merged:
