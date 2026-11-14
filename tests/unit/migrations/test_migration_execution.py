@@ -10,8 +10,10 @@ Tests migration execution including:
 """
 
 import ast
+import os
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -31,7 +33,7 @@ from sqlspec.migrations.base import (
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer, MigrationRename
-from sqlspec.migrations.loaders import PythonFileLoader, SQLFileLoader
+from sqlspec.migrations.loaders import PythonFileLoader, SQLFileLoader, find_project_root
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
@@ -1096,3 +1098,48 @@ def test_dataclasses_and_exports_hygiene() -> None:
         SQLFileLoader,
         generate_conversion_map,
     )
+
+
+def test_find_project_root_stops_before_foreign_uid_ancestor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """find_project_root stops climbing on POSIX before entering a different non-root UID directory."""
+    if not hasattr(os, "getuid"):
+        pytest.skip("POSIX os.getuid required")
+
+    foreign_root = tmp_path / "foreign_workspace"
+    user_parent = foreign_root / "team"
+    migrations_dir = user_parent / "migrations"
+    migrations_dir.mkdir(parents=True)
+    (foreign_root / "pyproject.toml").write_text("[project]\nname = 'foreign'\n", encoding="utf-8")
+
+    current_uid = os.getuid()
+    foreign_uid = current_uid + 1000
+    resolved_foreign = foreign_root.resolve()
+    orig_stat = Path.stat
+
+    def _mock_stat(self_path: Path, *, follow_symlinks: bool = True) -> Any:
+        result = orig_stat(self_path, follow_symlinks=follow_symlinks)
+        if self_path == resolved_foreign:
+            return SimpleNamespace(st_uid=foreign_uid, st_mode=result.st_mode)
+        return SimpleNamespace(st_uid=current_uid, st_mode=result.st_mode)
+
+    monkeypatch.setattr(Path, "stat", _mock_stat)
+    assert find_project_root(migrations_dir) == user_parent.resolve()
+
+    user_migrations_directly_under_foreign = foreign_root / "direct_migrations"
+    user_migrations_directly_under_foreign.mkdir()
+    assert find_project_root(user_migrations_directly_under_foreign) == user_migrations_directly_under_foreign.resolve()
+
+    root_owned_workspace = tmp_path / "root_workspace"
+    child_dir = root_owned_workspace / "migrations"
+    child_dir.mkdir(parents=True)
+    (root_owned_workspace / "pyproject.toml").write_text("[project]\nname = 'rootpkg'\n", encoding="utf-8")
+    resolved_root_ws = root_owned_workspace.resolve()
+
+    def _mock_stat_root(self_path: Path, *, follow_symlinks: bool = True) -> Any:
+        result = orig_stat(self_path, follow_symlinks=follow_symlinks)
+        if self_path == resolved_root_ws:
+            return SimpleNamespace(st_uid=0, st_mode=result.st_mode)
+        return SimpleNamespace(st_uid=current_uid, st_mode=result.st_mode)
+
+    monkeypatch.setattr(Path, "stat", _mock_stat_root)
+    assert find_project_root(child_dir) == resolved_root_ws

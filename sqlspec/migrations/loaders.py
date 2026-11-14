@@ -7,6 +7,7 @@ import abc
 import ast
 import builtins
 import inspect
+import os
 import sys
 import types
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -40,7 +41,7 @@ ReconcileCallable = Callable[[MigrationContext], Awaitable[None] | None]
 
 
 def find_project_root(start_path: Path) -> Path:
-    """Search upward from start_path for a project marker file.
+    """Search upward from start_path for a project marker file within trusted ownership bounds.
 
     Args:
         start_path: Directory to start searching from.
@@ -48,15 +49,35 @@ def find_project_root(start_path: Path) -> Path:
     Returns:
         Path to project root or parent directory.
     """
-    current_path = start_path.resolve()
+    resolved_start = start_path.resolve()
+    allowed_uids = {os.getuid(), 0} if hasattr(os, "getuid") else None
+    current_path = resolved_start
 
     while current_path != current_path.parent:
+        if allowed_uids is not None:
+            try:
+                owner_uid: int | None = current_path.stat().st_uid
+            except FileNotFoundError:
+                owner_uid = None
+            except OSError:
+                break
+            if owner_uid is not None and owner_uid not in allowed_uids:
+                break
         for marker in PROJECT_ROOT_MARKERS:
             if (current_path / marker).exists():
                 return current_path
         current_path = current_path.parent
 
-    return start_path.resolve().parent
+    fallback = resolved_start.parent
+    if allowed_uids is not None:
+        try:
+            if fallback.stat().st_uid not in allowed_uids:
+                return resolved_start
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return resolved_start
+    return fallback
 
 
 @contextmanager
