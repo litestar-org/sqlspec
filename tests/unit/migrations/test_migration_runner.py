@@ -22,7 +22,7 @@ from sqlspec.core import SQL
 from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations import runner as runner_module
-from sqlspec.migrations.base import LoadedMigrationMetadata
+from sqlspec.migrations.base import ExtensionReconcilerDescriptor, LoadedMigrationMetadata
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.loaders import SQLFileLoader as MigrationSQLFileLoader
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
@@ -2617,3 +2617,121 @@ def test_execute_reconciliation_records_observability_metrics(tmp_path: Path) ->
     assert snapshot["test_cfg.migrations.reconcile.applied"] == 1.0
     assert snapshot["test_cfg.migrations.reconcile.errors"] == 1.0
     assert "test_cfg.migrations.reconcile.duration_ms" in snapshot
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("default_schema", [None, "tenant_a"], ids=["no-schema", "with-schema"])
+async def test_nontransactional_failure_rolls_back_active_implicit_transaction(
+    tmp_path: Path, runner_mode: _RunnerMode, default_schema: str | None
+) -> None:
+    """Failing non-transactional migrations and reconcilers roll back active implicit transactions regardless of schema."""
+    cfg: dict[str, Any] = {"transactional": False}
+    if default_schema is not None:
+        cfg["default_schema"] = default_schema
+    runner = runner_mode.runner(tmp_path, cfg)
+
+    sql_driver = runner_mode.driver()
+    if runner_mode.is_async:
+
+        async def _tx_open_sql() -> bool:
+            return True
+
+        sql_driver._transaction_open = _tx_open_sql
+    else:
+        sql_driver._connection_in_transaction = lambda: True
+    sql_driver.execute_script.side_effect = ValueError("sql boom")
+
+    with pytest.raises(ValueError, match="sql boom"):
+        await runner_mode.call(runner.execute_upgrade, sql_driver, _failing_migration(tmp_path), use_transaction=False)
+
+    expected_sql_calls = (
+        [
+            call.set_migration_non_transactional_schema("tenant_a"),
+            call.execute_script(_MIGRATION_STATEMENT),
+            call.rollback(),
+            call.reset_migration_session_schema(),
+        ]
+        if default_schema is not None
+        else [call.execute_script(_MIGRATION_STATEMENT), call.rollback()]
+    )
+    assert sql_driver.mock_calls == expected_sql_calls
+
+    fail_reconcile = tmp_path / "fail_reconcile_implicit.py"
+    fail_reconcile.write_text(
+        'def reconcile(context):\n    context.driver.record_event("reconciler_ran_work")\n    raise RuntimeError("boom")\n',
+        encoding="utf-8",
+    )
+    rec_driver = runner_mode.driver()
+    events: list[str] = []
+    if runner_mode.is_async:
+
+        async def _tx_open_rec() -> bool:
+            return True
+
+        async def _set_schema_async(schema: str) -> None:
+            events.append(f"set_schema:{schema}")
+
+        async def _rollback_async() -> None:
+            events.append("rollback")
+
+        async def _reset_schema_async() -> None:
+            events.append("reset_schema")
+
+        rec_driver._transaction_open = _tx_open_rec
+        rec_driver.set_migration_non_transactional_schema.side_effect = _set_schema_async
+        rec_driver.rollback.side_effect = _rollback_async
+        rec_driver.reset_migration_session_schema.side_effect = _reset_schema_async
+    else:
+        rec_driver._connection_in_transaction = lambda: True
+        rec_driver.set_migration_non_transactional_schema.side_effect = lambda schema: events.append(
+            f"set_schema:{schema}"
+        )
+        rec_driver.rollback.side_effect = lambda: events.append("rollback")
+        rec_driver.reset_migration_session_schema.side_effect = lambda: events.append("reset_schema")
+    rec_driver.record_event = Mock(side_effect=lambda name: events.append(name))
+
+    with pytest.raises(MigrationError, match="failed with RuntimeError"):
+        await runner_mode.call(
+            runner.execute_reconciliation,
+            rec_driver,
+            ExtensionReconcilerDescriptor(name="adk", module_path=fail_reconcile),
+        )
+
+    expected_events = (
+        ["set_schema:tenant_a", "reconciler_ran_work", "rollback", "reset_schema"]
+        if default_schema is not None
+        else ["reconciler_ran_work", "rollback"]
+    )
+    assert events == expected_events
+
+
+@pytest.mark.anyio
+async def test_outer_lock_isolates_nontransactional_reconciler_with_savepoint(
+    tmp_path: Path, runner_mode: _RunnerMode
+) -> None:
+    """Non-transactional reconcilers under outer_lock use savepoints and do not commit the outer transaction."""
+    runner = runner_mode.runner(tmp_path, {"transactional": False})
+    ok_path = tmp_path / "ok_outer_rec.py"
+    ok_path.write_text('def reconcile(context):\n    context.driver.record_event("ok")\n', encoding="utf-8")
+    fail_path = tmp_path / "fail_outer_rec.py"
+    fail_path.write_text(
+        'def reconcile(context):\n    context.driver.record_event("fail")\n    raise RuntimeError("boom")\n',
+        encoding="utf-8",
+    )
+
+    driver = runner_mode.driver()
+    driver.record_event = Mock()
+    with runner.outer_lock(driver):
+        await runner_mode.call(
+            runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="adk", module_path=ok_path)
+        )
+        driver.commit.assert_not_called()
+        with pytest.raises(MigrationError):
+            await runner_mode.call(
+                runner.execute_reconciliation, driver, ExtensionReconcilerDescriptor(name="adk", module_path=fail_path)
+            )
+    driver.rollback.assert_not_called()
+    assert runner.consume_savepoint_recovery(driver) is True
+    assert call.create_savepoint("sqlspec_reconcile_step") in driver.mock_calls
+    assert call.rollback_to_savepoint("sqlspec_reconcile_step") in driver.mock_calls
+    assert call.release_savepoint("sqlspec_reconcile_step") in driver.mock_calls

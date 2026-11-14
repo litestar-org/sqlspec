@@ -1540,3 +1540,185 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
         assert exc_info.value.__cause__ is step_error
     finally:
         cfg_sync.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("backend", ["postgres", "sqlite"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(backend: str, is_async: bool) -> None:
+    """Failing transaction-state checks during error unwind must not mask the primary error or skip unlock."""
+    executed: list[str] = []
+    probe_state = {"fail": False}
+
+    if is_async:
+        async_tracker = AsyncMigrationTracker()
+
+        class _BrokenAsyncDriver:
+            dialect = backend
+
+            async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                executed.append(str(stmt))
+                return SQLResult()
+
+            async def rollback(self) -> None:
+                raise AssertionError("rollback should not run when tx probe fails")
+
+            async def _transaction_open(self) -> bool:
+                if probe_state["fail"]:
+                    raise RuntimeError("tx probe boom")
+                return False
+
+        driver_async: Any = _BrokenAsyncDriver()
+        with pytest.raises(ValueError, match="caller boom"):
+            async with async_tracker.acquire_lock(driver_async):
+                probe_state["fail"] = True
+                raise ValueError("caller boom")
+        if backend == "postgres":
+            assert any("pg_advisory_unlock" in sql for sql in executed)
+        else:
+            assert not async_tracker.holds_transaction_lock(driver_async)
+        return
+
+    sync_tracker = SyncMigrationTracker()
+
+    class _BrokenSyncDriver:
+        dialect = backend
+
+        def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+            executed.append(str(stmt))
+            return SQLResult()
+
+        def rollback(self) -> None:
+            raise AssertionError("rollback should not run when tx probe fails")
+
+        def _connection_in_transaction(self) -> bool:
+            if probe_state["fail"]:
+                raise RuntimeError("tx probe boom")
+            return False
+
+    driver_sync: Any = _BrokenSyncDriver()
+    with pytest.raises(ValueError, match="caller boom"):
+        with sync_tracker.acquire_lock(driver_sync):
+            probe_state["fail"] = True
+            raise ValueError("caller boom")
+    if backend == "postgres":
+        assert any("pg_advisory_unlock" in sql for sql in executed)
+    else:
+        assert not sync_tracker.holds_transaction_lock(driver_sync)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_nontransactional_failure_rolls_back_via_savepoint_and_preserves_prior_steps(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """A failing -- transactional: false migration under SQLite BEGIN IMMEDIATE must not commit partial DDL."""
+    db_path = tmp_path / f"nontx_partial_{is_async}.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_good.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE items_good (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    (migrations_dir / "0002_nontx_bad.sql").write_text(
+        "-- transactional: false\n"
+        "-- name: migrate-0002-up\n"
+        "CREATE TABLE partial_leak (id INTEGER PRIMARY KEY);\n"
+        "THIS IS INVALID SQL;\n",
+        encoding="utf-8",
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+        try:
+            with pytest.raises(MigrationError):
+                await cmds_async.upgrade(echo=False)
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied = await verify_driver.select("SELECT version_num FROM ddl_migrations")
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+        try:
+            with pytest.raises(MigrationError):
+                cmds_sync.upgrade(echo=False)
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied = verify_driver.select("SELECT version_num FROM ddl_migrations")
+        finally:
+            cfg_sync.close_pool()
+
+    assert "items_good" in tables
+    assert "partial_leak" not in tables
+    assert [row["version_num"] for row in applied] == ["0001"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """When step savepoint rollback fails under SQLite outer lock, _lock_context rolls back the outer tx."""
+    db_path = tmp_path / f"unrecovered_{is_async}.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_nontx_bad.sql").write_text(
+        "-- transactional: false\n"
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE partial_leak (id INTEGER PRIMARY KEY);\n"
+        "THIS IS INVALID SQL;\n",
+        encoding="utf-8",
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+
+        async def _broken_savepoint_rollback_async(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
+            cmds_async.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+
+        cmds_async.runner._recover_failed_savepoint = _broken_savepoint_rollback_async  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+        try:
+            with pytest.raises(MigrationError):
+                await cmds_async.upgrade(echo=False)
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+
+        def _broken_savepoint_rollback_sync(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
+            cmds_sync.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+
+        cmds_sync.runner._recover_failed_savepoint = _broken_savepoint_rollback_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+        try:
+            with pytest.raises(MigrationError):
+                cmds_sync.upgrade(echo=False)
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+        finally:
+            cfg_sync.close_pool()
+
+    assert "partial_leak" not in tables

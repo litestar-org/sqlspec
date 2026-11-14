@@ -993,8 +993,8 @@ class _SyncMigrationLockContext:
 
     def _exit_postgres(self, has_error: bool) -> None:
         if has_error:
-            if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                with suppress(Exception):
+            with suppress(Exception):
+                if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                     self._driver.rollback()
             try:
                 self._driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": self._lock_id})
@@ -1016,11 +1016,11 @@ class _SyncMigrationLockContext:
         self._sqlite_locked = False
         self._tracker._sqlite_lock_owners.discard(self._driver_id)
         if has_error:
-            if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                try:
+            try:
+                if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                     self._driver.rollback()
-                except Exception as rollback_exc:
-                    _log_unlock_failed(self._driver, self._lock_name, rollback_exc)
+            except Exception as rollback_exc:
+                _log_unlock_failed(self._driver, self._lock_name, rollback_exc)
             return
         if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
             self._driver.commit()
@@ -1108,8 +1108,8 @@ class _AsyncMigrationLockContext:
 
     async def _exit_postgres(self, has_error: bool) -> None:
         if has_error:
-            if await _driver_in_transaction_async(self._driver):
-                with suppress(Exception):
+            with suppress(Exception):
+                if await _driver_in_transaction_async(self._driver):
                     await self._driver.rollback()
             try:
                 await self._driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": self._lock_id})
@@ -1131,11 +1131,11 @@ class _AsyncMigrationLockContext:
         self._sqlite_locked = False
         self._tracker._sqlite_lock_owners.discard(self._driver_id)
         if has_error:
-            if await _driver_in_transaction_async(self._driver):
-                try:
+            try:
+                if await _driver_in_transaction_async(self._driver):
                     await self._driver.rollback()
-                except Exception as rollback_exc:
-                    _log_unlock_failed(self._driver, self._lock_name, rollback_exc)
+            except Exception as rollback_exc:
+                _log_unlock_failed(self._driver, self._lock_name, rollback_exc)
             return
         if await _driver_in_transaction_async(self._driver):
             await self._driver.commit()

@@ -94,6 +94,7 @@ class BaseMigrationRunner:
         self._metadata_cache: dict[str, _CachedMigrationMetadata] = {}
         self._outer_locked_drivers: set[int] = set()
         self._savepoint_recovered_drivers: set[int] = set()
+        self._outer_lock_unrecovered_drivers: set[int] = set()
         self.description_hints = description_hints or TemplateDescriptionHints()
         self.summary_only = summary_only
         self.use_logger = use_logger
@@ -147,6 +148,7 @@ class BaseMigrationRunner:
         driver_id = id(driver)
         self._outer_locked_drivers.add(driver_id)
         self._savepoint_recovered_drivers.discard(driver_id)
+        self._outer_lock_unrecovered_drivers.discard(driver_id)
         try:
             yield
         finally:
@@ -157,6 +159,14 @@ class BaseMigrationRunner:
         driver_id = id(driver)
         if driver_id in self._savepoint_recovered_drivers:
             self._savepoint_recovered_drivers.discard(driver_id)
+            return True
+        return False
+
+    def consume_unrecovered_outer_lock_failure(self, driver: Any) -> bool:
+        """Return and clear whether ``driver`` failed under an outer lock without savepoint recovery."""
+        driver_id = id(driver)
+        if driver_id in self._outer_lock_unrecovered_drivers:
+            self._outer_lock_unrecovered_drivers.discard(driver_id)
             return True
         return False
 
@@ -1090,6 +1100,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
     def _commit_nontransactional_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
+        if id(driver) in self._outer_locked_drivers:
+            return
         if self._has_active_implicit_transaction(driver):
             driver.commit()
 
@@ -1142,16 +1154,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
         start_time = time.perf_counter()
         execution_time = 0
 
-        if use_transaction:
-            uses_outer_lock = id(driver) in self._outer_locked_drivers
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
             step_savepoint = "sqlspec_reconcile_step"
             try:
                 if uses_outer_lock:
                     self._savepoint_recovered_drivers.discard(id(driver))
+                    self._outer_lock_unrecovered_drivers.discard(id(driver))
                     driver.create_savepoint(step_savepoint)
                 else:
                     driver.begin()
             except Exception as exc:
+                if uses_outer_lock:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
                 self._finish_migration_span_error(
                     span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
                 )
@@ -1159,7 +1174,10 @@ class SyncMigrationRunner(BaseMigrationRunner):
             step_error: BaseException | None = None
             try:
                 if default_schema:
-                    driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        driver.set_migration_session_schema(default_schema)
+                    else:
+                        driver.set_migration_non_transactional_schema(default_schema)
                 self._invoke_reconciler(driver, descriptor, direction=direction)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
                 if uses_outer_lock:
@@ -1189,12 +1207,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
                 execution_time = int((time.perf_counter() - start_time) * 1000)
             except BaseException as exc:
                 self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
-                if not default_schema:
-                    in_implicit_tx = False
-                    with contextlib.suppress(Exception):
-                        in_implicit_tx = self._has_active_implicit_transaction(driver)
-                    if in_implicit_tx:
-                        self._attempt_recovery(driver.rollback, "rollback")
                 if isinstance(exc, Exception):
                     wrapped = self._wrap_reconciler_error(descriptor, exc)
                     self._finish_migration_span_error(
@@ -1234,12 +1246,17 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if directive_schema is not None and not driver.has_schema(directive_schema):
             msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
-        if use_transaction:
-            uses_outer_lock = id(driver) in self._outer_locked_drivers
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
             step_savepoint = "sqlspec_migration_step"
             if uses_outer_lock:
                 self._savepoint_recovered_drivers.discard(id(driver))
-                driver.create_savepoint(step_savepoint)
+                self._outer_lock_unrecovered_drivers.discard(id(driver))
+                try:
+                    driver.create_savepoint(step_savepoint)
+                except BaseException:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                    raise
             else:
                 driver.begin()
             schema_reset = False
@@ -1247,7 +1264,10 @@ class SyncMigrationRunner(BaseMigrationRunner):
             step_error: BaseException | None = None
             try:
                 if default_schema:
-                    driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        driver.set_migration_session_schema(default_schema)
+                    else:
+                        driver.set_migration_non_transactional_schema(default_schema)
                 for sql_statement in sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -1309,6 +1329,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
             self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
         if rolled_back and released:
             self._savepoint_recovered_drivers.add(id(driver))
+        else:
+            self._outer_lock_unrecovered_drivers.add(id(driver))
 
     def _recover_failed_migration(
         self, driver: "SyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
@@ -1320,11 +1342,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
             in_transaction: Whether the runner began a transaction for this migration.
             schema_active: Whether a session schema reset is still outstanding.
         """
-        if in_transaction:
+        in_implicit_tx = False
+        if not in_transaction and id(driver) not in self._outer_locked_drivers:
+            with contextlib.suppress(Exception):
+                in_implicit_tx = self._has_active_implicit_transaction(driver)
+        if in_transaction or in_implicit_tx:
             self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:
             return
-        if self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+        if (
+            self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+            or in_transaction
+            or in_implicit_tx
+        ):
             return
         self._attempt_recovery(driver.rollback, "rollback")
         self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
@@ -1592,6 +1622,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
     async def _commit_nontransactional_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
+        if id(driver) in self._outer_locked_drivers:
+            return
         if await self._has_active_implicit_transaction_async(driver):
             await driver.commit()
 
@@ -1638,16 +1670,19 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         start_time = time.perf_counter()
         execution_time = 0
 
-        if use_transaction:
-            uses_outer_lock = id(driver) in self._outer_locked_drivers
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
             step_savepoint = "sqlspec_reconcile_step"
             try:
                 if uses_outer_lock:
                     self._savepoint_recovered_drivers.discard(id(driver))
+                    self._outer_lock_unrecovered_drivers.discard(id(driver))
                     await driver.create_savepoint(step_savepoint)
                 else:
                     await driver.begin()
             except Exception as exc:
+                if uses_outer_lock:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
                 self._finish_migration_span_error(
                     span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
                 )
@@ -1655,7 +1690,10 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             step_error: BaseException | None = None
             try:
                 if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        await driver.set_migration_session_schema(default_schema)
+                    else:
+                        await driver.set_migration_non_transactional_schema(default_schema)
                 await self._invoke_reconciler(driver, descriptor, direction=direction)
                 execution_time = int((time.perf_counter() - start_time) * 1000)
                 if uses_outer_lock:
@@ -1687,12 +1725,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                 execution_time = int((time.perf_counter() - start_time) * 1000)
             except BaseException as exc:
                 await self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
-                if not default_schema:
-                    in_implicit_tx = False
-                    with contextlib.suppress(Exception):
-                        in_implicit_tx = await self._has_active_implicit_transaction_async(driver)
-                    if in_implicit_tx:
-                        await self._attempt_recovery(driver.rollback, "rollback")
                 if isinstance(exc, Exception):
                     wrapped = self._wrap_reconciler_error(descriptor, exc)
                     self._finish_migration_span_error(
@@ -1732,12 +1764,17 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if directive_schema is not None and not await driver.has_schema(directive_schema):
             msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
-        if use_transaction:
-            uses_outer_lock = id(driver) in self._outer_locked_drivers
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
             step_savepoint = "sqlspec_migration_step"
             if uses_outer_lock:
                 self._savepoint_recovered_drivers.discard(id(driver))
-                await driver.create_savepoint(step_savepoint)
+                self._outer_lock_unrecovered_drivers.discard(id(driver))
+                try:
+                    await driver.create_savepoint(step_savepoint)
+                except BaseException:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                    raise
             else:
                 await driver.begin()
             schema_reset = False
@@ -1745,7 +1782,10 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             step_error: BaseException | None = None
             try:
                 if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        await driver.set_migration_session_schema(default_schema)
+                    else:
+                        await driver.set_migration_non_transactional_schema(default_schema)
                 for sql_statement in sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -1809,6 +1849,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
         if rolled_back and released:
             self._savepoint_recovered_drivers.add(id(driver))
+        else:
+            self._outer_lock_unrecovered_drivers.add(id(driver))
 
     async def _recover_failed_migration(
         self, driver: "AsyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
@@ -1820,11 +1862,19 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             in_transaction: Whether the runner began a transaction for this migration.
             schema_active: Whether a session schema reset is still outstanding.
         """
-        if in_transaction:
+        in_implicit_tx = False
+        if not in_transaction and id(driver) not in self._outer_locked_drivers:
+            with contextlib.suppress(Exception):
+                in_implicit_tx = await self._has_active_implicit_transaction_async(driver)
+        if in_transaction or in_implicit_tx:
             await self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:
             return
-        if await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+        if (
+            await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+            or in_transaction
+            or in_implicit_tx
+        ):
             return
         await self._attempt_recovery(driver.rollback, "rollback")
         await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")

@@ -2158,6 +2158,11 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                             except Exception as commit_exc:
                                 raise commit_exc from step_error
                         raise step_error
+                    recorded_error = self._last_command_error
+                    if recorded_error is not None:
+                        self.runner.consume_savepoint_recovery(driver)
+                        if self.runner.consume_unrecovered_outer_lock_failure(driver):
+                            _raise_recorded_command_error(recorded_error)
             else:
                 yield
 
@@ -3365,6 +3370,11 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                             except Exception as commit_exc:
                                 raise commit_exc from step_error
                         raise step_error
+                    recorded_error = self._last_command_error
+                    if recorded_error is not None:
+                        self.runner.consume_savepoint_recovery(driver)
+                        if self.runner.consume_unrecovered_outer_lock_failure(driver):
+                            _raise_recorded_command_error(recorded_error)
             else:
                 yield
 
