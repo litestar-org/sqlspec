@@ -2068,8 +2068,9 @@ class CommonDriverAttributesMixin:
         """
         if statement_config is None:
             statement_config = self.statement_config
+        use_default_cache = statement_config is self.statement_config
 
-        if isinstance(statement, str):
+        if use_default_cache and isinstance(statement, str):
             cached_sql = self._cache_holder.get_statement(statement)
             if cached_sql is not None and not kwargs:
                 has_filters = any(is_statement_filter(p) for p in parameters)
@@ -2088,7 +2089,13 @@ class CommonDriverAttributesMixin:
             filters = [*pending_filters, *filters]
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
-            if not filters and not kwargs and isinstance(statement, str) and self._stmt_cache_max_size > 0:
+            if (
+                use_default_cache
+                and not filters
+                and not kwargs
+                and isinstance(statement, str)
+                and self._stmt_cache_max_size > 0
+            ):
                 self._cache_holder.set_statement(statement, sql_statement, max_size=self._stmt_cache_max_size)
 
         _check_declared_parameters(sql_statement)
@@ -3641,6 +3648,21 @@ def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_ex
     return stripped_placeholders - retained_placeholders
 
 
+def _has_stripped_placeholder(stmt_expr: "exp.Expr", *, include_select_expressions: bool) -> bool:
+    for clause_name in ("order", "limit", "offset", "fetch"):
+        clause = stmt_expr.args.get(clause_name)
+        if isinstance(clause, exp.Expr):
+            for node in clause.walk():
+                if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                    return True
+    if include_select_expressions and isinstance(stmt_expr, exp.Select):
+        for select_expr in stmt_expr.expressions:
+            for node in select_expr.walk():
+                if isinstance(node, (exp.Placeholder, exp.Parameter)):
+                    return True
+    return False
+
+
 def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool = False) -> "set[str]":
     """Extract placeholder names from stripped pagination/projection clauses.
 
@@ -3651,13 +3673,17 @@ def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool =
     Returns:
         Set of placeholder names found exclusively in stripped clauses.
     """
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    has_input_named = isinstance(processed_state, ProcessedState) and bool(processed_state.input_named_parameters)
     stmt_expr = original_sql.statement_expression
     if stmt_expr is not None:
         placeholders = _pagination_names_in_expression(stmt_expr, include_select_expressions=include_select_expressions)
         if placeholders:
             return placeholders
         has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
-        if has_named:
+        if has_named or (not original_sql.named_parameters and not has_input_named):
+            return set()
+        if not _has_stripped_placeholder(stmt_expr, include_select_expressions=include_select_expressions):
             return set()
 
     raw_sql = original_sql.raw_sql

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -1736,3 +1737,33 @@ async def test_async_statement_cache_respects_auto_begin_on_write(
                 assert begins == 0
     finally:
         await cfg.close_pool()
+
+
+def test_prepare_statement_cache_respects_statement_config_override(tmp_path: Path) -> None:
+    """prepare_statement does not read or populate the default cache under an override StatementConfig."""
+    cfg = SqliteConfig(connection_config={"database": str(tmp_path / "override_cache.sqlite")})
+    postgres_override = StatementConfig(dialect="postgres")
+    unparsed_override = StatementConfig(enable_parsing=False)
+    try:
+        with cfg.provide_session() as session:
+            default_first = session.prepare_statement("SELECT :y AS v", ({"y": 1},))
+            assert default_first.statement_config is session.statement_config
+
+            dialect_override = session.prepare_statement(
+                "SELECT :y AS v", ({"y": 1},), statement_config=postgres_override
+            )
+            assert dialect_override.statement_config is postgres_override
+
+            unparsed = session.prepare_statement("SELECT :y AS v", ({"y": 1},), statement_config=unparsed_override)
+            assert unparsed.statement_config is unparsed_override
+            assert unparsed.statement_config.enable_parsing is False
+            assert unparsed.is_read_only() is False
+
+            fresh_sql = "SELECT :z AS v"
+            override_first = session.prepare_statement(fresh_sql, ({"z": 1},), statement_config=postgres_override)
+            assert override_first.statement_config is postgres_override
+
+            default_after = session.prepare_statement(fresh_sql, ({"z": 2},))
+            assert default_after.statement_config is session.statement_config
+    finally:
+        cfg.close_pool()

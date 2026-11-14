@@ -8,6 +8,7 @@ from typing import Any
 
 import msgspec
 import pytest
+import sqlglot
 
 from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
@@ -1142,3 +1143,28 @@ def test_extract_total_from_rows_handles_mixed_row_representations(mock_driver: 
     clean_rows, total = mock_driver._extract_total_from_rows(rows)
     assert total == 5
     assert clean_rows == [{"id": 1}, {"id": 2}]
+
+
+@pytest.mark.parametrize(
+    ("query_sql", "param_arg"),
+    [("SELECT id FROM users WHERE org_id = ?", (1,)), ("SELECT id FROM users WHERE org_id = :org", {"org": 1})],
+)
+def test_count_query_skips_redundant_reparse_without_pagination_clauses(
+    mock_driver: "MockSyncDriver", monkeypatch: pytest.MonkeyPatch, query_sql: str, param_arg: Any
+) -> None:
+    """_count_query does not re-parse raw_sql when no stripped clauses or named parameters exist."""
+    sql = mock_driver.prepare_statement(SQL(query_sql, param_arg), statement_config=mock_driver.statement_config)
+    sql.compile()
+    assert sql.statement_expression is not None
+
+    parse_calls: list[str] = []
+    orig_parse_one = sqlglot.parse_one
+
+    def spy_parse_one(sql_text: str, *args: Any, **kwargs: Any) -> Any:
+        parse_calls.append(sql_text)
+        return orig_parse_one(sql_text, *args, **kwargs)
+
+    monkeypatch.setattr("sqlglot.parse_one", spy_parse_one)
+    count_sql = mock_driver._count_query(sql)
+    assert "count(*)" in count_sql.sql.lower()
+    assert parse_calls == []
