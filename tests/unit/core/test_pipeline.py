@@ -127,3 +127,48 @@ def test_fingerprint_distinguishes_type_coercion_map_callables() -> None:
     assert hash(config_a.parameter_config) != hash(config_b.parameter_config)
     assert hash(config_a) != hash(config_b)
     assert registry._fingerprint_config(config_a) != registry._fingerprint_config(config_b)
+
+
+@requires_patchable_internals
+def test_pipeline_collision_fallback_isolates_configs_and_transformers() -> None:
+    """Identical pipeline fingerprints with unequal configs or transformer identities must not cross-wire."""
+    registry = StatementPipelineRegistry()
+
+    def transform_a(sql: str, params: object) -> "tuple[str, object]":
+        return f"{sql} /* a */", params
+
+    def transform_b(sql: str, params: object) -> "tuple[str, object]":
+        return f"{sql} /* b */", params
+
+    config_a = StatementConfig(
+        dialect="sqlite", parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transform_a)
+    )
+    config_b = StatementConfig(
+        dialect="postgres",
+        parameter_config=ParameterStyleConfig(ParameterStyle.NUMERIC, output_transformer=transform_b),
+    )
+
+    with patch.object(StatementPipelineRegistry, "_fingerprint_config", return_value="pipeline::collision"):
+        compiled_a1 = registry.compile(config_a, "SELECT ?", [1])
+        compiled_b1 = registry.compile(config_b, "SELECT $1", [2])
+        compiled_a2 = registry.compile(config_a, "SELECT ?", [3])
+        compiled_b2 = registry.compile(config_b, "SELECT $1", [4])
+
+    assert compiled_a1.compiled_sql == "SELECT ? /* a */"
+    assert compiled_a2.compiled_sql == "SELECT ? /* a */"
+    assert compiled_b1.compiled_sql == "SELECT $1 /* b */"
+    assert compiled_b2.compiled_sql == "SELECT $1 /* b */"
+
+
+def test_pipeline_retains_strong_config_reference() -> None:
+    """Cached pipelines retain the StatementConfig instance alongside its transformers."""
+    registry = StatementPipelineRegistry()
+
+    def transform(sql: str, params: object) -> "tuple[str, object]":
+        return sql, params
+
+    config = StatementConfig(parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, output_transformer=transform))
+    registry.compile(config, "SELECT ?", [1])
+    pipeline = next(iter(registry._pipelines.values()))
+    assert pipeline.config is config
+    assert pipeline.config.parameter_config.output_transformer is transform

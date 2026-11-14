@@ -77,19 +77,21 @@ class StatementPipelineRegistry:
     ) -> "CompiledSQL":
         if not getattr(config, "_is_frozen", False):
             config.freeze()
-        key = self._fingerprint_config(config)
-        pipeline = self._pipelines.get(key)
+        base_key = self._fingerprint_config(config)
+        pipeline = self._pipelines.get(base_key)
         record_metrics = _RECORD_PIPELINE_METRICS
 
-        if pipeline is not None:
-            self._pipelines.move_to_end(key)
+        if pipeline is not None and _matches_pipeline_config(pipeline.config, config):
+            self._pipelines.move_to_end(base_key)
+        elif pipeline is not None:
+            pipeline = self._resolve_collision_pipeline(base_key, config, record_metrics)
         else:
             pipeline = _StatementPipeline(
                 config, self._pipeline_cache_size, self._pipeline_parse_cache_size, self._cache_enabled, record_metrics
             )
             if len(self._pipelines) >= self._max_pipelines:
                 self._pipelines.popitem(last=False)
-            self._pipelines[key] = pipeline
+            self._pipelines[base_key] = pipeline
 
         return pipeline.compile(
             sql, parameters, is_many, record_metrics, expression=expression, param_fingerprint=param_fingerprint
@@ -116,13 +118,34 @@ class StatementPipelineRegistry:
             if metrics is None:
                 continue
             entry: dict[str, Any] = {
-                "config": key,
+                "config": key.partition("#")[0],
                 "dialect": pipeline.dialect,
                 "parameter_style": pipeline.parameter_style,
             }
             entry.update(metrics)
             snapshots.append(entry)
         return snapshots
+
+    def _resolve_collision_pipeline(
+        self, base_key: str, config: "StatementConfig", record_metrics: bool
+    ) -> "_StatementPipeline":
+        collision_index = 1
+        while True:
+            slot_key = f"{base_key}#{collision_index}"
+            existing = self._pipelines.get(slot_key)
+            if existing is None:
+                break
+            if _matches_pipeline_config(existing.config, config):
+                self._pipelines.move_to_end(slot_key)
+                return existing
+            collision_index += 1
+        pipeline = _StatementPipeline(
+            config, self._pipeline_cache_size, self._pipeline_parse_cache_size, self._cache_enabled, record_metrics
+        )
+        if len(self._pipelines) >= self._max_pipelines:
+            self._pipelines.popitem(last=False)
+        self._pipelines[slot_key] = pipeline
+        return pipeline
 
     @staticmethod
     def _fingerprint_config(config: "Any") -> str:
@@ -203,7 +226,7 @@ class _PipelineMetrics:
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _StatementPipeline:
-    __slots__ = ("_metrics", "_processor", "dialect", "parameter_style")
+    __slots__ = ("_metrics", "_processor", "config", "dialect", "parameter_style")
 
     def __init__(
         self,
@@ -213,6 +236,7 @@ class _StatementPipeline:
         cache_enabled: bool,
         record_metrics: bool,
     ) -> None:
+        self.config = config
         self._processor = SQLProcessor(
             config,
             max_cache_size=cache_size,
@@ -251,6 +275,22 @@ class _StatementPipeline:
         if self._metrics is None:
             return None
         return self._metrics.snapshot()
+
+
+def _matches_pipeline_config(cached_config: "StatementConfig", config: "StatementConfig") -> bool:
+    if cached_config is config:
+        return True
+    if cached_config != config:
+        return False
+    cached_params = cached_config.parameter_config
+    target_params = config.parameter_config
+    return (
+        type(cached_config.parameter_converter) is type(config.parameter_converter)
+        and type(cached_config.parameter_validator) is type(config.parameter_validator)
+        and cached_params.output_transformer is target_params.output_transformer
+        and cached_params.ast_transformer is target_params.ast_transformer
+        and cached_config.output_transformer is config.output_transformer
+    )
 
 
 def _is_truthy(value: "str | None") -> bool:
