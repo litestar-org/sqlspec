@@ -162,8 +162,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -203,6 +204,9 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (

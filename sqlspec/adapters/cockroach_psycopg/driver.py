@@ -228,8 +228,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -269,6 +270,9 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
@@ -291,14 +295,6 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
         self._wants_follower_read(statement)
         return super().dispatch_special_handling(cursor, statement)
-
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        safe = statement.is_read_only()
-        if self.driver_features.get("read_only_session") and not safe:
-            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
-            raise ReadOnlyTransactionError(msg)
-        return safe
 
     def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
@@ -386,6 +382,14 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
 
     def handle_database_exceptions(self) -> "CockroachPsycopgSyncExceptionHandler":
         return CockroachPsycopgSyncExceptionHandler()
+
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -528,8 +532,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
                 query is not None
                 and not prepared.is_script
                 and not prepared.is_many
-                and prepared.operation_type == "SELECT"
                 and isinstance(values, (list, tuple))
+                and self._wants_follower_read(prepared)
+                and prepared.operation_type == "SELECT"
             ):
                 command, bound = build_native_export(
                     query,
@@ -569,6 +574,9 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         transactions use the inherited path. CSV needs explicit skip (0 for no
         header); nullif is never inferred. Native failures are never replayed.
         """
+        if self.driver_features.get("read_only_session"):
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
         options = self.driver_features.get("native_storage_csv_options", {})
         resolved = None
         if (
@@ -591,14 +599,6 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     async def dispatch_special_handling(self, cursor: Any, statement: SQL) -> "SQLResult | None":
         self._wants_follower_read(statement)
         return await super().dispatch_special_handling(cursor, statement)
-
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        safe = statement.is_read_only()
-        if self.driver_features.get("read_only_session") and not safe:
-            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
-            raise ReadOnlyTransactionError(msg)
-        return safe
 
     async def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
@@ -675,6 +675,14 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
 
     def handle_database_exceptions(self) -> "CockroachPsycopgAsyncExceptionHandler":
         return CockroachPsycopgAsyncExceptionHandler()
+
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
 
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"

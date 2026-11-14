@@ -2,19 +2,25 @@
 """Unit tests for CockroachDB psycopg retry helpers."""
 
 import inspect
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from psycopg import errors as pg_errors
+from psycopg import pq
 
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
 from sqlspec.adapters.cockroach_psycopg.core import (
     build_connection_config,
+    build_statement_config,
     calculate_backoff_seconds,
     create_mapped_exception,
     is_retryable_error,
     resolve_follower_read_options,
 )
+from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
+from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.exceptions import ConnectionTimeoutError, ReadOnlyTransactionError
 from sqlspec.utils.routing import RoutingContext
 
@@ -213,3 +219,123 @@ def test_build_connection_config_merges_managed_options() -> None:
     assert built["options"] == (
         "--application_name=app -c statement_timeout=2500 -c default_transaction_use_follower_reads=on"
     )
+
+
+def test_cockroach_psycopg_sync_load_from_storage_rejects_read_only_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync load_from_storage fails closed on read-only sessions even on idle autocommit connections."""
+    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    driver = CockroachPsycopgSyncDriver(
+        conn,
+        statement_config=build_statement_config(),
+        driver_features={"enable_native_storage": True, "read_only_session": True},
+    )
+    execute_native = MagicMock()
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        CockroachPsycopgSyncDriver,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(
+            resolve_destination=lambda _target: SimpleNamespace(protocol="s3", uri="s3://b/k")
+        ),
+    )
+
+    with pytest.raises(ReadOnlyTransactionError):
+        driver.load_from_storage("items", "s3://b/k.parquet", file_format="parquet")
+    execute_native.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_cockroach_psycopg_async_load_from_storage_rejects_read_only_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async load_from_storage fails closed on read-only sessions even on idle autocommit connections."""
+    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    driver = CockroachPsycopgAsyncDriver(
+        conn,
+        statement_config=build_statement_config(),
+        driver_features={"enable_native_storage": True, "read_only_session": True},
+    )
+    execute_native = AsyncMock()
+    monkeypatch.setattr(CockroachPsycopgAsyncDriver, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        CockroachPsycopgAsyncDriver,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(
+            resolve_destination=lambda _target: SimpleNamespace(protocol="s3", uri="s3://b/k")
+        ),
+    )
+
+    with pytest.raises(ReadOnlyTransactionError):
+        await driver.load_from_storage("items", "s3://b/k.parquet", file_format="parquet")
+    execute_native.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "sql", ["WITH d AS (DELETE FROM items RETURNING *) SELECT * FROM d", "SELECT nextval('items_seq')"]
+)
+@pytest.mark.parametrize("read_only_session", [False, True])
+def test_cockroach_psycopg_sync_select_to_storage_guards_unsafe_selects(
+    monkeypatch: pytest.MonkeyPatch, sql: str, read_only_session: bool
+) -> None:
+    """Unsafe SELECT statements bypass native EXPORT on sync driver and raise on read-only sessions."""
+    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    driver = CockroachPsycopgSyncDriver(
+        conn,
+        statement_config=build_statement_config(),
+        driver_features={"enable_native_storage": True, "read_only_session": read_only_session},
+    )
+    execute_native = MagicMock()
+    fallback_job = object()
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        CockroachPsycopgSyncDriver,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(
+            resolve_destination=lambda _target: SimpleNamespace(protocol="s3", uri="s3://b/out")
+        ),
+    )
+    monkeypatch.setattr(PsycopgSyncDriver, "select_to_storage", MagicMock(return_value=fallback_job))
+
+    if read_only_session:
+        with pytest.raises(ReadOnlyTransactionError):
+            driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
+    else:
+        job: Any = driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
+        assert job is fallback_job
+    execute_native.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "sql", ["WITH d AS (DELETE FROM items RETURNING *) SELECT * FROM d", "SELECT nextval('items_seq')"]
+)
+@pytest.mark.parametrize("read_only_session", [False, True])
+async def test_cockroach_psycopg_async_select_to_storage_guards_unsafe_selects(
+    monkeypatch: pytest.MonkeyPatch, sql: str, read_only_session: bool
+) -> None:
+    """Unsafe SELECT statements bypass native EXPORT on async driver and raise on read-only sessions."""
+    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    driver = CockroachPsycopgAsyncDriver(
+        conn,
+        statement_config=build_statement_config(),
+        driver_features={"enable_native_storage": True, "read_only_session": read_only_session},
+    )
+    execute_native = AsyncMock()
+    fallback_job = object()
+    monkeypatch.setattr(CockroachPsycopgAsyncDriver, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        CockroachPsycopgAsyncDriver,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(
+            resolve_destination=lambda _target: SimpleNamespace(protocol="s3", uri="s3://b/out")
+        ),
+    )
+    monkeypatch.setattr(PsycopgAsyncDriver, "select_to_storage", AsyncMock(return_value=fallback_job))
+
+    if read_only_session:
+        with pytest.raises(ReadOnlyTransactionError):
+            await driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
+    else:
+        job: Any = await driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
+        assert job is fallback_job
+    execute_native.assert_not_awaited()
