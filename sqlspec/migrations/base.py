@@ -18,7 +18,7 @@ from sqlspec.builder._delete import Delete
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SQLSpecError
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import (
@@ -114,17 +114,28 @@ class AppliedMigrationRecord(TypedDict):
 class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    _SEQUENCED_INSERT_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+    _POSTGRES_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
         "postgres",
         "postgresql",
         "pgvector",
         "paradedb",
         "pg_textsearch",
-        "mysql",
-        "mariadb",
+    })
+    _MYSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mysql", "mariadb"})
+    _MSSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mssql", "tsql"})
+    _SEQUENCED_INSERT_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        *_POSTGRES_LOCK_DIALECTS,
+        *_MYSQL_LOCK_DIALECTS,
         "sqlite",
         "duckdb",
     })
+    _MSSQL_ACQUIRE_LOCK_SQL: "ClassVar[str]" = (
+        "DECLARE @sqlspec_res INT; "
+        "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
+        "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
+        "SELECT @sqlspec_res"
+    )
+    _MSSQL_RELEASE_LOCK_SQL: "ClassVar[str]" = "EXEC sp_releaseapplock :lock_name, 'Session'"
 
     def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
@@ -168,10 +179,15 @@ class BaseMigrationTracker(Generic[DriverT]):
             resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+        self._sqlite_lock_owners: set[int] = set()
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
         self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
+
+    def holds_transaction_lock(self, driver: Any) -> bool:
+        """Return True while this tracker owns an outer SQLite transaction lock on ``driver``."""
+        return id(driver) in self._sqlite_lock_owners
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> "Awaitable[None] | None":
@@ -511,6 +527,46 @@ class BaseMigrationTracker(Generic[DriverT]):
         lock_name = f"sqlspec_mig_{self.version_table}"[:64]
         lock_id = int.from_bytes(hashlib.sha256(lock_name.encode("utf-8")).digest()[:8], "big", signed=True)
         return lock_name, lock_id
+
+    @classmethod
+    def _lock_backend_kind(cls, driver: Any) -> str:
+        """Classify ``driver`` into its migration lock backend family or empty string."""
+        raw_dialect = getattr(type(driver), "dialect", None)
+        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+            return ""
+        if dialect in cls._POSTGRES_LOCK_DIALECTS:
+            return "postgres"
+        if dialect in cls._MYSQL_LOCK_DIALECTS:
+            return "mysql"
+        if dialect in cls._MSSQL_LOCK_DIALECTS:
+            return "mssql"
+        if dialect == "sqlite":
+            return "sqlite"
+        return ""
+
+    def _uses_sequenced_insert(self, driver: Any) -> bool:
+        """Return True when ``driver`` uses single-statement ``execution_sequence`` inserts."""
+        return str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS
+
+    @staticmethod
+    def _translate_mssql_lock_exception(
+        lock_name: str, timeout_seconds: int, exc: SQLSpecError
+    ) -> MigrationError | None:
+        """Convert T-SQL lock acquisition errors into ``MigrationError`` when matched."""
+        if "Migration lock acquisition failed" in str(exc):
+            msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
+            return MigrationError(msg)
+        return None
+
+    @staticmethod
+    def _validate_mssql_lock_result(lock_name: str, result: Any) -> None:
+        """Raise ``MigrationError`` when ``sp_getapplock`` returns a negative status code."""
+        if result.data:
+            lock_code = result.scalar()
+            if isinstance(lock_code, int) and lock_code < 0:
+                msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
+                raise MigrationError(msg)
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.

@@ -140,18 +140,3 @@ class CorrelationExtractor:
         if _CORRELATION_VALUE_PATTERN.fullmatch(candidate) is None:
             return ""
         return candidate
-
-    def _sanitize(self, value: str) -> str:
-        """Return a bounded, single-line log-safe correlation identifier.
-
-        Truncates at the first line break, strips surrounding whitespace, bounds to
-        ``max_length``, and falls back to UUID generation when disallowed characters
-        are present or the resulting string is empty.
-
-        Args:
-            value: The raw correlation ID value.
-
-        Returns:
-            The validated correlation ID, or a generated UUID if invalid or empty.
-        """
-        return self._clean_value(value) or CorrelationContext.generate()

@@ -6,7 +6,7 @@ This module provides functionality to track applied migrations in the database.
 import importlib
 import logging
 from contextlib import asynccontextmanager, contextmanager, suppress
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -25,16 +25,6 @@ if TYPE_CHECKING:
     from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
-
-_POSTGRES_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({
-    "postgres",
-    "postgresql",
-    "pgvector",
-    "paradedb",
-    "pg_textsearch",
-})
-_MYSQL_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
-_MSSQL_LOCK_DIALECTS: Final[frozenset[str]] = frozenset({"mssql", "tsql"})
 
 logger = get_logger("sqlspec.migrations.tracker")
 _console: "Console | None" = None
@@ -108,7 +98,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         """
         version_type = self._derive_version_type(version)
         replaces_csv = ",".join(replaces) if replaces else None
-        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+        if self._uses_sequenced_insert(driver):
             statement: Any = self._record_migration_sequenced_statement(
                 version, version_type, description, execution_time_ms, checksum, self._applied_by(), replaces_csv
             )
@@ -206,7 +196,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
 
         version_type = self._derive_version_type(squashed_version)
         replaces_csv = ",".join(replaced_versions) if replaced_versions else None
-        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+        if self._uses_sequenced_insert(driver):
             statement: Any = self._record_migration_sequenced_statement(
                 squashed_version, version_type, description, 0, checksum, self._applied_by(), replaces_csv
             )
@@ -269,65 +259,14 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Raises:
             MigrationError: When MySQL or SQL Server lock acquisition fails or times out.
         """
-        raw_dialect = getattr(type(driver), "dialect", None)
-        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
-        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+        lock_kind = self._lock_backend_kind(driver)
+        if not lock_kind:
             yield
             return
 
         lock_name, lock_id = self._migration_lock_key()
-        if dialect in _POSTGRES_LOCK_DIALECTS:
+        if lock_kind == "postgres":
             driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": lock_id})
-            try:
-                yield
-            finally:
-                driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
-            return
-
-        if dialect in _MYSQL_LOCK_DIALECTS:
-            lock_result = driver.select_value(
-                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
-            )
-            if lock_result != 1:
-                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
-                raise MigrationError(msg)
-            try:
-                yield
-            finally:
-                driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
-            return
-
-        if dialect in _MSSQL_LOCK_DIALECTS:
-            timeout_ms = max(timeout_seconds, 0) * 1000
-            try:
-                ms_result = driver.execute(
-                    "DECLARE @sqlspec_res INT; "
-                    "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
-                    "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
-                    "SELECT @sqlspec_res",
-                    {"lock_name": lock_name, "timeout_ms": timeout_ms},
-                )
-            except SQLSpecError as exc:
-                if "Migration lock acquisition failed" in str(exc):
-                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
-                    raise MigrationError(msg) from exc
-                raise
-            if ms_result.data:
-                lock_code = ms_result.scalar()
-                if isinstance(lock_code, int) and lock_code < 0:
-                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
-                    raise MigrationError(msg)
-            try:
-                yield
-            finally:
-                driver.execute("EXEC sp_releaseapplock :lock_name, 'Session'", {"lock_name": lock_name})
-            return
-
-        if dialect == "sqlite":
-            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                yield
-                return
-            driver.execute("BEGIN IMMEDIATE")
             lock_error: BaseException | None = None
             try:
                 yield
@@ -335,7 +274,83 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 lock_error = exc
             if lock_error is not None:
                 if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                    driver.rollback()
+                    with suppress(Exception):
+                        driver.rollback()
+                try:
+                    driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+            return
+
+        if lock_kind == "mysql":
+            lock_result = driver.select_value(
+                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
+            )
+            if lock_result != 1:
+                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+                raise MigrationError(msg)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                try:
+                    driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+            return
+
+        if lock_kind == "mssql":
+            timeout_ms = max(timeout_seconds, 0) * 1000
+            try:
+                ms_result = driver.execute(
+                    self._MSSQL_ACQUIRE_LOCK_SQL, {"lock_name": lock_name, "timeout_ms": timeout_ms}
+                )
+            except SQLSpecError as exc:
+                translated = self._translate_mssql_lock_exception(lock_name, timeout_seconds, exc)
+                if translated is not None:
+                    raise translated from exc
+                raise
+            self._validate_mssql_lock_result(lock_name, ms_result)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                try:
+                    driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
+            return
+
+        if lock_kind == "sqlite":
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                yield
+                return
+            driver.execute("BEGIN IMMEDIATE")
+            driver_id = id(driver)
+            self._sqlite_lock_owners.add(driver_id)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            finally:
+                self._sqlite_lock_owners.discard(driver_id)
+            if lock_error is not None:
+                if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                    try:
+                        driver.rollback()
+                    except Exception as rollback_exc:
+                        _log_unlock_failed(driver, lock_name, rollback_exc)
                 raise lock_error
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 driver.commit()
@@ -349,11 +364,20 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        locked = self.holds_transaction_lock(driver)
+        savepoint = "sqlspec_tracker_schema"
+        schema_error: Exception | None = None
+        if locked:
+            driver.create_savepoint(savepoint)
         try:
             target = self._tracking_schema_target()
-            result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
+            result = ensure_schema_sync(
+                driver, [target], manage_schema=True, create_schema=False, assume_existing=True, commit=not locked
+            )
             added_columns = result.added_columns.get(target.identity, [])
             if not added_columns:
+                if locked:
+                    driver.release_savepoint(savepoint)
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
@@ -364,10 +388,20 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():
                 _get_console().print("[green]Migration tracking table schema updated successfully[/]")
+            if locked:
+                driver.release_savepoint(savepoint)
         except Exception as exc:
-            with suppress(Exception):
-                driver.rollback()
-            _log_schema_check_failed(driver, self.version_table, exc)
+            schema_error = exc
+        if schema_error is not None:
+            if locked:
+                with suppress(Exception):
+                    driver.rollback_to_savepoint(savepoint)
+                with suppress(Exception):
+                    driver.release_savepoint(savepoint)
+            else:
+                with suppress(Exception):
+                    driver.rollback()
+            _log_schema_check_failed(driver, self.version_table, schema_error)
 
     def _safe_commit(self, driver: "SyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
@@ -375,7 +409,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        if driver.driver_features.get("autocommit", False):
+        if self.holds_transaction_lock(driver) or driver.driver_features.get("autocommit", False):
             return
 
         try:
@@ -479,7 +513,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         """
         version_type = self._derive_version_type(version)
         replaces_csv = ",".join(replaces) if replaces else None
-        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+        if self._uses_sequenced_insert(driver):
             statement: Any = self._record_migration_sequenced_statement(
                 version, version_type, description, execution_time_ms, checksum, self._applied_by(), replaces_csv
             )
@@ -577,7 +611,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
 
         version_type = self._derive_version_type(squashed_version)
         replaces_csv = ",".join(replaced_versions) if replaced_versions else None
-        if str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS:
+        if self._uses_sequenced_insert(driver):
             statement: Any = self._record_migration_sequenced_statement(
                 squashed_version, version_type, description, 0, checksum, self._applied_by(), replaces_csv
             )
@@ -642,65 +676,14 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Raises:
             MigrationError: When MySQL or SQL Server lock acquisition fails or times out.
         """
-        raw_dialect = getattr(type(driver), "dialect", None)
-        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
-        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+        lock_kind = self._lock_backend_kind(driver)
+        if not lock_kind:
             yield
             return
 
         lock_name, lock_id = self._migration_lock_key()
-        if dialect in _POSTGRES_LOCK_DIALECTS:
+        if lock_kind == "postgres":
             await driver.execute("SELECT pg_advisory_lock(:lock_id)", {"lock_id": lock_id})
-            try:
-                yield
-            finally:
-                await driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
-            return
-
-        if dialect in _MYSQL_LOCK_DIALECTS:
-            lock_result = await driver.select_value(
-                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
-            )
-            if lock_result != 1:
-                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
-                raise MigrationError(msg)
-            try:
-                yield
-            finally:
-                await driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
-            return
-
-        if dialect in _MSSQL_LOCK_DIALECTS:
-            timeout_ms = max(timeout_seconds, 0) * 1000
-            try:
-                ms_result = await driver.execute(
-                    "DECLARE @sqlspec_res INT; "
-                    "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
-                    "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
-                    "SELECT @sqlspec_res",
-                    {"lock_name": lock_name, "timeout_ms": timeout_ms},
-                )
-            except SQLSpecError as exc:
-                if "Migration lock acquisition failed" in str(exc):
-                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
-                    raise MigrationError(msg) from exc
-                raise
-            if ms_result.data:
-                lock_code = ms_result.scalar()
-                if isinstance(lock_code, int) and lock_code < 0:
-                    msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
-                    raise MigrationError(msg)
-            try:
-                yield
-            finally:
-                await driver.execute("EXEC sp_releaseapplock :lock_name, 'Session'", {"lock_name": lock_name})
-            return
-
-        if dialect == "sqlite":
-            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                yield
-                return
-            await driver.execute("BEGIN IMMEDIATE")
             lock_error: BaseException | None = None
             try:
                 yield
@@ -708,7 +691,83 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 lock_error = exc
             if lock_error is not None:
                 if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                    await driver.rollback()
+                    with suppress(Exception):
+                        await driver.rollback()
+                try:
+                    await driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            await driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
+            return
+
+        if lock_kind == "mysql":
+            lock_result = await driver.select_value(
+                "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
+            )
+            if lock_result != 1:
+                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+                raise MigrationError(msg)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                try:
+                    await driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            await driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
+            return
+
+        if lock_kind == "mssql":
+            timeout_ms = max(timeout_seconds, 0) * 1000
+            try:
+                ms_result = await driver.execute(
+                    self._MSSQL_ACQUIRE_LOCK_SQL, {"lock_name": lock_name, "timeout_ms": timeout_ms}
+                )
+            except SQLSpecError as exc:
+                translated = self._translate_mssql_lock_exception(lock_name, timeout_seconds, exc)
+                if translated is not None:
+                    raise translated from exc
+                raise
+            self._validate_mssql_lock_result(lock_name, ms_result)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            if lock_error is not None:
+                try:
+                    await driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
+                except Exception as unlock_exc:
+                    _log_unlock_failed(driver, lock_name, unlock_exc)
+                raise lock_error
+            await driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
+            return
+
+        if lock_kind == "sqlite":
+            if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                yield
+                return
+            await driver.execute("BEGIN IMMEDIATE")
+            driver_id = id(driver)
+            self._sqlite_lock_owners.add(driver_id)
+            lock_error = None
+            try:
+                yield
+            except BaseException as exc:
+                lock_error = exc
+            finally:
+                self._sqlite_lock_owners.discard(driver_id)
+            if lock_error is not None:
+                if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                    try:
+                        await driver.rollback()
+                    except Exception as rollback_exc:
+                        _log_unlock_failed(driver, lock_name, rollback_exc)
                 raise lock_error
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 await driver.commit()
@@ -722,13 +781,20 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        locked = self.holds_transaction_lock(driver)
+        savepoint = "sqlspec_tracker_schema"
+        schema_error: Exception | None = None
+        if locked:
+            await driver.create_savepoint(savepoint)
         try:
             target = self._tracking_schema_target()
             result = await ensure_schema_async(
-                driver, [target], manage_schema=True, create_schema=False, assume_existing=True
+                driver, [target], manage_schema=True, create_schema=False, assume_existing=True, commit=not locked
             )
             added_columns = result.added_columns.get(target.identity, [])
             if not added_columns:
+                if locked:
+                    await driver.release_savepoint(savepoint)
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
@@ -739,10 +805,20 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():
                 _get_console().print("[green]Migration tracking table schema updated successfully[/]")
+            if locked:
+                await driver.release_savepoint(savepoint)
         except Exception as exc:
-            with suppress(Exception):
-                await driver.rollback()
-            _log_schema_check_failed(driver, self.version_table, exc)
+            schema_error = exc
+        if schema_error is not None:
+            if locked:
+                with suppress(Exception):
+                    await driver.rollback_to_savepoint(savepoint)
+                with suppress(Exception):
+                    await driver.release_savepoint(savepoint)
+            else:
+                with suppress(Exception):
+                    await driver.rollback()
+            _log_schema_check_failed(driver, self.version_table, schema_error)
 
     async def _safe_commit(self, driver: "AsyncDriverAdapterBase") -> None:
         """Safely commit a transaction only if autocommit is disabled.
@@ -750,7 +826,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        if driver.driver_features.get("autocommit", False):
+        if self.holds_transaction_lock(driver) or driver.driver_features.get("autocommit", False):
             return
 
         try:
@@ -1015,5 +1091,17 @@ def _log_commit_skipped(driver: Any, exc: Exception) -> None:
         operation="commit",
         status="skipped",
         reason="autocommit",
+        error_type=type(exc).__name__,
+    )
+
+
+def _log_unlock_failed(driver: Any, lock_name: str, exc: Exception) -> None:
+    """Log a migration lock release or cleanup error while preserving the caller failure."""
+    log_with_context(
+        logger,
+        logging.WARNING,
+        "migration.lock.release_failed",
+        db_system=resolve_db_system(type(driver).__name__),
+        lock_name=lock_name,
         error_type=type(exc).__name__,
     )

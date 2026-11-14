@@ -12,11 +12,17 @@ from pathlib import Path
 
 import pytest
 
+from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+from sqlspec.migrations.templates import (
+    MigrationTemplateProfile,
+    MigrationTemplateSettings,
+    PythonTemplateDefinition,
+    SQLTemplateDefinition,
+)
+
 
 def test_generate_python_squash_generate_python_squash_valid_syntax(tmp_path: Path) -> None:
     """Test that generated Python file has valid syntax."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -34,8 +40,6 @@ def test_generate_python_squash_generate_python_squash_valid_syntax(tmp_path: Pa
 
 def test_generate_python_squash_generate_python_squash_has_docstring(tmp_path: Path) -> None:
     """Test that generated Python file contains metadata docstring."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -55,8 +59,6 @@ def test_generate_python_squash_generate_python_squash_has_docstring(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_up_function(tmp_path: Path) -> None:
     """Test that up() function returns SQL statements."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -82,8 +84,6 @@ def test_generate_python_squash_generate_python_squash_up_function(tmp_path: Pat
 
 def test_generate_python_squash_generate_python_squash_down_function(tmp_path: Path) -> None:
     """Test that down() function returns SQL statements in correct order."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -110,8 +110,6 @@ def test_generate_python_squash_generate_python_squash_down_function(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_empty_down(tmp_path: Path) -> None:
     """Test that empty down SQL generates None-returning down() function."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -133,8 +131,6 @@ def test_generate_python_squash_generate_python_squash_empty_down(tmp_path: Path
 
 def test_generate_python_squash_generate_python_squash_escapes_quotes(tmp_path: Path) -> None:
     """Test that SQL with quotes is properly escaped."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -157,8 +153,6 @@ def test_generate_python_squash_generate_python_squash_escapes_quotes(tmp_path: 
 
 def test_generate_python_squash_generate_python_squash_multiline_sql(tmp_path: Path) -> None:
     """Test that multiline SQL is handled correctly."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -184,8 +178,6 @@ def test_generate_python_squash_generate_python_squash_multiline_sql(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_return_type_annotation(tmp_path: Path) -> None:
     """Test that functions have proper type annotations."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -213,14 +205,6 @@ def test_generate_python_squash_escapes_docstring_and_headers(
     tmp_path: Path, raw_text: str, expected_snippet: str
 ) -> None:
     """Squashed Python output remains valid AST syntax and preserves sanitized single-line headers."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-    from sqlspec.migrations.templates import (
-        MigrationTemplateProfile,
-        MigrationTemplateSettings,
-        PythonTemplateDefinition,
-        SQLTemplateDefinition,
-    )
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     settings = MigrationTemplateSettings(
         default_format="py",

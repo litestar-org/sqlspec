@@ -1355,6 +1355,9 @@ def test_resolve_db_system_snowflake(name: str, expected: str) -> None:
         ("SELECT $1, $2 FROM t WHERE name = 'alice'", "SELECT $1, $2 FROM t WHERE name = '***'"),
         ("SELECT * FROM t WHERE name LIKE'a%'", "SELECT * FROM t WHERE name LIKE'***'"),
         ("SELECT E'it\\'s', N'uni', B'101', X'ff'", "SELECT '***', '***', '***', '***'"),
+        ("SELECT 'line1\\\nline2', 'secret'", "SELECT '***', '***'"),
+        ("SELECT 'secret\\", "SELECT '***'"),
+        ("SELECT 'secret\\\\", "SELECT '***'"),
         ("SELECT * FROM t WHERE token = 'unclosed", "SELECT * FROM t WHERE token = '***'"),
         ("SELECT $tag$unclosed payload", "SELECT '***'"),
     ],
@@ -1364,10 +1367,11 @@ def test_redact_sql_literals_preserves_comments_and_identifiers(raw_sql: str, ex
     assert redact_sql_literals(raw_sql) == expected_sql
 
 
-@pytest.mark.parametrize("unclosed_prefix", ["'", "$tag$"])
-def test_redact_sql_literals_linear_time_on_large_unclosed_literals(unclosed_prefix: str) -> None:
-    """redact_sql_literals finishes in linear time on large unclosed literals."""
-    payload = "SELECT " + unclosed_prefix + ("a" * 50_000)
+@pytest.mark.parametrize(
+    "payload", ["SELECT '" + ("a" * 50_000), "SELECT $tag$" + ("a" * 50_000), "SELECT '" + ("a\\'" * 15_000) + "tail\\"]
+)
+def test_redact_sql_literals_linear_time_on_large_unclosed_literals(payload: str) -> None:
+    """redact_sql_literals finishes in linear time on large unclosed and backslash-heavy literals."""
     start = time.perf_counter()
     result = redact_sql_literals(payload)
     elapsed = time.perf_counter() - start

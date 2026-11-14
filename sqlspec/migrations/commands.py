@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NamedTuple, NoReturn, ParamSpec, TypeVar, cast, overload
 
@@ -25,7 +25,7 @@ from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import CreateTable, sql
 from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, SquashValidationError
-from sqlspec.migrations.base import BaseMigrationCommands
+from sqlspec.migrations.base import BaseMigrationCommands, BaseMigrationTracker
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, BaseMigrationRunner, SyncMigrationRunner
@@ -40,8 +40,8 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
     from collections.abc import Set as AbstractSet
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from sqlspec.config import AsyncConfigT, DatabaseConfigProtocol, SyncConfigT
     from sqlspec.data_dictionary import TableMetadata
@@ -2125,14 +2125,35 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         for version_num in sorted(retained_reconcile):
             self.tracker.remove_migration(driver, version_num)
 
-    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AbstractContextManager[None]":
-        """Return a tracker lock context for mutating commands or a no-op context."""
+    @contextmanager
+    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "Iterator[None]":
+        """Hold a tracker lock and preserve outer SQLite transactions across step commits.
+
+        Yields:
+            Control to the caller under the active migration lock context.
+        """
         if dry_run:
-            return nullcontext()
+            yield
+            return
         acquire_lock = getattr(self.tracker, "acquire_lock", None)
-        if callable(acquire_lock):
-            return cast("AbstractContextManager[None]", acquire_lock(driver))
-        return nullcontext()
+        if not callable(acquire_lock):
+            yield
+            return
+        lock_cm = cast("Any", acquire_lock(driver))
+        with lock_cm:
+            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_lock(driver):
+                with self.runner.outer_lock(driver):
+                    step_error: BaseException | None = None
+                    try:
+                        yield
+                    except BaseException as exc:
+                        step_error = exc
+                    if step_error is not None:
+                        if self.runner.consume_savepoint_recovery(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                            driver.commit()
+                        raise step_error
+            else:
+                yield
 
     def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""
@@ -3303,14 +3324,35 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         for version_num in sorted(retained_reconcile):
             await self.tracker.remove_migration(driver, version_num)
 
-    def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AbstractAsyncContextManager[None]":
-        """Return an async tracker lock context for mutating commands or a no-op context."""
+    @asynccontextmanager
+    async def _lock_context(self, driver: Any, *, dry_run: bool = False) -> "AsyncIterator[None]":
+        """Hold an async tracker lock and preserve outer SQLite transactions across step commits.
+
+        Yields:
+            Control to the caller under the active async migration lock context.
+        """
         if dry_run:
-            return nullcontext()
+            yield
+            return
         acquire_lock = getattr(self.tracker, "acquire_lock", None)
-        if callable(acquire_lock):
-            return cast("AbstractAsyncContextManager[None]", acquire_lock(driver))
-        return nullcontext()
+        if not callable(acquire_lock):
+            yield
+            return
+        lock_cm = cast("Any", acquire_lock(driver))
+        async with lock_cm:
+            if isinstance(self.tracker, BaseMigrationTracker) and self.tracker.holds_transaction_lock(driver):
+                with self.runner.outer_lock(driver):
+                    step_error: BaseException | None = None
+                    try:
+                        yield
+                    except BaseException as exc:
+                        step_error = exc
+                    if step_error is not None:
+                        if self.runner.consume_savepoint_recovery(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                            await driver.commit()
+                        raise step_error
+            else:
+                yield
 
     async def _validate_migration_schema(self, driver: Any) -> None:
         """Validate the configured migration schema exists before issuing DDL."""

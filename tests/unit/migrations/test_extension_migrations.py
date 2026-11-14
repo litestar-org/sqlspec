@@ -655,8 +655,6 @@ def test_adbc_driver_and_runner_implicit_transaction_detection() -> None:
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 async def test_reconciler_downgrade_runs_only_at_base_not_step_back(tmp_path: Path, is_async: bool) -> None:
     """downgrade('-1') preserves reconciled extension tables while downgrade('base') drops them."""
-    from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
-
     core_dir = tmp_path / "migrations"
     core_dir.mkdir()
     (core_dir / "0001_core.sql").write_text(

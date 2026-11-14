@@ -15,9 +15,9 @@ __all__ = (
 
 _SQL_REDACT_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
-    r"|(?P<dquote>\"(?:\"\"|[^\"])*(?:\"|\Z))"
+    r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
     r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
-    r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?:''|\\.|[^'\\])*(?:'|\Z))"
+    r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
 )
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
