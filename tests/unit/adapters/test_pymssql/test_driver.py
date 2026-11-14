@@ -431,8 +431,7 @@ def test_set_migration_session_schema_raises_pending_exception_when_row_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Deferred exception checks still run when no identity row is returned."""
-    cursor = FakeCursor()
-    cursor.fetchone_value = None
+    cursor = FakeCursor(rows=[])
     conn = FakeConnection(cursor)
     driver = PymssqlDriver(cast("Any", conn))
     handler = driver.handle_database_exceptions()

@@ -730,7 +730,8 @@ def test_mysqlconnector_dsn_override_replaces_inherited_primary_endpoint(
         replicas=[{override_key: "mysql://u2:p2@rep2:3308/d2"}],
     )
     replica = primary.replica_groups["default"].configs[0]
-    derived = primary.derive_pool(**{override_key: "mysql://u3:p3@rep3:3309/d3"})
+    override_kwargs: dict[str, Any] = {override_key: "mysql://u3:p3@rep3:3309/d3"}
+    derived = primary.derive_pool(**override_kwargs)
 
     assert replica.connection_config["user"] == "u2"
     assert replica.connection_config["password"] == "p2"
