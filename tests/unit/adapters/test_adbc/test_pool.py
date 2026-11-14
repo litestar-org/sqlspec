@@ -609,3 +609,51 @@ def test_adbc_config_provide_maps_native_connect_error(monkeypatch: pytest.Monke
         with getattr(config, method)():
             pass
     assert mapped_exc.value.__cause__ is native
+
+
+def test_adbc_provide_connection_routes_through_pool_and_discards_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provide_connection reuses pooled leases, enforces max_size, and discards failed leases."""
+    seed = MagicMock()
+    lease_a, lease_b = MagicMock(), MagicMock()
+    seed.adbc_clone.side_effect = [lease_a, lease_b]
+    monkeypatch.setattr(adbc_config_module, "resolve_driver_connect_func", lambda *_a: lambda **__: seed)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_postgresql", "uri": "postgresql://localhost/app"},
+        pool_config={"max_size": 1, "timeout": 0},
+    )
+    try:
+        with config.provide_connection() as first:
+            assert first is lease_a
+            with pytest.raises(ConnectionTimeoutError):
+                with config.provide_connection():
+                    pass
+
+        lease_a.close.assert_not_called()
+
+        with config.provide_connection() as reused:
+            assert reused is lease_a
+
+        with pytest.raises(RuntimeError, match="boom"):
+            with config.provide_connection() as broken:
+                assert broken is lease_a
+                raise RuntimeError("boom")
+
+        assert lease_a.rollback.call_count == 3
+        lease_a.close.assert_called_once_with()
+
+        with config.provide_connection() as replaced:
+            assert replaced is lease_b
+    finally:
+        config.close_pool()
+
+
+def test_adbc_provide_connection_unpooled_closes_owned_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unpooled provide_connection still creates and closes one-off owned connections."""
+    conn = MagicMock()
+    monkeypatch.setattr(adbc_config_module, "resolve_driver_connect_func", lambda *_a: lambda **__: conn)
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
+    assert config.provide_pool() is None
+    with config.provide_connection() as acquired:
+        assert acquired is conn
+    conn.close.assert_called_once_with()

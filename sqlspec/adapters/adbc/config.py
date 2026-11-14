@@ -242,14 +242,20 @@ class AdbcDriverFeatures(TypedDict):
 class AdbcConnectionContext(SyncPoolConnectionContext):
     """Context manager for ADBC connections."""
 
-    __slots__ = ("_connection",)
+    __slots__ = ("_connection", "_origin_pool")
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
         self._connection: AdbcConnection | None = None
+        self._origin_pool: AdbcConnectionPool | None = None
 
     def __enter__(self) -> "AdbcConnection":
-        connection = _acquire_adbc_connection(self._config)
+        self._origin_pool = self._config.provide_pool()
+        try:
+            connection = _acquire_adbc_connection(self._config, self._origin_pool)
+        except BaseException:
+            self._origin_pool = None
+            raise
         self._connection = connection
         return connection
 
@@ -258,8 +264,11 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
     ) -> bool | None:
         if self._connection is not None:
             connection = self._connection
+            pool, self._origin_pool = self._origin_pool, None
             self._connection = None
-            if connection is not self._config.connection_instance:
+            if pool is not None:
+                pool.release(connection, discard=exc_type is not None)
+            elif connection is not self._config.connection_instance:
                 connection.close()
             else:
                 _rollback_connection_instance(self._config, connection, exc_type)
