@@ -59,6 +59,7 @@ jobs:
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            PIP_CONSTRAINT=/project/build-constraints.txt
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
           CIBW_TEST_COMMAND: >-

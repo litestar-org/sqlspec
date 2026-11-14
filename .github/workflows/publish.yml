@@ -131,6 +131,9 @@ jobs:
           # Base build deps; PGO blocks below override on Linux + macOS.
           # build-constraints.txt is produced from uv.lock so hatch-mypyc / mypy /
           # hatchling versions track the locked dev environment.
+          CIBW_BEFORE_ALL_MACOS: "cp {project}/build-constraints.txt /tmp/sqlspec-build-constraints.txt"
+          CIBW_BEFORE_ALL_WINDOWS: >-
+            python -c "import shutil; shutil.copyfile('{project}/build-constraints.txt', 'C:/sqlspec-build-constraints.txt')"
           CIBW_BEFORE_BUILD: "pip install -c {project}/build-constraints.txt hatch-mypyc hatchling"
 
           CIBW_TEST_REQUIRES: "aiosqlite pymssql cloud-sql-python-connector google-cloud-alloydb-connector"
@@ -160,6 +163,7 @@ jobs:
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=/tmp/sqlspec-mypyc-build
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            PIP_CONSTRAINT=/project/build-constraints.txt
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
           # ── macOS (Clang): plain mypyc, no PGO ──
@@ -172,12 +176,14 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            PIP_CONSTRAINT=/tmp/sqlspec-build-constraints.txt
 
           # ── Windows (MSVC): plain mypyc, no PGO ──
           CIBW_ENVIRONMENT_WINDOWS: >-
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR=C:/b
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
+            PIP_CONSTRAINT=C:/sqlspec-build-constraints.txt
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
