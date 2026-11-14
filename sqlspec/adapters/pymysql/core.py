@@ -96,6 +96,12 @@ _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]]
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
     "23502": (NotNullViolationError, "not-null constraint violation"),
     "23514": (CheckViolationError, "check constraint violation"),
+    "42S02": (OperationalError, "table does not exist"),
+    "42S22": (OperationalError, "column does not exist"),
+}
+_MYSQL_OPERATIONAL_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1146: (OperationalError, "table does not exist"),
+    1054: (OperationalError, "column does not exist"),
 }
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
@@ -122,6 +128,7 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    1290: (PermissionDeniedError, "read-only server"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -517,6 +524,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
     if sqlstate_prefix == "40":
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
+    dispatch = _MYSQL_OPERATIONAL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     if sqlstate_prefix == "42":

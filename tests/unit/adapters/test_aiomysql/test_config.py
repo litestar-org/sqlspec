@@ -367,7 +367,9 @@ def test_aiomysqlconfig_replica_shorthands_preserve_overrides() -> None:
     assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
     assert replicas[1].connection_config["host"] == "standby"
     assert replicas[1].connection_config["port"] == 3308
-    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert "init_command" not in replicas[0].connection_config
+    assert "read_only" not in replicas[0].connection_config
+    assert replicas[0]._read_only is True
     assert config.connection_config["host"] == "writer"
 
 
@@ -471,6 +473,16 @@ async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(m
     assert seen[0].connection is _DETACHED_CONNECTION
 
 
+def _make_aiomysql_mock_conn() -> MagicMock:
+    cursor = MagicMock(execute=AsyncMock(), close=AsyncMock())
+    return MagicMock(
+        closed=False,
+        get_autocommit=MagicMock(return_value=True),
+        rollback=AsyncMock(),
+        cursor=AsyncMock(return_value=cursor),
+    )
+
+
 @pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
 @pytest.mark.parametrize(
     ("driver_exc", "expected_mapped"),
@@ -484,7 +496,7 @@ async def test_aiomysql_read_replica_failover_maps_driver_errors(
     monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
 ) -> None:
     """Replica pool creation and acquire errors map to failover-eligible SQLSpec exceptions."""
-    healthy_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    healthy_conn = _make_aiomysql_mock_conn()
     acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=healthy_conn), __aexit__=AsyncMock(return_value=None))
     healthy_pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
 
@@ -510,7 +522,7 @@ async def test_aiomysql_read_replica_failover_maps_driver_errors(
 
 async def test_aiomysql_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """User hook RuntimeError during acquisition propagates without triggering replica failover."""
-    hook_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    hook_conn = _make_aiomysql_mock_conn()
     acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=hook_conn), __aexit__=AsyncMock(return_value=None))
     pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
     monkeypatch.setattr(aiomysql, "create_pool", AsyncMock(return_value=pool))
@@ -529,3 +541,40 @@ async def test_aiomysql_on_connection_create_runtime_error_not_swallowed(monkeyp
         async with config.provide_read_session():
             pass
     assert attempted == ["called"]
+
+
+@pytest.mark.parametrize("read_only", [True, False])
+async def test_aiomysql_replica_applies_session_read_only_without_mutating_init_command(
+    monkeypatch: pytest.MonkeyPatch, read_only: bool
+) -> None:
+    """Read-only replicas execute SET SESSION TRANSACTION READ ONLY once before user hook."""
+    events: list[str] = []
+    cursor = MagicMock(execute=AsyncMock(side_effect=lambda sql: events.append(f"sql:{sql}")), close=AsyncMock())
+    replica_conn = MagicMock(
+        closed=False,
+        get_autocommit=MagicMock(return_value=True),
+        rollback=AsyncMock(),
+        cursor=AsyncMock(return_value=cursor),
+    )
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=replica_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+    monkeypatch.setattr(aiomysql, "create_pool", AsyncMock(return_value=pool))
+
+    async def on_create(_conn: Any) -> None:
+        events.append("hook")
+
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "init_command": "SET @probe = 1"},
+        driver_features={"on_connection_create": on_create},
+        replicas=[{"host": "reader", "read_only": read_only}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+
+    async with config.provide_read_session():
+        pass
+    async with config.provide_read_session():
+        pass
+
+    expected = ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] if read_only else ["hook"]
+    assert events == expected

@@ -38,7 +38,6 @@ __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
     "_resolve_column_types",
-    "append_read_only_init_command",
     "apply_driver_features",
     "build_gtid_wait_query",
     "build_insert_statement",
@@ -89,6 +88,10 @@ _MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     1091: (OperationalError, "cannot drop column or key"),
 }
 _MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "23505": (UniqueViolationError, "unique constraint violation"),
+    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
+    "23502": (NotNullViolationError, "not-null constraint violation"),
+    "23514": (CheckViolationError, "check constraint violation"),
     "42S02": (OperationalError, "table does not exist"),
     "42S22": (OperationalError, "column does not exist"),
 }
@@ -121,6 +124,7 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
+    1290: (PermissionDeniedError, "read-only server"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -723,23 +727,6 @@ def merge_derive_overrides(
     return result
 
 
-def append_read_only_init_command(existing: str | None) -> str:
-    """Append session read-only mode once.
-
-    Args:
-        existing: Existing initialization SQL.
-
-    Returns:
-        SQL preserving existing initialization statements.
-    """
-    command = "SET SESSION TRANSACTION READ ONLY"
-    if not existing:
-        return command
-    if command in " ".join(existing.upper().split()):
-        return existing
-    return existing.rstrip().rstrip(";") + "; " + command
-
-
 def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
     """Parse explicit MySQL or MariaDB replica endpoints.
 
@@ -873,6 +860,10 @@ def _create_mysql_error(
 
 driver_profile = build_profile()
 
+_MYSQL_NEWDECIMAL_CODE: Final[int] = 246
+_MYSQL_DECIMAL_MIN_LEN: Final[int] = 6
+_DECIMAL_MAX_PRECISION: Final[int] = 76
+
 _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
     0: "decimal",
     1: "int32",
@@ -892,6 +883,22 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 }
 
 
+def _decimal_token(col: Any) -> str:
+    """Resolve a MySQL NEWDECIMAL field descriptor to an exact or fallback decimal token."""
+    if not isinstance(col, (tuple, list)) or len(col) < _MYSQL_DECIMAL_MIN_LEN:
+        return "decimal"
+    raw_length = col[4]
+    raw_scale = col[5]
+    if isinstance(raw_length, bool) or not isinstance(raw_length, int):
+        return "decimal"
+    if isinstance(raw_scale, bool) or not isinstance(raw_scale, int):
+        return "decimal"
+    precision = raw_length - (1 if raw_scale else 0)
+    if 1 <= precision <= _DECIMAL_MAX_PRECISION and 0 <= raw_scale <= precision:
+        return f"decimal({precision},{raw_scale})"
+    return "decimal"
+
+
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":
     """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
 
@@ -902,9 +909,13 @@ def _resolve_column_types(description: Any) -> "dict[str, str] | None":
         return None
     column_types: dict[str, str] = {}
     for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
+        type_code = col[1]
+        if type_code == _MYSQL_NEWDECIMAL_CODE:
+            column_types[col[0]] = _decimal_token(col)
+        else:
+            token = _MYSQL_TYPE_CODE_TOKENS.get(type_code)
+            if token is not None:
+                column_types[col[0]] = token
     return column_types or None
 
 

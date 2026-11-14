@@ -600,7 +600,9 @@ def test_mysqlconnectorsyncconfig_replica_shorthands_preserve_overrides() -> Non
     assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
     assert replicas[1].connection_config["host"] == "standby"
     assert replicas[1].connection_config["port"] == 3308
-    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert "init_command" not in replicas[0].connection_config
+    assert "read_only" not in replicas[0].connection_config
+    assert replicas[0]._read_only is True
     assert config.connection_config["host"] == "writer"
 
 
@@ -642,7 +644,9 @@ def test_mysqlconnectorasyncconfig_replica_shorthands_preserve_overrides() -> No
     assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
     assert replicas[1].connection_config["host"] == "standby"
     assert replicas[1].connection_config["port"] == 3308
-    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert "init_command" not in replicas[0].connection_config
+    assert "read_only" not in replicas[0].connection_config
+    assert replicas[0]._read_only is True
     assert config.connection_config["host"] == "writer"
 
 
@@ -829,6 +833,18 @@ def test_mysqlconnector_async_derived_pools_own_distinct_native_names_and_readon
     assert primary.connection_config["pool_reset_session"] is True
 
 
+def _make_mysqlconnector_async_mock_conn() -> MagicMock:
+    cursor = MagicMock(execute=AsyncMock(), close=AsyncMock())
+    return MagicMock(
+        autocommit=True,
+        in_transaction=False,
+        _cnx=MagicMock(unread_result=False),
+        cursor=AsyncMock(return_value=cursor),
+        close=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+
 @pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
 @pytest.mark.parametrize(
     ("driver_exc", "expected_mapped"),
@@ -843,7 +859,13 @@ def test_mysqlconnector_sync_read_replica_failover_maps_driver_errors(
     monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
 ) -> None:
     """Sync pool creation and acquire errors map to SQLSpec errors and fail over replicas."""
-    healthy_conn = MagicMock(autocommit=True, in_transaction=False, close=MagicMock(), rollback=MagicMock())
+    healthy_conn = MagicMock(
+        autocommit=True,
+        in_transaction=False,
+        _cnx=MagicMock(unread_result=False),
+        close=MagicMock(),
+        rollback=MagicMock(),
+    )
 
     def fake_pool(**kwargs: Any) -> Any:
         if kwargs.get("host") == "r1":
@@ -877,7 +899,7 @@ async def test_mysqlconnector_async_read_replica_failover_maps_driver_errors(
     monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
 ) -> None:
     """Async pool creation and acquire errors map to SQLSpec errors and fail over replicas."""
-    healthy_conn = MagicMock(autocommit=True, in_transaction=False, close=AsyncMock(), rollback=AsyncMock())
+    healthy_conn = _make_mysqlconnector_async_mock_conn()
 
     def fake_async_pool(**kwargs: Any) -> Any:
         if kwargs.get("host") == "r1":
@@ -901,7 +923,13 @@ async def test_mysqlconnector_async_read_replica_failover_maps_driver_errors(
 
 def test_mysqlconnector_sync_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """User hook RuntimeError propagates through sync provide_read_session without failover."""
-    hook_conn = MagicMock(autocommit=True, in_transaction=False, close=MagicMock(), rollback=MagicMock())
+    hook_conn = MagicMock(
+        autocommit=True,
+        in_transaction=False,
+        _cnx=MagicMock(unread_result=False),
+        close=MagicMock(),
+        rollback=MagicMock(),
+    )
     monkeypatch.setattr(
         mysqlconnector_config_module,
         "MysqlConnectorConnectionPool",
@@ -919,3 +947,82 @@ def test_mysqlconnector_sync_hook_runtime_error_not_swallowed(monkeypatch: pytes
     with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
         pass
     hook_conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize(("pool_reset_session", "expected_calls"), [(False, 1), (True, 2)])
+def test_mysqlconnector_sync_replica_session_read_only_across_checkouts(
+    monkeypatch: pytest.MonkeyPatch, pool_reset_session: bool, expected_calls: int
+) -> None:
+    """Sync replicas set read-only before hook and re-apply it on checkout when pool_reset_session is enabled."""
+    events: list[str] = []
+    raw_cnx = MagicMock(unread_result=False)
+    cursor = MagicMock(execute=MagicMock(side_effect=lambda sql: events.append(f"sql:{sql}")), close=MagicMock())
+    replica_conn = MagicMock(
+        autocommit=True,
+        in_transaction=False,
+        _cnx=raw_cnx,
+        cursor=MagicMock(return_value=cursor),
+        close=MagicMock(),
+        rollback=MagicMock(),
+    )
+    monkeypatch.setattr(
+        mysqlconnector_config_module,
+        "MysqlConnectorConnectionPool",
+        lambda **_kwargs: MagicMock(get_connection=MagicMock(return_value=replica_conn)),
+    )
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"host": "writer", "init_command": "SET @probe = 1"},
+        driver_features={"on_connection_create": lambda _c: events.append("hook")},
+        replicas=[{"host": "reader", "pool_reset_session": pool_reset_session}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+
+    with config.provide_read_session():
+        pass
+    with config.provide_read_session():
+        pass
+
+    assert events == ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] * expected_calls
+
+
+@pytest.mark.parametrize(("pool_reset_session", "expected_calls"), [(False, 1), (True, 2)])
+async def test_mysqlconnector_async_replica_session_read_only_across_checkouts(
+    monkeypatch: pytest.MonkeyPatch, pool_reset_session: bool, expected_calls: int
+) -> None:
+    """Async replicas set read-only before hook and re-apply it on checkout when pool_reset_session is enabled."""
+    events: list[str] = []
+    raw_cnx = MagicMock(unread_result=False)
+    cursor = MagicMock(execute=AsyncMock(side_effect=lambda sql: events.append(f"sql:{sql}")), close=AsyncMock())
+    replica_conn = MagicMock(
+        autocommit=True,
+        in_transaction=False,
+        _cnx=raw_cnx,
+        cursor=AsyncMock(return_value=cursor),
+        close=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        mysqlconnector_config_module,
+        "MysqlConnectorAsyncPool",
+        lambda **_kwargs: MagicMock(initialize_pool=AsyncMock(), get_connection=AsyncMock(return_value=replica_conn)),
+    )
+
+    async def on_create(_conn: Any) -> None:
+        events.append("hook")
+
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"host": "writer", "init_command": "SET @probe = 1"},
+        driver_features={"on_connection_create": on_create},
+        replicas=[{"host": "reader", "pool_reset_session": pool_reset_session}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+
+    async with config.provide_read_session():
+        pass
+    async with config.provide_read_session():
+        pass
+
+    assert events == ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] * expected_calls

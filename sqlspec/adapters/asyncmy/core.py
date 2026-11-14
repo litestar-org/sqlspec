@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 __all__ = (
     "AsyncmyStreamSource",
     "_resolve_column_types",
-    "append_read_only_init_command",
     "apply_driver_features",
     "build_gtid_wait_query",
     "build_insert_statement",
@@ -92,7 +91,18 @@ _MYSQL_DDL_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     1061: (OperationalError, "duplicate key name"),
     1091: (OperationalError, "cannot drop column or key"),
 }
-_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {}
+_MYSQL_SQLSTATE_EXACT_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "23505": (UniqueViolationError, "unique constraint violation"),
+    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
+    "23502": (NotNullViolationError, "not-null constraint violation"),
+    "23514": (CheckViolationError, "check constraint violation"),
+    "42S02": (OperationalError, "table does not exist"),
+    "42S22": (OperationalError, "column does not exist"),
+}
+_MYSQL_OPERATIONAL_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1146: (OperationalError, "table does not exist"),
+    1054: (OperationalError, "column does not exist"),
+}
 _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23": (IntegrityError, "integrity constraint violation"),
     "28": (PermissionDeniedError, "authorization error"),
@@ -100,10 +110,6 @@ _MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]
     "42": (SQLParsingError, "SQL syntax error"),
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),
-}
-_MYSQL_SYNTAX_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
-    1054: (SQLParsingError, "unknown column"),
-    1146: (SQLParsingError, "table does not exist"),
 }
 _MYSQL_CONSTRAINT_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_DUP_ENTRY: (UniqueViolationError, "unique constraint violation"),
@@ -123,7 +129,6 @@ _MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] =
     MYSQL_ER_ACCESS_DENIED: (PermissionDeniedError, "access denied"),
     MYSQL_ER_TABLEACCESS_DENIED: (PermissionDeniedError, "access denied"),
     1290: (PermissionDeniedError, "read-only server"),
-    1836: (PermissionDeniedError, "read-only mode"),
 }
 _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
@@ -519,7 +524,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    dispatch = _MYSQL_SYNTAX_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    dispatch = _MYSQL_OPERATIONAL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
@@ -559,7 +564,9 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql, dialect="mysql")}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    if len(keep) == sql.count("%"):
+        return sql
+    return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
 def build_load_data_statement(table: str, columns: "list[str]") -> str:
@@ -626,23 +633,6 @@ def merge_derive_overrides(
     if clear_pool_name and "pool_name" not in overrides:
         result.pop("pool_name", None)
     return result
-
-
-def append_read_only_init_command(existing: str | None) -> str:
-    """Append session read-only mode once.
-
-    Args:
-        existing: Existing initialization SQL.
-
-    Returns:
-        SQL preserving existing initialization statements.
-    """
-    command = "SET SESSION TRANSACTION READ ONLY"
-    if not existing:
-        return command
-    if command in " ".join(existing.upper().split()):
-        return existing
-    return existing.rstrip().rstrip(";") + "; " + command
 
 
 def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:

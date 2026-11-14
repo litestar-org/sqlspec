@@ -145,13 +145,13 @@ async def test_asyncmy_execute_cache_hit_invokes_collect_rows_on_clean_query(mon
 def test_asyncmy_mapped_exceptions_without_sqlstate() -> None:
     """Explicit MySQL errnos map correctly even when exception object lacks sqlstate."""
     from sqlspec.adapters.asyncmy.core import create_mapped_exception
-    from sqlspec.exceptions import DatabaseConnectionError, ReadOnlyTransactionError, SQLParsingError
+    from sqlspec.exceptions import DatabaseConnectionError, OperationalError, ReadOnlyTransactionError
 
     class _FakeErr(Exception):
         pass
 
-    assert isinstance(create_mapped_exception(_FakeErr(1054, "Unknown column")), SQLParsingError)
-    assert isinstance(create_mapped_exception(_FakeErr(1146, "Table doesn't exist")), SQLParsingError)
+    assert isinstance(create_mapped_exception(_FakeErr(1054, "Unknown column")), OperationalError)
+    assert isinstance(create_mapped_exception(_FakeErr(1146, "Table doesn't exist")), OperationalError)
     assert isinstance(create_mapped_exception(_FakeErr(1040, "Too many connections")), DatabaseConnectionError)
     assert isinstance(
         create_mapped_exception(_FakeErr(1290, "The MySQL server is running with the --read-only option")),

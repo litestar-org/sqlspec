@@ -18,7 +18,6 @@ from sqlspec.exceptions import (
     QueryTimeoutError,
     ReadOnlyTransactionError,
     SQLParsingError,
-    SQLSpecError,
     UniqueViolationError,
 )
 
@@ -139,7 +138,7 @@ def test_mysql_handler_records_mapped_ddl_error(module_path: str, handler_name: 
         (1836, None, "read-only server", ReadOnlyTransactionError),
         (1290, None, "The MySQL server is running with --read-only", ReadOnlyTransactionError),
         (1290, None, "The MySQL server is running with --super_read_only", ReadOnlyTransactionError),
-        (1290, None, "The MySQL server is running with --secure-file-priv", SQLSpecError),
+        (1290, None, "The MySQL server is running with --secure-file-priv", PermissionDeniedError),
         (None, "25006", "read-only transaction", ReadOnlyTransactionError),
     ],
 )
@@ -148,8 +147,31 @@ def test_mysql_readonly_error_qualification(
 ) -> None:
     error = FakeMysqlError(code, message, errno=code, sqlstate=sqlstate)
     result = importlib.import_module(module_path).create_mapped_exception(error)
-    if code == 1290 and "secure-file-priv" in message and module_path == "sqlspec.adapters.asyncmy.core":
-        expected = PermissionDeniedError
+    assert type(result) is expected
+    assert result.__cause__ is error
+
+
+@pytest.mark.parametrize("module_path", MODULE_PATHS)
+@pytest.mark.parametrize(
+    ("code", "sqlstate", "expected"),
+    [
+        (1146, "42S02", OperationalError),
+        (1054, "42S22", OperationalError),
+        (1146, None, OperationalError),
+        (1054, None, OperationalError),
+        (None, "42S02", OperationalError),
+        (None, "42S22", OperationalError),
+        (None, "23505", UniqueViolationError),
+        (None, "23503", ForeignKeyViolationError),
+        (None, "23502", NotNullViolationError),
+        (None, "23514", CheckViolationError),
+    ],
+)
+def test_mysql_operational_and_sqlstate_mapping_parity(
+    module_path: str, code: int | None, sqlstate: str | None, expected: type[Exception]
+) -> None:
+    error = _make_error(code, sqlstate=sqlstate)
+    result = importlib.import_module(module_path).create_mapped_exception(error)
     assert type(result) is expected
     assert result.__cause__ is error
 

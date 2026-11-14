@@ -353,6 +353,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         **kwargs: Any,
     ) -> None:
         connection_config = build_connection_config(connection_config)
+        explicit_read_only = connection_config.pop("read_only", None)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -361,6 +362,11 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         self._user_connection_hook: Callable[[PyMysqlConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        is_replica_read_only = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
+        self._read_only: bool = bool(explicit_read_only) if explicit_read_only is not None else is_replica_read_only
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("local_infile"):
@@ -440,7 +446,9 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
         connection.update(values)
         read_only = connection.pop("read_only", read_only)
-        connection["read_only"] = read_only is not False
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
         forwarded["connection_config_overrides"] = connection
         return forwarded
 
@@ -486,7 +494,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        read_only = config.pop("read_only", False)
+        read_only = bool(config.pop("read_only", False)) or self._read_only
         connection_factory = None
         if self.driver_features.get("enable_cloud_sql", False):
             connection_factory = self._setup_cloud_sql_connector(config)

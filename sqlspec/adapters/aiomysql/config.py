@@ -17,7 +17,6 @@ from sqlspec.adapters.aiomysql._typing import (
     AiomysqlSessionContext,
 )
 from sqlspec.adapters.aiomysql.core import (
-    append_read_only_init_command,
     apply_driver_features,
     create_mapped_exception,
     default_statement_config,
@@ -289,7 +288,7 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
 class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", AiomysqlDriver]):
     """Configuration for aiomysql database connections."""
 
-    __slots__ = ("_initialized_connections", "_user_connection_hook")
+    __slots__ = ("_initialized_connections", "_read_only", "_user_connection_hook")
 
     driver_type: ClassVar[type[AiomysqlDriver]] = AiomysqlDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AiomysqlConnection)
@@ -340,6 +339,10 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[AiomysqlConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
+        )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
         )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
@@ -440,10 +443,9 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
         connection.update(values)
         read_only = connection.pop("read_only", read_only)
-        if read_only is not False:
-            connection["init_command"] = append_read_only_init_command(
-                connection.get("init_command", self.connection_config.get("init_command"))
-            )
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
         forwarded["connection_config_overrides"] = connection
         return forwarded
 
@@ -473,14 +475,22 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         return pool_kwargs
 
     async def _ensure_connection(self, connection: "AiomysqlConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection.
+        """Ensure read-only session state and connection callback run once per physical connection.
 
-        Uses WeakSet tracking to ensure the callback runs once per physical connection.
+        Uses WeakSet tracking to ensure initialization runs once per physical connection.
         """
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         if connection not in self._initialized_connections:
-            await self._user_connection_hook(connection)
+            if self._read_only:
+                try:
+                    async with AiomysqlCursor(connection) as cursor:
+                        await cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
             self._initialized_connections.add(connection)
 
     async def _close_pool(self) -> None:

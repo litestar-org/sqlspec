@@ -20,7 +20,6 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorSyncSessionContext,
 )
 from sqlspec.adapters.mysqlconnector.core import (
-    append_read_only_init_command,
     apply_driver_features,
     create_mapped_exception,
     default_statement_config,
@@ -442,6 +441,10 @@ class MysqlConnectorSyncConfig(
         self._user_connection_hook: Callable[[MysqlConnectorSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
@@ -525,25 +528,32 @@ class MysqlConnectorSyncConfig(
         connection.update(values)
         read_only = connection.pop("read_only", read_only)
         if read_only is not False:
-            connection["init_command"] = append_read_only_init_command(
-                connection.get("init_command", self.connection_config.get("init_command"))
-            )
             connection.setdefault("pool_reset_session", False)
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
         forwarded["connection_config_overrides"] = connection
         return forwarded
 
     def _ensure_connection(self, connection: "MysqlConnectorSyncConnection") -> None:
         """Initialize connection state after creation or a native session reset."""
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         underlying = getattr(connection, "_cnx", None)
-        if underlying is not None and self.connection_config.get("pool_reset_session", True):
-            self._user_connection_hook(connection)
-            return
-        underlying = underlying or connection
-        if underlying not in self._initialized_connections:
-            self._user_connection_hook(connection)
-            self._initialized_connections.add(underlying)
+        should_reset_init = underlying is not None and self.connection_config.get("pool_reset_session", True)
+        tracking_key = underlying or connection
+        if should_reset_init or tracking_key not in self._initialized_connections:
+            if self._read_only:
+                try:
+                    with MysqlConnectorSyncCursor(connection) as cursor:
+                        cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                self._user_connection_hook(connection)
+            if not should_reset_init:
+                self._initialized_connections.add(tracking_key)
 
     def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
@@ -635,6 +645,10 @@ class MysqlConnectorAsyncConfig(
         self._user_connection_hook: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]] | None = (
             features_dict.pop("on_connection_create", None)
         )
+        replica_read_only = features_dict.pop("_replica_read_only", None)
+        self._read_only: bool = (
+            bool(kwargs.get("is_replica", False)) if replica_read_only is None else bool(replica_read_only)
+        )
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["allow_local_infile"])
         if features_dict.get("enable_local_infile_bulk_load") and not connection_config.get("allow_local_infile"):
@@ -711,10 +725,10 @@ class MysqlConnectorAsyncConfig(
         connection.update(values)
         read_only = connection.pop("read_only", read_only)
         if read_only is not False:
-            connection["init_command"] = append_read_only_init_command(
-                connection.get("init_command", self.connection_config.get("init_command"))
-            )
             connection.setdefault("pool_reset_session", False)
+        driver_features_overrides = dict(forwarded.get("driver_features_overrides") or {})
+        driver_features_overrides["_replica_read_only"] = read_only is not False
+        forwarded["driver_features_overrides"] = driver_features_overrides
         forwarded["connection_config_overrides"] = connection
         return forwarded
 
@@ -751,16 +765,23 @@ class MysqlConnectorAsyncConfig(
 
     async def _ensure_connection(self, connection: "MysqlConnectorAsyncConnection") -> None:
         """Initialize connection state after creation or a native session reset."""
-        if self._user_connection_hook is None:
+        if not self._read_only and self._user_connection_hook is None:
             return
         underlying = getattr(connection, "_cnx", None)
-        if underlying is not None and self.connection_config.get("pool_reset_session", True):
-            await self._user_connection_hook(connection)
-            return
-        underlying = underlying or connection
-        if underlying not in self._initialized_connections:
-            await self._user_connection_hook(connection)
-            self._initialized_connections.add(underlying)
+        should_reset_init = underlying is not None and self.connection_config.get("pool_reset_session", True)
+        tracking_key = underlying or connection
+        if should_reset_init or tracking_key not in self._initialized_connections:
+            if self._read_only:
+                try:
+                    async with MysqlConnectorAsyncCursor(connection) as cursor:
+                        await cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                except Exception as exc:
+                    _raise_mapped_connection_error(exc)
+                    raise
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
+            if not should_reset_init:
+                self._initialized_connections.add(tracking_key)
 
     async def _acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
         """Acquire and initialize an async mysql-connector connection from pool."""

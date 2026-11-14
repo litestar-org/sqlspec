@@ -360,7 +360,9 @@ def test_pymysqlconfig_replica_shorthands_preserve_overrides() -> None:
     assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
     assert replicas[1].connection_config["host"] == "standby"
     assert replicas[1].connection_config["port"] == 3308
-    assert replicas[0].connection_config["read_only"] is True
+    assert "init_command" not in replicas[0].connection_config
+    assert "read_only" not in replicas[0].connection_config
+    assert replicas[0]._read_only is True
     assert config.connection_config["host"] == "writer"
 
 
@@ -381,7 +383,8 @@ def test_pymysqlconfig_explicit_read_write_replica_preserves_init_command() -> N
     config = PyMysqlConfig(replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}])
     replica = config.replica_groups["default"].configs[0]
     assert replica.connection_config["init_command"] == "SET @probe = 1"
-    assert replica.connection_config["read_only"] is False
+    assert "read_only" not in replica.connection_config
+    assert replica._read_only is False
 
 
 def test_pymysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
