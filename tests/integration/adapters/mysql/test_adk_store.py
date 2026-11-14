@@ -882,7 +882,9 @@ async def test_mysql_adk_reconcile_legacy_utf8mb4_unicode_ci_upgrades_and_preser
 
         preserved_session = await _call(mysql_adk_store_harness, store.get_session, "app", "user", "s-legacy")
         assert preserved_session is not None
-        assert preserved_session["state"] == {"origin": "legacy", "app:tier": "base", "user:lang": "en"}
+        assert preserved_session["state"] == {"origin": "legacy"}
+        assert await _call(mysql_adk_store_harness, store.get_app_state, "app") == {"app:tier": "base"}
+        assert await _call(mysql_adk_store_harness, store.get_user_state, "app", "user") == {"user:lang": "en"}
         preserved_events = await _call(mysql_adk_store_harness, store.get_events, "app", "user", "s-legacy")
         assert [event["id"] for event in preserved_events] == ["e-legacy"]
 
@@ -900,7 +902,11 @@ async def test_mysql_adk_reconcile_legacy_utf8mb4_unicode_ci_upgrades_and_preser
 
         lower_again = await _call(mysql_adk_store_harness, store.get_session, "app", "user", "s-legacy")
         assert lower_again is not None
-        assert lower_again["state"] == {"origin": "legacy", "app:tier": "base", "user:lang": "en"}
+        assert lower_again["state"] == {"origin": "legacy"}
+        assert await _call(mysql_adk_store_harness, store.get_app_state, "app") == {"app:tier": "base"}
+        assert await _call(mysql_adk_store_harness, store.get_app_state, "App") == {"app:tier": "pro"}
+        assert await _call(mysql_adk_store_harness, store.get_user_state, "app", "user") == {"user:lang": "en"}
+        assert await _call(mysql_adk_store_harness, store.get_user_state, "App", "user ") == {"user:lang": "fr"}
     finally:
         await _drop_tables_safely(
             mysql_adk_store_harness,

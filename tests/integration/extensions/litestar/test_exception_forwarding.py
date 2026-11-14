@@ -219,6 +219,7 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
     @get("/ok")
     async def ok_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
         await db_connection.execute("INSERT INTO litestar_psycopg_items (name) VALUES (%s)", ("healthy",))
+        await db_connection.commit()
         return {"status": "ok"}
 
     app = Litestar(route_handlers=[raise_route, ok_route], plugins=[plugin], debug=True)
@@ -238,8 +239,10 @@ def test_psycopg_injected_connection_rolls_back_on_raise(postgres_service: "Post
     assert rows == ["healthy"]
 
 
-def test_psycopg_injected_connection_clean_return_commits(postgres_service: "PostgresService") -> None:
-    """Psycopg injected connection in manual mode commits uncommitted work on clean return."""
+def test_psycopg_injected_connection_manual_rolls_back_uncommitted_and_persists_commit(
+    postgres_service: "PostgresService",
+) -> None:
+    """Psycopg injected connection in manual mode discards uncommitted writes and keeps explicit commits."""
     pytest.importorskip("psycopg")
     pytest.importorskip("psycopg_pool")
     from sqlspec.adapters.psycopg import PsycopgAsyncConfig
@@ -261,24 +264,32 @@ def test_psycopg_injected_connection_clean_return_commits(postgres_service: "Pos
     spec.add_config(config)
     plugin = SQLSpecPlugin(sqlspec=spec)
 
-    @get("/clean")
-    async def clean_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
-        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("clean_work",))
-        return {"status": "clean"}
+    @get("/uncommitted")
+    async def uncommitted_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
+        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("uncommitted_work",))
+        return {"status": "uncommitted"}
 
-    app = Litestar(route_handlers=[clean_route], plugins=[plugin], debug=True)
+    @get("/committed")
+    async def committed_route(db_connection: NamedDependency[Any]) -> dict[str, str]:
+        await db_connection.execute("INSERT INTO litestar_psycopg_clean (name) VALUES (%s)", ("committed_work",))
+        await db_connection.commit()
+        return {"status": "committed"}
+
+    app = Litestar(route_handlers=[uncommitted_route, committed_route], plugins=[plugin], debug=True)
 
     with TestClient(app=app, raise_server_exceptions=False) as client:
-        res = client.get("/clean")
+        res_uncommitted = client.get("/uncommitted")
+        res_committed = client.get("/committed")
 
-    assert res.status_code == 200
+    assert res_uncommitted.status_code == 200
+    assert res_committed.status_code == 200
 
     with psycopg.connect(conninfo, autocommit=True) as p_conn:
         with p_conn.cursor() as cur:
             cur.execute("SELECT name FROM litestar_psycopg_clean ORDER BY name;")
             rows = [row[0] for row in cur.fetchall()]
 
-    assert rows == ["clean_work"]
+    assert rows == ["committed_work"]
 
 
 def test_litestar_autocommit_rolls_back_when_exception_handler_returns_200(tmp_path: Path) -> None:

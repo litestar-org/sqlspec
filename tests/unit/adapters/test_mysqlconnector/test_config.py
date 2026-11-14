@@ -1026,3 +1026,57 @@ async def test_mysqlconnector_async_replica_session_read_only_across_checkouts(
         pass
 
     assert events == ["sql:SET SESSION TRANSACTION READ ONLY", "hook"] * expected_calls
+
+
+@pytest.mark.parametrize(
+    ("autocommit", "in_transaction", "expected_rollback"), [(False, False, 1), (True, False, 0), (True, True, 1)]
+)
+async def test_mysqlconnector_async_rollback_and_close_handles_async_autocommit_property(
+    autocommit: bool, in_transaction: bool, expected_rollback: int
+) -> None:
+    """Async connection release avoids sync .autocommit ProgrammingError and respects active transactions."""
+
+    class _FakeAsyncConnection:
+        def __init__(self) -> None:
+            self._autocommit = autocommit
+            self.in_transaction = in_transaction
+            self.rollback = AsyncMock()
+            self.close = AsyncMock()
+
+        @property
+        def autocommit(self) -> bool:
+            raise mc_errors.ProgrammingError(
+                "The use of async properties are not supported by Python. "
+                "Use `await get_autocommit()` to get the autocommit instead"
+            )
+
+    conn = _FakeAsyncConnection()
+    await mysqlconnector_config_module._rollback_and_close_async(conn, None)
+
+    assert conn.rollback.await_count == expected_rollback
+    conn.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("autocommit", "expected_rollback"), [(False, 1), (True, 0)])
+async def test_mysqlconnector_async_rollback_and_close_falls_back_to_get_autocommit(
+    autocommit: bool, expected_rollback: int
+) -> None:
+    """Async connection release falls back to get_autocommit when _autocommit is absent."""
+
+    class _FakeAsyncConnectionNoAttr:
+        def __init__(self) -> None:
+            self.in_transaction = False
+            self.get_autocommit = AsyncMock(return_value=autocommit)
+            self.rollback = AsyncMock()
+            self.close = AsyncMock()
+
+        @property
+        def autocommit(self) -> bool:
+            raise mc_errors.ProgrammingError("Use `await get_autocommit()` instead")
+
+    conn = _FakeAsyncConnectionNoAttr()
+    await mysqlconnector_config_module._rollback_and_close_async(conn, None)
+
+    conn.get_autocommit.assert_awaited_once()
+    assert conn.rollback.await_count == expected_rollback
+    conn.close.assert_awaited_once()

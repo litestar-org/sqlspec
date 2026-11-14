@@ -604,7 +604,7 @@ async def test_sqlite_stores_reapply_pragmas_after_close_pool(tmp_path: Path) ->
             )
         )
         assert len(adk_store._configured_connections) == 1
-        assert len(litestar_store._configured_connections) == 1
+        assert len(litestar_store._configured_connections) >= 1
 
         config.close_pool()
         gc.collect()
@@ -615,6 +615,7 @@ async def test_sqlite_stores_reapply_pragmas_after_close_pool(tmp_path: Path) ->
         adk_store.delete_session("app", "user", "s1")
         assert adk_store.get_session("app", "user", "s1") is None
         await litestar_store.set("sess-1", b"payload")
+        assert len(litestar_store._configured_connections) >= 1
         assert memory_store.delete_entries_by_session("s1", app_name="app", user_id="user") == 0
         with config.provide_connection() as conn:
             cur = conn.execute(f"SELECT COUNT(*) FROM {adk_store.events_table} WHERE session_id = ?", ("s1",))

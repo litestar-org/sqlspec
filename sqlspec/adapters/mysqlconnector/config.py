@@ -844,12 +844,39 @@ def _rollback_and_close_sync(conn: Any, exc_type: "type[BaseException] | None") 
         raise failure
 
 
+async def _async_autocommit_enabled(conn: Any) -> bool:
+    """Return whether autocommit is active on an async mysql-connector connection.
+
+    Async connections in mysql-connector raise ``ProgrammingError`` when accessing
+    the ``.autocommit`` property synchronously and expose ``await get_autocommit()``
+    and local ``_autocommit`` state instead. Treat connections with an open
+    server transaction as requiring rollback even when autocommit is enabled.
+    """
+    if getattr(conn, "in_transaction", False):
+        return False
+    try:
+        autocommit = conn.autocommit
+    except AttributeError:
+        autocommit = getattr(conn, "_autocommit", None)
+    except MysqlConnectorError:
+        autocommit = getattr(conn, "_autocommit", None)
+        if autocommit is None:
+            get_autocommit = getattr(conn, "get_autocommit", None)
+            if callable(get_autocommit):
+                autocommit = get_autocommit()
+                if isawaitable(autocommit):
+                    autocommit = await autocommit
+    if isinstance(autocommit, bool):
+        return autocommit
+    return False
+
+
 async def _rollback_and_close_async(conn: Any, exc_type: "type[BaseException] | None") -> None:
     """Roll back open async work, return the pooled wrapper, and disconnect the socket when either step fails."""
     raw_cnx = getattr(conn, "_cnx", None)
     failure: BaseException | None = None
     try:
-        if not getattr(conn, "autocommit", False):
+        if not await _async_autocommit_enabled(conn):
             await conn.rollback()
     except BaseException as exc:
         failure = exc

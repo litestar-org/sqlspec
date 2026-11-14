@@ -300,7 +300,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         )
-        SELECT $1, $2, $3, $4, $5, $6, $7
+        SELECT $1, $2::varchar(128), $3::varchar(128), $4::varchar(128), $5, $6, $7
         WHERE EXISTS (
             SELECT 1 FROM {self._session_table}
             WHERE id = $4 AND app_name = $2 AND user_id = $3
