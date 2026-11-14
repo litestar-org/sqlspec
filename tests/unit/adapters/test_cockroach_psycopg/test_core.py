@@ -17,7 +17,9 @@ from sqlspec.adapters.cockroach_psycopg.core import (
     calculate_backoff_seconds,
     create_mapped_exception,
     is_retryable_error,
+    native_export_telemetry,
     resolve_follower_read_options,
+    sanitize_native_storage_uri,
 )
 from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
@@ -339,3 +341,46 @@ async def test_cockroach_psycopg_async_select_to_storage_guards_unsafe_selects(
         job: Any = await driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
         assert job is fallback_job
     execute_native.assert_not_awaited()
+
+
+def test_cockroach_psycopg_native_export_telemetry_sanitizes_uri_credentials() -> None:
+    """Native export telemetry strips userinfo and query parameters while retaining scheme, host, and path."""
+    raw_uri = "s3://access_key:secret_key@bucket-name:9000/exports/prefix?AWS_ACCESS_KEY_ID=abc&AWS_SECRET_ACCESS_KEY=xyz#frag"
+    assert sanitize_native_storage_uri(raw_uri) == "s3://bucket-name:9000/exports/prefix"
+
+    telemetry = native_export_telemetry([{"filename": "out.parquet", "rows": 2, "bytes": 16}], raw_uri, "s3", "parquet")
+    assert telemetry["destination"] == "s3://bucket-name:9000/exports/prefix"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.anyio
+async def test_cockroach_psycopg_select_to_storage_sanitizes_telemetry_but_binds_full_uri(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    """Driver select_to_storage binds full URI to SQL while recording sanitized telemetry destination."""
+    raw_uri = "gs://user:pass@bucket/prefix?CREDENTIALS=secret_blob"
+    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    driver_cls = CockroachPsycopgAsyncDriver if asynchronous else CockroachPsycopgSyncDriver
+    driver: Any = driver_cls(
+        conn, statement_config=build_statement_config(), driver_features={"enable_native_storage": True}
+    )
+    execute_native = (
+        AsyncMock(return_value=[{"filename": "part-0.parquet", "rows": 3, "bytes": 24}])
+        if asynchronous
+        else MagicMock(return_value=[{"filename": "part-0.parquet", "rows": 3, "bytes": 24}])
+    )
+    monkeypatch.setattr(driver_cls, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        driver_cls,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(resolve_destination=lambda _target: SimpleNamespace(protocol="gs", uri=raw_uri)),
+    )
+
+    job = (
+        await driver.select_to_storage("SELECT 1", "gs://bucket/prefix", format_hint="parquet")
+        if asynchronous
+        else driver.select_to_storage("SELECT 1", "gs://bucket/prefix", format_hint="parquet")
+    )
+
+    assert execute_native.call_args.args[1] == [raw_uri]
+    assert job.telemetry["destination"] == "gs://bucket/prefix"

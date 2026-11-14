@@ -1,5 +1,6 @@
 """Parameterized tests for real adapter implementations."""
 
+import ast
 import base64
 import importlib
 import inspect
@@ -71,6 +72,8 @@ ADAPTER_CORE_MODULES = (
     "sqlspec.adapters.asyncmy.core",
     "sqlspec.adapters.asyncpg.core",
     "sqlspec.adapters.bigquery.core",
+    "sqlspec.adapters.cockroach_asyncpg.core",
+    "sqlspec.adapters.cockroach_psycopg.core",
     "sqlspec.adapters.db2.core",
     "sqlspec.adapters.duckdb.core",
     "sqlspec.adapters.mssql_python.core",
@@ -170,6 +173,30 @@ def test_adapter_apply_driver_features_signature_and_return_shape(module_name: s
     assert isinstance(resolved_statement_config, StatementConfig)
     assert isinstance(features, dict)
     assert features["custom"] == "value"
+
+
+@pytest.mark.parametrize(
+    ("module_path", "forbidden_prefixes"),
+    [
+        ("sqlspec/adapters/cockroach_asyncpg/core.py", ("sqlspec.adapters.asyncpg",)),
+        ("sqlspec/adapters/cockroach_psycopg/core.py", ("sqlspec.adapters.psycopg",)),
+    ],
+)
+def test_cockroach_core_modules_have_no_sibling_adapter_imports(
+    module_path: str, forbidden_prefixes: tuple[str, ...]
+) -> None:
+    """CockroachDB core modules are self-contained and never import parent adapter modules."""
+    source = (Path(__file__).resolve().parents[3] / module_path).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=module_path)
+    imported_modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.append(node.module)
+
+    offending = [name for name in imported_modules if name.startswith(forbidden_prefixes)]
+    assert offending == []
 
 
 def test_mssql_python_pool_is_implemented_in_pool_module() -> None:

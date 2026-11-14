@@ -16,7 +16,9 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     calculate_backoff_seconds,
     create_mapped_exception,
     is_retryable_error,
+    native_export_telemetry,
     resolve_follower_read_options,
+    sanitize_native_storage_uri,
 )
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.exceptions import DatabaseConnectionError, QueryTimeoutError, ReadOnlyTransactionError
@@ -296,3 +298,36 @@ async def test_cockroach_asyncpg_select_to_storage_guards_unsafe_selects(
         job: Any = await driver.select_to_storage(sql, "s3://b/out", format_hint="parquet")
         assert job is fallback_job
     execute_native.assert_not_awaited()
+
+
+def test_cockroach_asyncpg_native_export_telemetry_sanitizes_uri_credentials() -> None:
+    """Native export telemetry strips userinfo and query parameters while retaining scheme, host, and path."""
+    raw_uri = "s3://access_key:secret_key@bucket-name:9000/exports/prefix?AWS_ACCESS_KEY_ID=abc&AWS_SECRET_ACCESS_KEY=xyz#frag"
+    assert sanitize_native_storage_uri(raw_uri) == "s3://bucket-name:9000/exports/prefix"
+
+    telemetry = native_export_telemetry([{"filename": "out.parquet", "rows": 2, "bytes": 16}], raw_uri, "s3", "parquet")
+    assert telemetry["destination"] == "s3://bucket-name:9000/exports/prefix"
+
+
+@pytest.mark.anyio
+async def test_cockroach_asyncpg_select_to_storage_sanitizes_telemetry_but_binds_full_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Driver select_to_storage binds full URI to SQL while recording sanitized telemetry destination."""
+    raw_uri = "s3://user:pass@bucket/prefix?AWS_ACCESS_KEY_ID=key&AWS_SECRET_ACCESS_KEY=secret"
+    conn = SimpleNamespace(is_in_transaction=lambda: False)
+    driver = CockroachAsyncpgDriver(
+        conn, statement_config=default_statement_config, driver_features={"enable_native_storage": True}
+    )
+    execute_native = AsyncMock(return_value=[{"filename": "part-0.parquet", "rows": 3, "bytes": 24}])
+    monkeypatch.setattr(CockroachAsyncpgDriver, "_execute_native_storage", execute_native)
+    monkeypatch.setattr(
+        CockroachAsyncpgDriver,
+        "_storage_pipeline",
+        lambda _self: SimpleNamespace(resolve_destination=lambda _target: SimpleNamespace(protocol="s3", uri=raw_uri)),
+    )
+
+    job = await driver.select_to_storage("SELECT 1", "s3://bucket/prefix", format_hint="parquet")
+
+    assert execute_native.call_args.args[1] == [raw_uri]
+    assert job.telemetry["destination"] == "s3://bucket/prefix"

@@ -16,6 +16,9 @@ from psycopg.adapt import AdaptersMap as CockroachPsycopgAdaptersMap
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
 from psycopg.rows import tuple_row as cockroach_psycopg_tuple_row
+from psycopg.sql import SQL as CockroachPsycopgSQL  # noqa: N811
+from psycopg.sql import Composed as CockroachPsycopgComposed
+from psycopg.sql import Identifier as CockroachPsycopgIdentifier
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
 from psycopg.types.json import set_json_dumps as cockroach_psycopg_set_json_dumps
 from psycopg.types.json import set_json_loads as cockroach_psycopg_set_json_loads
@@ -50,8 +53,11 @@ __all__ = (
     "CockroachPsycopgAdaptersMap",
     "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgComposed",
     "CockroachPsycopgConnectionPool",
+    "CockroachPsycopgIdentifier",
     "CockroachPsycopgJsonb",
+    "CockroachPsycopgSQL",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",

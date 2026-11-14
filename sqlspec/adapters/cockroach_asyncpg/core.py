@@ -1,31 +1,48 @@
 """CockroachDB AsyncPG adapter helpers."""
 
+import asyncio
 import re
 import secrets
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
-from sqlspec.adapters.asyncpg.core import configure_parameter_serializers
-from sqlspec.adapters.asyncpg.core import create_mapped_exception as _map_parent_exception
+from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
 from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DeadlockError,
+    ForeignKeyViolationError,
     ImproperConfigurationError,
+    IntegrityError,
+    NotNullViolationError,
+    OperationalError,
+    OperationCancelledError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     ReadOnlyTransactionError,
     SerializationConflictError,
+    SQLParsingError,
     SQLSpecError,
+    UniqueViolationError,
+    _classify_timeout_or_cancellation,
+    map_sqlstate_to_exception,
 )
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
-    from sqlspec.core import StatementConfig
+    from collections.abc import Callable
+
+    from sqlspec.core import ParameterStyleConfig, StatementConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
@@ -36,12 +53,14 @@ __all__ = (
     "build_native_export",
     "build_native_import",
     "calculate_backoff_seconds",
+    "configure_parameter_serializers",
     "create_mapped_exception",
     "is_retryable_error",
     "native_export_telemetry",
     "native_import_telemetry",
     "normalize_native_export_query",
     "resolve_follower_read_options",
+    "sanitize_native_storage_uri",
     "validate_follower_read_staleness",
 )
 
@@ -52,6 +71,15 @@ _DEFAULT_ENABLE_LOGGING: Final[bool] = True
 _MAX_CAUSE_CHAIN_DEPTH: Final[int] = 16
 _SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
 _CLUSTER_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
+_UNSET: Final[object] = object()
+_EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
+_STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
+_STALENESS_FUNCTION: Final[re.Pattern[str]] = re.compile(
+    r"(?:follower_read_timestamp|with_max_staleness|with_min_timestamp)"
+    r"\(\s*(?:'[^'\\;]*'\s*(?:,\s*(?:'[^'\\;]*'|true|false)\s*)*)?\)",
+    re.IGNORECASE,
+)
+DEFAULT_FOLLOWER_READ_STALENESS: Final[str] = "follower_read_timestamp()"
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -110,15 +138,29 @@ def apply_driver_features(
     return statement_config, processed_features
 
 
+def configure_parameter_serializers(
+    parameter_config: "ParameterStyleConfig",
+    serializer: "Callable[[Any], str]",
+    *,
+    deserializer: "Callable[[str], Any] | None" = None,
+) -> "ParameterStyleConfig":
+    """Return a parameter configuration updated with AsyncPG JSON codecs."""
+    effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
+    return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
+
+
 def build_connection_config(config: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Prepare CockroachDB AsyncPG connection config, extracting multi-region server settings."""
-    normalized = normalize_connection_config(config)
+    normalized: dict[str, Any] = dict(normalize_connection_config(config))
     extra = normalized.pop("extra", None)
     if isinstance(extra, Mapping):
         for key, value in extra.items():
             if value is not None:
                 normalized.setdefault(key, value)
-    result = asyncpg_build_connection_config(normalized)
+    result: dict[str, Any] = dict(normalized)
+    _resolve_connection_alias(result, "dsn", ("dsn", "conninfo", "url", "connection_string"))
+    _resolve_connection_alias(result, "database", ("database", "dbname", "db"))
+    _resolve_connection_alias(result, "user", ("user", "username"))
     server_settings = dict(result.get("server_settings") or {})
     if "application_name" in result:
         server_settings.setdefault("application_name", str(result.pop("application_name")))
@@ -182,8 +224,10 @@ def is_retryable_error(error: BaseException) -> bool:
         depth += 1
         if isinstance(current, SerializationConflictError):
             return True
-        if has_sqlstate(current) and str(current.sqlstate) == "40001":
-            return True
+        if has_sqlstate(current):
+            sqlstate = getattr(current, "sqlstate", None)
+            if str(sqlstate) == "40001":
+                return True
         if not isinstance(current, SQLSpecError):
             return False
         next_exc = cast("BaseException | None", cast("Any", current).__cause__)
@@ -204,14 +248,6 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachAsyncpgRetryConfig
     if capped_ms <= 0.0:
         return 0.0
     return _SYSTEM_RANDOM.uniform(capped_ms / 2.0, capped_ms) / 1000.0
-
-
-_STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
-_STALENESS_FUNCTION: Final[re.Pattern[str]] = re.compile(
-    r"(?:follower_read_timestamp|with_max_staleness|with_min_timestamp)"
-    r"\(\s*(?:'[^'\\;]*'\s*(?:,\s*(?:'[^'\\;]*'|true|false)\s*)*)?\)",
-    re.IGNORECASE,
-)
 
 
 def validate_follower_read_staleness(staleness: str) -> str:
@@ -274,12 +310,21 @@ def build_native_import(table: str, uri: str, file_format: str, options: "dict[s
     return command, values
 
 
+def sanitize_native_storage_uri(uri: str) -> str:
+    """Strip userinfo, query parameters, and fragments from a native storage URI for telemetry."""
+    parsed = urlsplit(uri)
+    if not parsed.scheme and not parsed.netloc:
+        return uri
+    netloc = parsed.netloc.rsplit("@", 1)[-1] if "@" in parsed.netloc else parsed.netloc
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+
+
 def native_export_telemetry(
     rows: "list[dict[str, Any]]", destination: str, backend: str, file_format: str
 ) -> "StorageTelemetry":
     """Retain measured export metadata and generated relative filenames."""
     return {
-        "destination": destination,
+        "destination": sanitize_native_storage_uri(destination),
         "backend": backend,
         "format": file_format,
         "rows_processed": sum(int(row["rows"]) for row in rows),
@@ -319,9 +364,6 @@ def normalize_native_export_query(query: str) -> str | None:
     return query[: delimiter.start] + query[delimiter.end + 1 :]
 
 
-DEFAULT_FOLLOWER_READ_STALENESS: Final[str] = "follower_read_timestamp()"
-
-
 def resolve_follower_read_options(
     driver_features: "Mapping[str, Any]",
     *,
@@ -347,12 +389,119 @@ def resolve_follower_read_options(
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
-    """Map native read-only violations before generic transaction errors."""
-    if (has_sqlstate(error) and error.sqlstate == "25006") or type(error).__name__ in {
+    """Map CockroachDB AsyncPG exceptions to SQLSpec exceptions."""
+    _ = logger
+    if (has_sqlstate(error) and getattr(error, "sqlstate", None) == "25006") or type(error).__name__ in {
         "ReadOnlySqlTransaction",
         "ReadOnlySQLTransactionError",
     }:
         mapped = ReadOnlyTransactionError(str(error))
         mapped.__cause__ = error if isinstance(error, BaseException) else None
         return mapped
-    return _map_parent_exception(error, logger=logger)
+
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return QueryTimeoutError(str(error))
+
+    if isinstance(error, OSError) or (
+        asyncpg is not None and isinstance(error, getattr(asyncpg, "InterfaceError", ()))
+    ):
+        return DatabaseConnectionError(str(error))
+
+    mapped_error = _EXCEPTION_MAPPING_DISPATCHER.get(error)
+    if mapped_error is not None:
+        error_code, error_class, description = mapped_error
+        if error_code == "57014":
+            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+            return _create_postgres_error(error, error_code, termination_class, description)
+        return _create_postgres_error(error, error_code, error_class, description)
+
+    sqlstate_attr = getattr(error, "sqlstate", None) if has_sqlstate(error) else None
+    sqlstate_code: str | None = str(sqlstate_attr) if sqlstate_attr is not None else None
+    if sqlstate_code:
+        if sqlstate_code == "57014":
+            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+            return _create_postgres_error(error, sqlstate_code, termination_class, "query terminated")
+        exc_class = map_sqlstate_to_exception(sqlstate_code)
+        if exc_class:
+            return _create_postgres_error(error, sqlstate_code, exc_class, "database error")
+
+    return _create_postgres_error(error, sqlstate_code, SQLSpecError, "database error")
+
+
+def _resolve_connection_alias(config: "dict[str, Any]", target: str, aliases: "tuple[str, ...]") -> None:
+    """Normalize connection alias keys in-place using the first present alias."""
+    selected: Any = _UNSET
+    for key in aliases:
+        if key in config:
+            value = config.pop(key)
+            if selected is _UNSET:
+                selected = value
+    if selected is not _UNSET:
+        config[target] = selected
+
+
+def _create_postgres_error(
+    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception wrapping a CockroachDB AsyncPG driver exception."""
+    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+def _register_exception_mappings() -> None:
+    """Register native asyncpg exception types on the adapter dispatcher."""
+    if asyncpg is None:
+        return
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.ReadOnlySQLTransactionError, ("25006", ReadOnlyTransactionError, "read-only transaction")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.UniqueViolationError, ("23505", UniqueViolationError, "unique constraint violation")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.ForeignKeyViolationError,
+        ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.NotNullViolationError, ("23502", NotNullViolationError, "not-null constraint violation")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.CheckViolationError, ("23514", CheckViolationError, "check constraint violation")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.IntegrityConstraintViolationError,
+        ("23000", IntegrityError, "integrity constraint violation"),
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.DeadlockDetectedError, ("40P01", DeadlockError, "deadlock detected")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.SerializationError, ("40001", SerializationConflictError, "serialization failure")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.QueryCanceledError, ("57014", OperationCancelledError, "query canceled")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.InsufficientPrivilegeError, ("42501", PermissionDeniedError, "insufficient privilege")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.InvalidPasswordError, ("28P01", PermissionDeniedError, "invalid password")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.InvalidAuthorizationSpecificationError,
+        ("28000", PermissionDeniedError, "authorization error"),
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.ConnectionDoesNotExistError, ("08003", DatabaseConnectionError, "connection does not exist")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.CannotConnectNowError, ("57P03", DatabaseConnectionError, "cannot connect now")
+    )
+    _EXCEPTION_MAPPING_DISPATCHER.register(
+        asyncpg.exceptions.PostgresSyntaxError, ("42601", SQLParsingError, "SQL syntax error")
+    )
+
+
+_register_exception_mappings()
