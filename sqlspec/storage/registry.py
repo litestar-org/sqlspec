@@ -74,7 +74,7 @@ class StorageRegistry:
             logging.DEBUG,
             "storage.alias.register",
             alias=alias,
-            uri=uri,
+            uri=_sanitize_uri_for_log(uri),
             backend_type=backend_cls.__name__,
             base_path=base_path or None,
         )
@@ -127,12 +127,14 @@ class StorageRegistry:
             path_obj = Path(path_str).expanduser().resolve()
             base_uri = _local_backend_uri(path_obj)
         else:
-            msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
+            sanitized_input = _sanitize_uri_for_log(path_str)
+            msg = f"Unknown storage alias or invalid URI: '{sanitized_input}'"
             raise ImproperConfigurationError(msg)
 
+        sanitized_log_uri = _sanitize_uri_for_log(path_str)
         cache_key = (base_uri, self._make_hashable(cache_params)) if cache_params else base_uri
         if cache_key in self._instances:
-            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=True)
+            log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=sanitized_log_uri, cached=True)
             return self._instances[cache_key]
 
         if not is_alias:
@@ -144,7 +146,7 @@ class StorageRegistry:
             instance = backend_cls(stored_uri, **{**config, **kwargs})
 
         self._instances[cache_key] = instance
-        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=False)
+        log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=sanitized_log_uri, cached=False)
         return instance
 
     def is_alias_registered(self, alias: str) -> bool:
@@ -304,3 +306,24 @@ def _local_backend_uri(path: Path) -> str:
     if root_path.drive and not uri_path.startswith("/"):
         uri_path = f"/{uri_path}"
     return urlunparse(("file", "", uri_path, "", "", ""))
+
+
+def _sanitize_uri_for_log(uri: str) -> str:
+    """Strip userinfo, query parameters, and fragments from storage URIs for log output."""
+    if "://" not in uri and "?" not in uri:
+        return uri
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        base, _, _ = uri.partition("?")
+        scheme_part, sep, rest = base.partition("://")
+        if not sep:
+            return base
+        authority, slash, tail = rest.partition("/")
+        sanitized_authority = authority.rsplit("@", 1)[-1] if "@" in authority else authority
+        return f"{scheme_part}://{sanitized_authority}{slash}{tail}"
+    if not parsed.scheme:
+        base, _, _ = uri.partition("?")
+        return base
+    netloc = parsed.netloc.rsplit("@", 1)[-1] if "@" in parsed.netloc else parsed.netloc
+    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, "", ""))
