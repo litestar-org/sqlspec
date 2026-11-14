@@ -68,6 +68,13 @@ _ANSI_LITERAL_DIALECTS: Final[frozenset[str]] = frozenset({
     "db2",
     "teradata",
 })
+_POSTGRES_ESCAPE_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "redshift",
+})
 
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
@@ -567,23 +574,29 @@ class ParameterConverter:
         """Render a literal for the server's default SQL mode.
 
         Negative numbers are separated from a preceding minus operator during
-        embedding so they never form a ``--`` comment marker. MySQL
-        NO_BACKSLASH_ESCAPES stores doubled backslashes as two characters.
-        Backslash handling differs between engines, so a string containing a
-        backslash requires a dialect.
+        embedding so they never form a ``--`` comment marker. Numeric subclasses
+        render via canonical base representations instead of custom ``__str__``
+        methods. On PostgreSQL-family dialects, strings containing backslashes
+        emit explicit ``E'...'`` escape strings so literals remain safe even when
+        ``standard_conforming_strings`` is disabled.
         """
         if param_value is None:
             return "NULL"
         if isinstance(param_value, bool):
             return "TRUE" if param_value else "FALSE"
-        if isinstance(param_value, (float, Decimal)):
-            finite = param_value.is_finite() if isinstance(param_value, Decimal) else isfinite(param_value)
-            if not finite:
+        if isinstance(param_value, Decimal):
+            if not param_value.is_finite():
                 msg = "Cannot embed a non-finite number in statically compiled SQL"
                 raise SQLSpecError(msg)
-            return str(param_value)
+            return Decimal.__str__(param_value)
+        if isinstance(param_value, float):
+            native_float = float(param_value)
+            if not isfinite(native_float):
+                msg = "Cannot embed a non-finite number in statically compiled SQL"
+                raise SQLSpecError(msg)
+            return float.__repr__(native_float)
         if isinstance(param_value, int):
-            return str(param_value)
+            return int.__repr__(int(param_value))
         normalized = dialect.strip().lower() if dialect else None
         literal_dialect = _DIALECT_LITERAL_ALIASES.get(normalized, normalized) if normalized else None
         if isinstance(param_value, (bytes, bytearray, memoryview)):
@@ -600,6 +613,14 @@ class ParameterConverter:
             if "\\" in text:
                 msg = "Cannot embed a string containing a backslash in statically compiled SQL without a dialect"
                 raise SQLSpecError(msg)
+            return "'" + text.replace("'", "''") + "'"
+        if literal_dialect in _POSTGRES_ESCAPE_STRING_DIALECTS:
+            if "\x00" in text:
+                msg = "Cannot embed a string containing NUL characters in statically compiled SQL"
+                raise SQLSpecError(msg)
+            if "\\" in text:
+                escaped = text.replace("\\", "\\\\").replace("'", "''")
+                return f"E'{escaped}'"
             return "'" + text.replace("'", "''") + "'"
         if literal_dialect in _ANSI_LITERAL_DIALECTS:
             if "\x00" in text:

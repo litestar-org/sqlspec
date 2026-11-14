@@ -2851,15 +2851,23 @@ def test_jsonb_exists_operator_distinguishes_operands(sql: str, expected: list[s
     assert [info.placeholder_text for info in validator.extract_parameters(sql)] == expected
 
 
-@pytest.mark.parametrize("dialect", ["mysql", "postgres", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"])
+@pytest.mark.parametrize(
+    "dialect", ["mysql", "postgres", "redshift", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"]
+)
 def test_static_literal_escapes_per_dialect(dialect: str) -> None:
     value = "x\\' OR 1=1 -- "
     literal = ParameterConverter._format_literal(value, dialect)
-    assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+    if dialect in {"postgres", "redshift"}:
+        assert literal == "E'x\\\\'' OR 1=1 -- '"
+    else:
+        assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
     statement = sqlglot.parse_one(f"SELECT * FROM t WHERE name = {literal}", dialect=dialect)
     equality = statement.args["where"].this
     assert isinstance(equality, sqlglot.exp.EQ)
-    assert isinstance(equality.expression, sqlglot.exp.Literal)
+    if dialect in {"postgres", "redshift"}:
+        assert isinstance(equality.expression, sqlglot.exp.ByteString)
+    else:
+        assert isinstance(equality.expression, sqlglot.exp.Literal)
     assert equality.expression.this == value
 
 
@@ -2927,11 +2935,12 @@ def test_static_cache_is_dialect_specific() -> None:
     from sqlspec import StatementConfig
 
     value = "back\\slash"
+    expected_by_dialect = {"mysql": "select 'back\\\\slash'", "postgres": "select E'back\\\\slash'"}
     for dialect in ("mysql", "postgres", "mysql"):
         sql, parameters = (
             SQL("select :x", {"x": value}, statement_config=StatementConfig(dialect=dialect)).as_script().compile()
         )
-        assert sql == "select " + sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+        assert sql == expected_by_dialect[dialect]
         assert parameters is None
 
 
@@ -3433,9 +3442,11 @@ def test_static_literal_separates_negative_numbers_after_minus(sql_template: str
     [
         ("mysql", "'a\\\\''b'"),
         ("mariadb", "'a\\\\''b'"),
-        ("postgres", "'a\\''b'"),
-        ("postgresql", "'a\\''b'"),
-        ("cockroachdb", "'a\\''b'"),
+        ("postgres", "E'a\\\\''b'"),
+        ("postgresql", "E'a\\\\''b'"),
+        ("cockroach", "E'a\\\\''b'"),
+        ("cockroachdb", "E'a\\\\''b'"),
+        ("redshift", "E'a\\\\''b'"),
         ("mssql", "'a\\''b'"),
         ("sybase", "'a\\''b'"),
         ("db2", "'a\\''b'"),
@@ -3444,7 +3455,7 @@ def test_static_literal_separates_negative_numbers_after_minus(sql_template: str
     ],
 )
 def test_static_literal_string_escaping_by_dialect(dialect: str, expected: str) -> None:
-    """String literals double backslashes only where the engine treats them as escapes."""
+    """String literals double backslashes or emit E-strings where the engine supports backslash escapes."""
     assert ParameterConverter._format_literal("a\\'b", dialect) == expected
 
 
@@ -3533,3 +3544,69 @@ def test_type_coercion_dispatcher_cache_is_bounded() -> None:
     ]
     assert len(_processor_module._TYPE_COERCION_DISPATCHERS) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
     assert len(_processor_module._TYPE_COERCION_DISPATCHERS_BY_ID) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
+
+
+def test_static_literal_ignores_numeric_subclass_str_override() -> None:
+    class CustomInt(int):
+        def __str__(self) -> str:
+            return "1 OR 1=1"
+
+    class CustomFloat(float):
+        def __str__(self) -> str:
+            return "1.0; DROP TABLE t"
+
+    class CustomDecimal(Decimal):
+        def __str__(self) -> str:
+            return "2.0 OR 1=1"
+
+    assert ParameterConverter._format_literal(CustomInt(42), "postgres") == "42"
+    assert ParameterConverter._format_literal(CustomFloat(3.5), "postgres") == "3.5"
+    assert ParameterConverter._format_literal(CustomDecimal("1.25"), "postgres") == "1.25"
+    assert ParameterConverter._format_literal(True, "postgres") == "TRUE"
+    assert ParameterConverter._format_literal(False, "postgres") == "FALSE"
+    assert ParameterConverter._format_literal("it's", "postgres") == "'it''s'"
+    assert ParameterConverter._format_literal("it's", "redshift") == "'it''s'"
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SELECT arr[:2] FROM t", "postgres", []),
+        ("SELECT arr[1:2] FROM t", "postgres", []),
+        ("SELECT arr[1 :2] FROM t", "postgres", []),
+        ("SELECT arr[ :2] FROM t", "postgres", []),
+        ("SELECT (arr || ARRAY[1])[:5] FROM t", "postgres", []),
+        ("SELECT arr[1][:2] FROM t", "postgres", []),
+        ("SELECT arr[(i + 1) :2] FROM t", "postgres", []),
+        ("SELECT :1, arr[:2] FROM t WHERE id = :2", "postgres", [":1", ":2"]),
+        ("SELECT ARRAY[:1, :2]", "postgres", [":1", ":2"]),
+        ("SELECT tbl.array[:2], :1 FROM t", "postgres", [":1"]),
+        ("SELECT 'arr[' || :1 FROM t", "postgres", [":1"]),
+        ("SELECT arr[:end_idx] FROM t", "postgres", [":end_idx"]),
+    ],
+)
+def test_extract_parameters_ignores_array_slice_bounds(sql: str, dialect: str, expected: "list[str]") -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SET @x = 1", "mysql", []),
+        ("SET @x = ?, @y = :val, @z := 3", "mariadb", ["?", ":val"]),
+        ("SET @a = 'x, y; z', @b = ?", "mysql", ["?"]),
+        ("SET @a = @rhs_param", "mysql", ["@rhs_param"]),
+        ("SELECT (@rn := @rn + 1) AS rn, id FROM users WHERE org = ?", "mysql", ["@rn", "?"]),
+        ("SELECT (@rn := 1) FROM users WHERE status = @status", "mariadb", ["@status"]),
+        ("CREATE PROCEDURE p() BEGIN SET @local_v = 1; END", "mysql", []),
+        ("SELECT * FROM t WHERE @a = 1", "mysql", ["@a"]),
+        ("UPDATE t SET col = @val WHERE id = @id", "mysql", ["@val", "@id"]),
+        ("SET @@sql_mode = 'STRICT_ALL_TABLES', @x = ?", "mysql", ["?"]),
+    ],
+)
+def test_extract_parameters_skips_mysql_session_variable_lhs_assignments(
+    sql: str, dialect: str, expected: "list[str]"
+) -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql, dialect=dialect)] == expected

@@ -165,6 +165,25 @@ _ANSI_STRING_DIALECTS: Final[frozenset[str]] = frozenset({
 })
 _BACKSLASH_STRING_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
 _OPERAND_LOOKBEHIND_CHARS: Final = 128
+_ARRAY_SLICE_STOP_CHARS: Final[frozenset[str]] = frozenset(",;]=<>!|'\"`")
+_EMPTY_INT_FROZENSET: Final[frozenset[int]] = frozenset()
+_MYSQL_SET_BLOCK_OPENERS: Final[frozenset[str]] = frozenset({"BEGIN", "THEN", "ELSE", "DO"})
+_MYSQL_ASSIGN_SCAN_REGEX: Final[re.Pattern[str]] = re.compile(
+    r"""
+    "(?:""|\\.|[^"\\])*" |
+    '(?:''|\\.|[^'\\])*' |
+    `(?:``|[^`])*` |
+    --[^\r\n]* |
+    \#[^\r\n]* |
+    /\*(?:[^*]|\*(?!/))*(?:\*/|\Z) |
+    @@[A-Za-z_]\w* |
+    := |
+    (?P<at_var>(?<![A-Za-z0-9_@])@(?!sqlspec_)\w+) |
+    (?P<word>[A-Za-z_][A-Za-z0-9_$]*) |
+    (?P<punct>[(),;=])
+    """,
+    re.VERBOSE,
+)
 
 
 _SNOWFLAKE_PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:")
@@ -370,6 +389,7 @@ class ParameterValidator:
             regex = MYSQL_PARAMETER_REGEX
         else:
             regex = PARAMETER_REGEX
+        mysql_lhs_positions = _mysql_assignment_lhs_positions(sql) if normalized_dialect == _SCANNER_MYSQL else ()
         parameters: list[ParameterInfo] = []
         for match in regex.finditer(sql):
             lastgroup = match.lastgroup
@@ -384,6 +404,10 @@ class ParameterValidator:
                 and _OPERAND_START.match(sql, match.end())
                 and _follows_operand(sql, match.start())
             ):
+                continue
+            if style is ParameterStyle.POSITIONAL_COLON and _is_positional_array_slice(sql, match.start()):
+                continue
+            if style is ParameterStyle.NAMED_AT and match.start() in mysql_lhs_positions:
                 continue
             name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
@@ -447,6 +471,108 @@ def _follows_operand(sql: str, start: int) -> bool:
         return True
     match = _PRECEDING_WORD.search(sql, max(0, end - _OPERAND_LOOKBEHIND_CHARS), end)
     return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)
+
+
+def _preceding_bracket_is_subscript(sql: str, bracket_pos: int) -> bool:
+    idx = bracket_pos - 1
+    while idx >= 0 and sql[idx].isspace():
+        idx -= 1
+    if idx < 0:
+        return False
+    ch = sql[idx]
+    if ch in ")]":
+        return True
+    if ch.isalnum() or ch == "_":
+        word_end = idx + 1
+        while idx >= 0 and (sql[idx].isalnum() or sql[idx] == "_"):
+            idx -= 1
+        word = sql[idx + 1 : word_end].lower()
+        if word == "array":
+            while idx >= 0 and sql[idx].isspace():
+                idx -= 1
+            return idx >= 0 and sql[idx] == "."
+        return word not in _NON_OPERAND_KEYWORDS
+    return False
+
+
+def _is_positional_array_slice(sql: str, colon_pos: int) -> bool:
+    idx = colon_pos - 1
+    paren_depth = 0
+    while idx >= 0:
+        ch = sql[idx]
+        if ch == ")":
+            paren_depth += 1
+        elif ch == "(":
+            if paren_depth == 0:
+                return False
+            paren_depth -= 1
+        elif paren_depth == 0:
+            if ch == "[":
+                return _preceding_bracket_is_subscript(sql, idx)
+            if ch in _ARRAY_SLICE_STOP_CHARS:
+                return False
+        idx -= 1
+    return False
+
+
+def _mysql_assignment_lhs_positions(sql: str) -> "frozenset[int] | set[int]":
+    if "@" not in sql or "=" not in sql:
+        return _EMPTY_INT_FROZENSET
+    lhs_positions: set[int] = set()
+    stmt_keyword: str | None = None
+    paren_depth = 0
+    expecting_set_lhs = False
+    prev_at_start: int | None = None
+    is_candidate_set_lhs = False
+    for match in _MYSQL_ASSIGN_SCAN_REGEX.finditer(sql):
+        group_name = match.lastgroup
+        lexeme = match.group(0)
+        if lexeme == ":=":
+            if prev_at_start is not None:
+                lhs_positions.add(prev_at_start)
+            prev_at_start = None
+            is_candidate_set_lhs = False
+            expecting_set_lhs = False
+            continue
+        if group_name == "at_var":
+            prev_at_start = match.start()
+            is_candidate_set_lhs = expecting_set_lhs and paren_depth == 0
+            expecting_set_lhs = False
+            continue
+        if group_name == "punct":
+            if lexeme == ";":
+                stmt_keyword = None
+                paren_depth = 0
+                expecting_set_lhs = False
+            elif lexeme == "(":
+                paren_depth += 1
+                expecting_set_lhs = False
+            elif lexeme == ")":
+                if paren_depth > 0:
+                    paren_depth -= 1
+                expecting_set_lhs = False
+            elif lexeme == ",":
+                expecting_set_lhs = paren_depth == 0 and stmt_keyword == "SET"
+            elif lexeme == "=":
+                if prev_at_start is not None and is_candidate_set_lhs:
+                    lhs_positions.add(prev_at_start)
+                expecting_set_lhs = False
+            prev_at_start = None
+            is_candidate_set_lhs = False
+            continue
+        if group_name == "word":
+            upper = lexeme.upper()
+            if upper in _MYSQL_SET_BLOCK_OPENERS and paren_depth == 0:
+                stmt_keyword = None
+                expecting_set_lhs = False
+            elif stmt_keyword is None:
+                stmt_keyword = upper
+                expecting_set_lhs = upper == "SET"
+            else:
+                expecting_set_lhs = False
+            prev_at_start = None
+            is_candidate_set_lhs = False
+    return lhs_positions
 
 
 def _normalize_dialect(dialect: str | None) -> str | None:
