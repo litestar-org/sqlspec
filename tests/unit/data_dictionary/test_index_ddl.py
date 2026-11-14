@@ -1,5 +1,6 @@
 """Unit tests for without_indexes context manager and drop_indexes bulk load orchestration."""
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.data_dictionary._index_ddl import (
     AsyncWithoutIndexesContext,
     SyncWithoutIndexesContext,
+    _split_schema_and_table,
     build_create_index_sql,
     build_drop_index_sql,
     filter_droppable_table_indexes,
@@ -408,3 +410,118 @@ def test_index_ddl_quotes_delimiters_and_preserves_sort_direction(
     meta = {"index_name": index_name, "columns": columns}
     assert build_drop_index_sql(dialect, meta, table, schema=schema) == expected_drop
     assert build_create_index_sql(dialect, meta, table, schema=schema) == expected_create
+
+
+@pytest.mark.parametrize(
+    ("table", "explicit_schema", "expected_pair"),
+    [
+        ('"my.schema"."my.orders"', None, ("my.schema", "my.orders")),
+        ("[audit].[order.items]", None, ("audit", "order.items")),
+        ("`my.db`.`my.table`", None, ("my.db", "my.table")),
+        ("catalog.schema.orders", None, ("catalog.schema", "orders")),
+        ('"order.items"', "audit", ("audit", "order.items")),
+        ("orders", '"My.Schema"', ("My.Schema", "orders")),
+    ],
+)
+def test_without_indexes_parses_quoted_dotted_schema_and_table_and_handles_async_tx_and_cancellation(
+    table: str, explicit_schema: str | None, expected_pair: tuple[str, str]
+) -> None:
+    """Quoted dotted and multi-segment schema/table identifiers split cleanly across lookup and DDL helpers."""
+    assert _split_schema_and_table(table, explicit_schema) == expected_pair
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, '"my.schema"."my.orders"')
+        == 'DROP INDEX IF EXISTS "my.schema"."idx_cust"'
+    )
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, "catalog.schema.orders")
+        == 'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"'
+    )
+    assert (
+        build_drop_index_sql("postgres", {"index_name": "idx_cust"}, "orders", schema="catalog.schema")
+        == 'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("table", "explicit_schema", "expected_lookup", "expected_drop", "expected_create"),
+    [
+        (
+            "catalog.schema.orders",
+            None,
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_a"',
+            'CREATE INDEX "idx_a" ON "catalog"."schema"."orders" ("a")',
+        ),
+        (
+            "orders",
+            "catalog.schema",
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_a"',
+            'CREATE INDEX "idx_a" ON "catalog"."schema"."orders" ("a")',
+        ),
+    ],
+)
+def test_sync_without_indexes_preserves_multi_segment_schema_in_ddl(
+    table: str, explicit_schema: str | None, expected_lookup: tuple[str, str], expected_drop: str, expected_create: str
+) -> None:
+    """Multi-segment unquoted schemas quote per segment in WithoutIndexesContext DDL."""
+    executed: list[str] = []
+
+    class _DD:
+        def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            assert (schema, table) == expected_lookup
+            return ({"index_name": "idx_a", "columns": ["a"]},)
+
+        def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _SyncDriver:
+        dialect = "postgres"
+        data_dictionary = _DD()
+
+        def execute(self, sql: str) -> None:
+            executed.append(sql)
+
+    with SyncWithoutIndexesContext(_SyncDriver(), table, schema=explicit_schema, concurrent=False):
+        pass
+
+    assert executed == [expected_drop, expected_create]
+
+
+@pytest.mark.anyio
+async def test_async_without_indexes_uses_transaction_open_and_restores_on_cancellation() -> None:
+    """AsyncWithoutIndexesContext checks _transaction_open and restores already-dropped indexes on CancelledError."""
+    executed: list[str] = []
+
+    class _DD:
+        async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+            assert (schema, table) == ("my.schema", "my.orders")
+            return ({"index_name": "idx_a", "columns": ["a"]}, {"index_name": "idx_b", "columns": ["b"]})
+
+        async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+            return []
+
+    class _AsyncDriver:
+        dialect = "postgres"
+        data_dictionary = _DD()
+
+        async def _transaction_open(self) -> bool:
+            return True
+
+        def _connection_in_transaction(self) -> bool:
+            raise AssertionError("sync _connection_in_transaction should not run when _transaction_open exists")
+
+        async def execute(self, sql: str) -> None:
+            executed.append(sql)
+            if "DROP INDEX" in sql and "idx_b" in sql:
+                raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        async with AsyncWithoutIndexesContext(_AsyncDriver(), '"my.schema"."my.orders"', concurrent=True):
+            pass
+
+    assert executed == [
+        'DROP INDEX IF EXISTS "my.schema"."idx_a"',
+        'DROP INDEX IF EXISTS "my.schema"."idx_b"',
+        'CREATE INDEX "idx_a" ON "my.schema"."my.orders" ("a")',
+    ]

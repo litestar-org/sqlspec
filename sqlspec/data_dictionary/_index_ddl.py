@@ -1,6 +1,7 @@
 """Compiled secondary-index drop and rebuild helpers for bulk loading."""
 
 import contextlib
+import inspect
 import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Self, final
@@ -107,20 +108,10 @@ def build_drop_index_sql(
         qualified_table = _format_index_table(table, resolved_schema, norm)
         return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in {"oracle", "db2"}:
-        qualified_idx = (
-            f"{_quote_index_part(resolved_schema, norm)}.{_quote_index_part(idx_name, norm)}"
-            if resolved_schema
-            else _quote_index_part(idx_name, norm)
-        )
-        return f"DROP INDEX {qualified_idx}"
+        return f"DROP INDEX {_format_qualified_index_name(idx_name, table, resolved_schema, norm)}"
     if norm == "spanner":
         return f"DROP INDEX {_quote_index_part(idx_name, norm)}"
-    qualified_idx = (
-        f"{_quote_index_part(resolved_schema, norm)}.{_quote_index_part(idx_name, norm)}"
-        if resolved_schema
-        else _quote_index_part(idx_name, norm)
-    )
-    return f"DROP INDEX IF EXISTS {qualified_idx}"
+    return f"DROP INDEX IF EXISTS {_format_qualified_index_name(idx_name, table, resolved_schema, norm)}"
 
 
 def build_create_index_sql(
@@ -214,6 +205,7 @@ class SyncWithoutIndexesContext:
             )
         droppable = filter_droppable_table_indexes(indexes_rows, constraints_rows)
         in_tx = _safe_driver_in_transaction(self._driver)
+        ddl_table, ddl_schema = _resolve_ddl_target(self._table, self._schema, table_name, dialect)
         for idx in droppable:
             ddl_override: str | None = None
             idx_name = str(idx.get("index_name") or idx.get("name") or "").strip()
@@ -230,17 +222,17 @@ class SyncWithoutIndexesContext:
             create_sql = build_create_index_sql(
                 dialect,
                 idx,
-                table_name,
-                schema=schema_name,
+                ddl_table,
+                schema=ddl_schema,
                 concurrent=self._concurrent,
                 in_transaction=in_tx,
                 ddl_override=ddl_override,
             )
-            drop_sql = build_drop_index_sql(dialect, idx, table_name, schema=schema_name)
+            drop_sql = build_drop_index_sql(dialect, idx, ddl_table, schema=ddl_schema)
             if drop_sql and create_sql:
                 try:
                     self._driver.execute(drop_sql)
-                except Exception:
+                except BaseException:
                     self._restore_dropped_indexes()
                     raise
                 self._rebuild_statements.append(create_sql)
@@ -302,7 +294,8 @@ class AsyncWithoutIndexesContext:
                 await dd.get_constraints(self._driver, table=table_name, schema=schema_name)
             )
         droppable = filter_droppable_table_indexes(indexes_rows, constraints_rows)
-        in_tx = _safe_driver_in_transaction(self._driver)
+        in_tx = await _safe_driver_in_transaction_async(self._driver)
+        ddl_table, ddl_schema = _resolve_ddl_target(self._table, self._schema, table_name, dialect)
         for idx in droppable:
             ddl_override: str | None = None
             idx_name = str(idx.get("index_name") or idx.get("name") or "").strip()
@@ -319,17 +312,17 @@ class AsyncWithoutIndexesContext:
             create_sql = build_create_index_sql(
                 dialect,
                 idx,
-                table_name,
-                schema=schema_name,
+                ddl_table,
+                schema=ddl_schema,
                 concurrent=self._concurrent,
                 in_transaction=in_tx,
                 ddl_override=ddl_override,
             )
-            drop_sql = build_drop_index_sql(dialect, idx, table_name, schema=schema_name)
+            drop_sql = build_drop_index_sql(dialect, idx, ddl_table, schema=ddl_schema)
             if drop_sql and create_sql:
                 try:
                     await self._driver.execute(drop_sql)
-                except Exception:
+                except BaseException:
                     await self._restore_dropped_indexes()
                     raise
                 self._rebuild_statements.append(create_sql)
@@ -338,7 +331,7 @@ class AsyncWithoutIndexesContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
-        in_tx = _safe_driver_in_transaction(self._driver)
+        in_tx = await _safe_driver_in_transaction_async(self._driver)
         rebuild_errors: list[Exception] = []
         for stmt in self._rebuild_statements:
             effective_stmt = stmt
@@ -419,6 +412,25 @@ def _quote_index_part(part: str, dialect: str) -> str:
     return quote_identifier(clean)
 
 
+def _resolve_ddl_target(table: str, schema: str | None, table_name: str, dialect: str) -> tuple[str, str | None]:
+    """Preserve unsplit table qualification unless an explicit schema override was given."""
+    if schema is None:
+        return table, None
+    return _quote_index_part(table_name, dialect), schema
+
+
+def _format_qualified_index_name(idx_name: str, table: str, resolved_schema: str | None, dialect: str) -> str:
+    if resolved_schema is not None:
+        schema_parts = split_qualified_identifier(resolved_schema, quote_chars='"`', allow_bracket_quotes=True)
+        if schema_parts:
+            return ".".join(_quote_index_part(part, dialect) for part in (*schema_parts, idx_name))
+        return f"{_quote_index_part(resolved_schema, dialect)}.{_quote_index_part(idx_name, dialect)}"
+    table_parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
+    if len(table_parts) > 1:
+        return ".".join(_quote_index_part(part, dialect) for part in (*table_parts[:-1], idx_name))
+    return _quote_index_part(idx_name, dialect)
+
+
 def _format_index_table(table: str, schema: str | None, dialect: str) -> str:
     """Format a qualified or unqualified table reference with dialect-escaped segments."""
     parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
@@ -495,12 +507,28 @@ def _safe_driver_in_transaction(driver: Any) -> bool:
     return False
 
 
+async def _safe_driver_in_transaction_async(driver: Any) -> bool:
+    """Return whether an async ``driver`` reports an active transaction without raising."""
+    for method_name in ("is_in_transaction", "_transaction_open", "_connection_in_transaction"):
+        checker = getattr(driver, method_name, None)
+        if not callable(checker):
+            continue
+        with contextlib.suppress(Exception):
+            res = checker()
+            if inspect.isawaitable(res):
+                res = await res
+            return bool(res)
+    return False
+
+
 def _split_schema_and_table(table: str, explicit_schema: str | None) -> tuple[str | None, str]:
     """Split an optional schema prefix and unquote identifier delimiters."""
-    clean = table.strip()
+    table_parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
     if explicit_schema is not None:
-        return explicit_schema, clean.rsplit(".", 1)[-1].strip('"`[]')
-    if "." in clean:
-        schema_part, table_part = clean.split(".", 1)
-        return schema_part.strip('"`[]'), table_part.strip('"`[]')
-    return None, clean.strip('"`[]')
+        schema_parts = split_qualified_identifier(explicit_schema, quote_chars='"`', allow_bracket_quotes=True)
+        resolved_schema = ".".join(schema_parts) if schema_parts else explicit_schema.strip()
+        table_name = table_parts[-1] if table_parts else ""
+        return resolved_schema, table_name
+    if len(table_parts) > 1:
+        return ".".join(table_parts[:-1]), table_parts[-1]
+    return None, (table_parts[0] if table_parts else "")
