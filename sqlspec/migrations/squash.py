@@ -29,6 +29,12 @@ from sqlspec.data_dictionary import DDLResult
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
+from sqlspec.migrations.base import (
+    _PG_RLS_SCHEMA_CHECK_SQL,
+    _extract_catalog_rows,
+    _is_postgres_non_cockroach_driver,
+    _validate_postgres_rls_rows,
+)
 from sqlspec.migrations.loaders import _load_migration_sql
 from sqlspec.migrations.templates import escape_python_docstring, sanitize_header_field
 from sqlspec.migrations.validation import (
@@ -2173,6 +2179,11 @@ class MigrationSquasher:
             raise SquashValidationError(msg)
         version_parts = split_qualified_identifier(self.version_table, quote_chars='"`', allow_bracket_quotes=True)
         version_table = version_parts[-1] if version_parts else self.version_table.strip('"`[]')
+        if _is_postgres_non_cockroach_driver(driver):
+            rls_result = driver.execute(_PG_RLS_SCHEMA_CHECK_SQL, {"schema_name": None})
+            _validate_postgres_rls_rows(
+                _extract_catalog_rows(rls_result), exclude_tables=(version_table,), use_squash_error=True
+            )
         data_dictionary = driver.data_dictionary
         create_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="create")
         drop_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="drop")

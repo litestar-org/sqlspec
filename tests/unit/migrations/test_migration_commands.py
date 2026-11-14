@@ -30,6 +30,7 @@ from sqlspec.migrations.commands import (
     SyncMigrationCommands,
     create_migration_commands,
 )
+from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import BaseMigrationRunner
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.validation import detect_out_of_order_migrations
@@ -1910,3 +1911,47 @@ def test_verify_strict_covers_extension_drift_unrecorded_squash_and_legacy_md5(t
             assert report["checksum_mismatches"] == []
     finally:
         cfg.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_commands_fix_wraps_target_file_collision_value_error_in_migration_error(
+    tmp_path: Path, is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """commands.fix converts MigrationFixer target collisions into MigrationError while keeping plan_renames ValueError."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_existing.sql").write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    (migrations_dir / "20250101000000_existing.sql").write_text(
+        "-- name: migrate-20250101000000-up\nSELECT 2;\n", encoding="utf-8"
+    )
+
+    fixer = MigrationFixer(migrations_dir)
+    with pytest.raises(ValueError, match="Target file already exists"):
+        fixer.plan_renames({"20250101000000": "0001"})
+
+    monkeypatch.setattr(
+        "sqlspec.migrations.commands.generate_conversion_map", lambda _migrations: {"20250101000000": "0001"}
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(tmp_path / "fix_collision_async.db")},
+            migration_config={"script_location": str(migrations_dir)},
+        )
+        try:
+            with pytest.raises(MigrationError, match="Target file already exists"):
+                await AsyncMigrationCommands(cfg_async).fix(dry_run=True, update_database=False, yes=True)
+        finally:
+            await cfg_async.close_pool()
+        return
+
+    cfg_sync = SqliteConfig(
+        connection_config={"database": str(tmp_path / "fix_collision_sync.db")},
+        migration_config={"script_location": str(migrations_dir)},
+    )
+    try:
+        with pytest.raises(MigrationError, match="Target file already exists"):
+            SyncMigrationCommands(cfg_sync).fix(dry_run=True, update_database=False, yes=True)
+    finally:
+        cfg_sync.close_pool()

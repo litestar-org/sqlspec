@@ -25,7 +25,15 @@ from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import CreateTable, sql
 from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, SquashValidationError
-from sqlspec.migrations.base import BaseMigrationCommands, BaseMigrationTracker, _driver_in_transaction_async
+from sqlspec.migrations.base import (
+    _PG_RLS_SCHEMA_CHECK_SQL,
+    BaseMigrationCommands,
+    BaseMigrationTracker,
+    _driver_in_transaction_async,
+    _extract_catalog_rows,
+    _is_postgres_non_cockroach_driver,
+    _validate_postgres_rls_rows,
+)
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, BaseMigrationRunner, SyncMigrationRunner
@@ -1195,6 +1203,26 @@ class MigrationCommandsCore(BaseMigrationCommands[CommandConfigT, Any], Generic[
         drop = exp.Drop(kind="TABLE", tables=[target], exists=True)
         return MigrationCommandsCore._terminate_statement(drop.sql(dialect=dialect, copy=False))
 
+    @staticmethod
+    def _ensure_postgres_rls_safe_sync(
+        driver: Any, *, schema: str | None = None, exclude_tables: "Sequence[str] | None" = None
+    ) -> None:
+        """Raise when PostgreSQL target tables enable RLS or define row-level policies."""
+        if not _is_postgres_non_cockroach_driver(driver):
+            return
+        result = driver.execute(_PG_RLS_SCHEMA_CHECK_SQL, {"schema_name": schema})
+        _validate_postgres_rls_rows(_extract_catalog_rows(result), exclude_tables=exclude_tables)
+
+    @staticmethod
+    async def _ensure_postgres_rls_safe_async(
+        driver: Any, *, schema: str | None = None, exclude_tables: "Sequence[str] | None" = None
+    ) -> None:
+        """Raise asynchronously when PostgreSQL target tables enable RLS or define row-level policies."""
+        if not _is_postgres_non_cockroach_driver(driver):
+            return
+        result = await driver.execute(_PG_RLS_SCHEMA_CHECK_SQL, {"schema_name": schema})
+        _validate_postgres_rls_rows(_extract_catalog_rows(result), exclude_tables=exclude_tables)
+
 
 class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRunner]):
     """Synchronous migration commands."""
@@ -1757,6 +1785,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
         if from_schema:
             excluded = self._version_table_exclusion()
             with self.config.provide_session() as driver:
+                self._ensure_postgres_rls_safe_sync(driver, schema=schema, exclude_tables=excluded)
                 up_sql, down_sql = schema_ddl_statements(
                     driver.data_dictionary.get_schema_ddl(
                         driver, schema=schema, exclude_tables=excluded, direction="create"
@@ -1805,11 +1834,13 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             Rendered schema DDL string.
         """
         _, echo_value, _ = self._resolve_output_policy(False, echo, False)
+        excluded = self._version_table_exclusion(include_migrations_table)
         with self.config.provide_session() as driver:
+            self._ensure_postgres_rls_safe_sync(driver, schema=schema, exclude_tables=excluded)
             create_res = driver.data_dictionary.get_schema_ddl(
                 driver,
                 schema=schema,
-                exclude_tables=self._version_table_exclusion(include_migrations_table),
+                exclude_tables=excluded,
                 direction="create",
                 prefer_native=prefer_native,
                 target_dialect=target_dialect,
@@ -1922,6 +1953,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     allow_gaps=allow_gaps,
                     applied_migrations=self._read_applied_migrations(driver),
                 )
+                self._ensure_postgres_rls_safe_sync(driver, exclude_tables=excluded)
                 schema_ddl = schema_ddl_statements(
                     driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
                     driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
@@ -1992,7 +2024,10 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             return
 
         fixer = MigrationFixer(self.migrations_path)
-        renames = fixer.plan_renames(conversion_map)
+        try:
+            renames = fixer.plan_renames(conversion_map)
+        except ValueError as exc:
+            raise MigrationError(str(exc)) from exc
 
         table = Table(title="Migration Conversions")
         table.add_column("Current Version", style="cyan")
@@ -2962,6 +2997,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
         if from_schema:
             excluded = self._version_table_exclusion()
             async with self.config.provide_session() as driver:
+                await self._ensure_postgres_rls_safe_async(driver, schema=schema, exclude_tables=excluded)
                 up_sql, down_sql = schema_ddl_statements(
                     await driver.data_dictionary.get_schema_ddl(
                         driver, schema=schema, exclude_tables=excluded, direction="create"
@@ -3010,11 +3046,13 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             Rendered schema DDL string.
         """
         _, echo_value, _ = self._resolve_output_policy(False, echo, False)
+        excluded = self._version_table_exclusion(include_migrations_table)
         async with self.config.provide_session() as driver:
+            await self._ensure_postgres_rls_safe_async(driver, schema=schema, exclude_tables=excluded)
             create_res = await driver.data_dictionary.get_schema_ddl(
                 driver,
                 schema=schema,
-                exclude_tables=self._version_table_exclusion(include_migrations_table),
+                exclude_tables=excluded,
                 direction="create",
                 prefer_native=prefer_native,
                 target_dialect=target_dialect,
@@ -3130,6 +3168,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     allow_gaps=allow_gaps,
                     applied_migrations=await self._read_applied_migrations(driver),
                 )
+                await self._ensure_postgres_rls_safe_async(driver, exclude_tables=excluded)
                 schema_ddl = schema_ddl_statements(
                     await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="create"),
                     await driver.data_dictionary.get_schema_ddl(driver, exclude_tables=excluded, direction="drop"),
@@ -3202,7 +3241,10 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             return
 
         fixer = MigrationFixer(self.migrations_path)
-        renames = fixer.plan_renames(conversion_map)
+        try:
+            renames = fixer.plan_renames(conversion_map)
+        except ValueError as exc:
+            raise MigrationError(str(exc)) from exc
 
         table = Table(title="Migration Conversions")
         table.add_column("Current Version", style="cyan")
