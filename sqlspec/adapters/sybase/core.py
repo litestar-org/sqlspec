@@ -416,14 +416,27 @@ def merge_sybase_derive_overrides(base_config: Mapping[str, Any], overrides: Map
         if alias in explicit and canonical not in explicit:
             config[canonical] = explicit[alias]
             config.pop(alias, None)
-    if "host" in explicit or "port" in explicit:
+    freetds_server = explicit.get("freetds_server")
+    server_alias = explicit.get("server_alias")
+    alias_name = freetds_server or server_alias
+    has_alias_flag = "is_server_alias" in explicit or "_sybase_server_alias" in explicit
+    explicit_alias_flag = bool(explicit.get("is_server_alias") or explicit.get("_sybase_server_alias"))
+    for key in ("freetds_server", "server_alias", "is_server_alias"):
+        config.pop(key, None)
+    if alias_name:
+        config["server"] = alias_name
+        config["_sybase_server_alias"] = True
+        config.pop("host", None)
+    elif "host" in explicit:
         config.pop("_sybase_server_alias", None)
-        if "host" in explicit and "server" not in explicit:
+        if "server" not in explicit:
             config["server"] = explicit["host"]
             config.pop("host", None)
-    elif "server" in explicit:
-        config.pop("port", None)
-        config["_sybase_server_alias"] = True
+    elif has_alias_flag:
+        if explicit_alias_flag:
+            config["_sybase_server_alias"] = True
+        else:
+            config.pop("_sybase_server_alias", None)
     return config
 
 

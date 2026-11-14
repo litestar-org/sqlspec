@@ -1353,17 +1353,62 @@ def test_sybase_reconcile_orchestrators_converge_litestar_events_and_adk() -> No
     driver.commit.assert_not_called()
 
 
-def test_replica_derivation_switches_freetds_alias_and_tcp_without_stale_options() -> None:
-    primary = SybaseConfig(connection_config={"freetds_server": "ASE_WRITER", "database": "app"})
+def test_replica_derivation_switches_freetds_alias_and_tcp_without_stale_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching between FreeTDS alias and TCP modes updates routing invariants cleanly."""
+    monkeypatch.delenv("TDSVER", raising=False)
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: FakeConnection()))
+    primary = SybaseConfig(connection_config={"freetds_server": "ASE_WRITER", "port": 5000, "database": "app"})
     reader = primary.derive_pool(host="reader", port=5001, db="reader_app", username="reader")
     assert reader.connection_config["server"] == "reader"
+    assert reader.connection_config["port"] == 5001
     assert reader.connection_config["database"] == "reader_app"
     assert reader.connection_config["user"] == "reader"
     assert reader.connection_config.get("_sybase_server_alias") is None
-    alias = reader.derive_pool(server="ASE_READER")
+    alias = reader.derive_pool(server_alias="ASE_READER", port=5002)
     assert alias.connection_config["server"] == "ASE_READER"
-    assert alias.connection_config.get("port") is None
+    assert alias.connection_config["port"] == 5002
     assert alias.connection_config["_sybase_server_alias"] is True
+    pool = alias.provide_pool()
+    pool.close()
+
+
+def test_freetds_alias_primary_preserves_alias_mode_across_server_and_port_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server and port overrides on a FreeTDS alias primary stay valid without TDSVER."""
+    monkeypatch.delenv("TDSVER", raising=False)
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: FakeConnection()))
+    primary = SybaseConfig(
+        connection_config={"freetds_server": "ASE_WRITER", "port": 5000, "database": "app"},
+        replicas=[{"server": "rep_ase"}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    assert replica.connection_config["server"] == "rep_ase"
+    assert replica.connection_config["port"] == 5000
+    assert replica.connection_config["_sybase_server_alias"] is True
+    replica.provide_pool().close()
+
+    port_override = primary.derive_pool(port=5001)
+    assert port_override.connection_config["port"] == 5001
+    assert port_override.connection_config["_sybase_server_alias"] is True
+    port_override.provide_pool().close()
+
+    both_override = primary.derive_pool(server="rep_ase", port=5001)
+    assert both_override.connection_config["server"] == "rep_ase"
+    assert both_override.connection_config["port"] == 5001
+    assert both_override.connection_config["_sybase_server_alias"] is True
+    both_override.provide_pool().close()
+
+
+def test_tcp_primary_server_override_stays_tcp_with_inherited_port() -> None:
+    """Overriding server on a TCP primary replaces the host while preserving TCP mode and port."""
+    primary = SybaseConfig(connection_config={"server": "writer", "port": 5000})
+    derived = primary.derive_pool(server="reader")
+    assert derived.connection_config["server"] == "reader"
+    assert derived.connection_config["port"] == 5000
+    assert derived.connection_config.get("_sybase_server_alias") is None
 
 
 def test_replica_sybase_url_shorthand_parses_endpoint_and_database() -> None:
