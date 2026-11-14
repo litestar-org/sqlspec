@@ -117,29 +117,6 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     return get_or_create_driver_session(request, config_state)
 
 
-def _resolve_or_build_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
-    """Return the cached driver session or build and cache a fresh one."""
-    session_instance_key = f"{config_state.session_key}_instance"
-    existing_session = get_state_value(request.state, session_instance_key, None)
-    if existing_session is not None:
-        return existing_session, False
-    config = config_state.config
-    session = config._prepare_driver(
-        config.driver_type(
-            connection=get_connection_from_request(request, config_state),
-            statement_config=config.statement_config,
-            driver_features=config.driver_features,
-        )
-    )
-    if (
-        config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
-        and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
-    ):
-        session._auto_begin_on_write = True
-    set_state_value(request.state, session_instance_key, session)
-    return session, True
-
-
 def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
     """Get or create the driver session bound to the request connection.
 
@@ -242,6 +219,29 @@ def get_scope_tenant(scope: "Mapping[str, Any]", config_state: "SQLSpecConfigSta
         if stored is not None:
             return stored
     return None
+
+
+def _resolve_or_build_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
+    """Return the cached driver session or build and cache a fresh one."""
+    session_instance_key = f"{config_state.session_key}_instance"
+    existing_session = get_state_value(request.state, session_instance_key, None)
+    if existing_session is not None:
+        return existing_session, False
+    config = config_state.config
+    session = config._prepare_driver(
+        config.driver_type(
+            connection=get_connection_from_request(request, config_state),
+            statement_config=config.statement_config,
+            driver_features=config.driver_features,
+        )
+    )
+    if (
+        config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
+        and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+    ):
+        session._auto_begin_on_write = True
+    set_state_value(request.state, session_instance_key, session)
+    return session, True
 
 
 def _state_dict(state: Any) -> dict[str, Any]:
