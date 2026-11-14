@@ -189,17 +189,6 @@ class PyMysqlStreamSource:
         self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    def _start(self) -> None:
-        try:
-            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
-            self._cursor = cursor
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            self.column_types = _resolve_column_types(self._cursor.description)
-        except BaseException:
-            self.close(error=True)
-            raise
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -216,6 +205,17 @@ class PyMysqlStreamSource:
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
+        except BaseException:
+            self.close(error=True)
+            raise
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -569,6 +569,90 @@ def build_load_data_statement(
     )
 
 
+def merge_derive_overrides(
+    base_config: Mapping[str, Any], overrides: Mapping[str, Any], *, clear_pool_name: bool = False
+) -> dict[str, Any]:
+    """Merge clone parameters with explicit aliases taking precedence.
+
+    Args:
+        base_config: Inherited connection options.
+        overrides: Explicit clone options.
+        clear_pool_name: Remove an inherited native pool name.
+
+    Returns:
+        Independent normalized connection options.
+    """
+    result = dict(base_config)
+    aliases = {
+        "database": ("db",),
+        "user": ("username",),
+        "password": ("passwd",),
+        "local_infile": ("allow_local_infile",),
+        "connect_timeout": ("connection_timeout",),
+        "cursorclass": ("cursor_class", "cursor_cls"),
+    }
+    for canonical, alternatives in aliases.items():
+        if canonical not in overrides and any(alias in overrides for alias in alternatives):
+            result.pop(canonical, None)
+    result.update(overrides)
+    for canonical, alternatives in aliases.items():
+        for alias in alternatives:
+            if alias in result:
+                value = result.pop(alias)
+                result.setdefault(canonical, value)
+    if clear_pool_name and "pool_name" not in overrides:
+        result.pop("pool_name", None)
+    return result
+
+
+def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+    """Parse explicit MySQL or MariaDB replica endpoints.
+
+    Args:
+        spec: Endpoint URL, host shorthand, or override mapping.
+
+    Returns:
+        Independent connection or config overrides.
+
+    Raises:
+        ImproperConfigurationError: The endpoint is missing or unsupported.
+    """
+    if isinstance(spec, bool):
+        msg = "MySQL replicas require explicit endpoints or overrides"
+        raise ImproperConfigurationError(msg)
+    if isinstance(spec, Mapping):
+        return dict(spec)
+    endpoint = spec if "://" in spec else "mysql://" + spec
+    if not endpoint.startswith(("mysql://", "mariadb://")):
+        msg = "Replica endpoint must use mysql:// or mariadb://"
+        raise ImproperConfigurationError(msg)
+    options = parse_mysql_dsn(endpoint)
+    if not options.get("host"):
+        msg = "Replica endpoint requires a host"
+        raise ImproperConfigurationError(msg)
+    return options
+
+
+def build_gtid_wait_query(gtid_set: str, timeout: float, *, mariadb: bool) -> str:
+    """Select a parameterized native GTID wait query.
+
+    Args:
+        gtid_set: Native GTID position to await.
+        timeout: Finite nonnegative wait duration in seconds.
+        mariadb: Select the MariaDB native function.
+
+    Returns:
+        SQL containing placeholders for the GTID position and timeout.
+
+    Raises:
+        ValueError: The GTID position is blank or the timeout is invalid.
+    """
+    if not gtid_set.strip() or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+        msg = "GTID wait requires a nonempty GTID set and a finite nonnegative timeout"
+        raise ValueError(msg)
+    return "SELECT MASTER_GTID_WAIT(%s, %s)" if mariadb else "SELECT WAIT_FOR_EXECUTED_GTID_SET(%s, %s)"
+
+
 def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *, logger: Any | None = None) -> Any:
     """Safely decode JSON column values using the specified deserializer."""
     if value is None:
@@ -714,87 +798,3 @@ def _resolve_column_types(description: Any) -> "dict[str, str] | None":
 
 
 default_statement_config = build_statement_config()
-
-
-def merge_derive_overrides(
-    base_config: Mapping[str, Any], overrides: Mapping[str, Any], *, clear_pool_name: bool = False
-) -> dict[str, Any]:
-    """Merge clone parameters with explicit aliases taking precedence.
-
-    Args:
-        base_config: Inherited connection options.
-        overrides: Explicit clone options.
-        clear_pool_name: Remove an inherited native pool name.
-
-    Returns:
-        Independent normalized connection options.
-    """
-    result = dict(base_config)
-    aliases = {
-        "database": ("db",),
-        "user": ("username",),
-        "password": ("passwd",),
-        "local_infile": ("allow_local_infile",),
-        "connect_timeout": ("connection_timeout",),
-        "cursorclass": ("cursor_class", "cursor_cls"),
-    }
-    for canonical, alternatives in aliases.items():
-        if canonical not in overrides and any(alias in overrides for alias in alternatives):
-            result.pop(canonical, None)
-    result.update(overrides)
-    for canonical, alternatives in aliases.items():
-        for alias in alternatives:
-            if alias in result:
-                value = result.pop(alias)
-                result.setdefault(canonical, value)
-    if clear_pool_name and "pool_name" not in overrides:
-        result.pop("pool_name", None)
-    return result
-
-
-def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-    """Parse explicit MySQL or MariaDB replica endpoints.
-
-    Args:
-        spec: Endpoint URL, host shorthand, or override mapping.
-
-    Returns:
-        Independent connection or config overrides.
-
-    Raises:
-        ImproperConfigurationError: The endpoint is missing or unsupported.
-    """
-    if isinstance(spec, bool):
-        msg = "MySQL replicas require explicit endpoints or overrides"
-        raise ImproperConfigurationError(msg)
-    if isinstance(spec, Mapping):
-        return dict(spec)
-    endpoint = spec if "://" in spec else "mysql://" + spec
-    if not endpoint.startswith(("mysql://", "mariadb://")):
-        msg = "Replica endpoint must use mysql:// or mariadb://"
-        raise ImproperConfigurationError(msg)
-    options = parse_mysql_dsn(endpoint)
-    if not options.get("host"):
-        msg = "Replica endpoint requires a host"
-        raise ImproperConfigurationError(msg)
-    return options
-
-
-def build_gtid_wait_query(gtid_set: str, timeout: float, *, mariadb: bool) -> str:
-    """Select a parameterized native GTID wait query.
-
-    Args:
-        gtid_set: Native GTID position to await.
-        timeout: Finite nonnegative wait duration in seconds.
-        mariadb: Select the MariaDB native function.
-
-    Returns:
-        SQL containing placeholders for the GTID position and timeout.
-
-    Raises:
-        ValueError: The GTID position is blank or the timeout is invalid.
-    """
-    if not gtid_set.strip() or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
-        msg = "GTID wait requires a nonempty GTID set and a finite nonnegative timeout"
-        raise ValueError(msg)
-    return "SELECT MASTER_GTID_WAIT(%s, %s)" if mariadb else "SELECT WAIT_FOR_EXECUTED_GTID_SET(%s, %s)"

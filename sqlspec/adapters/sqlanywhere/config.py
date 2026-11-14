@@ -202,6 +202,31 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
             **kwargs,
         )
 
+    def create_connection(self) -> "SqlanywhereConnection":
+        """Open a standalone SAP SQL Anywhere connection owned by the caller."""
+        return self.provide_pool().new_connection()
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "SqlanywhereConfig": SqlanywhereConfig,
+            "SqlanywhereConnection": SqlanywhereConnection,
+            "SqlanywhereConnectionContext": SqlanywhereConnectionContext,
+            "SqlanywhereConnectionParams": SqlanywhereConnectionParams,
+            "SqlanywhereConnectionPool": SqlanywhereConnectionPool,
+            "SqlanywhereCursor": SqlanywhereCursor,
+            "SqlanywhereDriver": SqlanywhereDriver,
+            "SqlanywhereDriverFeatures": SqlanywhereDriverFeatures,
+            "SqlanywhereExceptionHandler": SqlanywhereExceptionHandler,
+            "SqlanywherePoolParams": SqlanywherePoolParams,
+            "SqlanywhereRawCursor": SqlanywhereRawCursor,
+            "SqlanywhereSessionContext": SqlanywhereSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        return EventRuntimeHints(poll_interval=0.5, lease_seconds=30, select_for_update=False, skip_locked=False)
+
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -238,31 +263,6 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         result = dict(spec_input)
         result.setdefault("nodetype", "READONLY")
         return result
-
-    def create_connection(self) -> "SqlanywhereConnection":
-        """Open a standalone SAP SQL Anywhere connection owned by the caller."""
-        return self.provide_pool().new_connection()
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "SqlanywhereConfig": SqlanywhereConfig,
-            "SqlanywhereConnection": SqlanywhereConnection,
-            "SqlanywhereConnectionContext": SqlanywhereConnectionContext,
-            "SqlanywhereConnectionParams": SqlanywhereConnectionParams,
-            "SqlanywhereConnectionPool": SqlanywhereConnectionPool,
-            "SqlanywhereCursor": SqlanywhereCursor,
-            "SqlanywhereDriver": SqlanywhereDriver,
-            "SqlanywhereDriverFeatures": SqlanywhereDriverFeatures,
-            "SqlanywhereExceptionHandler": SqlanywhereExceptionHandler,
-            "SqlanywherePoolParams": SqlanywherePoolParams,
-            "SqlanywhereRawCursor": SqlanywhereRawCursor,
-            "SqlanywhereSessionContext": SqlanywhereSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        return EventRuntimeHints(poll_interval=0.5, lease_seconds=30, select_for_update=False, skip_locked=False)
 
     def _create_pool(self) -> "SqlanywhereConnectionPool":
         return SqlanywhereConnectionPool(

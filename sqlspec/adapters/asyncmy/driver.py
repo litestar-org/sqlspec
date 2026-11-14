@@ -111,6 +111,17 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
         )
 
+    @property
+    def data_dictionary(self) -> "AsyncmyDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AsyncmyDataDictionary()
+        return self._data_dictionary
+
     async def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
         """Wait for the server to apply a GTID set within a bounded timeout.
 
@@ -125,17 +136,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
         result = await self.select_value(query, (gtid_set, timeout))
         return bool(result == 0)
-
-    @property
-    def data_dictionary(self) -> "AsyncmyDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AsyncmyDataDictionary()
-        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.

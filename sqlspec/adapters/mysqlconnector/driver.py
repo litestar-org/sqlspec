@@ -119,6 +119,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
 
+    @property
+    def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = MysqlConnectorSyncDataDictionary()
+        return self._data_dictionary
+
     def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
         """Wait for the server to apply a GTID set within a bounded timeout.
 
@@ -133,12 +139,6 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
         result = self.select_value(query, (gtid_set, timeout))
         return bool(result == 0)
-
-    @property
-    def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = MysqlConnectorSyncDataDictionary()
-        return self._data_dictionary
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
@@ -404,6 +404,12 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         cursor_options = cast("dict[str, Any] | None", self.driver_features.get("cursor_options"))
         self._cursor_options: dict[str, Any] | None = dict(cursor_options) if cursor_options else None
 
+    @property
+    def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = MysqlConnectorAsyncDataDictionary()
+        return self._data_dictionary
+
     async def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
         """Wait for the server to apply a GTID set within a bounded timeout.
 
@@ -418,12 +424,6 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
         result = await self.select_value(query, (gtid_set, timeout))
         return bool(result == 0)
-
-    @property
-    def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = MysqlConnectorAsyncDataDictionary()
-        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)

@@ -296,6 +296,30 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
                 msg = "Tenant connection_instance must require verified unpooled operation"
                 raise ImproperConfigurationError(msg)
 
+    def create_connection(self) -> "MssqlPythonConnection":
+        self._require_leased_tenant_connection()
+        pool = self.provide_pool()
+        return pool.acquire()
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "MssqlPythonConfig": MssqlPythonConfig,
+            "MssqlPythonConnection": MssqlPythonConnection,
+            "MssqlPythonConnectionContext": MssqlPythonConnectionContext,
+            "MssqlPythonConnectionParams": MssqlPythonConnectionParams,
+            "MssqlPythonConnectionPool": MssqlPythonConnectionPool,
+            "MssqlPythonDriver": MssqlPythonDriver,
+            "MssqlPythonDriverFeatures": MssqlPythonDriverFeatures,
+            "MssqlPythonPoolParams": MssqlPythonPoolParams,
+            "MssqlPythonSessionContext": MssqlPythonSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for SQL Server queue fallback."""
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: "Mapping[str, Any]"
     ) -> dict[str, Any]:
@@ -326,30 +350,6 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         if "multisubnetfailover" not in options:
             options.setdefault("multi_subnet_failover", failover)
         return {**result, "connection_config_overrides": options}
-
-    def create_connection(self) -> "MssqlPythonConnection":
-        self._require_leased_tenant_connection()
-        pool = self.provide_pool()
-        return pool.acquire()
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "MssqlPythonConfig": MssqlPythonConfig,
-            "MssqlPythonConnection": MssqlPythonConnection,
-            "MssqlPythonConnectionContext": MssqlPythonConnectionContext,
-            "MssqlPythonConnectionParams": MssqlPythonConnectionParams,
-            "MssqlPythonConnectionPool": MssqlPythonConnectionPool,
-            "MssqlPythonDriver": MssqlPythonDriver,
-            "MssqlPythonDriverFeatures": MssqlPythonDriverFeatures,
-            "MssqlPythonPoolParams": MssqlPythonPoolParams,
-            "MssqlPythonSessionContext": MssqlPythonSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for SQL Server queue fallback."""
-        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
     def _create_pool(self) -> "MssqlPythonConnectionPool":
         return _create_mssql_python_pool(dict(self.connection_config), self.driver_features, self._user_connection_hook)

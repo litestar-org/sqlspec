@@ -200,24 +200,6 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             **kwargs,
         )
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
-            if alias in overrides and canonical not in overrides:
-                config.pop(canonical, None)
-        return config
-
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, str):
-            return {"connection_config_overrides": {"server": spec_input}}
-        if spec_input is True:
-            if not str(self.connection_config.get("database") or "").strip():
-                msg = "SQL Server read-only intent requires a target database"
-                raise ImproperConfigurationError(msg)
-            return {"connection_config_overrides": {"read_only": True}}
-        return super()._build_replica_spec_overrides(spec_input)
-
     def create_connection(self) -> "PymssqlConnection":
         """Open a standalone connection owned by the caller.
 
@@ -252,6 +234,24 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return runtime hints for pymssql event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
+            if alias in overrides and canonical not in overrides:
+                config.pop(canonical, None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"server": spec_input}}
+        if spec_input is True:
+            if not str(self.connection_config.get("database") or "").strip():
+                msg = "SQL Server read-only intent requires a target database"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"read_only": True}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def _create_pool(self) -> "PymssqlConnectionPool":
         config = dict(self.connection_config)

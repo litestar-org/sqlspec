@@ -401,41 +401,6 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     return config
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
-
-
-def _constraint_exception_from_message(error: BaseException) -> "SQLSpecError | None":
-    """Classify Sybase ASE constraint messages when a driver omits the native error number."""
-    message = str(error)
-    normalized = message.lower()
-    if "unique key constraint" in normalized or "duplicate key" in normalized:
-        return UniqueViolationError(f"Sybase ASE unique constraint violation. Original error: {message}")
-    if (
-        "cannot insert the value null" in normalized
-        or "does not allow nulls" in normalized
-        or "does not allow null values" in normalized
-    ):
-        return NotNullViolationError(f"Sybase ASE not-null constraint violation. Original error: {message}")
-    if "check constraint" in normalized:
-        return CheckViolationError(f"Sybase ASE check constraint violation. Original error: {message}")
-    if "foreign key constraint" in normalized:
-        return ForeignKeyViolationError(f"Sybase ASE foreign key constraint violation. Original error: {message}")
-    return None
-
-
-def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
-    """Return custom type coercions for Sybase ASE."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int}
-    coercions.update(build_uuid_coercions())
-    return coercions
-
-
-_ = _SybaseDialect
-driver_profile = build_profile()
-default_statement_config = build_statement_config()
-
-
 def merge_sybase_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve explicit endpoint aliases in a fresh derivation mapping."""
     config = dict(base_config)
@@ -481,3 +446,38 @@ def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
     if parsed.path.strip("/"):
         config["database"] = unquote(parsed.path.strip("/"))
     return config
+
+
+def _bool_to_int(value: bool) -> int:
+    return int(value)
+
+
+def _constraint_exception_from_message(error: BaseException) -> "SQLSpecError | None":
+    """Classify Sybase ASE constraint messages when a driver omits the native error number."""
+    message = str(error)
+    normalized = message.lower()
+    if "unique key constraint" in normalized or "duplicate key" in normalized:
+        return UniqueViolationError(f"Sybase ASE unique constraint violation. Original error: {message}")
+    if (
+        "cannot insert the value null" in normalized
+        or "does not allow nulls" in normalized
+        or "does not allow null values" in normalized
+    ):
+        return NotNullViolationError(f"Sybase ASE not-null constraint violation. Original error: {message}")
+    if "check constraint" in normalized:
+        return CheckViolationError(f"Sybase ASE check constraint violation. Original error: {message}")
+    if "foreign key constraint" in normalized:
+        return ForeignKeyViolationError(f"Sybase ASE foreign key constraint violation. Original error: {message}")
+    return None
+
+
+def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
+    """Return custom type coercions for Sybase ASE."""
+    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int}
+    coercions.update(build_uuid_coercions())
+    return coercions
+
+
+_ = _SybaseDialect
+driver_profile = build_profile()
+default_statement_config = build_statement_config()

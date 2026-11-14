@@ -316,30 +316,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
     _session_context_class: "ClassVar[type[PyMysqlSessionContext]]" = PyMysqlSessionContext
     _default_statement_config = default_statement_config
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
-    ) -> dict[str, Any]:
-        return merge_derive_overrides(config, overrides, clear_pool_name=False)
-
-    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
-        values = parse_mysql_replica_shorthand(spec_input)
-        read_only = values.pop("read_only", True)
-        connection = dict(values.pop("connection_config_overrides", {}))
-        config_keys = {
-            "driver_features_overrides",
-            "statement_config",
-            "migration_config",
-            "extension_config",
-            "observability_config",
-            "bind_key",
-        }
-        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
-        connection.update(values)
-        read_only = connection.pop("read_only", read_only)
-        connection["read_only"] = read_only is not False
-        forwarded["connection_config_overrides"] = connection
-        return forwarded
-
     def __init__(
         self,
         *,
@@ -416,6 +392,30 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        connection["read_only"] = read_only is not False
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
