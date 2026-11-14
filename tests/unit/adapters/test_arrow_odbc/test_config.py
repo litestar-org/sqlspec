@@ -564,3 +564,36 @@ def test_arrow_odbc_config_provide_maps_native_connect_error(monkeypatch: pytest
         with getattr(config, method)():
             pass
     assert mapped_exc.value.__cause__ is native
+
+
+@pytest.mark.parametrize(
+    ("hook_error", "expected_match"),
+    [
+        (RuntimeError("hook failed"), "hook failed"),
+        (ImproperConfigurationError("invalid session setup"), "invalid session setup"),
+    ],
+    ids=["runtime-error", "improper-config"],
+)
+def test_create_connection_closes_connection_when_hook_raises(
+    monkeypatch: pytest.MonkeyPatch, hook_error: Exception, expected_match: str
+) -> None:
+    """create_connection closes the raw ODBC connection if on_connection_create raises."""
+    close_calls = 0
+
+    class _CreatedConnection:
+        def close(self) -> None:
+            nonlocal close_calls
+            close_calls += 1
+
+    def failing_hook(_conn: Any) -> None:
+        raise hook_error
+
+    monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", lambda *_a, **_kw: _CreatedConnection())
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics"}, driver_features={"on_connection_create": failing_hook}
+    )
+
+    with pytest.raises(ImproperConfigurationError, match=expected_match):
+        config.create_connection()
+
+    assert close_calls == 1

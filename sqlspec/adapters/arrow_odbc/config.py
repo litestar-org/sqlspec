@@ -1,5 +1,6 @@
 """arrow-odbc database configuration."""
 
+import contextlib
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
@@ -260,7 +261,12 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
             if self._user_connection_hook is not None:
-                self._user_connection_hook(connection)
+                try:
+                    self._user_connection_hook(connection)
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        _close_arrow_odbc_connection(connection)
+                    raise
             return cast("ArrowOdbcConnection", connection)
         except ImproperConfigurationError:
             raise
