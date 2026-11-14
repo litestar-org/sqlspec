@@ -10,7 +10,7 @@ from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import (
-    get_or_create_driver_session,
+    get_or_create_driver_session_async,
     get_or_create_session,
     get_state_value,
     has_state_value,
@@ -314,11 +314,7 @@ class SQLSpecPlugin:
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         if not has_state_value(request.state, config_state.connection_key):
             await acquire_pending_connection_async(request, config_state)
-        session_instance_key = f"{config_state.session_key}_instance"
-        existing = get_state_value(request.state, session_instance_key, None)
-        if existing is not None:
-            return existing
-        return cast("Any", get_or_create_driver_session(request, config_state))
+        return cast("Any", await get_or_create_driver_session_async(request, config_state))
 
     def get_connection(self, request: "Request", key: Any = None) -> Any:
         """Get database connection from request state, checking it out on first access.

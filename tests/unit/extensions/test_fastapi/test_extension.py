@@ -1,5 +1,6 @@
 """Tests for FastAPI SQLSpec plugin."""
 
+import asyncio
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -428,3 +429,38 @@ def test_fastapi_prepared_session_streaming_completion_and_detachment(
         assert reader.execute("SELECT value FROM stream_items ORDER BY value").fetchall() == expected_rows
     finally:
         reader.close()
+
+
+def test_fastapi_async_lifecycle_hooks_via_provide_session(caplog: pytest.LogCaptureFixture) -> None:
+    """FastAPI awaits async on_session_start and on_session_end hooks through provide_session."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"fastapi": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+    app = FastAPI()
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/check")
+    async def check(db: Annotated[Any, Depends(plugin.provide_session())]) -> dict[str, Any]:
+        return {"value": await db.select_value("SELECT 1")}
+
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.get("/check")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text

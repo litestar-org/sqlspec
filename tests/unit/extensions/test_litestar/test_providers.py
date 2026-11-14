@@ -1,13 +1,16 @@
 # pyright: reportArgumentType=false, reportCallIssue=false
 """Unit tests for Litestar filter providers (issue #405)."""
 
+import asyncio
 import datetime as dt
 import inspect
-from typing import Any, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 import pytest
+from litestar import Request, get
 from litestar.config.app import AppConfig
 from litestar.exceptions import ValidationException
+from litestar.testing import create_test_client
 from litestar.types import HTTPScope
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -33,7 +36,11 @@ from sqlspec.extensions.litestar.providers import (
     create_filter_dependencies,
     dep_cache,
 )
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.typing import LITESTAR_INSTALLED
+
+if TYPE_CHECKING:
+    from sqlspec.config import LifecycleConfig
 
 if not LITESTAR_INSTALLED:
     pytest.skip("Litestar not installed", allow_module_level=True)
@@ -631,3 +638,47 @@ def test_aggregate_function_excludes_inactive_before_after_and_id_filters() -> N
     assert len(result) == 1
     assert isinstance(result[0], BeforeAfterFilter)
     assert result[0].field_name == "updated_at"
+
+
+@pytest.mark.parametrize("use_deferred", [False, True])
+def test_provide_request_session_async_awaits_async_lifecycle_hooks(
+    use_deferred: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Litestar provide_request_session_async and deferred sessions await async lifecycle hooks."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"litestar": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+    sqlspec = SQLSpec()
+    sqlspec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec)
+
+    @get("/check")
+    async def check(request: Request[Any, Any, Any]) -> dict[str, Any]:
+        session = (
+            plugin.provide_request_session(config, request.app.state, request.scope)
+            if use_deferred
+            else await plugin.provide_request_session_async(config, request.app.state, request.scope)
+        )
+        return {"value": await session.select_value("SELECT 1")}
+
+    with caplog.at_level("WARNING"), create_test_client(route_handlers=[check], plugins=[plugin]) as client:
+        response = client.get("/check")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text

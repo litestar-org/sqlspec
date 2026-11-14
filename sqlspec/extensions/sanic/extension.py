@@ -18,6 +18,7 @@ from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
     get_or_create_session,
+    get_or_create_session_async,
     get_request_tenant,
     has_context_value,
     pop_context_value,
@@ -257,7 +258,7 @@ class SQLSpecPlugin:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         await self.get_connection_async(request, key)
-        return get_or_create_session(request, config_state)
+        return await get_or_create_session_async(request, config_state)
 
     def get_connection(self, request: Any, key: Any = None) -> Any:
         """Get database connection from request context, checking it out on first access.

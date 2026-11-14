@@ -16,6 +16,7 @@ __all__ = (
     "get_connection_from_request",
     "get_context_value",
     "get_or_create_session",
+    "get_or_create_session_async",
     "get_request_tenant",
     "has_context_value",
     "pop_context_value",
@@ -115,24 +116,12 @@ def get_connection_from_request(request: Any, config_state: "SanicConfigState") 
         raise ImproperConfigurationError(msg) from exc
 
 
-def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any:
-    """Get or create database session for request.
-
-    Sessions are cached per request to return the same session instance across
-    multiple calls in one request.
-
-    Args:
-        request: Sanic request instance.
-        config_state: Configuration state for the database.
-
-    Returns:
-        Database session driver instance.
-    """
+def _resolve_or_build_session(request: Any, config_state: "SanicConfigState") -> tuple[Any, bool]:
+    """Return the cached request session or build and cache a fresh one."""
     session_instance_key = f"{config_state.session_key}_instance"
-
     existing_session = get_context_value(request.ctx, session_instance_key, None)
     if existing_session is not None:
-        return existing_session
+        return existing_session, False
     config = config_state.config
     session = config._prepare_driver(
         config.driver_type(
@@ -146,10 +135,46 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
         and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
     ):
         session._auto_begin_on_write = True
-    runtime = session.observability
-    if not runtime.is_idle:
-        runtime.emit_session_start_sync(session)
     set_context_value(request.ctx, session_instance_key, session)
+    return session, True
+
+
+def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any:
+    """Get or create database session for request.
+
+    Sessions are cached per request to return the same session instance across
+    multiple calls in one request.
+
+    Args:
+        request: Sanic request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session driver instance.
+    """
+    session, created = _resolve_or_build_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
+    return session
+
+
+async def get_or_create_session_async(request: Any, config_state: "SanicConfigState") -> Any:
+    """Get or create database session asynchronously, awaiting session-start hooks.
+
+    Args:
+        request: Sanic request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session driver instance.
+    """
+    session, created = _resolve_or_build_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            await runtime.emit_session_start_async(session)
     return session
 
 

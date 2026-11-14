@@ -17,6 +17,7 @@ __all__ = (
     "deferred_session_key",
     "get_connection_from_request",
     "get_or_create_driver_session",
+    "get_or_create_driver_session_async",
     "get_or_create_session",
     "get_request_tenant",
     "get_scope_tenant",
@@ -116,21 +117,12 @@ def get_or_create_session(request: "Request", config_state: "SQLSpecConfigState"
     return get_or_create_driver_session(request, config_state)
 
 
-def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Get or create the driver session bound to the request connection.
-
-    Args:
-        request: Starlette request instance.
-        config_state: Configuration state for the database.
-
-    Returns:
-        Database session (driver instance).
-    """
+def _resolve_or_build_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
+    """Return the cached driver session or build and cache a fresh one."""
     session_instance_key = f"{config_state.session_key}_instance"
-
     existing_session = get_state_value(request.state, session_instance_key, None)
     if existing_session is not None:
-        return existing_session
+        return existing_session, False
     config = config_state.config
     session = config._prepare_driver(
         config.driver_type(
@@ -145,9 +137,42 @@ def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfi
     ):
         session._auto_begin_on_write = True
     set_state_value(request.state, session_instance_key, session)
-    runtime = session.observability
-    if not runtime.is_idle:
-        runtime.emit_session_start_sync(session)
+    return session, True
+
+
+def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+    """Get or create the driver session bound to the request connection.
+
+    Args:
+        request: Starlette request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session (driver instance).
+    """
+    session, created = _resolve_or_build_driver_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
+    return session
+
+
+async def get_or_create_driver_session_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+    """Get or create the driver session asynchronously, awaiting session-start hooks.
+
+    Args:
+        request: Starlette request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session (driver instance).
+    """
+    session, created = _resolve_or_build_driver_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            await runtime.emit_session_start_async(session)
     return session
 
 

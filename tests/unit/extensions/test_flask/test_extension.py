@@ -1,6 +1,7 @@
 # pyright: reportArgumentType=false
 """Tests for Flask SQLSpec plugin lifecycle and configuration."""
 
+import asyncio
 import sqlite3
 import tempfile
 from contextlib import asynccontextmanager, contextmanager
@@ -693,3 +694,41 @@ def test_flask_streamed_response_defers_finalization_and_release_to_close(
             assert reader.execute("SELECT value FROM stream_items ORDER BY value").fetchall() == expected_rows
         finally:
             reader.close()
+
+
+def test_flask_async_lifecycle_hooks_via_portal(caplog: pytest.LogCaptureFixture) -> None:
+    """Flask awaits async on_session_start and on_session_end hooks through the async portal."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"flask": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/check")
+    def check() -> dict[str, Any]:
+        session = plugin.get_session()
+        return {"value": session.select_value("SELECT 1")}
+
+    try:
+        with caplog.at_level("WARNING"):
+            response = app.test_client().get("/check")
+            assert response.status_code == 200
+            assert response.get_json() == {"value": 1}
+        assert events == ["start", "end"]
+        assert "Async lifecycle hook invoked on sync path" not in caplog.text
+    finally:
+        plugin.shutdown()

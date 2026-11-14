@@ -843,3 +843,43 @@ class _AsyncConnCtx:
 
     async def __aexit__(self, *args: object) -> None:
         return None
+
+
+@pytest.mark.parametrize("use_deferred", [False, True])
+def test_starlette_async_lifecycle_hooks_execute_on_async_and_deferred_sessions(
+    use_deferred: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Starlette awaits async on_session_start and on_session_end hooks across async and deferred sessions."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+
+    async def route(request: Request) -> JSONResponse:
+        session = plugin.get_session(request) if use_deferred else await plugin.get_session_async(request)
+        value = await session.select_value("SELECT 1")
+        return JSONResponse({"value": value})
+
+    app = Starlette(routes=[Route("/items", route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.get("/items")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text

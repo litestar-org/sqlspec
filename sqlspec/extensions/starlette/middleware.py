@@ -25,6 +25,7 @@ from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_asy
 from sqlspec.extensions.starlette._utils import (
     deferred_session_key,
     get_or_create_driver_session,
+    get_or_create_driver_session_async,
     get_scope_tenant,
     get_state_value,
     has_state_value,
@@ -588,7 +589,12 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
         set_state_value(request.state, config_state.connection_key, connection)
 
         async def _exit_sync_cm(exc_type: Any, exc: Any, tb: Any) -> bool:
-            _clear_published_connection(request, config_state)
+            try:
+                await _clear_published_connection(request, config_state)
+            except BaseException:
+                with TenantContext.bind(captured_payload):
+                    await with_ensure_async_(cm).__aexit__(exc_type, exc, tb)
+                raise
             with TenantContext.bind(captured_payload):
                 return bool(await with_ensure_async_(cm).__aexit__(exc_type, exc, tb))
 
@@ -599,9 +605,11 @@ def acquire_pending_connection_sync(request: "Request", config_state: "SQLSpecCo
         set_state_value(request.state, config_state.connection_key, connection)
 
         async def _close_sync_conn(_exc_type: Any, _exc: Any, _tb: Any) -> bool:
-            _clear_published_connection(request, config_state)
-            with TenantContext.bind(captured_payload):
-                await ensure_async_(connection.close)()
+            try:
+                await _clear_published_connection(request, config_state)
+            finally:
+                with TenantContext.bind(captured_payload):
+                    await ensure_async_(connection.close)()
             return False
 
         pending.stack.push_async_exit(_close_sync_conn)
@@ -625,7 +633,7 @@ def deferred_request_session(request: "Request", config_state: "SQLSpecConfigSta
 
     async def open_session() -> Any:
         await acquire_pending_connection_async(request, config_state)
-        return get_or_create_driver_session(request, config_state)
+        return await get_or_create_driver_session_async(request, config_state)
 
     def current_session() -> Any:
         if has_state_value(request.state, config_state.connection_key):
@@ -731,7 +739,7 @@ def _completes_response(message: "Message") -> bool:
     )
 
 
-def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
+async def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
     session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
     if session is None:
         session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
@@ -740,7 +748,7 @@ def _clear_published_connection(request: "Request", config_state: "SQLSpecConfig
             try:
                 runtime = getattr(session, "observability", None)
                 if runtime is not None and not runtime.is_idle:
-                    runtime.emit_session_end_sync(session)
+                    await runtime.emit_session_end_async(session)
             finally:
                 detach = getattr(session, "_detach_connection", None)
                 if detach is not None:
@@ -756,8 +764,10 @@ def _clear_published_connection(request: "Request", config_state: "SQLSpecConfig
                 deferred_detach()
 
 
-@contextmanager
-def _published_connection(request: "Request", config_state: "SQLSpecConfigState", connection: Any) -> "Generator[None]":
+@asynccontextmanager
+async def _published_connection(
+    request: "Request", config_state: "SQLSpecConfigState", connection: Any
+) -> "AsyncGenerator[None]":
     """Expose a connection on request state and clear every derived entry on exit.
 
     Yields:
@@ -767,7 +777,7 @@ def _published_connection(request: "Request", config_state: "SQLSpecConfigState"
     try:
         yield
     finally:
-        _clear_published_connection(request, config_state)
+        await _clear_published_connection(request, config_state)
 
 
 @asynccontextmanager
@@ -785,7 +795,7 @@ async def _open_config_connection(config_state: "SQLSpecConfigState", request: "
         with TenantContext.bind(captured_payload):
             connection = await cm.__aenter__()
         try:
-            with _published_connection(request, config_state, connection):
+            async with _published_connection(request, config_state, connection):
                 yield connection
         except BaseException as exc:
             with TenantContext.bind(captured_payload):
@@ -799,7 +809,7 @@ async def _open_config_connection(config_state: "SQLSpecConfigState", request: "
 
     connection = await ensure_async_(config.create_connection)()
     try:
-        with _published_connection(request, config_state, connection):
+        async with _published_connection(request, config_state, connection):
             yield connection
     finally:
         await ensure_async_(connection.close)()

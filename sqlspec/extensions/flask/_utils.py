@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
-from sqlspec.extensions._deferred_session import PortalSession
+from sqlspec.extensions._deferred_session import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import tenant_receipt_key
 from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.tenant import TenantContextPayload
@@ -99,10 +99,15 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
             and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
         ):
             session._auto_begin_on_write = True
+        set_context_value(g, cache_key, session)
         runtime = session.observability
         if not runtime.is_idle:
-            runtime.emit_session_start_sync(session)
-        set_context_value(g, cache_key, session)
+            if portal is not None:
+                call_portal_with_context(
+                    portal, runtime.emit_session_start_async, session, routing_bind_key=config.bind_key
+                )
+            else:
+                runtime.emit_session_start_sync(session)
     if portal is None:
         return session
     view = PortalSession(session, portal)

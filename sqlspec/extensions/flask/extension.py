@@ -750,7 +750,15 @@ class SQLSpecPlugin:
                 try:
                     runtime = getattr(session, "observability", None)
                     if runtime is not None and not runtime.is_idle:
-                        runtime.emit_session_end_sync(session)
+                        if config_state.is_async and self._portal is not None:
+                            self._call_portal(
+                                config_state,
+                                runtime.emit_session_end_async,
+                                session,
+                                tenant_override=captured_payload if has_captured_payload else "ambient",
+                            )
+                        else:
+                            runtime.emit_session_end_sync(session)
                 finally:
                     detach = getattr(session, "_detach_connection", None)
                     if detach is not None:

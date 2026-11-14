@@ -1107,7 +1107,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """
         plugin_state = self._get_plugin_state(cast("Any", key))
         connection = await self._ensure_connection_async(plugin_state, state, scope)
-        return cast("AsyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
+        return cast("AsyncDriverAdapterBase", await self._create_session_async(plugin_state, connection, scope))
 
     @overload
     def provide_request_connection(
@@ -1484,24 +1484,42 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "await plugin.provide_request_session_async(key, state, scope)",
         )
 
-    def _create_session(
+    def _resolve_or_build_session(
         self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
-    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
-        """Create a session from a connection and store it in scope."""
+    ) -> "tuple[SyncDriverAdapterBase | AsyncDriverAdapterBase, bool]":
+        """Return the cached request session for this connection or build and cache a fresh one."""
         session_scope_key = f"{plugin_state.session_key}_instance"
-
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None and getattr(session, "connection", None) is connection:
             set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
-            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), False
 
         session = build_request_session(plugin_state.config, connection, plugin_state.commit_mode)
         set_sqlspec_scope_state(scope, session_scope_key, session)
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
-        runtime = session.observability
-        if not runtime.is_idle:
-            runtime.emit_session_start_sync(session)
-        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), True
+
+    def _create_session(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
+        """Create a session from a connection and store it in scope."""
+        session, created = self._resolve_or_build_session(plugin_state, connection, scope)
+        if created:
+            runtime = session.observability
+            if not runtime.is_idle:
+                runtime.emit_session_start_sync(session)
+        return session
+
+    async def _create_session_async(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
+        """Create a session from a connection, await async start hooks, and store it in scope."""
+        session, created = self._resolve_or_build_session(plugin_state, connection, scope)
+        if created:
+            runtime = session.observability
+            if not runtime.is_idle:
+                await runtime.emit_session_start_async(session)
+        return session
 
     def _registry_state(self, name: Any) -> "PluginConfigState | None":
         """Resolve plugin state from registry identity, independent of Litestar registration.
