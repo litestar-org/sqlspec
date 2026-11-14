@@ -410,7 +410,9 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
                 self._config, pool, conn, self._acquire_options
             )
             if hook is not None:
-                execute_session_checkout_sync(conn, hook, skip_alter_session=skip)
+                execute_session_checkout_sync(
+                    conn, hook, skip_alter_session=skip, preserve_tagged_alter=self._desired_tag is not None
+                )
         except BaseException as exc:
             self._conn = None
             try:
@@ -1016,7 +1018,9 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
                 self._config, pool, conn, self._acquire_options
             )
             if hook is not None:
-                await execute_session_checkout_async(conn, hook, skip_alter_session=skip)
+                await execute_session_checkout_async(
+                    conn, hook, skip_alter_session=skip, preserve_tagged_alter=self._desired_tag is not None
+                )
         except BaseException as exc:
             self._connection = None
             self._pool = None

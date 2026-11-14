@@ -696,6 +696,11 @@ def test_oracle_session_context_hook_sync_checkout_and_release() -> None:
     cursor_mock.__enter__.return_value = cursor_mock
     cursor_mock.__exit__.return_value = False
     cursor_mock.execute.side_effect = lambda sql, params=None: executed_sql.append((sql, dict(params or {})))
+    cursor_mock.fetchall.return_value = [
+        ("EDITION", "EDITION", "ORA$BASE"),
+        ("TIME_ZONE", "TIME_ZONE", "+00:00"),
+        ("NLS", "NLS_DATE_FORMAT", "DD-MON-RR"),
+    ]
 
     conn_mock = MagicMock()
     conn_mock.__enter__.return_value = conn_mock
@@ -721,13 +726,21 @@ def test_oracle_session_context_hook_sync_checkout_and_release() -> None:
         assert conn_mock.action == "invoice"
         assert conn_mock.client_identifier == "tenant_42"
 
-    assert len(executed_sql) == 2
-    checkout_sql, checkout_binds = executed_sql[0]
-    release_sql, _ = executed_sql[1]
+    assert len(executed_sql) == 3
+    probe_sql, probe_binds = executed_sql[0]
+    checkout_sql, checkout_binds = executed_sql[1]
+    release_sql, _ = executed_sql[2]
+    assert "CURRENT_EDITION_NAME" in probe_sql
+    assert "SESSIONTIMEZONE" in probe_sql
+    assert "NLS_SESSION_PARAMETERS" in probe_sql
+    assert probe_binds == {"p_nls_base_0": "NLS_DATE_FORMAT"}
     assert "EDITION = ORA$BASE" in checkout_sql
     assert "TIME_ZONE = ''UTC''" in checkout_sql
     assert "DBMS_SESSION.SET_CONTEXT(:ctx_ns_0, :ctx_attr_0, :ctx_val_0);" in checkout_sql
     assert checkout_binds == {"ctx_ns_0": "APP_CTX", "ctx_attr_0": "TENANT_ID", "ctx_val_0": "42"}
+    assert "TIME_ZONE = ''+00:00''" in release_sql
+    assert "EDITION = ORA$BASE" in release_sql
+    assert "NLS_DATE_FORMAT = ''DD-MON-RR''" in release_sql
     assert "DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_0);" in release_sql
     assert conn_mock.module == ""
     assert conn_mock.action == ""
@@ -1843,6 +1856,7 @@ def test_oracle_replica_error_mapping(code: int, expected_name: str) -> None:
 def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
+    cursor.fetchall.return_value = [("TIME_ZONE", "TIME_ZONE", "+00:00")]
     connection = MagicMock()
     connection.thin = False
     connection.tag = "EDITION=V2"
@@ -1856,9 +1870,15 @@ def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
     for _ in range(2):
         with config.provide_connection():
             pass
-    assert len(cursor.execute.call_args_list) == 2
-    assert "TIME_ZONE = ''UTC''" in cursor.execute.call_args_list[0].args[0]
-    assert "TIME_ZONE = ''+01:00''" in cursor.execute.call_args_list[1].args[0]
+    executed = [call_item.args[0] for call_item in cursor.execute.call_args_list]
+    assert sum("SESSIONTIMEZONE" in sql for sql in executed) == 1
+    assert len(executed) == 5
+    assert "TIME_ZONE = ''UTC''" in executed[1]
+    assert "TIME_ZONE = ''+00:00''" in executed[2]
+    assert "EDITION" not in executed[2]
+    assert "TIME_ZONE = ''+01:00''" in executed[3]
+    assert "TIME_ZONE = ''+00:00''" in executed[4]
+    assert "EDITION" not in executed[4]
 
 
 @pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
@@ -2430,3 +2450,143 @@ async def test_oracle_p12_only_wallet_directory_isolates_temp_dir_and_cleans_on_
     assert not extracted_dir.exists()
     assert (src_dir / "ewallet.p12").is_file()
     assert not (src_dir / "ewallet.pem").exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_oracle_session_hook_restores_edition_timezone_and_nls_with_cached_baseline(asynchronous: bool) -> None:
+    """First borrow captures baseline EDITION, TIME_ZONE, and NLS settings once and restores them on release."""
+    executed_sql: list[tuple[str, dict[str, Any]]] = []
+    baseline_rows = [
+        ("EDITION", "EDITION", "ORA$BASE"),
+        ("TIME_ZONE", "TIME_ZONE", "-05:00"),
+        ("NLS", "NLS_DATE_FORMAT", "DD-MON-RR"),
+        ("NLS", "NLS_LANGUAGE", "AMERICAN"),
+    ]
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+
+    def record_exec(sql: str, params: dict[str, Any] | None = None) -> None:
+        executed_sql.append((sql, dict(params or {})))
+
+    if asynchronous:
+
+        async def async_exec(sql: str, params: dict[str, Any] | None = None) -> None:
+            record_exec(sql, params)
+
+        cursor.execute = AsyncMock(side_effect=async_exec)
+        cursor.fetchall = AsyncMock(return_value=baseline_rows)
+    else:
+        cursor.execute = MagicMock(side_effect=record_exec)
+        cursor.fetchall = MagicMock(return_value=baseline_rows)
+
+    conn = MagicMock()
+    conn.thin = True
+    conn.edition = "ORA$BASE"
+    conn.cursor.return_value = cursor
+    conn.rollback = AsyncMock() if asynchronous else Mock()
+
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=conn) if asynchronous else Mock(return_value=conn)
+    pool.release = AsyncMock() if asynchronous else Mock()
+    pool.drop = AsyncMock() if asynchronous else Mock()
+
+    zones = iter(["UTC", "+02:00"])
+    hook = OracleSessionContextConfig(
+        edition="V2",
+        time_zone=lambda: next(zones),
+        nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD", "NLS_LANGUAGE": "FRENCH"},
+        reset_on_release=True,
+    )
+    cfg_cls: Any = OracleAsyncConfig if asynchronous else OracleSyncConfig
+    cfg = cfg_cls(connection_instance=pool, driver_features={"session_context_hook": hook})
+
+    for _ in range(2):
+        ctx = cfg.provide_connection()
+        if asynchronous:
+            async with ctx:
+                pass
+        else:
+            with ctx:
+                pass
+
+    probe_calls = [item for item in executed_sql if "NLS_SESSION_PARAMETERS" in item[0]]
+    assert len(probe_calls) == 1
+    assert set(probe_calls[0][1].values()) == {"NLS_DATE_FORMAT", "NLS_LANGUAGE"}
+    assert len(executed_sql) == 5
+
+    checkout_1 = executed_sql[1][0]
+    release_1 = executed_sql[2][0]
+    checkout_2 = executed_sql[3][0]
+    release_2 = executed_sql[4][0]
+
+    assert "TIME_ZONE = ''UTC''" in checkout_1
+    assert "EDITION = V2" in checkout_1
+    assert "NLS_DATE_FORMAT = ''YYYY-MM-DD''" in checkout_1
+    assert "NLS_LANGUAGE = ''FRENCH''" in checkout_1
+
+    for release_sql in (release_1, release_2):
+        assert "TIME_ZONE = ''-05:00''" in release_sql
+        assert "EDITION = ORA$BASE" in release_sql
+        assert "NLS_LANGUAGE = ''AMERICAN''" in release_sql
+        assert "NLS_DATE_FORMAT = ''DD-MON-RR''" in release_sql
+        assert release_sql.index("NLS_LANGUAGE") < release_sql.index("NLS_DATE_FORMAT")
+
+    assert "TIME_ZONE = ''+02:00''" in checkout_2
+
+    oracle_core_module.forget_oracle_session_state(conn)
+    assert id(conn) not in oracle_core_module._INITIAL_ALTER_SESSION_BY_CONN_ID
+    assert id(conn) not in oracle_core_module._ACTIVE_ALTER_FIELDS_BY_CONN_ID
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_oracle_session_hook_skips_baseline_probe_when_reset_disabled(asynchronous: bool) -> None:
+    """When reset_on_release is False, edition/time_zone/nls checkout skips baseline probing and release reset."""
+    executed_sql: list[str] = []
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+
+    def record_exec(sql: str, _params: dict[str, Any] | None = None) -> None:
+        executed_sql.append(sql)
+
+    if asynchronous:
+
+        async def async_exec(sql: str, _params: dict[str, Any] | None = None) -> None:
+            record_exec(sql)
+
+        cursor.execute = AsyncMock(side_effect=async_exec)
+    else:
+        cursor.execute = MagicMock(side_effect=record_exec)
+
+    conn = MagicMock()
+    conn.thin = True
+    conn.edition = "ORA$BASE"
+    conn.cursor.return_value = cursor
+    conn.rollback = AsyncMock() if asynchronous else Mock()
+
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=conn) if asynchronous else Mock(return_value=conn)
+    pool.release = AsyncMock() if asynchronous else Mock()
+
+    hook = OracleSessionContextConfig(
+        edition="V2", time_zone="UTC", nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD"}, reset_on_release=False
+    )
+    cfg_cls: Any = OracleAsyncConfig if asynchronous else OracleSyncConfig
+    cfg = cfg_cls(connection_instance=pool, driver_features={"session_context_hook": hook})
+
+    ctx = cfg.provide_connection()
+    if asynchronous:
+        async with ctx:
+            pass
+    else:
+        with ctx:
+            pass
+
+    assert len(executed_sql) == 1
+    assert "ALTER SESSION SET" in executed_sql[0]
+    assert not any("NLS_SESSION_PARAMETERS" in sql for sql in executed_sql)

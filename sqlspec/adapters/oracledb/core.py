@@ -12,6 +12,7 @@ import ssl
 import stat
 import tempfile
 import threading
+import weakref
 import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
 from functools import partial
@@ -160,6 +161,7 @@ __all__ = (
     "is_oracle_standby_failover_error",
     "is_oracle_standby_lag_error",
     "is_stateful_oracle_session_context",
+    "mark_oracle_tagged_release",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
@@ -172,9 +174,11 @@ __all__ = (
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "prepare_session_checkout_pipeline",
+    "prepare_session_checkout_with_baseline_pipeline",
     "prepare_session_release_pipeline",
     "read_oracle_lob_async",
     "read_oracle_lob_sync",
+    "record_oracle_alter_session_baseline",
     "release_extracted_wallet_dir",
     "resolve_dbms_cloud_source_uri",
     "resolve_oracle_connection_compatible_major",
@@ -891,13 +895,105 @@ def clear_end_user_security_release(connection: Any) -> None:
 
 _INITIAL_SCHEMA_BY_CONN_ID: dict[int, str] = {}
 _INITIAL_PRIORITY_BY_CONN_ID: dict[int, Any] = {}
+_INITIAL_ALTER_SESSION_BY_CONN_ID: dict[int, dict[str, Any]] = {}
+_ACTIVE_ALTER_FIELDS_BY_CONN_ID: dict[int, tuple[bool, bool, tuple[str, ...]]] = {}
+_TAGGED_ALTER_CONN_IDS: set[int] = set()
+_REGISTERED_SESSION_CLEANUP_IDS: set[int] = set()
+_UNSET_SESSION_FIELD: Final = object()
 _MISSING_TRANSACTION_PRIORITY: Final = object()
+
+
+def _drop_oracle_session_state_by_id(conn_id: int) -> None:
+    _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
+    _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
+    _INITIAL_ALTER_SESSION_BY_CONN_ID.pop(conn_id, None)
+    _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
+    _TAGGED_ALTER_CONN_IDS.discard(conn_id)
+    _REGISTERED_SESSION_CLEANUP_IDS.discard(conn_id)
+
+
+def _ensure_session_state_cleanup(connection: Any) -> None:
+    conn_id = id(connection)
+    if conn_id in _REGISTERED_SESSION_CLEANUP_IDS:
+        return
+    _REGISTERED_SESSION_CLEANUP_IDS.add(conn_id)
+    with contextlib.suppress(TypeError):
+        weakref.finalize(connection, _drop_oracle_session_state_by_id, conn_id)
 
 
 def forget_oracle_session_state(connection: Any) -> None:
     """Remove checkout baselines when a physical connection is discarded."""
-    _INITIAL_SCHEMA_BY_CONN_ID.pop(id(connection), None)
-    _INITIAL_PRIORITY_BY_CONN_ID.pop(id(connection), None)
+    _drop_oracle_session_state_by_id(id(connection))
+
+
+def mark_oracle_tagged_release(connection: Any, enabled: bool) -> None:
+    """Track whether a Thick connection's current lease releases with a state tag."""
+    conn_id = id(connection)
+    if enabled:
+        _ensure_session_state_cleanup(connection)
+        _TAGGED_ALTER_CONN_IDS.add(conn_id)
+    else:
+        _TAGGED_ALTER_CONN_IDS.discard(conn_id)
+
+
+def _build_alter_session_baseline_probe(
+    *, need_edition: bool, need_time_zone: bool, missing_nls_keys: "tuple[str, ...]"
+) -> "tuple[str | None, dict[str, Any]]":
+    branches: list[str] = []
+    binds: dict[str, Any] = {}
+    if need_edition:
+        branches.append(
+            "SELECT 'EDITION' AS kind, 'EDITION' AS param_key, "
+            "SYS_CONTEXT('USERENV', 'CURRENT_EDITION_NAME') AS param_val FROM DUAL"
+        )
+    if need_time_zone:
+        branches.append("SELECT 'TIME_ZONE' AS kind, 'TIME_ZONE' AS param_key, SESSIONTIMEZONE AS param_val FROM DUAL")
+    if missing_nls_keys:
+        placeholders: list[str] = []
+        for idx, key in enumerate(missing_nls_keys):
+            param_name = f"p_nls_base_{idx}"
+            placeholders.append(f":{param_name}")
+            binds[param_name] = key
+        in_clause = ", ".join(placeholders)
+        branches.append(
+            "SELECT 'NLS' AS kind, PARAMETER AS param_key, VALUE AS param_val "
+            f"FROM NLS_SESSION_PARAMETERS WHERE PARAMETER IN ({in_clause})"
+        )
+    if not branches:
+        return None, {}
+    return " UNION ALL ".join(branches), binds
+
+
+def record_oracle_alter_session_baseline(connection: Any, rows: "Sequence[Any] | None") -> None:
+    """Cache initial session edition, time zone, and NLS values for release restoration."""
+    if not rows:
+        return
+    conn_id = id(connection)
+    baseline = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
+    if baseline is None:
+        _ensure_session_state_cleanup(connection)
+        baseline = {"nls_parameters": {}}
+        _INITIAL_ALTER_SESSION_BY_CONN_ID[conn_id] = baseline
+    nls_baseline = cast("dict[str, str]", baseline.setdefault("nls_parameters", {}))
+    for row in rows:
+        if not isinstance(row, (tuple, list)) or len(row) < _VERSION_COMPONENTS:
+            continue
+        kind, key, value = row[0], row[1], row[2]
+        if not isinstance(value, str):
+            continue
+        if kind == "EDITION" and "edition" not in baseline:
+            cleaned_edition = value.strip()
+            _validate_oracle_identifier(cleaned_edition, "edition")
+            baseline["edition"] = cleaned_edition
+        elif kind == "TIME_ZONE" and "time_zone" not in baseline:
+            cleaned_tz = value.strip()
+            _validate_oracle_time_zone(cleaned_tz)
+            baseline["time_zone"] = cleaned_tz
+        elif kind == "NLS" and isinstance(key, str):
+            upper_key = key.upper()
+            if upper_key not in nls_baseline:
+                _validate_oracle_nls_parameters({upper_key: value})
+                nls_baseline[upper_key] = value
 
 
 def normalize_oracle_appcontext(
@@ -932,10 +1028,14 @@ def extract_pipeline_single_row(pipeline_result: Any) -> tuple[Any, ...] | None:
     return tuple(rows[0]) if rows else None
 
 
-def prepare_session_checkout_pipeline(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
-) -> tuple[str | None, dict[str, Any]]:
-    """Apply zero-round-trip connection fields and prepare optional checkout SQL."""
+def prepare_session_checkout_with_baseline_pipeline(
+    connection: Any,
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    *,
+    skip_alter_session: bool = False,
+    preserve_tagged_alter: bool = False,
+) -> "tuple[str | None, dict[str, Any], str | None, dict[str, Any]]":
+    """Apply zero-round-trip fields and prepare optional baseline probe plus checkout SQL."""
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     if resolved.current_schema is not None:
         baseline = getattr(connection, "current_schema", "")
@@ -955,8 +1055,6 @@ def prepare_session_checkout_pipeline(
     if resolved.end_user_security is not None:
         apply_end_user_security_checkout(connection, resolved.end_user_security)
     contexts = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
-    if callable(resolved.contexts):
-        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=resolved.edition)
     if contexts:
         for namespace, attrs in contexts.items():
             if namespace.upper() == "CLIENTCONTEXT":
@@ -969,11 +1067,52 @@ def prepare_session_checkout_pipeline(
                             raise ImproperConfigurationError(msg)
                         values[key] = value
                 connection.set_app_context("CLIENTCONTEXT", **values)
-    edition = _resolve_callable_or_str(resolved.edition)
-    actual = getattr(connection, "edition", None)
-    if edition is not None and isinstance(actual, str) and edition.upper() == actual.upper():
-        resolved = _copy_oracle_session_context(resolved, contexts=contexts, edition=None)
-    plsql, binds, piggybacks = _build_session_checkout_plan(resolved, skip_alter_session=skip_alter_session)
+
+    edition_is_static = resolved.edition is not None and not callable(resolved.edition)
+    tz_is_static = resolved.time_zone is not None and not callable(resolved.time_zone)
+    nls_is_static = resolved.nls_parameters is not None and not callable(resolved.nls_parameters)
+
+    edition_val = _resolve_callable_or_str(resolved.edition)
+    actual_edition = getattr(connection, "edition", None)
+    if edition_val is not None and isinstance(actual_edition, str) and edition_val.upper() == actual_edition.upper():
+        edition_val = None
+    tz_val = _resolve_callable_or_str(resolved.time_zone)
+    nls_raw = resolved.nls_parameters() if callable(resolved.nls_parameters) else resolved.nls_parameters
+    nls_dict: dict[str, str] | None = None
+    if nls_raw:
+        _validate_oracle_nls_parameters(nls_raw)
+        nls_dict = {str(key).upper(): str(val) for key, val in nls_raw.items()}
+
+    concrete_config = _copy_oracle_session_context(
+        resolved, contexts=contexts, edition=edition_val, time_zone=tz_val, nls_parameters=nls_dict
+    )
+
+    conn_id = id(connection)
+    preserve_tagged = preserve_tagged_alter or (conn_id in _TAGGED_ALTER_CONN_IDS)
+    if resolved.reset_on_release and not skip_alter_session:
+        track_edition = edition_val is not None and not (preserve_tagged and edition_is_static)
+        track_tz = tz_val is not None and not (preserve_tagged and tz_is_static)
+        track_nls = tuple(sorted(nls_dict)) if nls_dict and not (preserve_tagged and nls_is_static) else ()
+    else:
+        track_edition = False
+        track_tz = False
+        track_nls = ()
+
+    if track_edition or track_tz or track_nls:
+        _ensure_session_state_cleanup(connection)
+        _ACTIVE_ALTER_FIELDS_BY_CONN_ID[conn_id] = (track_edition, track_tz, track_nls)
+        cached = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id) or {}
+        cached_nls = cached.get("nls_parameters") or {}
+        baseline_sql, baseline_binds = _build_alter_session_baseline_probe(
+            need_edition=track_edition and "edition" not in cached,
+            need_time_zone=track_tz and "time_zone" not in cached,
+            missing_nls_keys=tuple(key for key in track_nls if key not in cached_nls),
+        )
+    else:
+        _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
+        baseline_sql, baseline_binds = None, {}
+
+    plsql, binds, piggybacks = _build_session_checkout_plan(concrete_config, skip_alter_session=skip_alter_session)
     for name, value in piggybacks.items():
         if name == "econtext_id" and connection_is_thin(connection):
             continue
@@ -985,6 +1124,20 @@ def prepare_session_checkout_pipeline(
         else:
             with contextlib.suppress(AttributeError):
                 setattr(connection, name, value)
+    return baseline_sql, baseline_binds, plsql, binds
+
+
+def prepare_session_checkout_pipeline(
+    connection: Any,
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    *,
+    skip_alter_session: bool = False,
+    preserve_tagged_alter: bool = False,
+) -> tuple[str | None, dict[str, Any]]:
+    """Apply zero-round-trip connection fields and prepare optional checkout SQL."""
+    _, _, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+        connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
+    )
     return plsql, binds
 
 
@@ -1003,14 +1156,20 @@ def prepare_session_release_pipeline(
         namespaces.update(contexts)
     if any(namespace.upper() == "CLIENTCONTEXT" for namespace in namespaces):
         connection.clear_app_context("CLIENTCONTEXT")
-    schema = _INITIAL_SCHEMA_BY_CONN_ID.pop(id(connection), None)
-    priority = _INITIAL_PRIORITY_BY_CONN_ID.pop(id(connection), None)
+    conn_id = id(connection)
+    schema = _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
+    priority = _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
+    active_alter = _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
+    alter_baseline = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
+    _TAGGED_ALTER_CONN_IDS.discard(conn_id)
     if resolved.reset_on_release:
         if schema is not None:
             connection.current_schema = schema
         if priority is not None:
             apply_oracle_transaction_priority(connection, priority)
-    plsql, binds, piggybacks = _build_session_release_plan(resolved)
+    plsql, binds, piggybacks = _build_session_release_plan(
+        resolved, active_alter=active_alter, alter_baseline=alter_baseline
+    )
     deferred = None
     for name, value in piggybacks.items():
         if name == "econtext_id" and connection_is_thin(connection):
@@ -2703,14 +2862,24 @@ def build_session_reset_plsql(
 
 
 def execute_session_checkout_sync(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
+    connection: Any,
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    *,
+    skip_alter_session: bool = False,
+    preserve_tagged_alter: bool = False,
 ) -> None:
-    """Apply checkout state and execute the optional PL/SQL block."""
+    """Apply checkout state and execute optional baseline probe plus PL/SQL block."""
     try:
-        plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
-        if plsql is not None:
+        baseline_sql, baseline_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+            connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
+        )
+        if baseline_sql is not None or plsql is not None:
             with connection.cursor() as cursor:
-                cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
+                if baseline_sql is not None:
+                    cursor.execute(baseline_sql, baseline_binds) if baseline_binds else cursor.execute(baseline_sql)
+                    record_oracle_alter_session_baseline(connection, cursor.fetchall())
+                if plsql is not None:
+                    cursor.execute(plsql, binds) if binds else cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
         raise create_mapped_exception(exc) from exc
 
@@ -2731,14 +2900,26 @@ def execute_session_release_sync(connection: Any, config: OracleSessionContextCo
 
 
 async def execute_session_checkout_async(
-    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]", *, skip_alter_session: bool = False
+    connection: Any,
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+    *,
+    skip_alter_session: bool = False,
+    preserve_tagged_alter: bool = False,
 ) -> None:
-    """Apply asynchronous checkout state and optional PL/SQL block."""
+    """Apply asynchronous checkout state and optional baseline probe plus PL/SQL block."""
     try:
-        plsql, binds = prepare_session_checkout_pipeline(connection, config, skip_alter_session=skip_alter_session)
-        if plsql is not None:
+        baseline_sql, baseline_binds, plsql, binds = prepare_session_checkout_with_baseline_pipeline(
+            connection, config, skip_alter_session=skip_alter_session, preserve_tagged_alter=preserve_tagged_alter
+        )
+        if baseline_sql is not None or plsql is not None:
             with connection.cursor() as cursor:
-                await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
+                if baseline_sql is not None:
+                    await cursor.execute(baseline_sql, baseline_binds) if baseline_binds else await cursor.execute(
+                        baseline_sql
+                    )
+                    record_oracle_alter_session_baseline(connection, await cursor.fetchall())
+                if plsql is not None:
+                    await cursor.execute(plsql, binds) if binds else await cursor.execute(plsql)
     except oracledb_module.DatabaseError as exc:
         raise create_mapped_exception(exc) from exc
 
@@ -3184,7 +3365,7 @@ def extract_static_alter_session_config(
     """Select static ALTER SESSION fields for one-time owned Thin connection setup."""
     values = {field: _oracle_context_value(config, field) for field in ("edition", "time_zone", "nls_parameters")}
     static = {field: value for field, value in values.items() if value is not None and not callable(value)}
-    return OracleSessionContextConfig(**static) if static else None
+    return OracleSessionContextConfig(**static, reset_on_release=False) if static else None
 
 
 def has_callable_alter_session_fields(config: OracleSessionContextConfig | Mapping[str, Any] | None) -> bool:
@@ -3556,7 +3737,12 @@ def _validate_end_user_attributes(value: Any) -> None:
 
 
 def _copy_oracle_session_context(
-    config: "OracleSessionContextConfig", *, contexts: Any, edition: Any
+    config: "OracleSessionContextConfig",
+    *,
+    contexts: Any,
+    edition: Any,
+    time_zone: Any = _UNSET_SESSION_FIELD,
+    nls_parameters: Any = _UNSET_SESSION_FIELD,
 ) -> "OracleSessionContextConfig":
     return OracleSessionContextConfig(
         contexts=contexts,
@@ -3565,8 +3751,8 @@ def _copy_oracle_session_context(
         action=config.action,
         client_identifier=config.client_identifier,
         ecid=config.ecid,
-        time_zone=config.time_zone,
-        nls_parameters=config.nls_parameters,
+        time_zone=config.time_zone if time_zone is _UNSET_SESSION_FIELD else time_zone,
+        nls_parameters=config.nls_parameters if nls_parameters is _UNSET_SESSION_FIELD else nls_parameters,
         ebs_apps_initialize=config.ebs_apps_initialize,
         mo_global_policy=config.mo_global_policy,
         apex_session=config.apex_session,
@@ -3810,8 +3996,42 @@ def _build_session_checkout_plan(
     return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
 
 
+def _append_alter_session_release_statement(
+    plsql_statements: list[str],
+    active_alter: "tuple[bool, bool, tuple[str, ...]] | None",
+    alter_baseline: "Mapping[str, Any] | None",
+) -> None:
+    if active_alter is None or alter_baseline is None:
+        return
+    restore_edition, restore_time_zone, restore_nls_keys = active_alter
+    restore_clauses: list[str] = []
+    if restore_time_zone and isinstance(alter_baseline.get("time_zone"), str):
+        base_tz = alter_baseline["time_zone"]
+        _validate_oracle_time_zone(base_tz)
+        restore_clauses.append(f"TIME_ZONE = ''{base_tz}''")
+    if restore_edition and isinstance(alter_baseline.get("edition"), str):
+        base_ed = alter_baseline["edition"]
+        _validate_oracle_identifier(base_ed, "edition")
+        restore_clauses.append(f"EDITION = {base_ed}")
+    base_nls = alter_baseline.get("nls_parameters")
+    if restore_nls_keys and isinstance(base_nls, Mapping):
+        ordered_keys = sorted(
+            (key for key in restore_nls_keys if isinstance(base_nls.get(key), str)),
+            key=lambda key: (0 if key in {"NLS_LANGUAGE", "NLS_TERRITORY"} else 1, key),
+        )
+        if ordered_keys:
+            _validate_oracle_nls_parameters({key: base_nls[key] for key in ordered_keys})
+            restore_clauses.extend(f"{key} = ''{base_nls[key]}''" for key in ordered_keys)
+    if restore_clauses:
+        joined_restore = " ".join(restore_clauses)
+        plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_restore}';")
+
+
 def _build_session_release_plan(
     config: "OracleSessionContextConfig | Mapping[str, Any]",
+    *,
+    active_alter: "tuple[bool, bool, tuple[str, ...]] | None" = None,
+    alter_baseline: "Mapping[str, Any] | None" = None,
 ) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     if not resolved.reset_on_release and not (
@@ -3839,6 +4059,7 @@ def _build_session_release_plan(
             plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION SET STANDBY_MAX_DATA_DELAY = NONE';")
         if resolved.adg_redirect_dml:
             plsql_statements.append("EXECUTE IMMEDIATE 'ALTER SESSION DISABLE ADG_REDIRECT_DML';")
+        _append_alter_session_release_statement(plsql_statements, active_alter, alter_baseline)
 
     bind_params: dict[str, Any] = {}
     if resolved.apex_detach:

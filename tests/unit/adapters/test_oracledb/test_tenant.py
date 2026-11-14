@@ -9,7 +9,11 @@ import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.adapters.oracledb.core import OracleSessionContextConfig, apply_oracle_session_trace_attributes
+from sqlspec.adapters.oracledb.core import (
+    OracleSessionContextConfig,
+    apply_oracle_session_trace_attributes,
+    forget_oracle_session_state,
+)
 from sqlspec.adapters.oracledb.tenant import (
     OracleAsyncIdentifierStrategy,
     OracleAsyncVPDStrategy,
@@ -39,11 +43,25 @@ def _connection(mode: str, connection_type: Any = SimpleNamespace) -> Any:
             connection.client_identifier = None
         if "CLEAR_IDENTIFIER" in statement:
             connection.client_identifier = "dirty" if connection.dirty else None
-        if "SYS_CONTEXT" in statement:
+        if "SYS_CONTEXT('USERENV', 'CLIENT_IDENTIFIER')" in statement:
             cursor.fetchone.return_value = (connection.client_identifier or None,)
+        if (
+            "CURRENT_EDITION_NAME" in statement
+            or "SESSIONTIMEZONE" in statement
+            or "NLS_SESSION_PARAMETERS" in statement
+        ):
+            rows: list[tuple[str, str, str]] = []
+            if "CURRENT_EDITION_NAME" in statement:
+                rows.append(("EDITION", "EDITION", "ORA$BASE"))
+            if "SESSIONTIMEZONE" in statement:
+                rows.append(("TIME_ZONE", "TIME_ZONE", "+00:00"))
+            if "NLS_SESSION_PARAMETERS" in statement:
+                rows.extend(("NLS", str(key), "DD-MON-RR") for key in (binds or {}).values())
+            cursor.fetchall.return_value = rows
 
     cursor.execute = AsyncMock(side_effect=execute) if mode == "async" else MagicMock(side_effect=execute)
     cursor.fetchone = AsyncMock() if mode == "async" else MagicMock()
+    cursor.fetchall = AsyncMock() if mode == "async" else MagicMock()
     connection.cursor = MagicMock(return_value=cursor)
     return connection
 
@@ -753,10 +771,15 @@ async def test_matching_thick_tenant_tag_keeps_dynamic_session_settings(mode: st
     for tenant in ("a", "b"):
         state = await _invoke(strategy.checkout, connection, TenantContextPayload(tenant))
         await _invoke(strategy.checkin, connection, state)
-    alters = [sql for sql, _ in connection.calls if "TIME_ZONE" in sql]
-    assert len(alters) == 2
-    assert "UTC" in alters[0]
-    assert "+01:00" in alters[1]
+    probes = [sql for sql, _ in connection.calls if "CURRENT_EDITION_NAME" in sql]
+    checkout_alters = [sql for sql, _ in connection.calls if "ALTER SESSION SET" in sql and "SET_IDENTIFIER" in sql]
+    release_alters = [sql for sql, _ in connection.calls if "ALTER SESSION SET" in sql and "CLEAR_IDENTIFIER" in sql]
+    assert len(probes) == 1
+    assert len(checkout_alters) == 2
+    assert "UTC" in checkout_alters[0]
+    assert "+01:00" in checkout_alters[1]
+    assert len(release_alters) == 2
+    assert all("TIME_ZONE = ''+00:00''" in sql for sql in release_alters)
 
 
 @pytest.mark.anyio
@@ -827,3 +850,84 @@ async def test_tenant_lease_invalidates_connection_when_priority_rejected(mode: 
 
     pool.drop.assert_called_once_with(bad_connection)
     pool.release.assert_not_called()
+
+
+@pytest.mark.parametrize("vpd", [False, True], ids=["identifier", "vpd"])
+async def test_async_tenant_pipeline_captures_and_restores_session_alter_fields(vpd: bool) -> None:
+    """Pipelined tenant checkout probes alter baselines once in-flight and restores them on checkin."""
+    connection = SimpleNamespace(client_identifier=None, edition="ORA$BASE", cursor=MagicMock(), flights=[])
+
+    async def run_pipeline(pipeline: Any, *, continue_on_error: bool) -> list[Any]:
+        assert continue_on_error is False
+        operations = pipeline.operations
+        connection.flights.append([operation.statement for operation in operations])
+        results: list[Any] = []
+        for operation in operations:
+            stmt = operation.statement
+            if "CURRENT_EDITION_NAME" in stmt or "SESSIONTIMEZONE" in stmt or "NLS_SESSION_PARAMETERS" in stmt:
+                results.append(
+                    SimpleNamespace(
+                        rows=[
+                            ("EDITION", "EDITION", "ORA$BASE"),
+                            ("TIME_ZONE", "TIME_ZONE", "-05:00"),
+                            ("NLS", "NLS_DATE_FORMAT", "DD-MON-RR"),
+                        ]
+                    )
+                )
+            elif "CLEAR_IDENTIFIER" in stmt:
+                connection.client_identifier = None
+                results.append(SimpleNamespace(rows=[]))
+            elif "SYS_CONTEXT" in stmt:
+                row = (
+                    (connection.client_identifier, connection.client_identifier)
+                    if vpd
+                    else (connection.client_identifier,)
+                )
+                results.append(SimpleNamespace(rows=[row]))
+            else:
+                results.append(SimpleNamespace(rows=[]))
+        return results
+
+    connection.run_pipeline = run_pipeline
+    zones = iter(["UTC", "+03:00"])
+    hook = OracleSessionContextConfig(
+        edition="V2",
+        time_zone=lambda: next(zones),
+        nls_parameters={"NLS_DATE_FORMAT": "YYYY-MM-DD"},
+        reset_on_release=True,
+    )
+    strategy: Any = (
+        OracleAsyncVPDStrategy(
+            set_procedure="APP.SET_TENANT",
+            clear_procedure="APP.CLEAR_TENANT",
+            namespace="APP_CTX",
+            attribute="TENANT_ID",
+            hook=hook,
+        )
+        if vpd
+        else OracleAsyncIdentifierStrategy(hook)
+    )
+
+    try:
+        for tenant in ("acme", "globex"):
+            state = await strategy.checkout(cast("Any", connection), TenantContextPayload(tenant))
+            await strategy.checkin(cast("Any", connection), state)
+    finally:
+        forget_oracle_session_state(connection)
+
+    assert len(connection.flights) == 4
+    borrow_1_checkout, borrow_1_checkin, borrow_2_checkout, borrow_2_checkin = connection.flights
+
+    assert any("CURRENT_EDITION_NAME" in stmt and "SESSIONTIMEZONE" in stmt for stmt in borrow_1_checkout)
+    assert not any("CURRENT_EDITION_NAME" in stmt or "SESSIONTIMEZONE" in stmt for stmt in borrow_2_checkout)
+
+    assert any("TIME_ZONE = ''UTC''" in stmt and "EDITION = V2" in stmt for stmt in borrow_1_checkout)
+    assert any("TIME_ZONE = ''+03:00''" in stmt and "EDITION = V2" in stmt for stmt in borrow_2_checkout)
+
+    for checkin_flight in (borrow_1_checkin, borrow_2_checkin):
+        assert any(
+            "TIME_ZONE = ''-05:00''" in stmt
+            and "EDITION = ORA$BASE" in stmt
+            and "NLS_DATE_FORMAT = ''DD-MON-RR''" in stmt
+            for stmt in checkin_flight
+        )

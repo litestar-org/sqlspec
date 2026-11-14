@@ -23,9 +23,11 @@ from sqlspec.adapters.oracledb.core import (
     extract_pipeline_single_row,
     forget_oracle_session_state,
     has_callable_alter_session_fields,
+    mark_oracle_tagged_release,
     oracle_transaction_priority_matches,
-    prepare_session_checkout_pipeline,
+    prepare_session_checkout_with_baseline_pipeline,
     prepare_session_release_pipeline,
+    record_oracle_alter_session_baseline,
     synthesize_session_state_tag,
 )
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
@@ -439,17 +441,21 @@ class OracleAsyncIdentifierStrategy:
             variables = _tenant_variables(payload, self._variable_keys)
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                sql, binds = prepare_session_checkout_pipeline(
+                baseline_sql, baseline_binds, sql, binds = prepare_session_checkout_with_baseline_pipeline(
                     connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
                 )
                 if variables:
                     cast("Any", connection).set_app_context("CLIENTCONTEXT", **variables)
                 pipeline = create_oracle_pipeline()
+                if baseline_sql is not None:
+                    pipeline.add_fetchall(baseline_sql, baseline_binds)
                 if sql is not None:
                     pipeline.add_execute(sql, binds)
                 pipeline.add_fetchone(_IDENTIFIER_QUERY)
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
+                    if baseline_sql is not None and results:
+                        record_oracle_alter_session_baseline(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:
                     msg = "Oracle tenant identifier pipeline checkout failed"
@@ -583,6 +589,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         )
         connection = self._pool.acquire(**kwargs)
         self._release_tag = kwargs.get("tag") if getattr(self._pool, "thin", None) is False else None
+        mark_oracle_tagged_release(connection, self._release_tag is not None)
         configured_priority = self._config.connection_config.get("transaction_priority")
         priority = options.transaction_priority if options is not None else None
         if priority is None:
@@ -600,7 +607,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
             try:
-                execute_session_checkout_sync(connection, hook)
+                execute_session_checkout_sync(connection, hook, preserve_tagged_alter=self._release_tag is not None)
             except BaseException as exc:
                 try:
                     self._invalidate(connection)
@@ -618,6 +625,7 @@ class OracleSyncTenantLease(SyncTenantLease):
         baseline, self._priority_baseline = self._priority_baseline, None
         if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
             apply_oracle_transaction_priority(connection, baseline)
+        mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             self._pool.release(connection, tag=self._release_tag)
         else:
@@ -662,6 +670,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         )
         connection = await self._pool.acquire(**kwargs)
         self._release_tag = kwargs.get("tag") if getattr(self._pool, "thin", None) is False else None
+        mark_oracle_tagged_release(connection, self._release_tag is not None)
         configured_priority = self._config.connection_config.get("transaction_priority")
         priority = options.transaction_priority if options is not None else None
         if priority is None:
@@ -680,7 +689,9 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         if hook is not None:
             setup_error: BaseException | None = None
             try:
-                await execute_session_checkout_async(connection, hook)
+                await execute_session_checkout_async(
+                    connection, hook, preserve_tagged_alter=self._release_tag is not None
+                )
             except BaseException as exc:
                 setup_error = exc
             if setup_error is not None:
@@ -699,6 +710,7 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         baseline, self._priority_baseline = self._priority_baseline, None
         if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
             apply_oracle_transaction_priority(connection, baseline)
+        mark_oracle_tagged_release(connection, False)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             await self._pool.release(connection, tag=self._release_tag)
         else:
@@ -827,16 +839,20 @@ class OracleAsyncVPDStrategy(OracleAsyncIdentifierStrategy):
         if has_pipeline_capability(connection):
             with TenantContext.bind(payload):
                 tenant_client_identifier()
-                sql, hook_binds = prepare_session_checkout_pipeline(
+                baseline_sql, baseline_binds, sql, hook_binds = prepare_session_checkout_with_baseline_pipeline(
                     connection, self._hook, skip_alter_session=_skip_tenant_alter(connection, self._hook)
                 )
                 pipeline = create_oracle_pipeline()
+                if baseline_sql is not None:
+                    pipeline.add_fetchall(baseline_sql, baseline_binds)
                 if sql is not None:
                     pipeline.add_execute(sql, hook_binds)
                 pipeline.add_execute(f"BEGIN {self._set_procedure}({placeholders}); END;", binds)
                 pipeline.add_fetchone(_TENANT_STATE_QUERY, self._context_binds())
                 try:
                     results = await connection.run_pipeline(pipeline, continue_on_error=False)
+                    if baseline_sql is not None and results:
+                        record_oracle_alter_session_baseline(connection, results[0].rows)
                     row = extract_pipeline_single_row(results[-1])
                 except Exception as exc:
                     msg = "Oracle trusted tenant pipeline checkout failed"
