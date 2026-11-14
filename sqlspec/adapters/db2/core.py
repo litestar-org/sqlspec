@@ -77,6 +77,12 @@ _CLI_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
     ("connect_timeout", "CONNECTTIMEOUT"),
 )
 _CLI_KEYWORD_TO_KEY: Final[dict[str, str]] = {keyword: key for key, keyword in _CLI_KEYWORDS}
+_DEDICATED_EXTRA_KEYWORDS: Final[dict[str, str]] = {
+    **_CLI_KEYWORD_TO_KEY,
+    "AUTOCOMMIT": "autocommit",
+    "READONLY": "read_only",
+    "READ_ONLY": "read_only",
+}
 _SUPPORTED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     *(key for key, _ in _CLI_KEYWORDS),
     "autocommit",
@@ -781,8 +787,8 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     for source in (dsn_extra, explicit_extra):
         for keyword, value in source.items():
             upper = str(keyword).upper()
-            if upper in _CLI_KEYWORD_TO_KEY or upper in {"AUTOCOMMIT", "READONLY", "READ_ONLY"}:
-                canonical = _CLI_KEYWORD_TO_KEY.get(upper, "autocommit")
+            canonical = _DEDICATED_EXTRA_KEYWORDS.get(upper)
+            if canonical is not None:
                 msg = f"Db2 connection keyword {keyword!r} must be configured with the {canonical!r} parameter"
                 raise ImproperConfigurationError(msg)
             merged[upper] = (str(keyword), value)

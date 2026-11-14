@@ -280,10 +280,17 @@ def test_invalid_extra_keyword_is_rejected() -> None:
         Db2SyncConfig(connection_config={"database": "d", "extra": {"A;B": "1"}})
 
 
-def test_extra_cannot_shadow_a_modeled_keyword() -> None:
+@pytest.mark.parametrize(
+    ("keyword", "expected_param"),
+    [("security", "security"), ("AUTOCOMMIT", "autocommit"), ("READONLY", "read_only"), ("READ_ONLY", "read_only")],
+)
+def test_extra_cannot_shadow_a_modeled_keyword(keyword: str, expected_param: str) -> None:
     """Keywords with a dedicated parameter must be configured through that parameter."""
-    with pytest.raises(ImproperConfigurationError):
-        Db2SyncConfig(connection_config={"database": "d", "extra": {"security": "SSL"}})
+    with pytest.raises(
+        ImproperConfigurationError,
+        match=f"Db2 connection keyword {keyword!r} must be configured with the {expected_param!r} parameter",
+    ):
+        Db2SyncConfig(connection_config={"database": "d", "extra": {keyword: "SSL"}})
 
 
 @pytest.mark.parametrize("connection_config", [{}, {"hostname": "h"}], ids=["empty", "host-only"])
