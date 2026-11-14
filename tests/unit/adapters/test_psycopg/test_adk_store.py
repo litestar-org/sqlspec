@@ -1219,3 +1219,110 @@ async def test_psycopg_memory_ddl_and_insert_use_composite_dedup_and_targetless_
     rendered = _rendered(cursor.execute_calls[0][0])
     assert "ON CONFLICT DO NOTHING" in rendered
     assert "ON CONFLICT (event_id)" not in rendered
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+@pytest.mark.parametrize(
+    (
+        "session_table",
+        "events_table",
+        "expected_ddl_session",
+        "expected_dml_session",
+        "expected_ddl_events",
+        "expected_dml_events",
+    ),
+    [
+        pytest.param(
+            "app.sessions",
+            "app.events",
+            "app.sessions",
+            '"app"."sessions"',
+            "app.events",
+            '"app"."events"',
+            id="qualified-lowercase",
+        ),
+        pytest.param(
+            "MySessions", "MyEvents", '"MySessions"', '"MySessions"', '"MyEvents"', '"MyEvents"', id="mixed-case"
+        ),
+        pytest.param(
+            "MySchema.MySessions",
+            "MySchema.MyEvents",
+            '"MySchema"."MySessions"',
+            '"MySchema"."MySessions"',
+            '"MySchema"."MyEvents"',
+            '"MySchema"."MyEvents"',
+            id="qualified-mixed-case",
+        ),
+    ],
+)
+async def test_psycopg_session_ddl_and_dml_quote_identifiers_consistently(
+    store_cls: Any,
+    is_async: bool,
+    _companion: str,
+    session_table: str,
+    events_table: str,
+    expected_ddl_session: str,
+    expected_dml_session: str,
+    expected_ddl_events: str,
+    expected_dml_events: str,
+) -> None:
+    """Psycopg session and event stores support qualified names and align DDL and DML quoting."""
+    cursor: Any = _AsyncDummyCursor() if is_async else _DummyCursor()
+    connection: Any = _AsyncDummyConnection(cursor) if is_async else _DummyConnection(cursor)
+    config = _mock_config()
+    config.extension_config = {"adk": {"session_table": session_table, "events_table": events_table}}
+    config.provide_connection = lambda *_a, **_k: connection
+    store = store_cls(config)
+
+    assert store._max_table_name_parts == 2
+    sessions_ddl = await _await_if_needed(store._sessions_table_ddl())
+    events_ddl = await _await_if_needed(store._events_table_ddl())
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl_session} (" in sessions_ddl
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl_events} (" in events_ddl
+    assert f"REFERENCES {expected_ddl_session}(id)" in events_ddl
+    assert f"DROP TABLE IF EXISTS {expected_ddl_events}" in store._drop_tables_sql()
+    assert f"DROP TABLE IF EXISTS {expected_ddl_session}" in store._drop_tables_sql()
+
+    await _await_if_needed(store.list_sessions("app"))
+    await _await_if_needed(store.get_events("app", "u1", "s1"))
+    list_sql = _rendered(cursor.execute_calls[0][0])
+    events_sql = _rendered(cursor.execute_calls[1][0])
+    assert f"FROM {expected_dml_session}" in list_sql
+    assert f"FROM {expected_dml_events} e JOIN {expected_dml_session} s" in events_sql
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_s", "_prep_r", "_companion", "_finalize"), _MEMORY_STORE_MODES
+)
+@pytest.mark.parametrize(
+    ("memory_table", "expected_ddl", "expected_dml"),
+    [
+        pytest.param("app.memories", "app.memories", '"app"."memories"', id="qualified-lowercase"),
+        pytest.param("MyMemories", '"MyMemories"', '"MyMemories"', id="mixed-case"),
+        pytest.param("MySchema.MyMemories", '"MySchema"."MyMemories"', '"MySchema"."MyMemories"', id="qualified-mixed"),
+    ],
+)
+async def test_psycopg_memory_ddl_and_dml_quote_identifiers_consistently(
+    store_cls: Any,
+    is_async: bool,
+    _prep_s: str,
+    _prep_r: str,
+    _companion: str,
+    _finalize: str,
+    memory_table: str,
+    expected_ddl: str,
+    expected_dml: str,
+) -> None:
+    """Psycopg memory stores support qualified names and align DDL and DML quoting."""
+    store, cursor, _ = _build_psycopg_memory_store(
+        store_cls, is_async=is_async, adk_config={"memory_table": memory_table}
+    )
+
+    assert store._max_table_name_parts == 2
+    ddl = await _await_if_needed(store._memory_table_ddl())
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl} (" in ddl
+    assert store._drop_memory_table_sql() == [f"DROP TABLE IF EXISTS {expected_ddl}"]
+
+    await _await_if_needed(store.search_entries("hello", "app", "u1"))
+    search_sql = _rendered(cursor.execute_calls[0][0])
+    assert f"FROM {expected_dml}" in search_sql

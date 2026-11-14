@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as Jsonb
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
@@ -19,6 +19,7 @@ from sqlspec.extensions.adk import (
 )
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -37,8 +38,9 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.cockroach_psycopg.adk.store")
+_SIMPLE_LOWER_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"\A[a-z_][a-z0-9_]*\Z")
 _LOCALITY_CLAUSE_PATTERN = re.compile(
-    r"^LOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)$",
+    r"\ALOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)\Z",
     re.IGNORECASE,
 )
 
@@ -211,22 +213,25 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         state_json = Jsonb(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(
+                table=_pg_table_identifier(self._session_table),
+                owner_id_col=pg_sql.Identifier(self._owner_id_column_name),
+            )
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
             params = (session_id, app_name, user_id, state_json)
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), params)
+            await cur.execute(query, params)
             row = await cur.fetchone()
             await conn.commit()
 
@@ -248,25 +253,25 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     ) -> "StoredSession | None":
         should_touch = self._should_renew(renew_for)
         if should_touch:
-            sql = f"""
-            UPDATE {self._session_table}
+            query = pg_sql.SQL("""
+            UPDATE {table}
             SET update_time = CURRENT_TIMESTAMP
             WHERE app_name = %s AND user_id = %s AND id = %s
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
         else:
-            sql = f"""
+            query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
+            FROM {table}
             WHERE app_name = %s AND user_id = %s AND id = %s
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
 
         try:
             async with (
                 self._provide_read_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
-                await cur.execute(sql.encode(), (app_name, user_id, session_id))
+                await cur.execute(query, (app_name, user_id, session_id))
                 row = await cur.fetchone()
                 if should_touch:
                     await conn.commit()
@@ -286,14 +291,14 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             return None
 
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPDATE {self._session_table}
+        query = pg_sql.SQL("""
+        UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE app_name = %s AND user_id = %s AND id = %s
-        """
+        """).format(table=_pg_table_identifier(self._session_table))
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+            await cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(
@@ -310,13 +315,13 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         if page_limit == 0:
             return []
 
-        sql, params = _session_list_query(
+        query, params = _session_list_query(
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
         try:
             async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), params)
+                await cur.execute(query, params)
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
             return []
@@ -334,32 +339,37 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         ]
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=_pg_table_identifier(self._session_table)
+        )
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), (app_name, user_id, session_id))
+            await cur.execute(query, (app_name, user_id, session_id))
             await conn.commit()
 
     async def append_event(self, event_record: StoredEvent) -> None:
         session_id = event_record["session_id"]
         app_name = event_record["app_name"]
         user_id = event_record["user_id"]
-        sql = f"""
-        INSERT INTO {self._events_table} (
+        query = pg_sql.SQL("""
+        INSERT INTO {events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         )
         SELECT %s, %s, %s, %s, %s, %s, %s
         WHERE EXISTS (
-            SELECT 1 FROM {self._session_table}
+            SELECT 1 FROM {session_table}
             WHERE id = %s AND app_name = %s AND user_id = %s
         )
-        """
+        """).format(
+            events_table=_pg_table_identifier(self._events_table),
+            session_table=_pg_table_identifier(self._session_table),
+        )
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                sql.encode(),
+                query,
                 (
                     event_record["id"],
                     app_name,
@@ -400,36 +410,36 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             msg = "event_record scope does not match target session arguments."
             raise ValueError(msg)
 
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        update_sql = f"""
-        UPDATE {self._session_table}
+        """).format(table=_pg_table_identifier(self._events_table))
+        update_query = pg_sql.SQL("""
+        UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
-        """
-        app_upsert_sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        """).format(table=_pg_table_identifier(self._session_table))
+        app_upsert_query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
-        user_upsert_sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        """).format(table=_pg_table_identifier(self._app_state_table))
+        user_upsert_query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._user_state_table))
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
-                await cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+                await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
                 row = await cur.fetchone()
                 if row is None:
                     _raise_missing_session(session_id)
                 await cur.execute(
-                    insert_sql.encode(),
+                    insert_query,
                     (
                         event_record["id"],
                         event_record["app_name"],
@@ -441,9 +451,9 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                     ),
                 )
                 if app_state is not None:
-                    await cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
+                    await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
                 if user_state is not None:
-                    await cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
+                    await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             except Exception:
                 rollback: Any = getattr(conn, "rollback", None)
                 if rollback is not None:
@@ -471,29 +481,34 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = %s", "s.user_id = %s", "s.id = %s"]
+        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("s.id = %s")]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("e.timestamp > %s")
+            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
             params.append(after_timestamp)
 
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = " LIMIT %s" if limit is not None else ""
+        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
+        limit_clause = pg_sql.SQL(" LIMIT %s" if limit is not None else "")
         if limit is not None:
             params.append(limit)
 
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
-        FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+        FROM {events_table} e
+        JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
-        """
+        """).format(
+            events_table=_pg_table_identifier(self._events_table),
+            session_table=_pg_table_identifier(self._session_table),
+            where_clause=where_clause,
+            limit_clause=limit_clause,
+        )
 
         try:
             async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), tuple(params))
+                await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
             return []
@@ -513,15 +528,19 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._events_table)
+            )
             params: tuple[Any, ...] = (before, app_name)
         else:
-            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=_pg_table_identifier(self._events_table)
+            )
             params = (before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), params)
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -529,15 +548,19 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._session_table)
+            )
             params: tuple[Any, ...] = (updated_before, app_name)
         else:
-            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=_pg_table_identifier(self._session_table)
+            )
             params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), params)
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -545,81 +568,91 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
 
     async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._user_state_table)
+            )
             params: tuple[Any, ...] = (updated_before, app_name)
         else:
-            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=_pg_table_identifier(self._user_state_table)
+            )
             params = (updated_before,)
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), params)
+                await cur.execute(query, params)
                 await conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
             return 0
 
     async def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
-        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
+            table=_pg_table_identifier(self._app_state_table)
+        )
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (app_name,))
+                await cur.execute(query, (app_name,))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
         except errors.UndefinedTable:
             return None
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s AND user_id = %s").format(
+            table=_pg_table_identifier(self._user_state_table)
+        )
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (app_name, user_id))
+                await cur.execute(query, (app_name, user_id))
                 row = await cur.fetchone()
                 return row["state"] if row is not None else None
         except errors.UndefinedTable:
             return None
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._app_state_table))
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), (app_name, Jsonb(state)))
+            await cur.execute(query, (app_name, Jsonb(state)))
             await conn.commit()
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._user_state_table))
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
+            await cur.execute(query, (app_name, user_id, Jsonb(state)))
             await conn.commit()
 
     async def get_metadata(self, key: str) -> "str | None":
-        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
+        query = pg_sql.SQL("SELECT value FROM {table} WHERE key = %s").format(
+            table=_pg_table_identifier(self._metadata_table)
+        )
 
         try:
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (key,))
+                await cur.execute(query, (key,))
                 row = await cur.fetchone()
                 return row["value"] if row is not None else None
         except errors.UndefinedTable:
             return None
 
     async def set_metadata(self, key: str, value: str) -> None:
-        sql = f"""
-        UPSERT INTO {self._metadata_table} (key, value)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (key, value)
         VALUES (%s, %s)
-        """
+        """).format(table=_pg_table_identifier(self._metadata_table))
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(sql.encode(), (key, value))
+            await cur.execute(query, (key, value))
             await conn.commit()
 
     async def _sessions_table_ddl(self) -> str:
@@ -631,7 +664,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         indexes_sql = "\n\n        ".join(_cockroach_session_index_statements(adk_config, self._session_table))
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
-            self._session_table, owner_id_line, session_locality, indexes_sql
+            _format_ddl_identifier(self._session_table), owner_id_line, session_locality, indexes_sql
         )
 
     async def _events_table_ddl(self) -> str:
@@ -640,43 +673,50 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         indexes_sql = "\n\n        ".join(_cockroach_event_index_statements(adk_config, self._events_table))
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
-            self._events_table, self._session_table, events_locality, indexes_sql
+            _format_ddl_identifier(self._events_table),
+            _format_ddl_identifier(self._session_table),
+            events_locality,
+            indexes_sql,
         )
 
     async def _app_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
-        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table, app_state_locality)
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._app_state_table), app_state_locality
+        )
 
     async def _user_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
-        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table, user_state_locality)
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._user_state_table), user_state_locality
+        )
 
     async def _metadata_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
-        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(_format_ddl_identifier(self._metadata_table), metadata_locality)
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._app_state_table)}"
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._user_state_table)}"
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._metadata_table)}"
 
     def _drop_tables_sql(self) -> "list[str]":
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._events_table)}",
+            f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._session_table)}",
         ]
 
 
@@ -722,22 +762,25 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         state_json = Jsonb(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(
+                table=_pg_table_identifier(self._session_table),
+                owner_id_col=pg_sql.Identifier(self._owner_id_column_name),
+            )
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
-            sql = f"""
-            INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
+            query = pg_sql.SQL("""
+            INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
             params = (session_id, app_name, user_id, state_json)
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), params)
+            cur.execute(query, params)
             row = cur.fetchone()
             conn.commit()
 
@@ -760,25 +803,25 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         """Get session by ID."""
         should_touch = self._should_renew(renew_for)
         if should_touch:
-            sql = f"""
-            UPDATE {self._session_table}
+            query = pg_sql.SQL("""
+            UPDATE {table}
             SET update_time = CURRENT_TIMESTAMP
             WHERE app_name = %s AND user_id = %s AND id = %s
             RETURNING id, app_name, user_id, state, create_time, update_time
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
         else:
-            sql = f"""
+            query = pg_sql.SQL("""
             SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
+            FROM {table}
             WHERE app_name = %s AND user_id = %s AND id = %s
-            """
+            """).format(table=_pg_table_identifier(self._session_table))
 
         try:
             with (
                 self._provide_read_connection(primary=renew_for is not None) as conn,
                 conn.cursor(row_factory=dict_row) as cur,
             ):
-                cur.execute(sql.encode(), (app_name, user_id, session_id))
+                cur.execute(query, (app_name, user_id, session_id))
                 row = cur.fetchone()
                 if should_touch:
                     conn.commit()
@@ -799,14 +842,14 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Update session state."""
-        sql = f"""
-        UPDATE {self._session_table}
+        query = pg_sql.SQL("""
+        UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE app_name = %s AND user_id = %s AND id = %s
-        """
+        """).format(table=_pg_table_identifier(self._session_table))
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+            cur.execute(query, (Jsonb(state), app_name, user_id, session_id))
             conn.commit()
 
     def list_sessions(
@@ -824,13 +867,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         if page_limit == 0:
             return []
 
-        sql, params = _session_list_query(
+        query, params = _session_list_query(
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
         try:
             with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), params)
+                cur.execute(query, params)
                 rows = cur.fetchall()
 
             return [
@@ -849,10 +892,12 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete session and associated events."""
-        sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
+        query = pg_sql.SQL("DELETE FROM {table} WHERE app_name = %s AND user_id = %s AND id = %s").format(
+            table=_pg_table_identifier(self._session_table)
+        )
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, user_id, session_id))
+            cur.execute(query, (app_name, user_id, session_id))
             conn.commit()
 
     def append_event(self, event_record: StoredEvent) -> None:
@@ -879,36 +924,36 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             msg = "event_record scope does not match target session arguments."
             raise ValueError(msg)
 
-        insert_sql = f"""
-        INSERT INTO {self._events_table} (
+        insert_query = pg_sql.SQL("""
+        INSERT INTO {table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        update_sql = f"""
-        UPDATE {self._session_table}
+        """).format(table=_pg_table_identifier(self._events_table))
+        update_query = pg_sql.SQL("""
+        UPDATE {table}
         SET state = %s, update_time = CURRENT_TIMESTAMP
         WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
-        """
-        app_upsert_sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        """).format(table=_pg_table_identifier(self._session_table))
+        app_upsert_query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
-        user_upsert_sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        """).format(table=_pg_table_identifier(self._app_state_table))
+        user_upsert_query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._user_state_table))
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
-                cur.execute(update_sql.encode(), (Jsonb(state), app_name, user_id, session_id))
+                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
                 row = cur.fetchone()
                 if row is None:
                     _raise_missing_session(session_id)
                 cur.execute(
-                    insert_sql.encode(),
+                    insert_query,
                     (
                         event_record["id"],
                         event_record["app_name"],
@@ -920,9 +965,9 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                     ),
                 )
                 if app_state is not None:
-                    cur.execute(app_upsert_sql.encode(), (app_name, Jsonb(app_state)))
+                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
                 if user_state is not None:
-                    cur.execute(user_upsert_sql.encode(), (app_name, user_id, Jsonb(user_state)))
+                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             except Exception:
                 rollback = getattr(conn, "rollback", None)
                 if callable(rollback):
@@ -951,29 +996,34 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = %s", "s.user_id = %s", "s.id = %s"]
+        where_clauses = [pg_sql.SQL("s.app_name = %s"), pg_sql.SQL("s.user_id = %s"), pg_sql.SQL("s.id = %s")]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
-            where_clauses.append("e.timestamp > %s")
+            where_clauses.append(pg_sql.SQL("e.timestamp > %s"))
             params.append(after_timestamp)
 
-        where_clause = " AND ".join(where_clauses)
-        limit_clause = " LIMIT %s" if limit is not None else ""
+        where_clause = pg_sql.SQL(" AND ").join(where_clauses)
+        limit_clause = pg_sql.SQL(" LIMIT %s" if limit is not None else "")
         if limit is not None:
             params.append(limit)
 
-        sql = f"""
+        query = pg_sql.SQL("""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
-        FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+        FROM {events_table} e
+        JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
-        """
+        """).format(
+            events_table=_pg_table_identifier(self._events_table),
+            session_table=_pg_table_identifier(self._session_table),
+            where_clause=where_clause,
+            limit_clause=limit_clause,
+        )
 
         try:
             with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), tuple(params))
+                cur.execute(query, tuple(params))
                 rows = cur.fetchall()
 
             return [
@@ -994,15 +1044,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
     def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
         if app_name is not None:
-            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._events_table)
+            )
             params: tuple[Any, ...] = (before, app_name)
         else:
-            sql = f"DELETE FROM {self._events_table} WHERE timestamp < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE timestamp < %s").format(
+                table=_pg_table_identifier(self._events_table)
+            )
             params = (before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), params)
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1011,15 +1065,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
     def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time predates the given threshold."""
         if app_name is not None:
-            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._session_table)
+            )
             params: tuple[Any, ...] = (updated_before, app_name)
         else:
-            sql = f"DELETE FROM {self._session_table} WHERE update_time < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=_pg_table_identifier(self._session_table)
+            )
             params = (updated_before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), params)
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1028,15 +1086,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
     def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         """Delete user-scoped state rows whose update_time predates the given threshold."""
         if app_name is not None:
-            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s AND app_name = %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s AND app_name = %s").format(
+                table=_pg_table_identifier(self._user_state_table)
+            )
             params: tuple[Any, ...] = (updated_before, app_name)
         else:
-            sql = f"DELETE FROM {self._user_state_table} WHERE update_time < %s"
+            query = pg_sql.SQL("DELETE FROM {table} WHERE update_time < %s").format(
+                table=_pg_table_identifier(self._user_state_table)
+            )
             params = (updated_before,)
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), params)
+                cur.execute(query, params)
                 conn.commit()
                 return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         except errors.UndefinedTable:
@@ -1044,11 +1106,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s").format(
+            table=_pg_table_identifier(self._app_state_table)
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (app_name,))
+                cur.execute(query, (app_name,))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
         except errors.UndefinedTable:
@@ -1056,11 +1120,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
+        query = pg_sql.SQL("SELECT state FROM {table} WHERE app_name = %s AND user_id = %s").format(
+            table=_pg_table_identifier(self._user_state_table)
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (app_name, user_id))
+                cur.execute(query, (app_name, user_id))
                 row = cur.fetchone()
                 return row["state"] if row is not None else None
         except errors.UndefinedTable:
@@ -1068,33 +1134,35 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        sql = f"""
-        UPSERT INTO {self._app_state_table} (app_name, state, update_time)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, state, update_time)
         VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._app_state_table))
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, Jsonb(state)))
+            cur.execute(query, (app_name, Jsonb(state)))
             conn.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        sql = f"""
-        UPSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (app_name, user_id, state, update_time)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """
+        """).format(table=_pg_table_identifier(self._user_state_table))
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (app_name, user_id, Jsonb(state)))
+            cur.execute(query, (app_name, user_id, Jsonb(state)))
             conn.commit()
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        sql = f"SELECT value FROM {self._metadata_table} WHERE key = %s"
+        query = pg_sql.SQL("SELECT value FROM {table} WHERE key = %s").format(
+            table=_pg_table_identifier(self._metadata_table)
+        )
 
         try:
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
+                cur.execute(query, (key,))
                 row = cur.fetchone()
                 return row["value"] if row is not None else None
         except errors.UndefinedTable:
@@ -1102,13 +1170,13 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        sql = f"""
-        UPSERT INTO {self._metadata_table} (key, value)
+        query = pg_sql.SQL("""
+        UPSERT INTO {table} (key, value)
         VALUES (%s, %s)
-        """
+        """).format(table=_pg_table_identifier(self._metadata_table))
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql.encode(), (key, value))
+            cur.execute(query, (key, value))
             conn.commit()
 
     def _sessions_table_ddl(self) -> str:
@@ -1120,7 +1188,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         indexes_sql = "\n\n        ".join(_cockroach_session_index_statements(adk_config, self._session_table))
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
-            self._session_table, owner_id_line, session_locality, indexes_sql
+            _format_ddl_identifier(self._session_table), owner_id_line, session_locality, indexes_sql
         )
 
     def _events_table_ddl(self) -> str:
@@ -1129,65 +1197,75 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         indexes_sql = "\n\n        ".join(_cockroach_event_index_statements(adk_config, self._events_table))
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
-            self._events_table, self._session_table, events_locality, indexes_sql
+            _format_ddl_identifier(self._events_table),
+            _format_ddl_identifier(self._session_table),
+            events_locality,
+            indexes_sql,
         )
 
     def _app_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         app_state_locality = _cockroach_table_locality_clause(adk_config, "app_state_table_locality")
 
-        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(self._app_state_table, app_state_locality)
+        return _ADK_APP_STATES_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._app_state_table), app_state_locality
+        )
 
     def _user_states_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         user_state_locality = _cockroach_table_locality_clause(adk_config, "user_state_table_locality")
 
-        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(self._user_state_table, user_state_locality)
+        return _ADK_USER_STATES_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._user_state_table), user_state_locality
+        )
 
     def _metadata_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         metadata_locality = _cockroach_table_locality_clause(adk_config, "metadata_table_locality")
 
-        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(self._metadata_table, metadata_locality)
+        return _ADK_METADATA_TABLE_DDL_TEMPLATE.format(_format_ddl_identifier(self._metadata_table), metadata_locality)
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._app_state_table)}"
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._user_state_table)}"
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._metadata_table)}"
 
     def _drop_tables_sql(self) -> "list[str]":
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._events_table)}",
+            f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._session_table)}",
         ]
 
     def _insert_event(self, event_record: StoredEvent) -> None:
         session_id = event_record["session_id"]
         app_name = event_record["app_name"]
         user_id = event_record["user_id"]
-        sql = f"""
-        INSERT INTO {self._events_table} (
+        query = pg_sql.SQL("""
+        INSERT INTO {events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
         )
         SELECT %s, %s, %s, %s, %s, %s, %s
         WHERE EXISTS (
-            SELECT 1 FROM {self._session_table}
+            SELECT 1 FROM {session_table}
             WHERE id = %s AND app_name = %s AND user_id = %s
         )
-        """
+        """).format(
+            events_table=_pg_table_identifier(self._events_table),
+            session_table=_pg_table_identifier(self._session_table),
+        )
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                sql.encode(),
+                query,
                 (
                     event_record["id"],
                     app_name,
@@ -1265,7 +1343,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         ]
         inserted_ats = [entry["inserted_at"] for entry in entries]
 
-        table_ident = pg_sql.Identifier(*self._memory_table.split("."))
+        table_ident = _pg_table_identifier(self._memory_table)
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1353,28 +1431,28 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
+            sql_query = pg_sql.SQL("""
+            SELECT * FROM {table}
             WHERE {where_scope}
               AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
             ORDER BY timestamp DESC
             LIMIT %s
-            """
+            """).format(table=_pg_table_identifier(self._memory_table), where_scope=where_scope)
             search_param = query
             params = (*scope_params, search_param, effective_limit)
         else:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
+            sql_query = pg_sql.SQL("""
+            SELECT * FROM {table}
             WHERE {where_scope} AND content_text ILIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
-            """
+            """).format(table=_pg_table_identifier(self._memory_table), where_scope=where_scope)
             search_param = f"%{query}%"
             params = (*scope_params, search_param, effective_limit)
 
         try:
             async with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
-                await cur.execute(sql.encode(), params)
+                await cur.execute(sql_query, params)
                 rows = await cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
         except errors.UndefinedTable:
@@ -1394,18 +1472,20 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = ["session_id = %s"]
+        clauses: list[pg_sql.Composable] = [pg_sql.SQL("session_id = %s")]
         params: list[Any] = [session_id]
         if app_name is not None:
-            clauses.append("app_name = %s")
+            clauses.append(pg_sql.SQL("app_name = %s"))
             params.append(app_name)
         if user_id is not None:
-            clauses.append("user_id = %s")
+            clauses.append(pg_sql.SQL("user_id = %s"))
             params.append(user_id)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
+        sql_query = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
+            table=_pg_table_identifier(self._memory_table), where=pg_sql.SQL(" AND ").join(clauses)
+        )
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), tuple(params))
+            await cur.execute(sql_query, tuple(params))
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1416,18 +1496,20 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = ["inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))"]
+        clauses: list[pg_sql.Composable] = [pg_sql.SQL("inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))")]
         params: list[Any] = [int(days)]
         if app_name is not None:
-            clauses.append("app_name = %s")
+            clauses.append(pg_sql.SQL("app_name = %s"))
             params.append(app_name)
         if scope is not None:
-            clauses.append("scope = %s")
+            clauses.append(pg_sql.SQL("scope = %s"))
             params.append(scope)
-        where_sql = " AND ".join(clauses)
-        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
+        where_sql = pg_sql.SQL(" AND ").join(clauses)
+        sql_query = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
+            table=_pg_table_identifier(self._memory_table), where=where_sql
+        )
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), tuple(params))
+            await cur.execute(sql_query, tuple(params))
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1441,10 +1523,12 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts)
         )
 
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, owner_id_line, memory_locality, indexes_sql)
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._memory_table), owner_id_line, memory_locality, indexes_sql
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._memory_table)}"]
 
 
 class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycopgSyncConfig"]):
@@ -1504,7 +1588,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         ]
         inserted_ats = [entry["inserted_at"] for entry in entries]
 
-        table_ident = pg_sql.Identifier(*self._memory_table.split("."))
+        table_ident = _pg_table_identifier(self._memory_table)
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1593,28 +1677,28 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
         where_scope, scope_params = _build_cockroach_scope_where(app_name, user_id, scope_filter)
         if self._use_fts:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
+            sql_query = pg_sql.SQL("""
+            SELECT * FROM {table}
             WHERE {where_scope}
               AND to_tsvector('english', content_text) @@ plainto_tsquery('english', %s)
             ORDER BY timestamp DESC
             LIMIT %s
-            """
+            """).format(table=_pg_table_identifier(self._memory_table), where_scope=where_scope)
             search_param = query
             params = (*scope_params, search_param, effective_limit)
         else:
-            sql = f"""
-            SELECT * FROM {self._memory_table}
+            sql_query = pg_sql.SQL("""
+            SELECT * FROM {table}
             WHERE {where_scope} AND content_text ILIKE %s
             ORDER BY timestamp DESC
             LIMIT %s
-            """
+            """).format(table=_pg_table_identifier(self._memory_table), where_scope=where_scope)
             search_param = f"%{query}%"
             params = (*scope_params, search_param, effective_limit)
 
         try:
             with self._provide_read_connection(primary=False) as conn, conn.cursor() as cur:
-                cur.execute(sql.encode(), params)
+                cur.execute(sql_query, params)
                 rows = cur.fetchall()
                 columns = [col[0] for col in cur.description or []]
         except errors.UndefinedTable:
@@ -1635,18 +1719,20 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = ["session_id = %s"]
+        clauses: list[pg_sql.Composable] = [pg_sql.SQL("session_id = %s")]
         params: list[Any] = [session_id]
         if app_name is not None:
-            clauses.append("app_name = %s")
+            clauses.append(pg_sql.SQL("app_name = %s"))
             params.append(app_name)
         if user_id is not None:
-            clauses.append("user_id = %s")
+            clauses.append(pg_sql.SQL("user_id = %s"))
             params.append(user_id)
 
-        sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
+        sql_query = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
+            table=_pg_table_identifier(self._memory_table), where=pg_sql.SQL(" AND ").join(clauses)
+        )
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), tuple(params))
+            cur.execute(sql_query, tuple(params))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1656,18 +1742,20 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = ["inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))"]
+        clauses: list[pg_sql.Composable] = [pg_sql.SQL("inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))")]
         params: list[Any] = [int(days)]
         if app_name is not None:
-            clauses.append("app_name = %s")
+            clauses.append(pg_sql.SQL("app_name = %s"))
             params.append(app_name)
         if scope is not None:
-            clauses.append("scope = %s")
+            clauses.append(pg_sql.SQL("scope = %s"))
             params.append(scope)
-        where_sql = " AND ".join(clauses)
-        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
+        where_sql = pg_sql.SQL(" AND ").join(clauses)
+        sql_query = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
+            table=_pg_table_identifier(self._memory_table), where=where_sql
+        )
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), tuple(params))
+            cur.execute(sql_query, tuple(params))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1681,21 +1769,56 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             _cockroach_memory_index_statements(adk_config, self._memory_table, use_fts=self._use_fts)
         )
 
-        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, owner_id_line, memory_locality, indexes_sql)
+        return _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(
+            _format_ddl_identifier(self._memory_table), owner_id_line, memory_locality, indexes_sql
+        )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [f"DROP TABLE IF EXISTS {_format_ddl_identifier(self._memory_table)}"]
+
+
+def _pg_table_identifier(table_name: str) -> pg_sql.Identifier:
+    """Build a schema-aware Psycopg Identifier from a potentially qualified table name."""
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        return pg_sql.Identifier(table_name)
+    return pg_sql.Identifier(*parts)
+
+
+def _format_ddl_part(part: str) -> str:
+    """Quote an identifier segment when it contains uppercase or special characters."""
+    if _SIMPLE_LOWER_IDENTIFIER.fullmatch(part) is not None:
+        return part
+    return quote_identifier(part)
+
+
+def _format_ddl_identifier(table_name: str) -> str:
+    """Format a potentially qualified table name for DDL matching Postgres folding rules."""
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=False)
+    if not parts:
+        return quote_identifier(table_name)
+    return ".".join(_format_ddl_part(part) for part in parts)
+
+
+def _format_ddl_index_name(table_name: str, suffix: str) -> str:
+    """Format a safe companion index name derived from a potentially qualified table name."""
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=False)
+    slug = "_".join(parts) if parts else table_name.replace(".", "_")
+    return _format_ddl_part(f"idx_{slug}_{suffix}")
 
 
 def _cockroach_session_index_statements(adk_config: Mapping[str, Any], session_table: str) -> list[str]:
     """Build guarded CockroachDB session companion index DDL statements."""
     hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
     session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
-    session_idx_name = session_table.replace(".", "_")
+    session_sql = _format_ddl_identifier(session_table)
+    idx_app_user = _format_ddl_index_name(session_table, "app_user")
+    idx_update_time = _format_ddl_index_name(session_table, "update_time")
+    idx_state = _format_ddl_index_name(session_table, "state")
     return [
-        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_app_user ON {session_table}(app_name, user_id){session_storing_clause};",
-        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_update_time ON {session_table}(update_time DESC){hash_shard_clause};",
-        f"CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_state ON {session_table} USING GIN (state) WHERE state != '{{}}'::jsonb;",
+        f"CREATE INDEX IF NOT EXISTS {idx_app_user} ON {session_sql}(app_name, user_id){session_storing_clause};",
+        f"CREATE INDEX IF NOT EXISTS {idx_update_time} ON {session_sql}(update_time DESC){hash_shard_clause};",
+        f"CREATE INDEX IF NOT EXISTS {idx_state} ON {session_sql} USING GIN (state) WHERE state != '{{}}'::jsonb;",
     ]
 
 
@@ -1703,29 +1826,38 @@ def _cockroach_event_index_statements(adk_config: Mapping[str, Any], events_tabl
     """Build guarded CockroachDB event companion index DDL statements."""
     hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
     events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
-    events_idx_name = events_table.replace(".", "_")
+    events_sql = _format_ddl_identifier(events_table)
+    idx_session = _format_ddl_index_name(events_table, "session")
+    idx_event_data = _format_ddl_index_name(events_table, "event_data")
+    idx_app_timestamp = _format_ddl_index_name(events_table, "app_timestamp")
     return [
-        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_session ON {events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};",
-        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_event_data ON {events_table} USING GIN (event_data);",
-        f"CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_app_timestamp ON {events_table}(app_name, timestamp ASC);",
+        f"CREATE INDEX IF NOT EXISTS {idx_session} ON {events_sql}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};",
+        f"CREATE INDEX IF NOT EXISTS {idx_event_data} ON {events_sql} USING GIN (event_data);",
+        f"CREATE INDEX IF NOT EXISTS {idx_app_timestamp} ON {events_sql}(app_name, timestamp ASC);",
     ]
 
 
 def _cockroach_memory_index_statements(adk_config: Mapping[str, Any], memory_table: str, *, use_fts: bool) -> list[str]:
     """Build guarded CockroachDB memory companion index DDL statements."""
     hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
-    memory_idx_name = memory_table.replace(".", "_")
+    memory_sql = _format_ddl_identifier(memory_table)
+    idx_app_scope = _format_ddl_index_name(memory_table, "app_scope_user_time")
+    idx_scope = _format_ddl_index_name(memory_table, "scope")
+    idx_session = _format_ddl_index_name(memory_table, "session")
     statements = [
-        f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_app_user_time ON {memory_table}(app_name, user_id, timestamp DESC){hash_shard_clause};",
-        f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_session ON {memory_table}(session_id);",
+        f"CREATE INDEX IF NOT EXISTS {idx_app_scope} ON {memory_sql}(app_name, scope, user_id, timestamp DESC){hash_shard_clause};",
+        f"CREATE INDEX IF NOT EXISTS {idx_scope} ON {memory_sql}(app_name, scope);",
+        f"CREATE INDEX IF NOT EXISTS {idx_session} ON {memory_sql}(session_id);",
     ]
     if use_fts:
+        idx_fts = _format_ddl_index_name(memory_table, "fts")
         statements.append(
-            f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_fts ON {memory_table} USING GIN (to_tsvector('english', content_text));"
+            f"CREATE INDEX IF NOT EXISTS {idx_fts} ON {memory_sql} USING GIN (to_tsvector('english', content_text));"
         )
     if adk_config.get("enable_memory_trigram_index", False):
+        idx_trgm = _format_ddl_index_name(memory_table, "content_trgm")
         statements.append(
-            f"CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_content_trgm ON {memory_table} USING GIN (content_text gin_trgm_ops);"
+            f"CREATE INDEX IF NOT EXISTS {idx_trgm} ON {memory_sql} USING GIN (content_text gin_trgm_ops);"
         )
     return statements
 
@@ -1817,12 +1949,15 @@ def _cockroach_storing_clause(adk_config: Mapping[str, Any], columns: tuple[str,
 
 def _build_cockroach_scope_where(
     app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
-) -> tuple[str, tuple[Any, ...]]:
+) -> tuple[pg_sql.Composable, tuple[Any, ...]]:
     if scope_filter == "all":
-        return "app_name = %s AND ((scope = 'user' AND user_id = %s) OR scope = 'app')", (app_name, user_id)
+        where = pg_sql.SQL("app_name = %s AND ((scope = 'user' AND user_id = %s) OR scope = 'app')")
+        return where, (app_name, user_id)
     if scope_filter == "user":
-        return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
-    return "app_name = %s AND scope = 'app'", (app_name,)
+        where = pg_sql.SQL("app_name = %s AND scope = 'user' AND user_id = %s")
+        return where, (app_name, user_id)
+    where = pg_sql.SQL("app_name = %s AND scope = 'app'")
+    return where, (app_name,)
 
 
 def _session_list_query(
@@ -1833,23 +1968,32 @@ def _session_list_query(
     direction: str,
     limit: "int | None",
     offset: int,
-) -> "tuple[str, tuple[Any, ...]]":
+) -> "tuple[pg_sql.Composed, tuple[Any, ...]]":
     """Return the bounded session-list query and its bound values."""
     params: list[Any] = [app_name]
-    where_clause = "app_name = %s"
+    user_filter = pg_sql.SQL("")
     if user_id is not None:
         params.append(user_id)
-        where_clause = f"{where_clause} AND user_id = %s"
+        user_filter = pg_sql.SQL(" AND user_id = %s")
 
-    page_clause = ""
+    page_clause = pg_sql.SQL("")
     if limit is not None:
         params.extend((limit, offset))
-        page_clause = "\n            LIMIT %s OFFSET %s"
+        page_clause = pg_sql.SQL(" LIMIT %s OFFSET %s")
 
-    sql = f"""
+    column_sql = pg_sql.SQL("create_time") if column == "create_time" else pg_sql.SQL("update_time")
+    direction_sql = pg_sql.SQL("DESC") if direction == "DESC" else pg_sql.SQL("ASC")
+
+    query = pg_sql.SQL("""
     SELECT id, app_name, user_id, state, create_time, update_time
-    FROM {session_table}
-    WHERE {where_clause}
-    ORDER BY {column} {direction}, id {direction}{page_clause}
-    """
-    return sql, tuple(params)
+    FROM {table}
+    WHERE app_name = %s{user_filter}
+    ORDER BY {column} {direction}, id {direction}{page}
+    """).format(
+        table=_pg_table_identifier(session_table),
+        user_filter=user_filter,
+        column=column_sql,
+        direction=direction_sql,
+        page=page_clause,
+    )
+    return query, tuple(params)

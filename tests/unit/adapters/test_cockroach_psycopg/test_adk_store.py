@@ -174,6 +174,7 @@ class _RecordingCursor:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self._rows = rows or []
         self.rowcount = rowcount
+        self.description: tuple[Any, ...] = ()
 
     def execute(self, sql: Any, params: Any = None) -> None:
         rendered = (
@@ -199,6 +200,7 @@ class _RecordingAsyncCursor:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self._rows = rows or []
         self.rowcount = rowcount
+        self.description: tuple[Any, ...] = ()
 
     async def execute(self, sql: Any, params: Any = None) -> None:
         rendered = (
@@ -290,7 +292,7 @@ async def test_cockroach_psycopg_async_list_sessions_binds_order_and_page() -> N
     sql, params = cursor.calls[0]
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
-        "FROM adk_session WHERE app_name = %s AND user_id = %s "
+        'FROM "adk_session" WHERE app_name = %s AND user_id = %s '
         "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
     )
     assert params == ("app", "u1", 10, 20)
@@ -305,7 +307,7 @@ def test_cockroach_psycopg_sync_list_sessions_binds_order_and_page() -> None:
     sql, params = cursor.calls[0]
     assert _normalized(sql) == (
         "SELECT id, app_name, user_id, state, create_time, update_time "
-        "FROM adk_session WHERE app_name = %s AND user_id = %s "
+        'FROM "adk_session" WHERE app_name = %s AND user_id = %s '
         "ORDER BY create_time ASC, id ASC LIMIT %s OFFSET %s"
     )
     assert params == ("app", "u1", 10, 20)
@@ -440,7 +442,7 @@ async def test_cockroach_psycopg_memory_embedding_keeps_text_search(
         result = await result
     assert result == []
     query, params = cursor.execute.call_args.args
-    sql = query.decode()
+    sql = query.as_string(None)
     assert "plainto_tsquery" in sql if use_fts else "content_text ILIKE" in sql
     assert params == ("app", "u1", "hello" if use_fts else "%hello%", 20)
 
@@ -483,11 +485,16 @@ async def test_cockroach_psycopg_session_companions_use_qualified_identity(async
     ("adk_config", "expected_names"),
     [
         pytest.param({"enable_memory": False}, [], id="disabled"),
-        pytest.param({"enable_memory": True}, ["idx_adk_memory_app_user_time", "idx_adk_memory_session"], id="default"),
+        pytest.param(
+            {"enable_memory": True},
+            ["idx_adk_memory_app_scope_user_time", "idx_adk_memory_scope", "idx_adk_memory_session"],
+            id="default",
+        ),
         pytest.param(
             {"enable_memory": True, "memory_use_fts": True, "enable_memory_trigram_index": True},
             [
-                "idx_adk_memory_app_user_time",
+                "idx_adk_memory_app_scope_user_time",
+                "idx_adk_memory_scope",
                 "idx_adk_memory_session",
                 "idx_adk_memory_fts",
                 "idx_adk_memory_content_trgm",
@@ -640,7 +647,7 @@ async def test_cockroach_psycopg_get_session_renews_only_for_positive_durations(
     assert result is not None
     sql, params = cursor.calls[0]
     if expect_update:
-        assert _normalized(sql).startswith("UPDATE adk_session SET update_time = CURRENT_TIMESTAMP")
+        assert _normalized(sql).startswith('UPDATE "adk_session" SET update_time = CURRENT_TIMESTAMP')
         assert connection.commit_called is True
     else:
         assert _normalized(sql).startswith("SELECT id, app_name, user_id, state, create_time, update_time")
@@ -674,8 +681,9 @@ async def test_cockroach_psycopg_append_event_checks_session_ownership(
         assert connection.commit_called is True
 
     sql, params = cursor.calls[0]
-    assert "WHERE EXISTS ( SELECT 1 FROM adk_session WHERE id = %s AND app_name = %s AND user_id = %s )" in _normalized(
-        sql
+    assert (
+        'WHERE EXISTS ( SELECT 1 FROM "adk_session" WHERE id = %s AND app_name = %s AND user_id = %s )'
+        in _normalized(sql)
     )
     assert params[-3:] == ("s1", "app", "u1")
 
@@ -731,8 +739,8 @@ async def test_cockroach_psycopg_append_event_and_update_state_validates_scope_a
         store.append_event_and_update_state(cast("Any", event_record), "app", "u1", "s1", {"k": "v"})
     )
     assert updated["id"] == "s1"
-    assert _normalized(cursor.calls[0][0]).startswith("UPDATE adk_session")
-    assert _normalized(cursor.calls[1][0]).startswith("INSERT INTO adk_event")
+    assert _normalized(cursor.calls[0][0]).startswith('UPDATE "adk_session"')
+    assert _normalized(cursor.calls[1][0]).startswith('INSERT INTO "adk_event"')
 
 
 @pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_SESSION_MODES)
@@ -744,7 +752,8 @@ async def test_cockroach_psycopg_get_events_joins_on_session_and_owner_columns(s
     sql, params = cursor.calls[0]
     normalized = _normalized(sql)
     assert (
-        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in normalized
+        'JOIN "adk_session" s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id'
+        in normalized
     )
     assert "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s" in normalized
     assert params == ("app", "u1", "s1")
@@ -783,7 +792,7 @@ async def test_cockroach_psycopg_delete_entries_by_session_scopes_predicates(
     assert deleted == 2
     assert connection.commit_called is True
     sql, params = cursor.calls[0]
-    assert _normalized(sql) == f"DELETE FROM adk_memory {expected_where}"
+    assert _normalized(sql) == f'DELETE FROM "adk_memory" {expected_where}'
     assert params == expected_params
 
 
@@ -821,3 +830,94 @@ async def test_cockroach_psycopg_memory_ddl_and_insert_use_composite_dedup_and_t
     sql, _ = cursor.calls[0]
     assert "ON CONFLICT DO NOTHING" in sql
     assert "ON CONFLICT (event_id)" not in sql
+
+
+@pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_SESSION_MODES)
+@pytest.mark.parametrize(
+    (
+        "session_table",
+        "events_table",
+        "expected_ddl_session",
+        "expected_dml_session",
+        "expected_ddl_events",
+        "expected_dml_events",
+    ),
+    [
+        pytest.param(
+            "app.sessions",
+            "app.events",
+            "app.sessions",
+            '"app"."sessions"',
+            "app.events",
+            '"app"."events"',
+            id="qualified-lowercase",
+        ),
+        pytest.param(
+            "MySessions", "MyEvents", '"MySessions"', '"MySessions"', '"MyEvents"', '"MyEvents"', id="mixed-case"
+        ),
+        pytest.param(
+            "MySchema.MySessions",
+            "MySchema.MyEvents",
+            '"MySchema"."MySessions"',
+            '"MySchema"."MySessions"',
+            '"MySchema"."MyEvents"',
+            '"MySchema"."MyEvents"',
+            id="qualified-mixed-case",
+        ),
+    ],
+)
+async def test_cockroach_psycopg_session_ddl_and_dml_quote_identifiers_consistently(
+    store_cls: Any,
+    is_async: bool,
+    session_table: str,
+    events_table: str,
+    expected_ddl_session: str,
+    expected_dml_session: str,
+    expected_ddl_events: str,
+    expected_dml_events: str,
+) -> None:
+    """CockroachPsycopg session and event DDL matches schema-aware DML identifier quoting."""
+    store, cursor, _ = _build_cockroach_psycopg_store(
+        store_cls, is_async=is_async, adk_config={"session_table": session_table, "events_table": events_table}
+    )
+
+    sessions_ddl = await _await_if_needed(store._sessions_table_ddl())
+    events_ddl = await _await_if_needed(store._events_table_ddl())
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl_session} (" in sessions_ddl
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl_events} (" in events_ddl
+    assert f"REFERENCES {expected_ddl_session}(id)" in events_ddl
+    assert f"DROP TABLE IF EXISTS {expected_ddl_events}" in store._drop_tables_sql()
+    assert f"DROP TABLE IF EXISTS {expected_ddl_session}" in store._drop_tables_sql()
+
+    await _await_if_needed(store.list_sessions("app"))
+    await _await_if_needed(store.get_events("app", "u1", "s1"))
+    list_sql, _ = cursor.calls[0]
+    events_sql, _ = cursor.calls[1]
+    assert f"FROM {expected_dml_session}" in _normalized(list_sql)
+    assert f"FROM {expected_dml_events} e JOIN {expected_dml_session} s" in _normalized(events_sql)
+
+
+@pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_MEMORY_MODES)
+@pytest.mark.parametrize(
+    ("memory_table", "expected_ddl", "expected_dml"),
+    [
+        pytest.param("app.memories", "app.memories", '"app"."memories"', id="qualified-lowercase"),
+        pytest.param("MyMemories", '"MyMemories"', '"MyMemories"', id="mixed-case"),
+        pytest.param("MySchema.MyMemories", '"MySchema"."MyMemories"', '"MySchema"."MyMemories"', id="qualified-mixed"),
+    ],
+)
+async def test_cockroach_psycopg_memory_ddl_and_dml_quote_identifiers_consistently(
+    store_cls: Any, is_async: bool, memory_table: str, expected_ddl: str, expected_dml: str
+) -> None:
+    """CockroachPsycopg memory DDL and DML quote qualified and mixed-case names consistently."""
+    store, cursor, _ = _build_cockroach_psycopg_store(
+        store_cls, is_async=is_async, adk_config={"enable_memory": True, "memory_table": memory_table}
+    )
+
+    ddl = await _await_if_needed(store._memory_table_ddl())
+    assert f"CREATE TABLE IF NOT EXISTS {expected_ddl} (" in ddl
+    assert store._drop_memory_table_sql() == [f"DROP TABLE IF EXISTS {expected_ddl}"]
+
+    await _await_if_needed(store.search_entries("hello", "app", "u1"))
+    search_sql, _ = cursor.calls[0]
+    assert f"FROM {expected_dml}" in search_sql
