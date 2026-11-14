@@ -88,6 +88,24 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
 _CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
 _ALLOYDB_URI_PARTS: Final[int] = 8
 _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME: Final[float] = 1800.0
+_ASYNCPG_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "port",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "database",
+    "dbname",
+    "db",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 
 logger = get_logger(__name__)
 
@@ -567,9 +585,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         else:
             conn_cfg.pop("server_settings", None)
         if isinstance(direct_dsn, str):
+            for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
+                conn_cfg.pop(key, None)
             conn_cfg["dsn"] = direct_dsn
         elif isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "dsn" in normalized_direct:
+                for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
+                    conn_cfg.pop(key, None)
+            conn_cfg.update(normalized_direct)
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
@@ -602,11 +626,33 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         aliases = ("dsn", "url", "conninfo", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
         if any(key in overrides for key in aliases):
-            for key in aliases:
+            for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
                 config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
             if explicit_dsn is not None:
                 config["dsn"] = explicit_dsn
+        if "database" not in overrides and ("dbname" in overrides or "db" in overrides):
+            config["database"] = overrides.get("dbname", overrides.get("db"))
+        config.pop("dbname", None)
+        config.pop("db", None)
+        if "user" not in overrides and "username" in overrides:
+            config["user"] = overrides["username"]
+        config.pop("username", None)
         return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "AsyncpgConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""

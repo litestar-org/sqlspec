@@ -54,6 +54,25 @@ if TYPE_CHECKING:
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 _MAX_INITIALIZED_CONNECTION_IDS: Final[int] = 4096
+_PSQLPY_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "hosts",
+    "port",
+    "ports",
+    "username",
+    "user",
+    "password",
+    "db_name",
+    "database",
+    "dbname",
+    "db",
+    "target_session_attrs",
+    "load_balance_hosts",
+)
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -523,9 +542,15 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         else:
             conn_cfg.pop("options", None)
         if isinstance(direct_dsn, str):
+            for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
+                conn_cfg.pop(key, None)
             conn_cfg["dsn"] = direct_dsn
         elif isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "dsn" in normalized_direct:
+                for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
+                    conn_cfg.pop(key, None)
+            conn_cfg.update(normalized_direct)
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
@@ -548,8 +573,13 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         aliases = ("dsn", "conninfo", "url", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
         if any(key in overrides for key in aliases):
-            for key in aliases:
+            for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
                 config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _PSQLPY_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
             if explicit_dsn is not None:
                 config["dsn"] = explicit_dsn
         for canonical, aliases_for_field in (("db_name", ("database", "dbname", "db")), ("username", ("user",))):
@@ -558,6 +588,8 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
                     if key in overrides:
                         config[canonical] = overrides[key]
                         break
+            for key in aliases_for_field:
+                config.pop(key, None)
         identity_fields = {
             "host",
             "hosts",
@@ -581,6 +613,16 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             else:
                 config["options"] = self._explicit_options
         return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "PsqlpyConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     @staticmethod
     def _merge_derived_dsn(dsn: str, overrides: Mapping[str, Any]) -> str:
@@ -634,6 +676,20 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
                 fields[target] = (
                     ",".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
                 )
+        host_overridden = "host" in overrides or "hosts" in overrides
+        port_overridden = "port" in overrides or "ports" in overrides
+        if "host" in fields and "port" in fields:
+            merged_hosts = [item for item in fields["host"].split(",") if item]
+            merged_ports = [item for item in fields["port"].split(",") if item]
+            if len(merged_ports) > 1 and len(merged_ports) != len(merged_hosts):
+                if port_overridden:
+                    message = "Number of derived ports must match number of hosts"
+                    raise ImproperConfigurationError(message)
+                if host_overridden:
+                    if len(set(merged_ports)) == 1:
+                        fields["port"] = merged_ports[0]
+                    else:
+                        fields.pop("port", None)
         if "target_session_attrs" in overrides:
             attrs = overrides["target_session_attrs"]
             fields["target_session_attrs"] = (

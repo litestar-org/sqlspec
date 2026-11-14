@@ -10,6 +10,7 @@ import pytest
 from psycopg import AsyncCursor, Connection, Cursor, pq
 from psycopg import Error as PsycopgError
 from psycopg.abc import AdaptContext
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 
 import sqlspec.adapters.psycopg.config as psycopg_config
@@ -1355,3 +1356,51 @@ async def test_psycopg_async_read_replica_failover_maps_driver_errors(
         assert conn is good_conn
     async with config.provide_read_session() as reader:
         assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_psycopg_derive_pool_pops_database_and_username_aliases(config_type: Any) -> None:
+    """Field-based derived configs drop alias keys so libpq make_conninfo accepts them."""
+    primary = config_type(connection_config={"host": "primary", "dbname": "app", "user": "u"})
+    derived = primary.derive_pool(database="ro_db", username="ro_user")
+    assert "database" not in derived.connection_config
+    assert "db" not in derived.connection_config
+    assert "username" not in derived.connection_config
+    parsed = conninfo_to_dict(make_conninfo("", **derived.connection_config))
+    assert parsed["dbname"] == "ro_db"
+    assert parsed["user"] == "ro_user"
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_psycopg_derive_conninfo_replica_and_direct_dsn_clear_inherited_endpoints(config_type: Any) -> None:
+    """Explicit conninfo, string replicas, and direct_dsn clear inherited field-based primary endpoints."""
+    primary = config_type(
+        connection_config={"host": "primary", "port": 5432, "dbname": "rw", "user": "u", "password": "pw"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://du:dp@direct:5439/direct_db"},
+        replicas=["postgresql://ro:ropw@replica:6432/ro_db"],
+    )
+    derived = primary.derive_pool(conninfo="postgresql://ro:ropw@replica:6432/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+    direct = primary.derive_direct_config()
+
+    for cfg in (derived, replica):
+        parsed = conninfo_to_dict(
+            make_conninfo(
+                cfg.connection_config["conninfo"], **{k: v for k, v in cfg.connection_config.items() if k != "conninfo"}
+            )
+        )
+        assert parsed["host"] == "replica"
+        assert parsed["port"] == "6432"
+        assert parsed["dbname"] == "ro_db"
+        assert parsed["user"] == "ro"
+
+    parsed_direct = conninfo_to_dict(
+        make_conninfo(
+            direct.connection_config["conninfo"],
+            **{k: v for k, v in direct.connection_config.items() if k != "conninfo"},
+        )
+    )
+    assert parsed_direct["host"] == "direct"
+    assert parsed_direct["port"] == "5439"
+    assert parsed_direct["dbname"] == "direct_db"
+    assert parsed_direct["user"] == "du"

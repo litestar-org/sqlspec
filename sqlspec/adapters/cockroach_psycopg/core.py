@@ -115,18 +115,13 @@ def build_connection_config(
 ) -> dict[str, Any]:
     """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility."""
     config = normalize_connection_config(connection_config)
-    conninfo = (
-        config.pop("conninfo", None)
-        or config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    conninfo = _pop_first_alias(config, ("conninfo", "dsn", "url", "connection_string"))
     if conninfo is not None:
         config["conninfo"] = conninfo
-    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    dbname = _pop_first_alias(config, ("dbname", "database", "db"))
     if dbname is not None:
         config["dbname"] = dbname
-    user = config.pop("user", None) or config.pop("username", None)
+    user = _pop_first_alias(config, ("user", "username"))
     if user is not None:
         config["user"] = user
 
@@ -369,3 +364,13 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         mapped.__cause__ = error if isinstance(error, BaseException) else None
         return mapped
     return _map_parent_exception(error, logger=logger)
+
+
+def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+    """Pop every alias key from config and return the first non-None value."""
+    found = None
+    for alias in aliases:
+        value = config.pop(alias, None)
+        if found is None and value is not None:
+            found = value
+    return found

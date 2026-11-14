@@ -70,6 +70,24 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "reset",
     "setup",
 })
+_COCKROACH_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "port",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "database",
+    "dbname",
+    "db",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 
 
 CockroachAsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]
@@ -502,18 +520,33 @@ class CockroachAsyncpgConfig(
         aliases = ("dsn", "url", "conninfo", "connection_string")
         explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
         if any(key in overrides for key in aliases):
-            for key in aliases:
+            for key in _COCKROACH_ENDPOINT_IDENTITY_KEYS:
                 config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _COCKROACH_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
             if explicit_dsn is not None:
                 config["dsn"] = explicit_dsn
-        if "dbname" in overrides or "db" in overrides:
+        if "database" not in overrides and ("dbname" in overrides or "db" in overrides):
             config["database"] = overrides.get("dbname", overrides.get("db"))
-            config.pop("dbname", None)
-            config.pop("db", None)
-        if "username" in overrides:
+        config.pop("dbname", None)
+        config.pop("db", None)
+        if "user" not in overrides and "username" in overrides:
             config["user"] = overrides["username"]
-            config.pop("username", None)
+        config.pop("username", None)
         return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "CockroachAsyncpgConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     @asynccontextmanager
     async def _read_connection(

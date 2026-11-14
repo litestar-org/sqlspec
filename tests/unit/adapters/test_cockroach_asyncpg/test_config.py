@@ -7,11 +7,13 @@ Tests cover:
 """
 
 import ast
+import inspect
 from pathlib import Path
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
+import asyncpg.connect_utils
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg import (
@@ -1006,3 +1008,29 @@ async def test_cockroach_asyncpg_read_replica_failover_maps_driver_errors(
         assert conn is good_conn
     async with config.provide_read_session() as reader:
         assert reader.connection is good_conn
+
+
+def test_cockroach_asyncpg_replica_and_dsn_override_clear_inherited_endpoints() -> None:
+    """String replicas and dsn overrides drop inherited field-based primary endpoints."""
+    primary = CockroachAsyncpgConfig(
+        connection_config={"host": "primary", "port": 26257, "database": "rw", "user": "u", "password": "pw"},
+        replicas=["postgresql://ro:ropw@replica:26258/ro_db"],
+    )
+    derived = primary.derive_pool(dsn="postgresql://ro:ropw@replica:26258/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+
+    parse_args = asyncpg.connect_utils._parse_connect_arguments  # type: ignore[attr-defined]
+    parse_defaults: dict[str, Any] = dict.fromkeys(inspect.signature(parse_args).parameters)
+    parse_defaults.update({
+        "statement_cache_size": 100,
+        "max_cached_statement_lifetime": 300,
+        "max_cacheable_statement_size": 307200,
+    })
+    for cfg in (derived, replica):
+        assert cfg.connection_config["dsn"] == "postgresql://ro:ropw@replica:26258/ro_db"
+        for stale_key in ("host", "port", "database", "user", "password"):
+            assert stale_key not in cfg.connection_config
+        addrs, params, _ = parse_args(**{**parse_defaults, **build_connection_config(cfg.connection_config)})
+        assert addrs == [("replica", 26258)]
+        assert params.database == "ro_db"
+        assert params.user == "ro"

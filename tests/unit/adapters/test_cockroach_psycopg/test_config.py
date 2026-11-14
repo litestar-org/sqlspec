@@ -17,6 +17,7 @@ import psycopg_pool
 import pytest
 from psycopg import Error as PsycopgError
 from psycopg import pq
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -1713,3 +1714,25 @@ async def test_cockroach_psycopg_async_read_replica_failover_maps_driver_errors(
         assert conn is good_conn
     async with config.provide_read_session() as reader:
         assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("config_type", (CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig))
+def test_cockroach_psycopg_replica_and_conninfo_override_clear_inherited_endpoints(config_type: Any) -> None:
+    """String replicas and conninfo overrides drop inherited field-based primary endpoints."""
+    primary = config_type(
+        connection_config={"host": "primary", "port": 26257, "dbname": "rw", "user": "u", "password": "pw"},
+        replicas=["postgresql://ro:ropw@replica:26258/ro_db"],
+    )
+    derived = primary.derive_pool(conninfo="postgresql://ro:ropw@replica:26258/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+
+    for cfg in (derived, replica):
+        parsed = conninfo_to_dict(
+            make_conninfo(
+                cfg.connection_config["conninfo"], **{k: v for k, v in cfg.connection_config.items() if k != "conninfo"}
+            )
+        )
+        assert parsed["host"] == "replica"
+        assert parsed["port"] == "26258"
+        assert parsed["dbname"] == "ro_db"
+        assert parsed["user"] == "ro"

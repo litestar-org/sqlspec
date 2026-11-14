@@ -887,3 +887,67 @@ async def test_psqlpy_read_replica_failover_maps_driver_errors(
         assert conn is good_conn
     async with config.provide_read_session() as reader:
         assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_key", "expected_value"),
+    [
+        pytest.param({"database": "ro_db"}, "db_name", "ro_db", id="database"),
+        pytest.param({"dbname": "ro_db"}, "db_name", "ro_db", id="dbname"),
+        pytest.param({"db": "ro_db"}, "db_name", "ro_db", id="db"),
+        pytest.param({"user": "ro_user"}, "username", "ro_user", id="user"),
+    ],
+)
+async def test_psqlpy_derive_pool_pops_alias_keys_for_pool_creation(
+    overrides: "dict[str, Any]", expected_key: str, expected_value: str
+) -> None:
+    """Derived pools remove alias keys so psqlpy.ConnectionPool accepts the merged parameters."""
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://u:p@primary:5432/rw"})
+    derived = primary.derive_pool(**overrides)
+    for alias in overrides:
+        assert alias not in derived.connection_config
+    assert derived.connection_config[expected_key] == expected_value
+    pool = await derived._create_pool()  # pyright: ignore[reportPrivateUsage]
+    pool.close()
+
+
+async def test_psqlpy_derive_pool_reconciles_multihost_ports() -> None:
+    """Overriding host on a multi-host primary DSN avoids mismatched port lists."""
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://u:p@127.0.0.1:5433,127.0.0.2:5434/appdb"})
+    single = primary.derive_pool(host="127.0.0.1")
+    assert "host='127.0.0.1'" in single.connection_config["dsn"]
+    assert "port=" not in single.connection_config["dsn"]
+    pool = await single._create_pool()  # pyright: ignore[reportPrivateUsage]
+    try:
+        with pytest.raises(Exception) as caught:
+            await pool.connection()
+        assert "invalid number of ports" not in str(caught.value)
+    finally:
+        pool.close()
+
+    uniform = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://u:p@127.0.0.1:5433,127.0.0.2:5433/appdb"}
+    ).derive_pool(host="127.0.0.1")
+    assert "port='5433'" in uniform.connection_config["dsn"]
+
+    with pytest.raises(ImproperConfigurationError, match="ports"):
+        primary.derive_pool(ports=[5433, 5434, 5435])
+
+
+def test_psqlpy_derive_dsn_and_direct_dsn_clear_inherited_endpoint_fields() -> None:
+    """Explicit DSN, replica string, and direct_dsn drop inherited field-based endpoint options."""
+    primary = PsqlpyConfig(
+        connection_config={"host": "primary", "port": 5432, "db_name": "rw", "username": "u", "password": "pw"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://du:dp@direct:5439/direct_db"},
+        replicas=["postgresql://ro:ropw@replica:6432/ro_db"],
+    )
+    derived = primary.derive_pool(dsn="postgresql://ro:ropw@replica:6432/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+    direct = primary.derive_direct_config()
+    for cfg in (derived, replica):
+        assert cfg.connection_config["dsn"] == "postgresql://ro:ropw@replica:6432/ro_db"
+        for stale_key in ("host", "port", "db_name", "username", "password"):
+            assert stale_key not in cfg.connection_config
+    assert direct.connection_config["dsn"] == "postgresql://du:dp@direct:5439/direct_db"
+    for stale_key in ("host", "port", "db_name", "username", "password"):
+        assert stale_key not in direct.connection_config

@@ -1,9 +1,11 @@
 """AsyncPG configuration tests covering statement config builders."""
 
+import inspect
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock
 
 import asyncpg
+import asyncpg.connect_utils
 import pytest
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
 
@@ -781,3 +783,37 @@ async def test_asyncpg_read_replica_failover_maps_driver_errors(
         assert conn is good_conn
     async with config.provide_read_session() as reader:
         assert reader.connection is good_conn
+
+
+def test_asyncpg_replica_dsn_and_direct_dsn_clear_inherited_endpoints() -> None:
+    """String replicas, dsn overrides, and direct_dsn clear inherited field-based primary options."""
+    primary = AsyncpgConfig(
+        connection_config={"host": "primary", "port": 5432, "database": "rw", "user": "u", "password": "pw"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://du:dp@direct:5439/direct_db"},
+        replicas=["postgresql://ro:ropw@replica:6432/ro_db"],
+    )
+    derived = primary.derive_pool(dsn="postgresql://ro:ropw@replica:6432/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+    direct = primary.derive_direct_config()
+
+    parse_args = asyncpg.connect_utils._parse_connect_arguments  # type: ignore[attr-defined]
+    parse_defaults: dict[str, Any] = dict.fromkeys(inspect.signature(parse_args).parameters)
+    parse_defaults.update({
+        "statement_cache_size": 100,
+        "max_cached_statement_lifetime": 300,
+        "max_cacheable_statement_size": 307200,
+    })
+    for cfg in (derived, replica):
+        assert cfg.connection_config["dsn"] == "postgresql://ro:ropw@replica:6432/ro_db"
+        for stale_key in ("host", "port", "database", "user", "password"):
+            assert stale_key not in cfg.connection_config
+        addrs, params, _ = parse_args(**{**parse_defaults, **build_connection_config(cfg.connection_config)})
+        assert addrs == [("replica", 6432)]
+        assert params.database == "ro_db"
+        assert params.user == "ro"
+
+    assert direct.connection_config["dsn"] == "postgresql://du:dp@direct:5439/direct_db"
+    addrs, params, _ = parse_args(**{**parse_defaults, **build_connection_config(direct.connection_config)})
+    assert addrs == [("direct", 5439)]
+    assert params.database == "direct_db"
+    assert params.user == "du"

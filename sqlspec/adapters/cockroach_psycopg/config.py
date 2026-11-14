@@ -84,6 +84,25 @@ __all__ = (
 )
 
 default_statement_config = build_statement_config()
+_COCKROACH_PSYCOPG_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "conninfo",
+    "dsn",
+    "url",
+    "connection_string",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "database",
+    "db",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 
 
 class CockroachPsycopgConnectionConfig(TypedDict):
@@ -538,21 +557,12 @@ class CockroachPsycopgSyncConfig(
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
-        aliases = ("conninfo", "dsn", "url", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["conninfo"] = explicit_dsn
-        if "database" in overrides or "db" in overrides:
-            config["dbname"] = overrides.get("database", overrides.get("db"))
-            config.pop("database", None)
-            config.pop("db", None)
-        if "username" in overrides:
-            config["user"] = overrides["username"]
-            config.pop("username", None)
-        return config
+        return _prepare_cockroach_psycopg_derived_config(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return _build_cockroach_psycopg_replica_string_overrides(spec_input)
+        return super()._build_replica_spec_overrides(spec_input)
 
     @contextmanager
     def _read_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
@@ -968,21 +978,12 @@ class CockroachPsycopgAsyncConfig(
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
-        aliases = ("conninfo", "dsn", "url", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["conninfo"] = explicit_dsn
-        if "database" in overrides or "db" in overrides:
-            config["dbname"] = overrides.get("database", overrides.get("db"))
-            config.pop("database", None)
-            config.pop("db", None)
-        if "username" in overrides:
-            config["user"] = overrides["username"]
-            config.pop("username", None)
-        return config
+        return _prepare_cockroach_psycopg_derived_config(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return _build_cockroach_psycopg_replica_string_overrides(spec_input)
+        return super()._build_replica_spec_overrides(spec_input)
 
     @asynccontextmanager
     async def _read_connection(
@@ -1184,3 +1185,49 @@ def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
         msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
         raise ImproperConfigurationError(msg)
     driver_features["native_storage_csv_options"] = dict(options)
+
+
+def _strip_cockroach_psycopg_endpoint_identity(config: "dict[str, Any]") -> None:
+    """Remove inherited endpoint identity fields from config and nested kwargs."""
+    for key in _COCKROACH_PSYCOPG_ENDPOINT_IDENTITY_KEYS:
+        config.pop(key, None)
+    nested_kwargs = config.get("kwargs")
+    if isinstance(nested_kwargs, dict):
+        cleaned = dict(nested_kwargs)
+        for key in _COCKROACH_PSYCOPG_ENDPOINT_IDENTITY_KEYS:
+            cleaned.pop(key, None)
+        if cleaned:
+            config["kwargs"] = cleaned
+        else:
+            config.pop("kwargs", None)
+
+
+def _prepare_cockroach_psycopg_derived_config(config: "dict[str, Any]", overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize derived CockroachDB connection overrides without stale endpoint leakage."""
+    aliases = ("conninfo", "dsn", "url", "connection_string")
+    explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+    if any(key in overrides for key in aliases):
+        _strip_cockroach_psycopg_endpoint_identity(config)
+        for key, value in overrides.items():
+            if key in _COCKROACH_PSYCOPG_ENDPOINT_IDENTITY_KEYS and key not in aliases:
+                config[key] = value
+        if explicit_dsn is not None:
+            config["conninfo"] = explicit_dsn
+    if "dbname" not in overrides and ("database" in overrides or "db" in overrides):
+        config["dbname"] = overrides.get("database", overrides.get("db"))
+    config.pop("database", None)
+    config.pop("db", None)
+    if "user" not in overrides and "username" in overrides:
+        config["user"] = overrides["username"]
+    config.pop("username", None)
+    return config
+
+
+def _build_cockroach_psycopg_replica_string_overrides(spec_input: str) -> dict[str, Any]:
+    """Map string replica shorthand to conninfo or host overrides."""
+    endpoint = spec_input.strip()
+    if not endpoint:
+        msg = "CockroachDB replica endpoint must not be empty"
+        raise ImproperConfigurationError(msg)
+    key = "conninfo" if ("://" in endpoint or "=" in endpoint) else "host"
+    return {"connection_config_overrides": {key: endpoint}}
