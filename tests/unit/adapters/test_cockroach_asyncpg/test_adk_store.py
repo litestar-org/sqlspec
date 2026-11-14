@@ -596,3 +596,15 @@ async def test_cockroach_asyncpg_memory_ddl_and_insert_use_composite_dedup_and_t
     sql, _ = conn.calls[0]
     assert "ON CONFLICT DO NOTHING" in sql
     assert "ON CONFLICT (event_id)" not in sql
+
+
+@pytest.mark.parametrize(("status", "expected"), [("DELETE OK", 0), ("", 0), ("DELETE 4", 4)])
+async def test_cockroach_asyncpg_memory_delete_parses_status_rowcount_safely(status: str, expected: int) -> None:
+    """Memory store deletes guard status strings before parsing affected row counts."""
+    conn = _RecordingConnection(status=status)
+    config = _mock_config({"enable_memory": True})
+    config.provide_connection = lambda *_a, **_k: conn
+    store = CockroachAsyncpgADKMemoryStore(config)
+
+    assert await store.delete_entries_by_session("s1") == expected
+    assert await store.delete_entries_older_than(7) == expected

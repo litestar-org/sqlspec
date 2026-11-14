@@ -267,8 +267,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            parts = result.split() if result else []
-            inserted = int(parts[-1]) if parts and parts[-1].isdigit() else 0
+            inserted = _parse_status_rowcount(result)
             if inserted == 0:
                 msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
                 raise ValueError(msg)
@@ -702,8 +701,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
         async with self._config.provide_connection() as conn, conn.transaction():
             result = await conn.execute(sql, *params)
-            parts = result.split() if result else []
-            return int(parts[-1]) if parts and parts[-1].isdigit() else 0
+            return _parse_status_rowcount(result)
 
     async def search_entries(
         self,
@@ -789,7 +787,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn:
             result = await conn.execute(sql, *params)
-            return int(result.split()[-1]) if result else 0
+            return _parse_status_rowcount(result)
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -814,7 +812,7 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             result = await conn.execute(sql, *params)
-            return int(result.split()[-1]) if result else 0
+            return _parse_status_rowcount(result)
 
     async def _memory_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -937,3 +935,8 @@ def _cockroach_storing_clause(adk_config: Mapping[str, Any], columns: tuple[str,
     if not adk_config.get("enable_storing_indexes", False):
         return ""
     return f" STORING ({', '.join(columns)})"
+
+
+def _parse_status_rowcount(result: str | None) -> int:
+    parts = result.split() if result else []
+    return int(parts[-1]) if parts and parts[-1].isdigit() else 0
