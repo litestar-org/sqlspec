@@ -465,14 +465,7 @@ def apply_request_routing_hints(
     if write_pin_cookie is not None:
         resolved_cookie = cookie_value
         if resolved_cookie is None and cookie_header is not None:
-            cookie = SimpleCookie()
-            try:
-                cookie.load(cookie_header)
-            except CookieError:
-                cookie = SimpleCookie()
-            morsel = cookie.get(write_pin_cookie)
-            if morsel is not None:
-                resolved_cookie = morsel.value
+            resolved_cookie = _extract_cookie_value(cookie_header, write_pin_cookie)
         if resolved_cookie:
             if routing_secret is not None:
                 verified, signed_causal = verify_write_pin(resolved_cookie, routing_secret, bind_key=bind_key)
@@ -514,14 +507,15 @@ def extract_asgi_routing_headers(
     """Extract Latin-1 cookie and routing header values from an ASGI scope."""
     if routing_header_bytes is None and not include_cookies:
         return None, ""
-    cookie_header: str | None = None
+    cookie_parts: list[str] = []
     routing_header_value = ""
     for raw_key, raw_value in scope.get("headers", ()):
         lower_key = raw_key.lower()
         if include_cookies and lower_key == _COOKIE_HEADER_BYTES:
-            cookie_header = raw_value.decode("latin-1")
+            cookie_parts.append(raw_value.decode("latin-1"))
         elif routing_header_bytes is not None and lower_key == routing_header_bytes:
             routing_header_value = raw_value.decode("latin-1").strip()
+    cookie_header = "; ".join(cookie_parts) if cookie_parts else None
     return cookie_header, routing_header_value
 
 
@@ -559,3 +553,23 @@ def _is_valid_routing_token(value: str) -> bool:
     return 0 < len(value) <= _MAX_ROUTING_TOKEN_LENGTH and not any(
         ord(ch) < _MIN_PRINTABLE_ASCII or ord(ch) == _ASCII_DEL for ch in value
     )
+
+
+def _extract_cookie_value(cookie_header: str, cookie_name: str) -> str | None:
+    cookie = SimpleCookie()
+    try:
+        cookie.load(cookie_header)
+    except CookieError:
+        cookie = SimpleCookie()
+    morsel = cookie.get(cookie_name)
+    if morsel is not None:
+        return morsel.value
+    for part in cookie_header.split(";"):
+        name, separator, raw_value = part.partition("=")
+        if not separator or name.strip() != cookie_name:
+            continue
+        value = raw_value.strip()
+        if value.startswith('"') and value.endswith('"') and len(value) > 1:
+            return value[1:-1]
+        return value
+    return None

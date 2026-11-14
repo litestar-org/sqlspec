@@ -20,7 +20,13 @@ from sqlspec.config import (
 from sqlspec.core.routing import ReplicaSpec
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError
 from sqlspec.protocols import ReplicaRoutableConfigProtocol
-from sqlspec.utils.routing import RoutingContext
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    apply_request_routing_hints,
+    extract_asgi_routing_headers,
+    sign_write_pin,
+)
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding
 
 
@@ -151,3 +157,31 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
         assert seen == [primary]
     finally:
         TenantContext.reset(token)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [(b"cookie", b"bad[cookie]=1; wp={token}")],
+        [(b"cookie", b"other=1; bad cookie=2; wp={token}")],
+        [(b"cookie", b"wp={token}"), (b"cookie", b"theme=dark")],
+    ],
+)
+def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(headers: list[tuple[bytes, bytes]]) -> None:
+    token = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-99")
+    rendered_headers = [(key, value.replace(b"{token}", token.encode("ascii"))) for key, value in headers]
+    cookie_header, routing_header_value = extract_asgi_routing_headers(
+        {"headers": rendered_headers}, routing_header_bytes=None, include_cookies=True
+    )
+    payload = apply_request_routing_hints(
+        RoutingContextPayload(),
+        bind_key="orders",
+        routing_header_value=routing_header_value,
+        cookie_header=cookie_header,
+        write_pin_cookie="wp",
+        routing_secret="cookie-secret",
+    )
+    entry = payload.entries["orders"]
+    assert entry.mode == "primary"
+    assert entry.pinned_by_write is True
+    assert entry.causal_token == "lsn-99"
