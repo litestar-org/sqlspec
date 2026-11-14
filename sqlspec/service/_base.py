@@ -13,6 +13,7 @@ from sqlspec.service._core import (
     _async_get_one,
     _async_paginate,
     _AsyncBeginTransactionContext,
+    _connection_in_transaction,
     _sync_exists,
     _sync_get_one,
     _sync_paginate,
@@ -21,6 +22,7 @@ from sqlspec.service._core import (
     _TransactionState,
 )
 from sqlspec.typing import SchemaT
+from sqlspec.utils.routing import RoutingContext
 
 if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
@@ -46,16 +48,28 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
     Args:
         session: The caller-owned driver session, mutually exclusive with config.
         config: Database configuration used to acquire sessions per helper call.
+        read_config: Optional dedicated reader configuration with the same execution mode.
+        read_bind_group: Preferred replica group for read helpers.
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
-    __slots__ = ("_config", "_loader", "_session", "_transaction_key", "_transaction_state")
+    __slots__ = (
+        "_config",
+        "_loader",
+        "_read_bind_group",
+        "_read_config",
+        "_session",
+        "_transaction_key",
+        "_transaction_state",
+    )
 
     def __init__(
         self,
         session: AsyncDriverT | None = None,
         *,
         config: "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None" = None,
+        read_config: "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None" = None,
+        read_bind_group: str | None = None,
         loader: "SQLFileLoader | None" = None,
     ) -> None:
         if (session is None) == (config is None):
@@ -64,6 +78,11 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         if config is not None and not config.is_async:
             msg = f"{type(self).__name__} requires an async database config."
             raise ImproperConfigurationError(msg)
+        if read_config is not None and not read_config.is_async:
+            msg = "Reader configuration must match the service execution mode"
+            raise ImproperConfigurationError(msg)
+        self._read_config = read_config
+        self._read_bind_group = read_bind_group
         self._session = session
         self._config = config
         self._loader = loader
@@ -100,15 +119,32 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         """Return the optional SQL file loader."""
         return self._loader
 
-    def provide_session(self, session: AsyncDriverT | None = None) -> AbstractAsyncContextManager[AsyncDriverT]:
+    @property
+    def read_config(
+        self,
+    ) -> "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None":
+        """Return the optional dedicated read configuration."""
+        return self._read_config
+
+    @property
+    def read_bind_group(self) -> str | None:
+        """Return the preferred replica group."""
+        return self._read_bind_group
+
+    def provide_session(
+        self, session: AsyncDriverT | None = None, *, read_only: bool = False
+    ) -> AbstractAsyncContextManager[AsyncDriverT]:
         """Borrow an available session or acquire a short config-owned session.
 
         Args:
             session: Caller-owned override, which this context does not close.
+            read_only: Route pure-read helpers through a reader session.
 
         Returns:
             A context yielding the driver and releasing only an acquired session.
         """
+        if read_only:
+            return self.provide_read_session(session)
         if session is not None:
             return nullcontext(session)
         if self._session is not None:
@@ -119,6 +155,40 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         if self._config is not None:
             return self._config.provide_session()
         msg = "No session or config is available to provide a session."
+        raise ImproperConfigurationError(msg)
+
+    def provide_read_session(
+        self, session: AsyncDriverT | None = None, *, bind_group: str | None = None
+    ) -> AbstractAsyncContextManager[AsyncDriverT]:
+        """Borrow an active writer transaction or acquire a reader session."""
+        if session is not None:
+            return nullcontext(session)
+        active = _transaction_session(self._transaction_key)
+        if active is not None:
+            return nullcontext(cast("AsyncDriverT", active))
+        if self._session is not None and self._config is None and self._read_config is None:
+            return nullcontext(self._session)
+        if self._session is not None and (
+            self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
+        ):
+            return nullcontext(self._session)
+        group = bind_group if bind_group is not None else self._read_bind_group
+        writer_bind = (
+            self._config.bind_key
+            if self._config is not None
+            else (self._session.observability.bind_key if self._session is not None else None)
+        )
+        entry = RoutingContext.get_entry(writer_bind)
+        if group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+            return self.provide_session()
+        target = self._read_config if self._read_config is not None else self._config
+        if target is not None:
+            if self._read_config is not None and not target.supports_read_routing and group is None:
+                return target.provide_session()
+            return target.provide_read_session(bind_group=group)
+        if self._session is not None:
+            return nullcontext(self._session)
+        msg = "No session or config is available to provide a read session"
         raise ImproperConfigurationError(msg)
 
     @overload
@@ -221,7 +291,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             An OffsetPagination with a total, or CursorPagination with page tokens.
         """
         return await _async_paginate(
-            self.provide_session(session), statement, parameters, schema_type, count_with_window, kwargs
+            self.provide_session(session, read_only=True), statement, parameters, schema_type, count_with_window, kwargs
         )
 
     @overload
@@ -277,7 +347,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         return cast(
             "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]",
             await _async_paginate(
-                self.provide_session(session),
+                self.provide_session(session, read_only=True),
                 statement,
                 parameters,
                 schema_type,
@@ -339,7 +409,13 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         return cast(
             "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]",
             await _async_paginate(
-                self.provide_session(session), statement, parameters, schema_type, False, kwargs, mode="cursor"
+                self.provide_session(session, read_only=True),
+                statement,
+                parameters,
+                schema_type,
+                False,
+                kwargs,
+                mode="cursor",
             ),
         )
 
@@ -411,7 +487,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             NotFoundError: If the query returns zero rows.
         """
         return await _async_get_one(
-            self.provide_session(session), statement, parameters, schema_type, error_message, kwargs
+            self.provide_session(session, read_only=True), statement, parameters, schema_type, error_message, kwargs
         )
 
     async def exists(
@@ -433,7 +509,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         Returns:
             True if at least one row exists, False otherwise.
         """
-        return await _async_exists(self.provide_session(session), statement, parameters, kwargs)
+        return await _async_exists(self.provide_session(session, read_only=True), statement, parameters, kwargs)
 
     async def begin(self, *, session: AsyncDriverT | None = None) -> None:
         """Begin a database transaction on the underlying session.
@@ -479,16 +555,28 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
     Args:
         session: The caller-owned driver session, mutually exclusive with config.
         config: Database configuration used to acquire sessions per helper call.
+        read_config: Optional dedicated reader configuration with the same execution mode.
+        read_bind_group: Preferred replica group for read helpers.
         loader: Optional SQL file loader to expose without resolving named queries.
     """
 
-    __slots__ = ("_config", "_loader", "_session", "_transaction_key", "_transaction_state")
+    __slots__ = (
+        "_config",
+        "_loader",
+        "_read_bind_group",
+        "_read_config",
+        "_session",
+        "_transaction_key",
+        "_transaction_state",
+    )
 
     def __init__(
         self,
         session: SyncDriverT | None = None,
         *,
         config: "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None" = None,
+        read_config: "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None" = None,
+        read_bind_group: str | None = None,
         loader: "SQLFileLoader | None" = None,
     ) -> None:
         if (session is None) == (config is None):
@@ -497,6 +585,11 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         if config is not None and config.is_async:
             msg = f"{type(self).__name__} requires a sync database config."
             raise ImproperConfigurationError(msg)
+        if read_config is not None and read_config.is_async:
+            msg = "Reader configuration must match the service execution mode"
+            raise ImproperConfigurationError(msg)
+        self._read_config = read_config
+        self._read_bind_group = read_bind_group
         self._session = session
         self._config = config
         self._loader = loader
@@ -533,15 +626,30 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         """Return the optional SQL file loader."""
         return self._loader
 
-    def provide_session(self, session: SyncDriverT | None = None) -> AbstractContextManager[SyncDriverT]:
+    @property
+    def read_config(self) -> "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None":
+        """Return the optional dedicated read configuration."""
+        return self._read_config
+
+    @property
+    def read_bind_group(self) -> str | None:
+        """Return the preferred replica group."""
+        return self._read_bind_group
+
+    def provide_session(
+        self, session: SyncDriverT | None = None, *, read_only: bool = False
+    ) -> AbstractContextManager[SyncDriverT]:
         """Borrow an available session or acquire a short config-owned session.
 
         Args:
             session: Caller-owned override, which this context does not close.
+            read_only: Route pure-read helpers through a reader session.
 
         Returns:
             A context yielding the driver and releasing only an acquired session.
         """
+        if read_only:
+            return self.provide_read_session(session)
         if session is not None:
             return nullcontext(session)
         if self._session is not None:
@@ -552,6 +660,40 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         if self._config is not None:
             return self._config.provide_session()
         msg = "No session or config is available to provide a session."
+        raise ImproperConfigurationError(msg)
+
+    def provide_read_session(
+        self, session: SyncDriverT | None = None, *, bind_group: str | None = None
+    ) -> AbstractContextManager[SyncDriverT]:
+        """Borrow an active writer transaction or acquire a reader session."""
+        if session is not None:
+            return nullcontext(session)
+        active = _transaction_session(self._transaction_key)
+        if active is not None:
+            return nullcontext(cast("SyncDriverT", active))
+        if self._session is not None and self._config is None and self._read_config is None:
+            return nullcontext(self._session)
+        if self._session is not None and (
+            self._session._transaction_depth > 0 or _connection_in_transaction(self._session)
+        ):
+            return nullcontext(self._session)
+        group = bind_group if bind_group is not None else self._read_bind_group
+        writer_bind = (
+            self._config.bind_key
+            if self._config is not None
+            else (self._session.observability.bind_key if self._session is not None else None)
+        )
+        entry = RoutingContext.get_entry(writer_bind)
+        if group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+            return self.provide_session()
+        target = self._read_config if self._read_config is not None else self._config
+        if target is not None:
+            if self._read_config is not None and not target.supports_read_routing and group is None:
+                return target.provide_session()
+            return target.provide_read_session(bind_group=group)
+        if self._session is not None:
+            return nullcontext(self._session)
+        msg = "No session or config is available to provide a read session"
         raise ImproperConfigurationError(msg)
 
     @overload
@@ -654,7 +796,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             An OffsetPagination with a total, or CursorPagination with page tokens.
         """
         return _sync_paginate(
-            self.provide_session(session), statement, parameters, schema_type, count_with_window, kwargs
+            self.provide_session(session, read_only=True), statement, parameters, schema_type, count_with_window, kwargs
         )
 
     @overload
@@ -710,7 +852,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         return cast(
             "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]",
             _sync_paginate(
-                self.provide_session(session),
+                self.provide_session(session, read_only=True),
                 statement,
                 parameters,
                 schema_type,
@@ -772,7 +914,13 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         return cast(
             "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]",
             _sync_paginate(
-                self.provide_session(session), statement, parameters, schema_type, False, kwargs, mode="cursor"
+                self.provide_session(session, read_only=True),
+                statement,
+                parameters,
+                schema_type,
+                False,
+                kwargs,
+                mode="cursor",
             ),
         )
 
@@ -843,7 +991,9 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         Raises:
             NotFoundError: If the query returns zero rows.
         """
-        return _sync_get_one(self.provide_session(session), statement, parameters, schema_type, error_message, kwargs)
+        return _sync_get_one(
+            self.provide_session(session, read_only=True), statement, parameters, schema_type, error_message, kwargs
+        )
 
     def exists(
         self,
@@ -864,7 +1014,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         Returns:
             True if at least one row exists, False otherwise.
         """
-        return _sync_exists(self.provide_session(session), statement, parameters, kwargs)
+        return _sync_exists(self.provide_session(session, read_only=True), statement, parameters, kwargs)
 
     def begin(self, *, session: SyncDriverT | None = None) -> None:
         """Begin a database transaction on the underlying session.

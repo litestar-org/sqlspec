@@ -2,7 +2,8 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from inspect import isawaitable
 from types import SimpleNamespace
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -97,8 +98,28 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
 
 
 def test_append_event_and_update_state_preserves_event_record_timestamp() -> None:
-    """Atomic append uses the ADK event timestamp while session update uses commit time."""
-    store = SpannerSyncADKStore(_mock_config())
+    """Atomic append updates session state first with commit time and inserts event with ADK timestamp."""
+    config = _mock_config()
+    database = config.get_database.return_value
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def _run_in_txn(job: Any) -> Any:
+        txn = MagicMock()
+
+        def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+            executed_writes.append((sql, params, param_types))
+            return 1
+
+        def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+            executed_writes.extend(stmts)
+            return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+        txn.execute_update = _exec_update
+        txn.batch_update = _batch_update
+        return job(txn)
+
+    database.run_in_transaction.side_effect = _run_in_txn
+    store = SpannerSyncADKStore(config)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     event: StoredEvent = {
         "id": "event-1",
@@ -118,19 +139,17 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
         "update_time": timestamp,
     }
 
-    with (
-        patch.object(type(store), "_run_write") as run_write,
-        patch.object(type(store), "_get_session", return_value=fake_record),
-    ):
+    with patch.object(type(store), "_get_session", return_value=fake_record):
         returned = store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
 
-    event_sql, event_params, _event_types = run_write.call_args.args[0][0]
-    update_sql, _state_params, _state_types = run_write.call_args.args[0][1]
+    assert len(executed_writes) == 2
+    update_sql, _state_params, _state_types = executed_writes[0]
+    event_sql, event_params, _event_types = executed_writes[1]
+    assert "PENDING_COMMIT_TIMESTAMP()" in update_sql
     assert "@timestamp" in event_sql
     assert "PENDING_COMMIT_TIMESTAMP()" not in event_sql
     assert event_params["id"] == "event-1"
     assert event_params["timestamp"] is timestamp
-    assert "PENDING_COMMIT_TIMESTAMP()" in update_sql
     assert returned == fake_record
 
 
@@ -198,9 +217,9 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     def _run_in_txn(job: Any) -> Any:
         txn = MagicMock()
 
-        def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> list[tuple[str]]:
+        def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> list[tuple[str, str, str]]:
             executed_queries.append((sql, params, param_types))
-            return [("event-existing",)]
+            return [("app", "user", "event-existing")]
 
         def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
             executed_writes.append((sql, params, param_types))
@@ -255,7 +274,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     assert inserted == 1
     assert len(executed_queries) == 1
     select_sql, select_params, select_types = executed_queries[0]
-    assert "WHERE event_id IN UNNEST(@event_ids)" in select_sql
+    assert "SELECT app_name, user_id, event_id FROM adk_memory WHERE event_id IN UNNEST(@event_ids)" in select_sql
     assert select_params["event_ids"] == ["event-existing", "event-1"]
     assert select_types["event_ids"] == cast("Any", param_types).Array(param_types.STRING)
 
@@ -496,21 +515,25 @@ def _normalized(sql: str) -> str:
 
 
 @contextmanager
-def _capture_session_list() -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
+def _capture_session_list(config: Any) -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
     calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
-    def capture(sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> "list[Any]":
-        calls.append((sql, dict(params or {}), dict(types or {})))
+    def capture(
+        sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> "list[Any]":
+        calls.append((sql, dict(params or {}), dict(param_types or {})))
         return []
 
-    with patch.object(SpannerSyncADKStore, "_run_read", side_effect=capture):
-        yield calls
+    snapshot = MagicMock()
+    snapshot.execute_sql.side_effect = capture
+    config.provide_connection.return_value.__enter__.return_value = snapshot
+    yield calls
 
 
 def test_spanner_list_sessions_binds_order_and_page() -> None:
     """Explicit ordering renders inline while page bounds bind as typed named parameters."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
 
     sql, params, types = calls[0]
@@ -524,7 +547,7 @@ def test_spanner_list_sessions_binds_order_and_page() -> None:
 def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None:
     """The default listing keeps recent-first ordering and binds no page values."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app")
 
     sql, params, _ = calls[0]
@@ -535,7 +558,7 @@ def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None
 def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
     """User filtering composes with the bound page values."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         store.list_sessions("app", "u1", limit=5)
 
     sql, params, _ = calls[0]
@@ -546,7 +569,7 @@ def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
 def test_spanner_list_sessions_zero_limit_never_reads() -> None:
     """A zero limit short-circuits before any read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls:
+    with _capture_session_list(store._config) as calls:
         assert store.list_sessions("app", limit=0) == []
     assert calls == []
 
@@ -563,7 +586,7 @@ def test_spanner_list_sessions_zero_limit_never_reads() -> None:
 def test_spanner_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
     """Invalid ordering or paging fails before a read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    with _capture_session_list() as calls, pytest.raises(ValueError):
+    with _capture_session_list(store._config) as calls, pytest.raises(ValueError):
         store.list_sessions("app", **options)
 
     assert calls == []
@@ -634,6 +657,7 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
     snap_ctx.__aenter__ = AsyncMock(return_value=snapshot)
     snap_ctx.__aexit__ = AsyncMock(return_value=None)
     database.snapshot.return_value = snap_ctx
+    config.provide_connection.return_value = snap_ctx
     config.get_database = AsyncMock(return_value=database)
 
     store = SpannerAsyncADKStore(config)
@@ -662,7 +686,28 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
 
 async def test_async_adk_store_append_event_and_update_state_and_get_events() -> None:
     """Verify SpannerAsyncADKStore atomic append_event_and_update_state and get_events."""
-    store = SpannerAsyncADKStore(_mock_config())
+    config = _mock_config()
+    database = MagicMock()
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    async def _run_in_txn(job: Any) -> Any:
+        txn = MagicMock()
+
+        async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+            executed_writes.append((sql, params, param_types))
+            return 1
+
+        async def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+            executed_writes.extend(stmts)
+            return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+        txn.execute_update = _exec_update
+        txn.batch_update = _batch_update
+        return await job(txn)
+
+    database.run_in_transaction = _run_in_txn
+    config.get_database = AsyncMock(return_value=database)
+    store = SpannerAsyncADKStore(config)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     event: StoredEvent = {
         "id": "event-1",
@@ -682,15 +727,14 @@ async def test_async_adk_store_append_event_and_update_state_and_get_events() ->
         "update_time": timestamp,
     }
 
-    with (
-        patch.object(type(store), "_run_write", new_callable=AsyncMock) as run_write,
-        patch.object(type(store), "_get_session", new_callable=AsyncMock, return_value=fake_record),
-    ):
+    with patch.object(type(store), "_get_session", new_callable=AsyncMock, return_value=fake_record):
         returned = await store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
 
     assert returned == fake_record
-    run_write.assert_awaited_once()
-    event_sql, event_params, _ = run_write.call_args.args[0][0]
+    assert len(executed_writes) == 2
+    update_sql, _, _ = executed_writes[0]
+    event_sql, event_params, _ = executed_writes[1]
+    assert "UPDATE adk_session" in update_sql
     assert "@timestamp" in event_sql
     assert event_params["timestamp"] is timestamp
 
@@ -699,10 +743,16 @@ async def test_async_adk_store_append_event_and_update_state_and_get_events() ->
         "_run_read",
         new_callable=AsyncMock,
         return_value=[("event-1", "session-1", "inv-1", timestamp, '{"content":"hello"}', "app", "u1")],
-    ):
+    ) as run_read:
         events = await store.get_events("app", "u1", "session-1")
     assert len(events) == 1
     assert events[0]["event_data"] == {"content": "hello"}
+    get_events_sql = _normalized(run_read.call_args.args[0])
+    assert (
+        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id"
+        in get_events_sql
+    )
+    assert "WHERE s.app_name = @app_name AND s.user_id = @user_id AND s.id = @session_id" in get_events_sql
 
 
 async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> None:
@@ -1018,3 +1068,321 @@ async def test_spanner_adk_reconcile_sync_and_async_parity() -> None:
     assert all("CREATE " in sql and "CREATE TABLE" not in sql for sql in sync_scripts[6:])
     sync_driver.commit.assert_not_called()
     async_driver.commit.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("renew_for", "expects_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-1, False, id="negative-int"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_spanner_get_session_renews_only_for_positive_duration(
+    is_async: bool, renew_for: int | timedelta | None, expects_renew: bool
+) -> None:
+    """get_session writes a renewal touch only when renew_for is strictly positive."""
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    row = ("s1", "app", "u1", '{"k":1}', now, now)
+    if is_async:
+        store: Any = SpannerAsyncADKStore(_mock_config())
+        with (
+            patch.object(type(store), "_run_write", new_callable=AsyncMock) as run_write,
+            patch.object(type(store), "_run_read", new_callable=AsyncMock, return_value=[row]),
+        ):
+            result = await store.get_session("app", "u1", "s1", renew_for=renew_for)
+        assert result is not None
+        assert (run_write.await_count == 1) is expects_renew
+    else:
+        store = SpannerSyncADKStore(_mock_config())
+        with (
+            patch.object(type(store), "_run_write") as run_write,
+            patch.object(type(store), "_run_read", return_value=[row]),
+        ):
+            result = store.get_session("app", "u1", "s1", renew_for=renew_for)
+        assert result is not None
+        assert (run_write.call_count == 1) is expects_renew
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("owner_exists", [True, False])
+async def test_spanner_append_event_checks_session_ownership_in_transaction(is_async: bool, owner_exists: bool) -> None:
+    """append_event verifies session ownership and inserts inside one run_in_transaction job."""
+    config = _mock_config({"shard_count": 4})
+    executed_queries: list[tuple[str, dict[str, Any]]] = []
+    executed_updates: list[tuple[str, dict[str, Any]]] = []
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    event: StoredEvent = {
+        "id": "ev-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": timestamp,
+        "event_data": {"x": 1},
+    }
+
+    if is_async:
+        database = MagicMock()
+
+        async def _run_async_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            async def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> Any:
+                del param_types
+                executed_queries.append((_normalized(sql), params))
+
+                async def _rows() -> Any:
+                    if owner_exists:
+                        yield (1,)
+
+                return _rows()
+
+            async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                del param_types
+                executed_updates.append((_normalized(sql), params))
+                return 1
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            return await job(txn)
+
+        database.run_in_transaction = _run_async_txn
+        config.get_database = AsyncMock(return_value=database)
+        store: Any = SpannerAsyncADKStore(config)
+    else:
+        database = config.get_database.return_value
+
+        def _run_sync_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> list[tuple[int]]:
+                del param_types
+                executed_queries.append((_normalized(sql), params))
+                return [(1,)] if owner_exists else []
+
+            def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                del param_types
+                executed_updates.append((_normalized(sql), params))
+                return 1
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            return job(txn)
+
+        database.run_in_transaction.side_effect = _run_sync_txn
+        store = SpannerSyncADKStore(config)
+
+    if owner_exists:
+        maybe = store.append_event(event)
+        if isawaitable(maybe):
+            await maybe
+        assert len(executed_queries) == 1
+        assert (
+            "SELECT 1 FROM adk_session WHERE id = @id AND app_name = @app_name AND user_id = @user_id "
+            "AND shard_id = MOD(FARM_FINGERPRINT(@id), 4) LIMIT 1"
+        ) == executed_queries[0][0]
+        assert len(executed_updates) == 1
+        assert executed_updates[0][0].startswith("INSERT INTO adk_event")
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            maybe = store.append_event(event)
+            if isawaitable(maybe):
+                await maybe
+        assert len(executed_queries) == 1
+        assert executed_updates == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_spanner_append_event_and_update_state_rejects_mismatch_and_missing_session(is_async: bool) -> None:
+    """append_event_and_update_state rejects mismatched records without DB work and aborts before insert when missing."""
+    config = _mock_config()
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    bad_event: StoredEvent = {
+        "id": "ev-1",
+        "app_name": "other-app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": timestamp,
+        "event_data": {"x": 1},
+    }
+    good_event: StoredEvent = {**bad_event, "app_name": "app"}
+    executed_updates: list[str] = []
+
+    if is_async:
+        database = MagicMock()
+
+        async def _run_async_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                del params, param_types
+                executed_updates.append(_normalized(sql))
+                return 0
+
+            txn.execute_update = _exec_update
+            return await job(txn)
+
+        database.run_in_transaction = _run_async_txn
+        config.get_database = AsyncMock(return_value=database)
+        store: Any = SpannerAsyncADKStore(config)
+    else:
+        database = config.get_database.return_value
+
+        def _run_sync_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                del params, param_types
+                executed_updates.append(_normalized(sql))
+                return 0
+
+            txn.execute_update = _exec_update
+            return job(txn)
+
+        database.run_in_transaction.side_effect = _run_sync_txn
+        store = SpannerSyncADKStore(config)
+
+    with pytest.raises(ValueError, match="does not match"):
+        maybe = store.append_event_and_update_state(bad_event, "app", "u1", "s1", {"turn": 1})
+        if isawaitable(maybe):
+            await maybe
+    assert executed_updates == []
+
+    with pytest.raises(ValueError, match="Session s1 not found during append_event_and_update_state"):
+        maybe = store.append_event_and_update_state(good_event, "app", "u1", "s1", {"turn": 1})
+        if isawaitable(maybe):
+            await maybe
+    assert len(executed_updates) == 1
+    assert executed_updates[0].startswith("UPDATE adk_session")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_spanner_memory_deduplicates_by_composite_owner_tuple(is_async: bool) -> None:
+    """Memory batch deduplication and lookup compare (app_name, user_id, event_id) tuples."""
+    config = _mock_config()
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    entry_a: StoredMemory = {
+        "id": "m1",
+        "session_id": "s1",
+        "app_name": "app-a",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "shared-event",
+        "author": "user",
+        "timestamp": timestamp,
+        "content_json": {"text": "a"},
+        "content_text": "a",
+        "metadata_json": None,
+        "inserted_at": timestamp,
+        "embedding": None,
+    }
+    entry_a_dup: StoredMemory = {**entry_a, "id": "m2"}
+    entry_b: StoredMemory = {**entry_a, "id": "m3", "app_name": "app-b", "user_id": "u2"}
+    executed_writes: list[dict[str, Any]] = []
+
+    if is_async:
+        database = MagicMock()
+
+        async def _run_async_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            async def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> Any:
+                del sql, params, param_types
+
+                async def _rows() -> Any:
+                    yield ("app-a", "u1", "shared-event")
+
+                return _rows()
+
+            async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                del sql, param_types
+                executed_writes.append(params)
+                return 1
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            return await job(txn)
+
+        database.run_in_transaction = _run_async_txn
+        config.get_database = AsyncMock(return_value=database)
+        store: Any = SpannerAsyncADKMemoryStore(config)
+    else:
+        database = config.get_database.return_value
+
+        def _run_sync_txn(job: Any) -> Any:
+            txn = MagicMock()
+            txn.execute_sql = lambda *_a, **_k: [("app-a", "u1", "shared-event")]
+            txn.execute_update = lambda _sql, params=None, param_types=None: executed_writes.append(params or {}) or 1
+            return job(txn)
+
+        database.run_in_transaction.side_effect = _run_sync_txn
+        store = SpannerSyncADKMemoryStore(config)
+
+    deduped = store._deduplicate_entries([entry_a, entry_a_dup, entry_b])
+    assert [item["id"] for item in deduped] == ["m1", "m3"]
+
+    inserted = store.insert_memory_entries([entry_a, entry_a_dup, entry_b])
+    if isawaitable(inserted):
+        inserted = await inserted
+    assert inserted == 1
+    assert len(executed_writes) == 1
+    assert (executed_writes[0]["app_name"], executed_writes[0]["user_id"]) == ("app-b", "u2")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(None, None, "session_id = @session_id", {"session_id": "s1"}, id="session-only"),
+        pytest.param(
+            "app",
+            None,
+            "session_id = @session_id AND app_name = @app_name",
+            {"session_id": "s1", "app_name": "app"},
+            id="with-app",
+        ),
+        pytest.param(
+            None,
+            "u1",
+            "session_id = @session_id AND user_id = @user_id",
+            {"session_id": "s1", "user_id": "u1"},
+            id="with-user",
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            "session_id = @session_id AND app_name = @app_name AND user_id = @user_id",
+            {"session_id": "s1", "app_name": "app", "user_id": "u1"},
+            id="with-app-and-user",
+        ),
+    ],
+)
+async def test_spanner_memory_delete_entries_by_session_scopes_owner_predicates(
+    is_async: bool, app_name: str | None, user_id: str | None, expected_where: str, expected_params: dict[str, Any]
+) -> None:
+    """delete_entries_by_session appends @app_name and @user_id predicates when provided."""
+    if is_async:
+        store: Any = SpannerAsyncADKMemoryStore(_mock_config())
+        with patch.object(type(store), "_execute_update", new_callable=AsyncMock, return_value=1) as exec_update:
+            deleted = await store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+        sql, params, _ = exec_update.call_args.args
+    else:
+        store = SpannerSyncADKMemoryStore(_mock_config())
+        with patch.object(type(store), "_execute_update", return_value=1) as exec_update:
+            deleted = store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+        sql, params, _ = exec_update.call_args.args
+
+    assert deleted == 1
+    assert sql == f"DELETE FROM adk_memory WHERE {expected_where}"
+    assert params == expected_params

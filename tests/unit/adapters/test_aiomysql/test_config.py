@@ -1,6 +1,7 @@
 """aiomysql configuration tests covering statement config builders."""
 
 from ssl import PROTOCOL_TLS_CLIENT, SSLContext
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import aiomysql  # pyright: ignore
@@ -9,6 +10,8 @@ import pytest
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor, AiomysqlRawCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig, build_connection_config
 from sqlspec.adapters.aiomysql.core import build_statement_config
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -348,3 +351,181 @@ async def test_aiomysql_create_connection_closes_socket_on_error(monkeypatch: py
         await config.create_connection()
 
     assert mock_conn.close.called
+
+
+def test_aiomysqlconfig_replica_shorthands_preserve_overrides() -> None:
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "writer", "database": "app"},
+        replicas=["mysql://reader:pw@replica:3307/reporting", "standby:3308"],
+    )
+    replicas = config.replica_groups["default"].configs
+    assert replicas[0].connection_config["host"] == "replica"
+    assert replicas[0].connection_config["port"] == 3307
+    assert replicas[0].connection_config["user"] == "reader"
+    assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
+    assert replicas[1].connection_config["host"] == "standby"
+    assert replicas[1].connection_config["port"] == 3308
+    assert replicas[0].connection_config["init_command"].upper().count("SET SESSION TRANSACTION READ ONLY") == 1
+    assert config.connection_config["host"] == "writer"
+
+
+def test_aiomysqlconfig_derive_alias_overrides_replace_inherited_values() -> None:
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "writer", "password": "old", "database": "app"}
+    )
+    derived = config.derive_pool(username="reader", passwd="new", database="reporting")
+    assert derived.connection_config["user"] == "reader"
+    assert derived.connection_config["password"] == "new"
+    assert derived.connection_config.get("database", derived.connection_config.get("db")) == "reporting"
+    assert config.connection_config["user"] == "writer"
+
+
+def test_aiomysqlconfig_explicit_read_write_replica_preserves_init_command() -> None:
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    config = AiomysqlConfig(replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}])
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+    assert "read_only" not in replica.connection_config
+
+
+def test_aiomysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    config = AiomysqlConfig(
+        connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "set session transaction read only"
+    with pytest.raises(ImproperConfigurationError):
+        AiomysqlConfig(replicas=True)
+    with pytest.raises(ImproperConfigurationError):
+        AiomysqlConfig(replicas=["postgres://replica"])
+    with pytest.raises(ImproperConfigurationError):
+        AiomysqlConfig(replicas=[""])
+
+
+@pytest.mark.parametrize("override_key", ["dsn", "url", "connection_string"])
+def test_aiomysqlconfig_dsn_override_replaces_inherited_primary_endpoint(override_key: str) -> None:
+    """Supplying a DSN override clears inherited primary endpoint parameters."""
+    primary = AiomysqlConfig(
+        connection_config={"dsn": "mysql://u1:p1@pri:3306/d1", "unix_socket": "/tmp/pri.sock"},
+        replicas=[{override_key: "mysql://u2:p2@rep2:3308/d2"}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    override_kwargs: dict[str, Any] = {override_key: "mysql://u3:p3@rep3:3309/d3"}
+    derived = primary.derive_pool(**override_kwargs)
+
+    assert replica.connection_config["user"] == "u2"
+    assert replica.connection_config["password"] == "p2"
+    assert replica.connection_config["host"] == "rep2"
+    assert replica.connection_config["port"] == 3308
+    assert replica.connection_config["db"] == "d2"
+    assert "unix_socket" not in replica.connection_config
+    assert derived.connection_config["user"] == "u3"
+    assert derived.connection_config["password"] == "p3"
+    assert derived.connection_config["host"] == "rep3"
+    assert derived.connection_config["port"] == 3309
+    assert derived.connection_config["db"] == "d3"
+    assert "unix_socket" not in derived.connection_config
+    assert primary.connection_config["host"] == "pri"
+    assert primary.connection_config["db"] == "d1"
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    mock_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx))
+    config = AiomysqlConfig(connection_instance=pool)
+
+    async with config.provide_session() as session:
+        assert session.connection is mock_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await session.execute("SELECT 1")
+
+
+async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx))
+    config = AiomysqlConfig(connection_instance=pool)
+    seen: list[Any] = []
+
+    def fail_prepare(_self: Any, driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(AiomysqlConfig, "_prepare_driver", fail_prepare)
+
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with config.provide_session():
+            pass
+
+    acquire_ctx.__aexit__.assert_awaited_once()
+    assert seen[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (aiomysql.OperationalError(1040, "Too many connections"), DatabaseConnectionError),
+        (aiomysql.InterfaceError("Socket lost"), DatabaseConnectionError),
+        (aiomysql.OperationalError("Server lost"), OperationalError),
+    ],
+)
+async def test_aiomysql_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Replica pool creation and acquire errors map to failover-eligible SQLSpec exceptions."""
+    healthy_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=healthy_conn), __aexit__=AsyncMock(return_value=None))
+    healthy_pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return healthy_pool
+
+    monkeypatch.setattr(aiomysql, "create_pool", fake_create_pool)
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
+    )
+    async with getattr(config, method)() as acquired:
+        conn = acquired if method == "provide_read_connection" else acquired.connection
+        assert conn is healthy_conn
+
+    failing_only = AiomysqlConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+    with pytest.raises(expected_mapped) as exc_info:
+        async with failing_only.provide_connection():
+            pass
+    assert exc_info.value.__cause__ is driver_exc
+
+
+async def test_aiomysql_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError during acquisition propagates without triggering replica failover."""
+    hook_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=hook_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+    monkeypatch.setattr(aiomysql, "create_pool", AsyncMock(return_value=pool))
+    attempted: list[str] = []
+
+    async def failing_hook(_conn: Any) -> None:
+        attempted.append("called")
+        raise RuntimeError("hook boom")
+
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    with pytest.raises(RuntimeError, match="hook boom"):
+        async with config.provide_read_session():
+            pass
+    assert attempted == ["called"]

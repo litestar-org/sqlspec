@@ -3,7 +3,9 @@
 import contextlib
 import copy
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,
@@ -15,7 +17,7 @@ from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobCo
 from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
 from sqlspec.adapters.bigquery.core import apply_driver_features, copy_job_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
-from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
+from sqlspec.config import ExtensionConfigs, MigrationConfig, NoPoolSyncConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -24,7 +26,7 @@ from sqlspec.typing import Empty
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
     from types import TracebackType
     from uuid import UUID
 
@@ -274,7 +276,69 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         )
 
         self.driver_features = driver_features
-        self.driver_features["_storage_write_client_provider"] = self._provide_storage_write_client
+        if self.driver_features.get("_storage_write_client_provider") is None:
+            self.driver_features["_storage_write_client_provider"] = self._provide_storage_write_client
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: Mapping[str, Any] | None = None,
+        driver_features_overrides: Mapping[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: dict[str, Any] | MigrationConfig | None = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: str | None = None,
+        is_replica: bool = False,
+        **overrides: Any,
+    ) -> Self:
+        """Clone a reader with independent job options and storage-write client ownership."""
+        features = dict(driver_features_overrides or {})
+        provider = self.driver_features.get("_storage_write_client_provider")
+        if "_storage_write_client_provider" not in features and getattr(provider, "__self__", None) is self:
+            features["_storage_write_client_provider"] = None
+        return super().derive_pool(
+            connection_config_overrides=connection_config_overrides,
+            driver_features_overrides=features,
+            statement_config=statement_config,
+            migration_config=migration_config,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            bind_key=bind_key,
+            is_replica=is_replica,
+            **overrides,
+        )
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            msg = "BigQuery replicas require an explicit project or connection configuration"
+            raise ImproperConfigurationError(msg)
+        if isinstance(spec_input, str):
+            parsed = urlsplit(spec_input)
+            if parsed.scheme == "bigquery":
+                return {
+                    "connection_config_overrides": {
+                        "project": parsed.netloc,
+                        "dataset_id": unquote(parsed.path.lstrip("/")),
+                    }
+                }
+            return {"connection_config_overrides": {"project": spec_input}}
+        return dict(spec_input)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        for alias, canonical in (
+            ("project_id", "project"),
+            ("dataset", "dataset_id"),
+            ("database", "dataset_id"),
+            ("db", "dataset_id"),
+        ):
+            if alias in overrides and canonical not in overrides:
+                config.pop(canonical, None)
+        if "default_query_job_config" in config:
+            config["default_query_job_config"] = copy.deepcopy(config["default_query_job_config"])
+        return build_connection_config(config)
 
     def __deepcopy__(self, memo: "dict[int, Any]") -> "BigQueryConfig":
         """Create a deep copy without attempting to copy threading locks or circular method bindings."""
@@ -299,6 +363,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         return result
 
     def close_pool(self) -> None:
+        """Close owned primary and replica clients, preserving the first failure."""
+        self._close_pools_sync(self._close_owned_clients)
+
+    def _close_owned_clients(self) -> None:
         """Close the clients this configuration created.
 
         A client supplied by the caller is left open, since its lifetime belongs

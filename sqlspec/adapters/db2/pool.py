@@ -9,6 +9,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.db2 import _typing as typing_module
 from sqlspec.adapters.db2._typing import ibm_db_dbi
 from sqlspec.adapters.db2.core import build_dsn_string
@@ -25,6 +27,18 @@ __all__ = ("Db2AsyncConnectionPool", "Db2AsyncPoolConnectionContext", "Db2SyncCo
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
 _IBM_DB_DBI = ibm_db_dbi
+
+
+def _build_connection_options(base: dict[int, Any], autocommit_mode: int, read_only: bool) -> dict[int, Any]:
+    """Prepare fresh native CLI attributes for one physical connection."""
+    options = dict(base)
+    options[typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT] = autocommit_mode
+    if read_only:
+        options.setdefault(
+            getattr(typing_module.ibm_db, "SQL_ATTR_ACCESS_MODE", 101),
+            getattr(typing_module.ibm_db, "SQL_MODE_READ_ONLY", 1),
+        )
+    return options
 
 
 def _set_current_schema(connection: Any, schema: str) -> None:
@@ -63,11 +77,13 @@ async def _set_current_schema_async(connection: Any, schema: str) -> None:
     await connection.set_current_schema(schema)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
     __slots__ = (
         "_autocommit",
+        "_conn_options",
         "_connection_parameters",
         "_connection_registry",
         "_dsn",
@@ -75,6 +91,7 @@ class Db2SyncConnectionPool:
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
+        "_read_only",
         "_recycle_seconds",
         "_registry_lock",
         "_thread_local",
@@ -86,6 +103,9 @@ class Db2SyncConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[Any], None] | None" = None,
+        *,
+        conn_options: "dict[int, Any] | None" = None,
+        read_only: bool | None = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -96,12 +116,16 @@ class Db2SyncConnectionPool:
             recycle_seconds: Connection recycle time in seconds (default 24h).
             health_check_interval: Seconds of idle time before running health check.
             on_connection_create: Callback executed when connection is created.
+            conn_options: Native CLI attributes copied for each physical connection.
+            read_only: Override configured native read-only access mode.
         """
         self._connection_parameters = connection_parameters
         native_parameters = dict(connection_parameters)
         native_parameters.pop("current_schema", None)
         self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
+        self._conn_options = dict(conn_options or {})
+        self._read_only = bool(connection_parameters.get("read_only", False)) if read_only is None else read_only
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
         self._generation = 0
@@ -138,9 +162,8 @@ class Db2SyncConnectionPool:
             if self._autocommit
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
-        connection = typing_module.ibm_db_dbi.connect(
-            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
-        )
+        options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
+        connection = typing_module.ibm_db_dbi.connect(self._dsn, "", "", "", "", options)
 
         try:
             schema = self._connection_parameters.get("current_schema")
@@ -165,15 +188,22 @@ class Db2SyncConnectionPool:
         depth = getattr(self._thread_local, "depth", 0)
         connection = self._get_thread_connection()
         self._thread_local.depth = depth + 1
+        body_failed = False
         try:
             yield connection
         except BaseException:
+            body_failed = True
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
             self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened across all threads."""
@@ -192,7 +222,7 @@ class Db2SyncConnectionPool:
 
     def release(self, connection: Any) -> None:
         """Release connection back to the thread-local pool."""
-        _ = connection
+        self._rollback_on_checkin(connection)
 
     def size(self) -> int:
         """Return the total number of active connections registered across all threads."""
@@ -287,6 +317,24 @@ class Db2SyncConnectionPool:
         with contextlib.suppress(Exception):
             connection.close()
 
+    def _rollback_on_checkin(self, connection: Any) -> None:
+        """Roll back uncommitted work on outermost checkin and retire closed or broken connections."""
+        if getattr(self._thread_local, "depth", 0) > 0:
+            return
+        if getattr(self._thread_local, "connection", None) is not connection:
+            return
+        assert connection is not None
+        if getattr(connection, "conn_handler", object()) is None:
+            self._close_thread_connection()
+            return
+        if self._autocommit:
+            return
+        try:
+            connection.rollback()
+        except BaseException:
+            self._close_thread_connection()
+            raise
+
     def _close_thread_connection(self) -> None:
         """Close and detach the calling thread's dedicated connection."""
         thread_state = self._thread_local.__dict__
@@ -299,6 +347,7 @@ class Db2SyncConnectionPool:
                 del self._thread_local.last_used
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _Db2PooledConnection:
     """Idle-stack record for one pooled async connection."""
 
@@ -310,6 +359,7 @@ class _Db2PooledConnection:
         self.last_used = last_used
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncPoolConnectionContext:
     """Async context manager that checks a connection out of a ``Db2AsyncConnectionPool``."""
 
@@ -339,9 +389,14 @@ class Db2AsyncPoolConnectionContext:
         """Release the connection back to the pool."""
         connection = self._connection
         self._connection = None
-        await self._pool.release(connection)
+        if exc_type is not None:
+            with contextlib.suppress(Exception):
+                await self._pool.release(connection)
+        else:
+            await self._pool.release(connection)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncConnectionPool:
     """Bounded asyncio pool of ``ibm_db_dbi.AsyncConnection`` objects.
 
@@ -357,6 +412,7 @@ class Db2AsyncConnectionPool:
         "_autocommit",
         "_checked_out",
         "_closed",
+        "_conn_options",
         "_connection_parameters",
         "_dsn",
         "_health_check_interval",
@@ -364,6 +420,7 @@ class Db2AsyncConnectionPool:
         "_max_size",
         "_on_connection_create",
         "_pool_id",
+        "_read_only",
         "_recycle_seconds",
         "_semaphore_instance",
     )
@@ -377,6 +434,8 @@ class Db2AsyncConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[Any], Awaitable[None] | None] | None" = None,
+        conn_options: "dict[int, Any] | None" = None,
+        read_only: bool | None = None,
     ) -> None:
         """Initialize the pool.
 
@@ -390,12 +449,16 @@ class Db2AsyncConnectionPool:
             health_check_interval: Seconds of idle time before a connection is pinged on reuse.
             on_connection_create: Callback run on every new connection; awaited when it returns
                 an awaitable.
+            conn_options: Native CLI attributes copied for each physical connection.
+            read_only: Override configured native read-only access mode.
         """
         self._connection_parameters = connection_parameters
         native_parameters = dict(connection_parameters)
         native_parameters.pop("current_schema", None)
         self._dsn = build_dsn_string(native_parameters)
         self._autocommit = bool(connection_parameters.get("autocommit", True))
+        self._conn_options = dict(conn_options or {})
+        self._read_only = bool(connection_parameters.get("read_only", False)) if read_only is None else read_only
         self._max_size = max_size
         self._acquire_timeout = acquire_timeout
         self._recycle_seconds = recycle_seconds
@@ -439,9 +502,8 @@ class Db2AsyncConnectionPool:
             if self._autocommit
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
-        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(
-            self._dsn, "", "", "", "", {typing_module.ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode}
-        )
+        options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
+        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
         try:
             schema = self._connection_parameters.get("current_schema")
             if schema is not None:
@@ -503,8 +565,8 @@ class Db2AsyncConnectionPool:
         Args:
             connection: Connection previously returned by ``acquire()``.
         """
-        record = self._checked_out.pop(id(connection), None)
-        if record is None:
+        conn_id = id(connection)
+        if conn_id not in self._checked_out:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -513,6 +575,19 @@ class Db2AsyncConnectionPool:
                 pool_id=self._pool_id,
                 database=self._database_name,
             )
+            return
+        if not self._closed:
+            if getattr(connection, "conn_handler", object()) is None:
+                await self.discard(connection)
+                return
+            if not self._autocommit:
+                try:
+                    await connection.rollback()
+                except BaseException:
+                    await self.discard(connection)
+                    raise
+        record = self._checked_out.pop(conn_id, None)
+        if record is None:
             return
         try:
             if self._closed:

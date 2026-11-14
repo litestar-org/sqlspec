@@ -3,8 +3,19 @@
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor, PymssqlRawCursor, PymssqlSessionContext
-from sqlspec.adapters.pymssql.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.pymssql._typing import (
+    PymssqlConnection,
+    PymssqlCursor,
+    PymssqlError,
+    PymssqlRawCursor,
+    PymssqlSessionContext,
+)
+from sqlspec.adapters.pymssql.core import (
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+)
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -13,6 +24,13 @@ from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -36,6 +54,10 @@ class PymssqlConnectionParams(TypedDict):
     """SQL Server or Windows domain login (``DOMAIN\\user``)."""
     password: NotRequired[str]
     """Password for ``user``."""
+    db: NotRequired[str]
+    """Alias for the target database."""
+    username: NotRequired[str]
+    """Alias for the authentication user."""
     database: NotRequired[str]
     """Initial SQL Server database selected on connect."""
     port: NotRequired[int | str]
@@ -105,9 +127,23 @@ class PymssqlConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "PymssqlConnection":
+        try:
+            return cast("PymssqlConnection", super().__enter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
+
 
 class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "PymssqlConnection":
+        try:
+            return cast("PymssqlConnection", super().acquire_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
 
 class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool, PymssqlDriver]):
@@ -183,7 +219,11 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             PymssqlConnection: A newly opened connection.
         """
         self._require_leased_tenant_connection()
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -207,18 +247,53 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         """Return runtime hints for pymssql event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        for canonical, alias in (("server", "host"), ("database", "db"), ("user", "username")):
+            if alias in overrides and canonical not in overrides:
+                config.pop(canonical, None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"server": spec_input}}
+        if spec_input is True:
+            if not str(self.connection_config.get("database") or "").strip():
+                msg = "SQL Server read-only intent requires a target database"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"read_only": True}}
+        return super()._build_replica_spec_overrides(spec_input)
+
     def _create_pool(self) -> "PymssqlConnectionPool":
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        return PymssqlConnectionPool(
-            config,
-            recycle_seconds=pool_recycle,
-            health_check_interval=health_check,
-            on_connection_create=self._user_connection_hook,
-        )
+        try:
+            return PymssqlConnectionPool(
+                config,
+                recycle_seconds=pool_recycle,
+                health_check_interval=health_check,
+                on_connection_create=self._user_connection_hook,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, PymssqlError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

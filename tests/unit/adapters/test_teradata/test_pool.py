@@ -199,10 +199,11 @@ def test_pool_health_check_reuses_or_replaces_connection(
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     pool = TeradataConnectionPool({}, health_check_interval=5, recycle_seconds=0)
     first = pool.acquire()
+    pool.release(first)
     cursor = first.cursor.return_value
+    cursor.reset_mock()
     if failed_ping:
         cursor.execute.side_effect = RuntimeError("connection lost")
-    pool.release(first)
     clock[0] = 110.0
     connection = pool.acquire()
     cursor.execute.assert_called_once_with("SELECT 1")
@@ -213,6 +214,7 @@ def test_pool_health_check_reuses_or_replaces_connection(
     else:
         assert connection is first
         cursor.fetchone.assert_called_once_with()
+    cursor.execute.side_effect = None
     pool.release(connection)
     pool.close()
 
@@ -225,6 +227,7 @@ def test_pool_recycles_expired_connection_without_ping(
     pool = TeradataConnectionPool({}, recycle_seconds=5, health_check_interval=1)
     first = pool.acquire()
     pool.release(first)
+    first.cursor.reset_mock()
     clock[0] = 110.0
     second = pool.acquire()
     assert second is sdk_connections[1]
@@ -293,3 +296,68 @@ def test_pool_query_band_none_resets_session(sdk_connections: list[Any]) -> None
     connection.cursor.return_value.execute.assert_called_once_with("SET QUERY_BAND = NONE FOR SESSION;")
     pool.release(connection)
     pool.close()
+
+
+@pytest.mark.parametrize(
+    ("band", "expected_sql"),
+    [
+        (None, "SET QUERY_BAND = NONE FOR SESSION;"),
+        ({"app": "sqlspec"}, "SET QUERY_BAND = 'app=sqlspec;' FOR SESSION;"),
+    ],
+)
+@pytest.mark.parametrize("autocommit", [True, False])
+def test_pool_release_resets_session_query_band_and_discards_on_failure(
+    sdk_connections: list[Any], band: dict[str, str] | None, expected_sql: str, autocommit: bool
+) -> None:
+    """release() resets the session QUERY_BAND, commits under autocommit=False, and discards on reset error."""
+    pool = TeradataConnectionPool({"autocommit": autocommit}, max_size=1, session_query_band=band)
+    connection = pool.acquire()
+    cursor = connection.cursor.return_value
+    cursor.reset_mock()
+    connection.commit.reset_mock()
+
+    pool.release(connection)
+    cursor.execute.assert_called_once_with(expected_sql)
+    cursor.close.assert_called_once_with()
+    if autocommit:
+        connection.commit.assert_not_called()
+    else:
+        connection.commit.assert_called_once_with()
+
+    reused = pool.acquire()
+    assert reused is connection
+    cursor.execute.side_effect = RuntimeError("query band reset failed")
+    pool.release(reused)
+    reused.close.assert_called_once_with()
+    assert pool.size() == 0
+    pool.close()
+
+
+def test_teradata_new_connection_maps_driver_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native teradatasql connection failures map to DatabaseConnectionError while preserving cause."""
+
+    class FakeTeradataError(Exception):
+        pass
+
+    class FakeOperationalError(FakeTeradataError):
+        pass
+
+    native = FakeOperationalError("[Error 1000] Unable to connect to host")
+
+    def failing_connect(**_: Any) -> Any:
+        raise native
+
+    monkeypatch.setitem(
+        sys.modules,
+        "teradatasql",
+        SimpleNamespace(connect=failing_connect, Error=FakeTeradataError, OperationalError=FakeOperationalError),
+    )
+    reset_dependency_cache("teradatasql")
+    pool = TeradataConnectionPool({"host": "primary.invalid"}, max_size=1)
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            pool.acquire()
+        assert exc_info.value.__cause__ is native
+    finally:
+        pool.close()
+        reset_dependency_cache("teradatasql")

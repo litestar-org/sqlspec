@@ -91,6 +91,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `check_same_thread` | `bool` | - | Restrict raw `sqlite3.Connection` usage to the creating OS thread. |
     | `factory` | `SqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass passed to `sqlite3.connect`. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection by `sqlite3`. |
+    | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
     | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit control flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
     | `pool_recycle_seconds` | `int` | - | Maximum connection age in seconds before recycling pooled SQLite connections. |
@@ -143,6 +144,7 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
     | `check_same_thread` | `bool` | - | Restrict underlying `sqlite3.Connection` access to the `aiosqlite` worker thread. |
     | `factory` | `AiosqliteConnectionFactory or None` | - | Custom `sqlite3.Connection` subclass instantiated on the worker thread. |
     | `cached_statements` | `int` | - | Number of compiled SQLite VM statements cached per connection. |
+    | `query_only` | `bool` | - | Enforce read-only queries on every physical connection. |
     | `uri` | `bool` | - | Interpret `database` as a SQLite `file:` URI supporting query parameters. |
     | `iter_chunk_size` | `int` | - | Row batch size fetched per worker-thread hop when iterating `aiosqlite` cursors. |
     | `autocommit` | `SQLiteAutocommitMode` | - | PEP 249 / Python 3.12+ autocommit flag or `sqlite3.LEGACY_TRANSACTION_CONTROL` (`-1`). |
@@ -201,6 +203,12 @@ SQLSpec ships `mypyc`-compiled synchronous (`sqlspec.adapters.sqlite`) and async
 ## Connection Exit
 
 Context managers returned by `provide_connection`, `provide_session`, and `pool.get_connection` automatically commit open uncommitted work on a clean context exit and roll back on any exception (including cancellation), on both `SqliteConfig` and `AiosqliteConfig`. Call `rollback()` explicitly before exiting cleanly if you want to discard open modifications. Direct `pool.acquire()` and `pool.release()` calls do not commit on release; releasing an uncommitted connection directly rolls back any open work.
+
+## WAL Read-Only Reader Pools
+
+For a file-backed database, `SqliteConfig(replicas=True)` and `AiosqliteConfig(replicas=True)` derive a read-only URI for the same file. The writer owns WAL setup. Readers use `mode=ro` and `PRAGMA query_only=1`, skip write pragmas such as `journal_mode=WAL` and `synchronous=NORMAL`, and retain connection hooks. Memory-only databases cannot provide this file-reader shortcut.
+
+Async readers use `BEGIN DEFERRED`; writers retain their configured transaction mode and serialized writer leases. This avoids taking a write reservation for a read. Native `SQLITE_READONLY` errors map to `ReadOnlyTransactionError`. Open and initialize the writer first, then use `provide_read_session()` for reads. See the [local reader example](../learn/recipes/read-replicas.md#try-a-local-wal-reader).
 
 ## See Also
 

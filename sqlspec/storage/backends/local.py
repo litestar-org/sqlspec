@@ -26,7 +26,12 @@ from sqlspec.storage._arrow_payload import (
     validate_arrow_write_options,
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import ensure_path_within_root, parse_file_uri_path, reject_parent_traversal
+from sqlspec.storage._paths import (
+    FILE_SCHEME_PREFIX,
+    ensure_path_within_root,
+    parse_file_uri_path,
+    reject_parent_traversal,
+)
 from sqlspec.storage._utils import import_pyarrow, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation, raise_storage_error
@@ -76,13 +81,13 @@ class LocalStore:
                 - file:///home/user/storage + base_path="subdir" -> /home/user/storage/subdir
                 - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
-        if uri.startswith("file://"):
+        if uri.startswith(FILE_SCHEME_PREFIX):
             path = parse_file_uri_path(uri)
-            self.base_path = Path(path).resolve()
+            self.base_path = Path(path).resolve() if path else Path.cwd().resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
         else:
-            self.base_path = Path.cwd()
+            self.base_path = Path.cwd().resolve()
 
         if "base_path" in kwargs:
             self.base_path = (self.base_path / kwargs["base_path"]).resolve()
@@ -90,7 +95,7 @@ class LocalStore:
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
         elif self.base_path.is_file():
-            self.base_path = self.base_path.parent
+            self.base_path = self.base_path.parent.resolve()
 
         self.protocol = "file"
 
@@ -259,7 +264,7 @@ class LocalStore:
                     resolved_file = path.resolve()
                     resolved_file.relative_to(self.base_path)
                     relative = path.relative_to(self.base_path)
-                except ValueError:
+                except (ValueError, OSError):
                     continue
                 relative_str = str(relative)
                 if not rel_prefix or relative_str.startswith(rel_prefix):
@@ -306,7 +311,8 @@ class LocalStore:
         if not pattern:
             return []
         reject_parent_traversal(pattern)
-        pattern_path = Path(pattern)
+        normalized_pattern = parse_file_uri_path(pattern) if pattern.startswith(FILE_SCHEME_PREFIX) else pattern
+        pattern_path = Path(normalized_pattern)
         if pattern_path.is_absolute():
             try:
                 rel_pattern_path = pattern_path.relative_to(self.base_path)
@@ -315,7 +321,7 @@ class LocalStore:
                 raise StoragePathTraversalError(msg) from exc
             rel_pattern = str(rel_pattern_path)
         else:
-            rel_pattern = pattern
+            rel_pattern = normalized_pattern
 
         matches = (
             self.base_path.rglob(rel_pattern)
@@ -329,7 +335,7 @@ class LocalStore:
                 try:
                     match.resolve().relative_to(self.base_path)
                     relative = match.relative_to(self.base_path)
-                except ValueError:
+                except (ValueError, OSError):
                     continue
                 results.append(str(relative))
 
@@ -578,7 +584,11 @@ class LocalStore:
         Raises:
             StoragePathTraversalError: If the path resolves outside ``base_path``.
         """
-        relative = ensure_path_within_root(path, self.base_path)
+        target: str | Path = path
+        target_str = str(path)
+        if target_str.startswith(FILE_SCHEME_PREFIX):
+            target = parse_file_uri_path(target_str)
+        relative = ensure_path_within_root(target, self.base_path)
         return self.base_path if not relative else self.base_path / relative
 
     def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
@@ -741,6 +751,7 @@ async def _abort_local_stage_async(stage: "Path", file_obj: "BinaryIO") -> None:
         return
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LocalFileSink:
     """Synchronous byte sink backed by a staged local file."""
 
@@ -774,6 +785,7 @@ class _LocalFileSink:
         self.closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncLocalFileSink:
     """Asynchronous byte sink backed by a staged local file via ``async_``."""
 
@@ -808,6 +820,7 @@ class _AsyncLocalFileSink:
         self.closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LocalWriteStream:
     """Synchronous staged local write stream context manager."""
 
@@ -861,6 +874,7 @@ class _LocalWriteStream:
             _abort_local_stage(stage, file_obj)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncLocalWriteStream:
     """Asynchronous staged local write stream context manager with shielded completion."""
 

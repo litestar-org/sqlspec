@@ -57,9 +57,11 @@ async def test_async_native_stack_continue_on_error_commits_successes(oracle_asy
             await cleanup.commit()
 
 
-async def test_async_native_stack_fail_fast_reports_operation_index(oracle_async_config: OracleAsyncConfig) -> None:
-    """Native pipeline fail-fast must surface StackExecutionError carrying the failing op index."""
-    from sqlspec.exceptions import StackExecutionError
+async def test_async_native_stack_fail_fast_preserves_error_without_operation_index(
+    oracle_async_config: OracleAsyncConfig,
+) -> None:
+    """Immediate native fail-fast errors preserve classification with an unknown operation index."""
+    from sqlspec.exceptions import StackExecutionError, UniqueViolationError
 
     async with oracle_async_config.provide_session() as setup:
         if not await setup._pipeline_native_supported():
@@ -80,7 +82,8 @@ async def test_async_native_stack_fail_fast_reports_operation_index(oracle_async
             with pytest.raises(StackExecutionError) as excinfo:
                 await driver.execute_stack(stack)
 
-            assert excinfo.value.operation_index == 1
+            assert excinfo.value.operation_index == -1
+            assert isinstance(excinfo.value.original_error, UniqueViolationError)
     finally:
         async with oracle_async_config.provide_session() as cleanup:
             await _drop_table(cleanup)

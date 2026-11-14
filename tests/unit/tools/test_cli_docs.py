@@ -206,7 +206,7 @@ def test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions
     assert len(keys) == len(set(keys))
     assert keys.index("`dsn`") < keys.index("`min_size`")
     assert "| `dsn` | `str` | - |" in asyncpg_table
-    assert "| `port` | `int` | `5432` |" in asyncpg_table
+    assert "| `port` | `int or Sequence[int]` | `5432` |" in asyncpg_table
     assert "| `connection_class` | `type[AsyncpgConnection]` |" in asyncpg_table
     assert "NotRequired" not in asyncpg_table
     assert all(" | " not in span for line in lines for span in line.split("`")[1::2])

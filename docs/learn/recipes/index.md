@@ -7,6 +7,7 @@ Production services combine SQLSpec's session primitives, filters, storage pipel
 | Recipe | Problem Solved | Key SQLSpec APIs |
 | --- | --- | --- |
 | [Service Layer](service-layer.md) | Encapsulate domain reads, existence checks, pagination, and atomic write transactions without leaking raw session lifecycles into route handlers or CLI callers. | `SQLSpecSyncService`, `SQLSpecAsyncService`, `begin_transaction`, `get_one`, `exists`, `paginate` |
+| [Read Replicas](read-replicas.md) | Scale reads across replica pools or bounded follower snapshots. | `replicas`, `provide_read_session`, `RoutingContext`, `ReadReplicaGroup` |
 | [Multi-Tenancy](multi-tenancy.md) | Isolate tenant data across dedicated databases (`bind_key`), per-tenant schemas (`search_path` / `current_schema`), or row-level predicates (`tenant_id`). | `TenantContext`, `tenant_strategy`, `bind_key`, database policies |
 | [Health Checks](health-checks.md) | Expose bounded-timeout Kubernetes liveness and readiness probes without exhausting connection pools or polluting application telemetry. | `provide_session`, `select_value`, `asyncio.timeout`, `SamplingConfig` |
 | [ETL and Bulk Ingest](etl-and-bulk-ingest.md) | Move analytical or operational datasets between databases and Parquet/Arrow object storage without exhausting worker memory. | `select_stream`, `execute_many`, `select_to_arrow`, `select_to_storage`, `load_from_arrow`, `load_from_records`, `load_from_storage`, `without_indexes` |
@@ -23,6 +24,8 @@ Introduce higher-level recipes as operational requirements grow:
 - **Adopt [Multi-Tenancy](multi-tenancy.md)** when onboarding enterprise customers that require strict schema, database, or row-level isolation guarantees.
 - **Adopt [Health Checks](health-checks.md)** before deploying pooled adapters behind load balancers, Cloud Run, or Kubernetes readiness probes.
 - **Adopt [ETL and Bulk Ingest](etl-and-bulk-ingest.md)** whenever batch jobs process more than a few thousand rows or bridge transactional tables to DuckDB, BigQuery, S3/GCS Parquet, or Oracle `DBMS_CLOUD`.
+
+Read-heavy services can start with [Read Replicas](read-replicas.md), then use [Replica Operations](read-replicas-operations.md) to choose freshness and failover rules.
 
 ## Composing Recipes with Framework Integrations
 
@@ -53,6 +56,7 @@ flowchart TD
 
 | Workload Requirement | Recommended Primitive | Avoid |
 | --- | --- | --- |
+| Scale reads across replica pools or follower snapshots | [Read Replicas](read-replicas.md) and [Replica Operations](read-replicas-operations.md) | Implicit cross-request stickiness or retrying SQL after yield |
 | Single-row lookup or paginated list endpoint | `SQLSpecAsyncService.get_one` / `paginate_limit_offset` / `paginate_cursor` | Opening nested manual transactions around read-only queries |
 | Multi-table write with audit log insert | `async with service.begin_transaction() as session:` | Committing each statement independently across separate pool checkouts |
 | Per-tenant schema or row isolation | `SET LOCAL search_path` inside a transaction or mandatory `tenant_id` filter | Session-level `SET search_path` without reset on pooled connections |

@@ -9,13 +9,23 @@ modules only after proving the boundary with installed-wheel smoke coverage.
 """
 
 import asyncio
+import sys
 import threading
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+)
 from difflib import get_close_matches
-from inspect import Signature, iscoroutinefunction, signature
+from inspect import Signature, isawaitable, iscoroutinefunction, signature
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, NotRequired, Self, TypeAlias, TypeVar, cast
 
 from typing_extensions import TypedDict
@@ -29,7 +39,15 @@ from sqlspec.core.config_runtime import (
     create_sync_pool,
     seed_runtime_driver_features,
 )
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.core.routing import ReplicaHealthBreaker, ReplicaSelector, ReplicaSpec, SelectionStrategy, build_selector
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    MissingDependencyError,
+    OperationalError,
+    ReplicaUnavailableError,
+    RoutingContextError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
@@ -38,16 +56,17 @@ from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, MutableMapping
-    from contextlib import AbstractAsyncContextManager, AbstractContextManager
     from uuid import UUID
 
     from sqlspec.core import StatementConfig
     from sqlspec.core.tenant import TenantStrategy
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+    from sqlspec.driver._routing import AsyncDriverT, AsyncRoutingSession, SyncDriverT, SyncRoutingSession
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
     from sqlspec.storage import StorageCapabilities
     from sqlspec.utils.tenant import TenantExtractorValue
@@ -78,6 +97,7 @@ __all__ = (
     "PoolT",
     "PrometheusConfig",
     "PythonTemplateOverride",
+    "ReadReplicaGroup",
     "SQLTemplateOverride",
     "SanicConfig",
     "StarletteConfig",
@@ -96,6 +116,9 @@ ConfigT = TypeVar(
 )
 
 DriverT = TypeVar("DriverT", bound="SyncDriverAdapterBase | AsyncDriverAdapterBase")
+ReplicaItemInput: TypeAlias = "DatabaseConfigProtocol[Any, Any, Any] | ReplicaSpec | Mapping[str, Any] | str | bool"
+ReplicaGroupInput: TypeAlias = "ReadReplicaGroup[Any] | Sequence[ReplicaItemInput]"
+ReplicasInput: TypeAlias = "bool | ReplicaItemInput | ReplicaGroupInput | Mapping[str, Any]"
 
 logger = get_logger("sqlspec.config")
 
@@ -375,6 +398,23 @@ class FlaskConfig(TypedDict):
     auto_trace_headers: NotRequired[bool]
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
+    read_session_key: NotRequired[str]
+    """Request key for a read session."""
+    read_connection_key: NotRequired[str]
+    """Request key for a read connection."""
+    routing_session_key: NotRequired[str]
+    """Request key for a routing session."""
+    default_routing_mode: NotRequired[Literal["primary", "auto"]]
+    """Default request routing mode. Default: ``'auto'``."""
+    enable_routing_middleware: NotRequired[bool]
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
+    write_pin_cookie: NotRequired[str | None]
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+
 
 class LitestarConfig(TypedDict):
     """Configuration options for Litestar SQLSpec plugin.
@@ -489,6 +529,25 @@ class LitestarConfig(TypedDict):
     migration_mode: NotRequired[ExtensionMigrationMode]
     """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
+    read_session_key: NotRequired[str]
+    """Request key for a read session."""
+    read_connection_key: NotRequired[str]
+    """Request key for a read connection."""
+    routing_session_key: NotRequired[str]
+    """Request key for a routing session."""
+    default_routing_mode: NotRequired[Literal["primary", "auto"]]
+    """Default request routing mode. Default: ``'auto'``."""
+    enable_routing_middleware: NotRequired[bool]
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
+    write_pin_cookie: NotRequired[str | None]
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    read_pool_key: NotRequired[str]
+    """Request key for the selected read pool."""
+
 
 class StarletteConfig(TypedDict):
     """Configuration options for Starlette SQLSpec extension.
@@ -552,6 +611,25 @@ class StarletteConfig(TypedDict):
 
     auto_trace_headers: NotRequired[bool]
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
+
+    read_session_key: NotRequired[str]
+    """Request key for a read session."""
+    read_connection_key: NotRequired[str]
+    """Request key for a read connection."""
+    routing_session_key: NotRequired[str]
+    """Request key for a routing session."""
+    default_routing_mode: NotRequired[Literal["primary", "auto"]]
+    """Default request routing mode. Default: ``'auto'``."""
+    enable_routing_middleware: NotRequired[bool]
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
+    write_pin_cookie: NotRequired[str | None]
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    read_pool_key: NotRequired[str]
+    """Request key for the selected read pool."""
 
 
 class FastAPIConfig(StarletteConfig):
@@ -622,6 +700,25 @@ class SanicConfig(TypedDict):
 
     sqlcommenter_framework: NotRequired[str]
     """Framework name for SQLCommenter attributes. Default: 'sanic'."""
+
+    read_session_key: NotRequired[str]
+    """Request key for a read session."""
+    read_connection_key: NotRequired[str]
+    """Request key for a read connection."""
+    routing_session_key: NotRequired[str]
+    """Request key for a routing session."""
+    default_routing_mode: NotRequired[Literal["primary", "auto"]]
+    """Default request routing mode. Default: ``'auto'``."""
+    enable_routing_middleware: NotRequired[bool]
+    """Install request-scoped routing middleware. Default: True."""
+    routing_header: NotRequired[str | None]
+    """Trusted application routing header name when explicitly enabled behind a gateway. Default: None."""
+    write_pin_cookie: NotRequired[str | None]
+    """Optional application write-pin cookie name. Default: None."""
+    routing_secret: NotRequired[str | bytes | None]
+    """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
+    read_pool_key: NotRequired[str]
+    """Request key for the selected read pool."""
 
 
 class ADKConfig(TypedDict):
@@ -738,6 +835,11 @@ class ADKConfig(TypedDict):
     migration_mode: NotRequired[ExtensionMigrationMode]
     """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
+    read_config_enabled: NotRequired[bool]
+    """Enable optional read configuration for ADK lookups."""
+    read_bind_group: NotRequired[str | None]
+    """Named replica group used for ADK reads."""
+
 
 class EventsConfig(TypedDict):
     """Configuration options for the events extension.
@@ -776,6 +878,12 @@ class EventsConfig(TypedDict):
 
     retention_seconds: NotRequired[int]
     """Retention window for acknowledged events before cleanup. Defaults to 86400 (24 hours)."""
+
+    max_attempts: NotRequired[int]
+    """Maximum claims per event before ``nack`` marks it failed. Defaults to 5."""
+
+    retry_backoff_seconds: NotRequired[float]
+    """Base delay for exponential redelivery backoff after ``nack``. Defaults to 1.0."""
 
     poll_interval: NotRequired[float]
     """Compatibility alias for event_poll_interval. Defaults to 1.0."""
@@ -869,12 +977,15 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     """
 
     __slots__ = (
+        "_is_replica",
         "_migration_commands",
         "_migration_config",
         "_migration_loader",
         "_migration_lock",
         "_observability_runtime",
+        "_replica_groups",
         "_storage_capabilities",
+        "_tenant_key",
         "bind_key",
         "connection_config",
         "connection_instance",
@@ -884,6 +995,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "statement_config",
     )
 
+    _tenant_key: Any
+    _is_replica: bool
+    _replica_groups: "dict[str, ReadReplicaGroup[Any]]"
     _migration_loader: "SQLFileLoader | None"
     _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] | None"
     _migration_lock: "threading.RLock"
@@ -931,18 +1045,31 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     observability_config: "ObservabilityConfig | None"
     _observability_runtime: "ObservabilityRuntime | None"
 
-    def __hash__(self) -> int:
-        return id(self)
+    @property
+    def is_replica(self) -> bool:
+        """Whether this configuration represents a read replica."""
+        return self._is_replica
 
-    def __eq__(self, other: object) -> bool:
-        return self is other
+    @property
+    def has_replicas(self) -> bool:
+        """Whether this configuration owns any replica groups."""
+        return bool(self._replica_groups)
 
-    def __repr__(self) -> str:
-        parts = ", ".join([
-            f"connection_instance={self.connection_instance!r}",
-            f"migration_config={self.migration_config!r}",
-        ])
-        return f"{type(self).__name__}({parts})"
+    @property
+    def supports_read_routing(self) -> bool:
+        """Whether replica pools or an adapter-specific read provider are available."""
+        return self.has_replicas or type(self).provide_read_session not in {
+            DatabaseConfigProtocol.provide_read_session,
+            NoPoolSyncConfig.provide_read_session,
+            NoPoolAsyncConfig.provide_read_session,
+            SyncDatabaseConfig.provide_read_session,
+            AsyncDatabaseConfig.provide_read_session,
+        }
+
+    @property
+    def replica_groups(self) -> "Mapping[str, ReadReplicaGroup[Any]]":
+        """Return a read-only view of named replica groups."""
+        return MappingProxyType(self._replica_groups)
 
     @property
     def migration_config(self) -> "dict[str, Any] | MigrationConfig":
@@ -967,6 +1094,140 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             self._migration_commands = None
             if self._has_initialized_attribute("extension_config"):
                 self._ensure_extension_migrations()
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: "Mapping[str, Any] | None" = None,
+        driver_features_overrides: "Mapping[str, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
+        extension_config: "ExtensionConfigs | None" = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: "str | None" = None,
+        is_replica: bool = False,
+        **overrides: Any,
+    ) -> Self:
+        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
+        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
+        connection_overrides: dict[str, Any] = dict(connection_config_overrides or {})
+        new_driver_features: dict[str, Any] = {
+            key: value
+            for key, value in self.driver_features.items()
+            if key not in {"_statement_cache_holder", "storage_capabilities"}
+        }
+        pool_session_cb = getattr(self, "_pool_session_callback", None)
+        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
+            new_conn_cfg["session_callback"] = pool_session_cb
+        user_conn_hook = getattr(self, "_user_connection_hook", None)
+        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
+            new_driver_features["on_connection_create"] = user_conn_hook
+        if connection_config_overrides:
+            new_conn_cfg.update(connection_config_overrides)
+        if driver_features_overrides:
+            new_driver_features.update(driver_features_overrides)
+        for key, val in overrides.items():
+            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
+                new_driver_features[key] = val
+            else:
+                new_conn_cfg[key] = val
+                connection_overrides[key] = val
+        new_conn_cfg = self._prepare_derived_connection_config(new_conn_cfg, connection_overrides)
+        derived = cast("Callable[..., Self]", type(self))(
+            is_replica=is_replica,
+            replicas=None,
+            connection_config=new_conn_cfg,
+            connection_instance=None,
+            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
+            statement_config=self.statement_config if statement_config is None else statement_config,
+            driver_features=new_driver_features,
+            bind_key=self.bind_key if bind_key is None else bind_key,
+            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
+            if extension_config is None
+            else extension_config,
+            observability_config=self.observability_config if observability_config is None else observability_config,
+        )
+
+        if bind_key is None or bind_key == self.bind_key:
+            derived._tenant_key = self._tenant_key
+        return derived
+
+    def provide_routing_session(
+        self,
+        *,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+    ) -> "SyncRoutingSession[Any] | AsyncRoutingSession[Any]":
+        """Construct a lazy routing facade for this configuration.
+
+        Args:
+            bind_group: Replica group used for eligible reads.
+            statement_config: Statement configuration override.
+            tenant: Tenant identity or payload for physical checkouts.
+            bypass_tenant: Explicitly bypass tenant setup.
+
+        Returns:
+            A facade matching this configuration's execution mode.
+        """
+        from sqlspec.driver._routing import AsyncRoutingSession, SyncRoutingSession
+
+        if self.is_async:
+            async_config = cast("AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", self)
+            return AsyncRoutingSession(
+                async_config,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+            )
+        sync_config = cast("SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]", self)
+        return SyncRoutingSession(
+            sync_config,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+        )
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
+        """Provide a replica connection, honoring scoped primary pins."""
+        return cast(
+            "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]",
+            self._provide_read(False, args, kwargs, bind_group),
+        )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
+        """Provide a read session while retaining the selected config's tenant lease."""
+        kwargs.update(statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant)
+        return cast(
+            "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]",
+            self._provide_read(True, args, kwargs, bind_group),
+        )
+
+    def __hash__(self) -> int:
+        return id(self)
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __repr__(self) -> str:
+        parts = ", ".join([
+            f"connection_instance={self.connection_instance!r}",
+            f"migration_config={self.migration_config!r}",
+        ])
+        return f"{type(self).__name__}({parts})"
 
     def set_migration_config(self, config: "dict[str, Any] | MigrationConfig") -> None:
         """Attach migration configuration after initial config creation.
@@ -1002,6 +1263,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self._observability_runtime = ObservabilityRuntime(
             merged, bind_key=self.bind_key, config_name=type(self).__name__
         )
+        for group in self._replica_groups.values():
+            group.attach_observability(registry_config)
 
     def get_observability_runtime(self) -> "ObservabilityRuntime":
         """Return the attached runtime, creating a disabled instance when missing."""
@@ -1286,6 +1549,180 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             yes: Skip confirmation prompt. Defaults to False.
         """
         raise NotImplementedError
+
+    def _allow_replica_fallback(self, _error: Exception) -> bool:
+        """Return whether a failed reader checkout may fall back to this primary."""
+        return True
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Normalize merged clone options while preserving explicit overrides."""
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            msg = f"{type(self).__name__} does not support replicas=True shorthand; pass explicit replica endpoints or overrides"
+            raise ImproperConfigurationError(msg)
+        if isinstance(spec_input, str):
+            key = next(
+                (
+                    key
+                    for key in ("dsn", "conninfo", "uri", "url", "database")
+                    if isinstance(self.connection_config.get(key), str)
+                ),
+                "dsn",
+            )
+            return {"connection_config_overrides": {key: spec_input}}
+        return dict(spec_input)
+
+    def _normalize_replica(self, item: ReplicaItemInput) -> ReplicaSpec:
+        spec = item if isinstance(item, ReplicaSpec) else ReplicaSpec(item)
+        config = spec.config
+        if not isinstance(config, DatabaseConfigProtocol):
+            config = self.derive_pool(is_replica=True, **self._build_replica_spec_overrides(config))
+        if config is self or config.has_replicas or config.is_async != self.is_async:
+            msg = "Replica configurations must be distinct, unnested, and use the primary execution mode"
+            raise ImproperConfigurationError(msg)
+        config._is_replica = True
+        if config.bind_key is None or config.bind_key == self.bind_key:
+            config._tenant_key = self._tenant_key
+        return ReplicaSpec(config, weight=spec.weight, name=spec.name, max_staleness_seconds=spec.max_staleness_seconds)
+
+    def _normalize_replicas(self, replicas: "ReplicasInput | None") -> "dict[str, ReadReplicaGroup[Any]]":
+        if not replicas:
+            return {}
+        if self._is_replica:
+            msg = "A replica configuration cannot declare nested replicas"
+            raise ImproperConfigurationError(msg)
+        groups: Mapping[Any, Any]
+        if isinstance(replicas, Mapping):
+            grouped = all(
+                isinstance(value, ReadReplicaGroup)
+                or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping)))
+                for value in replicas.values()
+            )
+            if grouped:
+                groups = replicas
+            elif any(isinstance(value, ReadReplicaGroup) for value in replicas.values()):
+                msg = "Cannot mix ReadReplicaGroup entries with scalar connection override keys in replicas mapping"
+                raise ImproperConfigurationError(msg)
+            else:
+                groups = {"default": [replicas]}
+        elif isinstance(replicas, ReadReplicaGroup) or (
+            isinstance(replicas, Sequence) and not isinstance(replicas, (str, bytes))
+        ):
+            groups = {"default": replicas}
+        else:
+            groups = {"default": [replicas]}
+        result: dict[str, ReadReplicaGroup[Any]] = {}
+        for name, items in groups.items():
+            if not isinstance(name, str) or not name:
+                msg = "Replica group names must be nonempty strings"
+                raise ImproperConfigurationError(msg)
+            if isinstance(items, ReadReplicaGroup):
+                for spec in items.specs:
+                    self._normalize_replica(spec)
+                result[name] = items
+            else:
+                result[name] = ReadReplicaGroup([self._normalize_replica(item) for item in items], name=name)
+        return result
+
+    def _resolve_read_group(self, bind_group: str | None) -> "tuple[ReadReplicaGroup[Any] | None, RoutingEntry | None]":
+        entry = RoutingContext.get_entry(self.bind_key)
+        if bind_group is None and entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+            return None, entry
+        effective_group = bind_group if bind_group is not None else entry.bind_group if entry is not None else None
+        if not self._replica_groups and effective_group is None:
+            return None, entry
+        group_key = effective_group if effective_group is not None else "default"
+        if group_key in self._replica_groups:
+            return self._replica_groups[group_key], entry
+        if effective_group is None and (entry is None or entry.mode != "replica"):
+            return None, entry
+        msg = f"Unknown replica bind_group {group_key!r}; available groups: {sorted(self._replica_groups)}"
+        raise RoutingContextError(msg)
+
+    def _provide_read(
+        self, session: bool, args: tuple[Any, ...], kwargs: dict[str, Any], bind_group: str | None
+    ) -> Any:
+        group, entry = self._resolve_read_group(bind_group)
+        if group is not None:
+            provider = group.provide_session if session else group.provide_connection
+            return provider(
+                *args,
+                primary=None if entry is not None and entry.mode == "replica" else self,
+                causal_token=None if entry is None else entry.causal_token,
+                max_staleness_seconds=None if entry is None else entry.max_staleness_seconds,
+                **kwargs,
+            )
+        if entry is not None and entry.mode == "replica":
+            msg = "No read replica is configured for the requested bind"
+            raise ReplicaUnavailableError(msg)
+        receipt = _ReadSelectionReceipt()
+        provider = self.provide_session if session else self.provide_connection
+        context = provider(*args, **kwargs)
+        if self.is_async:
+            return _ReadAsyncContext(
+                self._primary_read_async(cast("AbstractAsyncContextManager[Any]", context), receipt), receipt
+            )
+        return _ReadSyncContext(self._primary_read_sync(cast("AbstractContextManager[Any]", context), receipt), receipt)
+
+    @contextmanager
+    def _primary_read_sync(
+        self, context: "AbstractContextManager[Any]", receipt: "_ReadSelectionReceipt"
+    ) -> "Generator[Any]":
+        with context as value:
+            receipt.config = self
+            yield value
+
+    @asynccontextmanager
+    async def _primary_read_async(
+        self, context: "AbstractAsyncContextManager[Any]", receipt: "_ReadSelectionReceipt"
+    ) -> "AsyncGenerator[Any]":
+        async with context as value:
+            receipt.config = self
+            yield value
+
+    def _create_replica_pools_sync(self) -> None:
+        for group in self._replica_groups.values():
+            group.create_pools()
+
+    async def _create_replica_pools_async(self) -> None:
+        for group in self._replica_groups.values():
+            await cast("Awaitable[list[Any]]", group.create_pools())
+
+    def _close_pools_sync(self, close_primary: Callable[[], None] | None = None) -> None:
+        error: BaseException | None = None
+        try:
+            if close_primary is not None:
+                close_primary()
+            self.connection_instance = None
+        except BaseException as exc:
+            error = exc
+        for group in self._replica_groups.values():
+            try:
+                group.close_pools()
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
+
+    async def _close_pools_async(self, close_primary: "Callable[[], Awaitable[None]] | None" = None) -> None:
+        error: BaseException | None = None
+        try:
+            if close_primary is not None:
+                await close_primary()
+            self.connection_instance = None
+        except BaseException as exc:
+            error = exc
+        for group in self._replica_groups.values():
+            try:
+                await cast("Awaitable[None]", group.close_pools())
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
 
     def _has_initialized_attribute(self, attribute_name: str) -> bool:
         """Return whether a slot-backed attribute has been initialized."""
@@ -1576,7 +2013,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = f"{type(self).__name__} has a tenant_strategy but no tenant lease implementation"
             raise ImproperConfigurationError(msg)
         lease = lease_type(self, strategy)
-        lease.tenant_key = self
+        lease.tenant_key = self._tenant_key
         return lease
 
     def _require_leased_tenant_connection(self) -> None:
@@ -1637,6 +2074,8 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         extension_config: "ExtensionConfigs | None",
         observability_config: "ObservabilityConfig | None",
         default_dialect: str,
+        replicas: "ReplicasInput | None" = None,
+        is_replica: bool = False,
     ) -> None:
         """Populate the configuration state shared by every base config class.
 
@@ -1645,10 +2084,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         ``default_dialect``, seeds runtime driver features from storage
         capabilities, and attaches lifecycle and observability extensions.
         """
+        self._is_replica = is_replica
+        self._replica_groups = {}
         self._migration_lock = threading.RLock()
         self._migration_loader = None
         self._migration_commands = None
         self.bind_key = bind_key
+        self._tenant_key = self
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
         self.extension_config = extension_config or {}
@@ -1677,6 +2119,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         )
         self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
+        self._replica_groups = self._normalize_replicas(replicas)
 
     def _provide_connection_impl(self, *args: Any, **kwargs: Any) -> Any:
         """Build the connection context manager shared by pooled configs."""
@@ -1845,6 +2288,8 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        replicas: "ReplicasInput | None" = None,
+        is_replica: bool = False,
         **kwargs: Any,
     ) -> None:
         self._reject_unexpected_kwargs(kwargs)
@@ -1857,6 +2302,8 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            replicas=replicas,
+            is_replica=is_replica,
             default_dialect="sqlite",
         )
 
@@ -1867,6 +2314,59 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide a database connection context manager."""
         raise NotImplementedError
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractContextManager[ConnectionT]":
+        """Provide a read connection with this config's execution mode."""
+        return cast(
+            "AbstractContextManager[ConnectionT]",
+            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+        )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT]":
+        """Provide a read session with this config's execution mode."""
+        return cast(
+            "AbstractContextManager[DriverT]",
+            super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                **kwargs,
+            ),
+        )
+
+    def provide_routing_session(
+        self: "NoPoolSyncConfig[ConnectionT, SyncDriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRoutingSession[SyncDriverT]":
+        """Construct a lazy session that routes each operation safely."""
+        from sqlspec.driver._routing import SyncRoutingSession
+
+        return SyncRoutingSession(
+            self,
+            *args,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            **kwargs,
+        )
 
     def provide_session(
         self,
@@ -1880,10 +2380,10 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         raise NotImplementedError
 
     def create_pool(self) -> None:
-        return None
+        self._create_replica_pools_sync()
 
     def close_pool(self) -> None:
-        return None
+        self._close_pools_sync()
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -1908,6 +2408,8 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        replicas: "ReplicasInput | None" = None,
+        is_replica: bool = False,
         **kwargs: Any,
     ) -> None:
         self._reject_unexpected_kwargs(kwargs)
@@ -1920,6 +2422,8 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            replicas=replicas,
+            is_replica=is_replica,
             default_dialect="sqlite",
         )
 
@@ -1930,6 +2434,59 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
         raise NotImplementedError
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[ConnectionT]":
+        """Provide a read connection with this config's execution mode."""
+        return cast(
+            "AbstractAsyncContextManager[ConnectionT]",
+            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+        )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[DriverT]":
+        """Provide a read session with this config's execution mode."""
+        return cast(
+            "AbstractAsyncContextManager[DriverT]",
+            super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                **kwargs,
+            ),
+        )
+
+    def provide_routing_session(
+        self: "NoPoolAsyncConfig[ConnectionT, AsyncDriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRoutingSession[AsyncDriverT]":
+        """Construct a lazy session that routes each operation safely."""
+        from sqlspec.driver._routing import AsyncRoutingSession
+
+        return AsyncRoutingSession(
+            self,
+            *args,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            **kwargs,
+        )
 
     def provide_session(
         self,
@@ -1943,10 +2500,10 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         raise NotImplementedError
 
     async def create_pool(self) -> None:
-        return None
+        await self._create_replica_pools_async()
 
     async def close_pool(self) -> None:
-        return None
+        await self._close_pools_async()
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -1971,6 +2528,8 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        replicas: "ReplicasInput | None" = None,
+        is_replica: bool = False,
         **kwargs: Any,
     ) -> None:
         self._reject_unexpected_kwargs(kwargs)
@@ -1983,6 +2542,8 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            replicas=replicas,
+            is_replica=is_replica,
             default_dialect="postgres",
         )
         self._pool_lock = threading.Lock()
@@ -1995,6 +2556,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         """
         existing_pool = self.connection_instance
         if existing_pool is not None:
+            self._create_replica_pools_sync()
             return existing_pool
 
         created_pool = create_sync_pool(
@@ -2005,14 +2567,20 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             self.get_observability_runtime().emit_pool_create_sync,
         )
         self.connection_instance = created_pool
+        self._create_replica_pools_sync()
         return cast("PoolT", created_pool)
 
     def close_pool(self) -> None:
-        """Close the connection pool."""
-        pool = self.connection_instance
+        """Close the primary and every replica, preserving the first error."""
         runtime = self.get_observability_runtime()
-        close_sync_pool(pool, self._close_pool, runtime.emit_pool_destroy_sync, runtime.emit_pool_destroying_sync)
-        self.connection_instance = None
+        self._close_pools_sync(
+            lambda: close_sync_pool(
+                self.connection_instance,
+                self._close_pool,
+                runtime.emit_pool_destroy_sync,
+                runtime.emit_pool_destroying_sync,
+            )
+        )
 
     def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
@@ -2025,6 +2593,59 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractContextManager[ConnectionT]":
         """Provide a database connection context manager."""
         return cast("AbstractContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractContextManager[ConnectionT]":
+        """Provide a read connection with this config's execution mode."""
+        return cast(
+            "AbstractContextManager[ConnectionT]",
+            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+        )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractContextManager[DriverT]":
+        """Provide a read session with this config's execution mode."""
+        return cast(
+            "AbstractContextManager[DriverT]",
+            super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                **kwargs,
+            ),
+        )
+
+    def provide_routing_session(
+        self: "SyncDatabaseConfig[ConnectionT, PoolT, SyncDriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "SyncRoutingSession[SyncDriverT]":
+        """Construct a lazy session that routes each operation safely."""
+        from sqlspec.driver._routing import SyncRoutingSession
+
+        return SyncRoutingSession(
+            self,
+            *args,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            **kwargs,
+        )
 
     def provide_session(
         self,
@@ -2060,49 +2681,6 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
         )
 
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
-        new_driver_features: dict[str, Any] = dict(self.driver_features)
-        pool_session_cb = getattr(self, "_pool_session_callback", None)
-        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
-            new_conn_cfg["session_callback"] = pool_session_cb
-        user_conn_hook = getattr(self, "_user_connection_hook", None)
-        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
-            new_driver_features["on_connection_create"] = user_conn_hook
-        if connection_config_overrides:
-            new_conn_cfg.update(connection_config_overrides)
-        if driver_features_overrides:
-            new_driver_features.update(driver_features_overrides)
-        for key, val in overrides.items():
-            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
-                new_driver_features[key] = val
-            else:
-                new_conn_cfg[key] = val
-        return type(self)(
-            connection_config=new_conn_cfg,
-            connection_instance=None,
-            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
-            statement_config=self.statement_config if statement_config is None else statement_config,
-            driver_features=new_driver_features,
-            bind_key=self.bind_key if bind_key is None else bind_key,
-            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
-            if extension_config is None
-            else extension_config,
-            observability_config=self.observability_config if observability_config is None else observability_config,
-        )
-
     @abstractmethod
     def _create_pool(self) -> PoolT:
         """Actual pool creation implementation."""
@@ -2133,6 +2711,8 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        replicas: "ReplicasInput | None" = None,
+        is_replica: bool = False,
         **kwargs: Any,
     ) -> None:
         self._reject_unexpected_kwargs(kwargs)
@@ -2145,6 +2725,8 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
             bind_key=bind_key,
             extension_config=extension_config,
             observability_config=observability_config,
+            replicas=replicas,
+            is_replica=is_replica,
             default_dialect="postgres",
         )
         self._pool_lock = asyncio.Lock()
@@ -2157,6 +2739,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         """
         existing_pool = self.connection_instance
         if existing_pool is not None:
+            await self._create_replica_pools_async()
             return existing_pool
 
         created_pool = await create_async_pool(
@@ -2167,16 +2750,20 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
             self.get_observability_runtime().emit_pool_create_async,
         )
         self.connection_instance = created_pool
+        await self._create_replica_pools_async()
         return cast("PoolT", created_pool)
 
     async def close_pool(self) -> None:
-        """Close the connection pool."""
-        pool = self.connection_instance
+        """Close the primary and every replica, preserving the first error."""
         runtime = self.get_observability_runtime()
-        await close_async_pool(
-            pool, self._close_pool, runtime.emit_pool_destroy_async, runtime.emit_pool_destroying_async
+        await self._close_pools_async(
+            lambda: close_async_pool(
+                self.connection_instance,
+                self._close_pool,
+                runtime.emit_pool_destroy_async,
+                runtime.emit_pool_destroying_async,
+            )
         )
-        self.connection_instance = None
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> PoolT:
         """Provide pool instance."""
@@ -2189,6 +2776,59 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AbstractAsyncContextManager[ConnectionT]":
         """Provide a database connection context manager."""
         return cast("AbstractAsyncContextManager[ConnectionT]", self._provide_connection_impl(*args, **kwargs))
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[ConnectionT]":
+        """Provide a read connection with this config's execution mode."""
+        return cast(
+            "AbstractAsyncContextManager[ConnectionT]",
+            super().provide_read_connection(*args, bind_group=bind_group, **kwargs),
+        )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[DriverT]":
+        """Provide a read session with this config's execution mode."""
+        return cast(
+            "AbstractAsyncContextManager[DriverT]",
+            super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                **kwargs,
+            ),
+        )
+
+    def provide_routing_session(
+        self: "AsyncDatabaseConfig[ConnectionT, PoolT, AsyncDriverT]",
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        **kwargs: Any,
+    ) -> "AsyncRoutingSession[AsyncDriverT]":
+        """Construct a lazy session that routes each operation safely."""
+        from sqlspec.driver._routing import AsyncRoutingSession
+
+        return AsyncRoutingSession(
+            self,
+            *args,
+            bind_group=bind_group,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            **kwargs,
+        )
 
     def provide_session(
         self,
@@ -2224,49 +2864,6 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
             self._provide_session_impl(*args, statement_config=statement_config, **kwargs),
         )
 
-    def derive_pool(
-        self,
-        *,
-        connection_config_overrides: "Mapping[str, Any] | None" = None,
-        driver_features_overrides: "Mapping[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        migration_config: "dict[str, Any] | MigrationConfig | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
-        bind_key: "str | None" = None,
-        **overrides: Any,
-    ) -> Self:
-        """Clone this configuration with overridden connection/pool or feature settings and ``connection_instance=None``."""
-        new_conn_cfg: dict[str, Any] = dict(self.connection_config)
-        new_driver_features: dict[str, Any] = dict(self.driver_features)
-        pool_session_cb = getattr(self, "_pool_session_callback", None)
-        if pool_session_cb is not None and "session_callback" not in new_conn_cfg:
-            new_conn_cfg["session_callback"] = pool_session_cb
-        user_conn_hook = getattr(self, "_user_connection_hook", None)
-        if user_conn_hook is not None and "on_connection_create" not in new_driver_features:
-            new_driver_features["on_connection_create"] = user_conn_hook
-        if connection_config_overrides:
-            new_conn_cfg.update(connection_config_overrides)
-        if driver_features_overrides:
-            new_driver_features.update(driver_features_overrides)
-        for key, val in overrides.items():
-            if key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS:
-                new_driver_features[key] = val
-            else:
-                new_conn_cfg[key] = val
-        return type(self)(
-            connection_config=new_conn_cfg,
-            connection_instance=None,
-            migration_config=dict(self.migration_config) if migration_config is None else migration_config,
-            statement_config=self.statement_config if statement_config is None else statement_config,
-            driver_features=new_driver_features,
-            bind_key=self.bind_key if bind_key is None else bind_key,
-            extension_config=cast("ExtensionConfigs", dict(self.extension_config))
-            if extension_config is None
-            else extension_config,
-            observability_config=self.observability_config if observability_config is None else observability_config,
-        )
-
     @abstractmethod
     async def _create_pool(self) -> PoolT:
         """Actual async pool creation implementation."""
@@ -2276,6 +2873,338 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     async def _close_pool(self) -> None:
         """Actual async pool destruction implementation."""
         raise NotImplementedError
+
+
+class _ReadSelectionReceipt:
+    __slots__ = ("config",)
+
+    def __init__(self) -> None:
+        self.config: DatabaseConfigProtocol[Any, Any, Any] | None = None
+
+
+class _ReadSyncContext(Generic[ConfigT]):
+    __slots__ = ("_context", "_selection_receipt")
+
+    def __init__(self, context: "AbstractContextManager[Any]", receipt: _ReadSelectionReceipt) -> None:
+        self._context = context
+        self._selection_receipt = receipt
+
+    def __enter__(self) -> Any:
+        return self._context.__enter__()
+
+    def __exit__(self, *args: Any) -> Any:
+        return self._context.__exit__(*args)
+
+
+class _ReadAsyncContext(Generic[ConfigT]):
+    __slots__ = ("_context", "_selection_receipt")
+
+    def __init__(self, context: "AbstractAsyncContextManager[Any]", receipt: _ReadSelectionReceipt) -> None:
+        self._context = context
+        self._selection_receipt = receipt
+
+    async def __aenter__(self) -> Any:
+        return await self._context.__aenter__()
+
+    async def __aexit__(self, *args: Any) -> Any:
+        return await self._context.__aexit__(*args)
+
+
+class ReadReplicaGroup(Generic[ConfigT]):
+    """Managed homogeneous read pools with checkout-only failover."""
+
+    __slots__ = (
+        "_breaker",
+        "_causal_validator",
+        "_configs",
+        "_fallback_to_primary",
+        "_is_async",
+        "_name",
+        "_selector",
+        "_specs",
+    )
+
+    def __init__(
+        self,
+        configs: "Sequence[ConfigT | ReplicaSpec]",
+        *,
+        strategy: SelectionStrategy | ReplicaSelector = "round_robin",
+        fallback_to_primary: bool = True,
+        failure_threshold: int = 3,
+        recovery_seconds: float = 10.0,
+        name: str = "default",
+        causal_validator: "Callable[[Any, str], bool | Awaitable[bool]] | None" = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        """Configure replica selection, recovery, and optional causal validation."""
+        if not configs or not name:
+            msg = "Read replica groups need a name and at least one replica"
+            raise ImproperConfigurationError(msg)
+        self._specs = tuple(item if isinstance(item, ReplicaSpec) else ReplicaSpec(item) for item in configs)
+        if any(not isinstance(spec.config, DatabaseConfigProtocol) for spec in self._specs):
+            msg = "Read replica groups require database configurations"
+            raise ImproperConfigurationError(msg)
+        self._configs = tuple(cast("ConfigT", spec.config) for spec in self._specs)
+        self._is_async = self._configs[0].is_async
+        if any(config.is_async != self._is_async for config in self._configs):
+            msg = "Read replica groups cannot mix sync and async configurations"
+            raise ImproperConfigurationError(msg)
+        self._name = name
+        self._fallback_to_primary = fallback_to_primary
+        self._causal_validator = causal_validator
+        self._selector = build_selector(strategy, self._specs)
+        self._breaker = ReplicaHealthBreaker(
+            len(self._configs),
+            failure_threshold=failure_threshold,
+            recovery_seconds=recovery_seconds,
+            clock=clock or time.monotonic,
+        )
+
+    @property
+    def configs(self) -> tuple[ConfigT, ...]:
+        """Return the group's configuration instances."""
+        return self._configs
+
+    @property
+    def specs(self) -> tuple[ReplicaSpec, ...]:
+        """Return weighted descriptors in their stable index order."""
+        return self._specs
+
+    @property
+    def breaker(self) -> ReplicaHealthBreaker:
+        """Return passive checkout health state."""
+        return self._breaker
+
+    @property
+    def selector(self) -> ReplicaSelector:
+        """Return the configured candidate selector."""
+        return self._selector
+
+    @property
+    def fallback_to_primary(self) -> bool:
+        """Whether exhaustion permits primary checkout."""
+        return self._fallback_to_primary
+
+    @property
+    def name(self) -> str:
+        """Return the group name."""
+        return self._name
+
+    @property
+    def is_async(self) -> bool:
+        """Whether all configurations use asynchronous providers."""
+        return self._is_async
+
+    def create_pools(self) -> "list[Any] | Awaitable[list[Any]]":
+        """Create every replica pool."""
+        if self._is_async:
+            return self._create_async_pools()
+        return [config.create_pool() for config in self._configs]
+
+    def close_pools(self) -> "Awaitable[None] | None":
+        """Close every pool before propagating the first close error."""
+        if self._is_async:
+            return self._close_async_pools()
+        error: BaseException | None = None
+        for config in self._configs:
+            try:
+                config.close_pool()
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
+        return None
+
+    def attach_observability(self, registry_config: ObservabilityConfig | None) -> None:
+        """Attach the registry settings to each replica's own runtime."""
+        for config in self._configs:
+            config.attach_observability(registry_config)
+
+    def provide_connection(
+        self,
+        *args: Any,
+        primary: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+        causal_token: str | None = None,
+        max_staleness_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Acquire a connection from one healthy candidate without replaying callers."""
+        return self._provide(False, args, kwargs, primary, causal_token, max_staleness_seconds)
+
+    def provide_session(
+        self,
+        *args: Any,
+        primary: "DatabaseConfigProtocol[Any, Any, Any] | None" = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        causal_token: str | None = None,
+        max_staleness_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Acquire a tenant-aware session with failover limited to checkout."""
+        kwargs.update(statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant)
+        return self._provide(True, args, kwargs, primary, causal_token, max_staleness_seconds)
+
+    async def _create_async_pools(self) -> list[Any]:
+        return [await cast("Awaitable[Any]", config.create_pool()) for config in self._configs]
+
+    async def _close_async_pools(self) -> None:
+        error: BaseException | None = None
+        for config in self._configs:
+            try:
+                await cast("Awaitable[None]", config.close_pool())
+            except BaseException as exc:
+                error = error or exc
+        if error is not None:
+            raise error
+
+    def _provide(
+        self,
+        session: bool,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        primary: "DatabaseConfigProtocol[Any, Any, Any] | None",
+        causal_token: str | None,
+        staleness: float | None,
+    ) -> Any:
+        receipt = _ReadSelectionReceipt()
+        if self._is_async:
+            return _ReadAsyncContext(
+                self._provide_async(session, args, kwargs, primary, causal_token, staleness, receipt), receipt
+            )
+        return _ReadSyncContext(
+            self._provide_sync(session, args, kwargs, primary, causal_token, staleness, receipt), receipt
+        )
+
+    def _validate_sync_causal(self, value: Any, causal_token: str | None) -> bool:
+        if causal_token is None or self._causal_validator is None:
+            return True
+        result = self._causal_validator(value, causal_token)
+        if isawaitable(result):
+            if callable(getattr(result, "close", None)):
+                cast("Any", result).close()
+            msg = "An async causal validator requires an async replica group"
+            raise ImproperConfigurationError(msg)
+        return result
+
+    @contextmanager
+    def _provide_sync(
+        self,
+        session: bool,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        primary: "DatabaseConfigProtocol[Any, Any, Any] | None",
+        causal_token: str | None,
+        staleness: float | None,
+        receipt: _ReadSelectionReceipt,
+    ) -> "Generator[Any]":
+        last_error: Exception | None = None
+        for index in self._selector.select_order(self._breaker, max_staleness_seconds=staleness):
+            if not self._breaker.try_acquire_probe(index):
+                continue
+            stack = ExitStack()
+            config = self._configs[index]
+            provider: Callable[..., Any] = config.provide_session if session else config.provide_connection
+            try:
+                value = stack.enter_context(cast("AbstractContextManager[Any]", provider(*args, **kwargs)))
+            except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
+                stack.__exit__(*sys.exc_info())
+                self._breaker.record_failure(index)
+                last_error = exc
+                continue
+            except BaseException:
+                self._breaker.release_probe(index)
+                stack.__exit__(*sys.exc_info())
+                raise
+            try:
+                caught_up = self._validate_sync_causal(value, causal_token)
+            except BaseException:
+                self._breaker.release_probe(index)
+                stack.__exit__(*sys.exc_info())
+                raise
+            if not caught_up:
+                self._breaker.release_probe(index)
+                stack.close()
+                continue
+            self._breaker.record_success(index)
+            receipt.config = config
+            with stack:
+                yield value
+            return
+        if self._fallback_to_primary and primary is not None:
+            if last_error is not None and not primary._allow_replica_fallback(last_error):
+                raise last_error
+            provider = primary.provide_session if session else primary.provide_connection
+            with cast("AbstractContextManager[Any]", provider(*args, **kwargs)) as value:
+                receipt.config = primary
+                yield value
+            return
+        msg = f"No healthy read replica available in group {self._name!r}"
+        raise ReplicaUnavailableError(msg) from last_error
+
+    @asynccontextmanager
+    async def _provide_async(
+        self,
+        session: bool,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        primary: "DatabaseConfigProtocol[Any, Any, Any] | None",
+        causal_token: str | None,
+        staleness: float | None,
+        receipt: _ReadSelectionReceipt,
+    ) -> "AsyncGenerator[Any]":
+        last_error: Exception | None = None
+        for index in self._selector.select_order(self._breaker, max_staleness_seconds=staleness):
+            if not self._breaker.try_acquire_probe(index):
+                continue
+            stack = AsyncExitStack()
+            config = self._configs[index]
+            provider: Callable[..., Any] = config.provide_session if session else config.provide_connection
+            try:
+                value = await stack.enter_async_context(
+                    cast("AbstractAsyncContextManager[Any]", provider(*args, **kwargs))
+                )
+            except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
+                await stack.__aexit__(*sys.exc_info())
+                self._breaker.record_failure(index)
+                last_error = exc
+                continue
+            except BaseException:
+                self._breaker.release_probe(index)
+                await stack.__aexit__(*sys.exc_info())
+                raise
+            try:
+                caught_up = (
+                    self._causal_validator(value, causal_token)
+                    if causal_token is not None and self._causal_validator is not None
+                    else True
+                )
+                if isawaitable(caught_up):
+                    caught_up = await caught_up
+            except BaseException:
+                self._breaker.release_probe(index)
+                await stack.__aexit__(*sys.exc_info())
+                raise
+            if not caught_up:
+                self._breaker.release_probe(index)
+                await stack.aclose()
+                continue
+            self._breaker.record_success(index)
+            receipt.config = config
+            async with stack:
+                yield value
+            return
+        if self._fallback_to_primary and primary is not None:
+            if last_error is not None and not primary._allow_replica_fallback(last_error):
+                raise last_error
+            provider = primary.provide_session if session else primary.provide_connection
+            async with cast("AbstractAsyncContextManager[Any]", provider(*args, **kwargs)) as value:
+                receipt.config = primary
+                yield value
+            return
+        msg = f"No healthy read replica available in group {self._name!r}"
+        raise ReplicaUnavailableError(msg) from last_error
 
 
 class _DriverFeatureHookWrapper:

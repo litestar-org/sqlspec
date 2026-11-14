@@ -80,6 +80,16 @@ Bind request IDs with `CorrelationContext` (or enable `enable_correlation_middle
 
 Setting `StatementConfig(enable_sqlcommenter=True)` appends W3C `traceparent` and `CorrelationContext` tags at wire dispatch time (`append_wire_sqlcomment`), keeping compiled SQL cache keys stable across requests so statement caching stays active. On Oracle (`python-oracledb`), `driver_features={"enable_session_tracing": True}` piggybacks `module`, `action`, `client_identifier`, and `econtext_id` onto the next TTC packet with zero extra round-trips.
 
+`get_w3c_trace_context()` returns `(traceparent, tracestate)` from the active span. It works with both recorded and propagated spans. With no valid span, it reads `SQLCommenterContext`. With no trace at all, it returns `(None, "")`.
+
+```python
+from sqlspec.observability import get_w3c_trace_context
+
+traceparent, tracestate = get_w3c_trace_context()
+```
+
+On Oracle 26ai, SQLSpec sends these headers through the native API when spans are enabled. It first checks `supports_opentelemetry_tracing`. The headers ride with the next request and add no trace-only call. Pool release clears them. Set `driver_features["enable_otel_trace_context"]=False` to opt out; the flag defaults to `True`. Older servers and Thick connections keep the existing session metadata path. When the native path sends W3C headers, SQLSpec omits the SQLCommenter suffix for that request. This avoids duplicate trace data. If you opt out, you can still enable SQLCommenter.
+
 ## DuckDB Statement Profiling
 
 On `DuckDBConfig` and DuckDB-backed `AdbcConfig`, setting `driver_features={"enable_statement_profiling": True}` captures per-statement JSON execution profiles onto `StatementEvent.profile` (along with `script_ordinal` and `script_statement_count` for multi-statement scripts).

@@ -1,10 +1,12 @@
 """arrow-odbc database configuration."""
 
+import contextlib
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
 from sqlspec.adapters.arrow_odbc._typing import (
     ArrowOdbcConnection,
+    ArrowOdbcError,
     ArrowOdbcSessionContext,
     TextEncoding,
     arrow_odbc_connect,
@@ -14,6 +16,7 @@ from sqlspec.adapters.arrow_odbc.core import (
     apply_driver_features,
     build_connection_config,
     build_statement_config,
+    create_mapped_exception,
     default_statement_config,
     resolve_dialect_from_dbms_name,
 )
@@ -23,7 +26,7 @@ from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_close
 
@@ -133,15 +136,16 @@ class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
         self._connection: ArrowOdbcConnection | None = None
 
     def __enter__(self) -> "ArrowOdbcConnection":
-        self._connection = self._config.create_connection()
+        self._connection = _open_arrow_odbc_connection(self._config)
         return cast("ArrowOdbcConnection", self._connection)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            _close_arrow_odbc_connection(self._connection)
+            connection = self._connection
             self._connection = None
+            _release_arrow_odbc_connection(self._config, connection, exc_type)
         return None
 
 
@@ -155,14 +159,20 @@ class _ArrowOdbcSessionConnectionHandler(SyncPoolSessionFactory):
         self._connection: ArrowOdbcConnection | None = None
 
     def acquire_connection(self) -> "ArrowOdbcConnection":
-        self._connection = self._config.create_connection()
+        self._connection = _open_arrow_odbc_connection(self._config)
         return cast("ArrowOdbcConnection", self._connection)
 
     def release_connection(self, _conn: "ArrowOdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
-        _close_arrow_odbc_connection(self._connection)
+        connection = self._connection
         self._connection = None
+        _release_arrow_odbc_connection(
+            self._config,
+            connection,
+            kwargs.get("exc_type"),
+            already_rolled_back=bool(kwargs.get("already_rolled_back", False)),
+        )
 
 
 class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
@@ -185,7 +195,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     _session_factory_class: "ClassVar[type[_ArrowOdbcSessionConnectionHandler]]" = _ArrowOdbcSessionConnectionHandler
     _session_context_class: "ClassVar[type[ArrowOdbcSessionContext]]" = ArrowOdbcSessionContext
     _default_statement_config = default_statement_config
-    __slots__ = ("_user_connection_hook",)
+    __slots__ = ("_explicit_driver_features", "_explicit_statement_config", "_user_connection_hook")
 
     def __init__(
         self,
@@ -202,26 +212,9 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     ) -> None:
         """Initialize arrow-odbc configuration."""
         normalized = normalize_connection_config(connection_config)
-        effective_config = dict(normalized)
-        extra = effective_config.get("extra")
-        if isinstance(extra, dict):
-            effective_config.update(extra)
-        provided_statement_config = statement_config
-        statement_config, features = apply_driver_features(
-            statement_config or default_statement_config, driver_features
-        )
-        connection_string = effective_config.get("connection_string")
-        if connection_string is not None:
-            features.setdefault("connection_string", str(connection_string))
-        if effective_config.get("driver") is not None:
-            features.setdefault("dbms_name", str(effective_config["driver"]))
-        elif effective_config.get("dsn") is not None and (
-            connection_string is None or resolve_dialect_from_dbms_name(str(connection_string)) == "sqlite"
-        ):
-            features.setdefault("dbms_name", str(effective_config["dsn"]))
-        features["connection_autocommit"] = bool(effective_config.get("autocommit", True))
-        if provided_statement_config is None:
-            statement_config = _resolve_statement_config(features)
+        self._explicit_driver_features = dict(driver_features or {})
+        self._explicit_statement_config = statement_config
+        statement_config, features = _prepare_arrow_odbc_features(normalized, statement_config, driver_features)
         self._user_connection_hook = cast(
             "Callable[[ArrowOdbcConnection], None] | None", features.pop("on_connection_create", None)
         )
@@ -238,6 +231,26 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             **kwargs,
         )
 
+    def derive_pool(self, **overrides: Any) -> Self:
+        """Derive a reader while recomputing generated endpoint and dialect settings."""
+        derived = super().derive_pool(**overrides)
+        explicit_features = dict(self._explicit_driver_features)
+        explicit_features.update(overrides.get("driver_features_overrides") or {})
+        explicit_features.update({
+            key: value
+            for key, value in overrides.items()
+            if key in self.driver_features or key == "on_connection_create"
+        })
+        explicit_statement = overrides.get("statement_config") or self._explicit_statement_config
+        derived._explicit_driver_features = explicit_features
+        derived._explicit_statement_config = explicit_statement
+        derived.statement_config, features = _prepare_arrow_odbc_features(
+            derived.connection_config, explicit_statement, explicit_features
+        )
+        derived._user_connection_hook = features.pop("on_connection_create", self._user_connection_hook)
+        derived.driver_features = features
+        return derived
+
     def create_connection(self) -> "ArrowOdbcConnection":
         """Create and return a new arrow-odbc connection."""
         if self.connection_instance is not None:
@@ -248,7 +261,12 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
             if self._user_connection_hook is not None:
-                self._user_connection_hook(connection)
+                try:
+                    self._user_connection_hook(connection)
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        _close_arrow_odbc_connection(connection)
+                    raise
             return cast("ArrowOdbcConnection", connection)
         except ImproperConfigurationError:
             raise
@@ -299,6 +317,33 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         """Return polling defaults suitable for generic ODBC sources."""
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        if "connection_string" in overrides:
+            for key in ("driver", "server", "host", "port", "database", "dsn", "uid", "pwd", "user", "password"):
+                if key not in overrides:
+                    config.pop(key, None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"connection_string": spec_input}}
+        if spec_input is True:
+            connection_string, _ = build_connection_config(self.connection_config)
+            database = {key.lower(): value for key, value in parse_odbc_connection_string(connection_string)}.get(
+                "database"
+            )
+            if (
+                _resolve_connection_dialect_hint(self.driver_features) != "mssql"
+                or not database
+                or not database.strip()
+            ):
+                msg = "ODBC read-only intent requires a SQL Server connection with a target database"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"application_intent": "ReadOnly"}}
+        return super()._build_replica_spec_overrides(spec_input)
+
 
 def _apply_driver_pooling(requested: bool) -> None:
     """Apply the ODBC driver manager's process-global connection pooling switch.
@@ -339,6 +384,27 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
         connection.close()
 
 
+def _release_arrow_odbc_connection(
+    config: "ArrowOdbcConfig",
+    connection: "ArrowOdbcConnection",
+    exc_type: "type[BaseException] | None",
+    *,
+    already_rolled_back: bool = False,
+) -> None:
+    """Close an owned connection, or roll back and preserve a caller-supplied connection_instance."""
+    if config.connection_instance is None or connection is not config.connection_instance:
+        _close_arrow_odbc_connection(connection)
+        return
+    assert connection is not None
+    if already_rolled_back or config.driver_features.get("connection_autocommit", True):
+        return
+    try:
+        connection.rollback()
+    except BaseException:
+        if exc_type is None:
+            raise
+
+
 def _resolve_connection_dialect_hint(features: "Mapping[str, Any]") -> str | None:
     for key in ("dbms_name", "connection_string"):
         value = features.get(key)
@@ -350,6 +416,25 @@ def _resolve_connection_dialect_hint(features: "Mapping[str, Any]") -> str | Non
     return None
 
 
+def _prepare_arrow_odbc_features(
+    normalized: dict[str, Any], statement_config: "StatementConfig | None", driver_features: "Mapping[str, Any] | None"
+) -> tuple["StatementConfig", dict[str, Any]]:
+    effective = dict(normalized)
+    extra = effective.get("extra")
+    if isinstance(extra, dict):
+        effective.update(extra)
+    configured, features = apply_driver_features(statement_config or default_statement_config, driver_features)
+    if effective:
+        connection_string, _ = build_connection_config(effective)
+        features.setdefault("connection_string", connection_string)
+    if effective.get("driver") is not None:
+        features.setdefault("dbms_name", str(effective["driver"]))
+    elif effective.get("dsn") is not None:
+        features.setdefault("dbms_name", str(effective["dsn"]))
+    features["connection_autocommit"] = bool(effective.get("autocommit", True))
+    return (configured if statement_config is not None else _resolve_statement_config(features)), features
+
+
 def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
     dialect = _resolve_connection_dialect_hint(features) or "sqlite"
     if dialect == "sqlite":
@@ -357,3 +442,12 @@ def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
     if dialect == "mssql":
         return _apply_json_serializer_override(build_statement_config(dialect="tsql"), features)
     return _apply_json_serializer_override(build_statement_config(dialect=dialect), features)
+
+
+def _open_arrow_odbc_connection(config: "ArrowOdbcConfig") -> "ArrowOdbcConnection":
+    try:
+        return config.create_connection()
+    except ImproperConfigurationError as exc:
+        if isinstance(exc.__cause__, ArrowOdbcError):
+            raise create_mapped_exception(exc.__cause__) from exc.__cause__
+        raise

@@ -23,6 +23,7 @@ from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorAsyncStreamSource,
     MysqlConnectorSyncStreamSource,
     _resolve_column_types,
+    build_gtid_wait_query,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -123,6 +124,21 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = MysqlConnectorSyncDataDictionary()
         return self._data_dictionary
+
+    def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)
@@ -393,6 +409,21 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = MysqlConnectorAsyncDataDictionary()
         return self._data_dictionary
+
+    async def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = await self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, statement.statement_config)

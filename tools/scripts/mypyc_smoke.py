@@ -31,6 +31,9 @@ class SmokeImport(NamedTuple):
 
 
 SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
+    SmokeImport("oracle_core", "sqlspec.adapters.oracledb.core", "OracleAcquireOptions", True, "oracledb"),
+    SmokeImport("oracle_type_converter", "sqlspec.adapters.oracledb.type_converter", None, True, "oracledb"),
+    SmokeImport("observability_common", "sqlspec.observability._common", "get_w3c_trace_context", True),
     SmokeImport("teradata_dialect", "sqlspec.dialects.teradata", "Vantage"),
     SmokeImport("teradata_generators", "sqlspec.dialects.teradata._generators", "teradata_dispatch", True),
     SmokeImport("teradata_dd_config", "sqlspec.data_dictionary.dialects.teradata.config", "TERADATA_CONFIG", True),
@@ -41,6 +44,10 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("base_sqlspec", "sqlspec.base", "SQLSpec", True),
     SmokeImport("prometheus_observer", "sqlspec.extensions.prometheus._observer", "PrometheusStatementObserver", True),
     SmokeImport("async_bridge", "sqlspec.utils.sync_tools", "async_", True),
+    SmokeImport("core_routing", "sqlspec.core.routing", "ReplicaSpec", True),
+    SmokeImport("routing_context", "sqlspec.utils.routing", "RoutingContext"),
+    SmokeImport("driver_routing", "sqlspec.driver._routing", "SyncRoutingSession"),
+    SmokeImport("deferred_session", "sqlspec.extensions._deferred_session", "DeferredAsyncSession"),
     SmokeImport("core_statement", "sqlspec.core.statement", "SQL", True),
     SmokeImport("builder_select", "sqlspec.builder._select", "Select", True),
     SmokeImport("env_utils", "sqlspec.utils.env", "get_env", True),
@@ -107,6 +114,101 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
 )
 
 
+def is_compiled_module(module: Any) -> bool:
+    """Return whether an imported module appears to be a compiled extension."""
+    module_file = getattr(module, "__file__", "") or ""
+    return module_file.endswith(COMPILED_SUFFIXES)
+
+
+def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
+    """Import the compiled-wheel smoke matrix and return per-entry results."""
+    results: list[dict[str, Any]] = []
+    for entry in SMOKE_IMPORTS:
+        result: dict[str, Any] = {
+            "name": entry.name,
+            "module": entry.module,
+            "attribute": entry.attribute,
+            "imported": False,
+            "compiled": False,
+            "compiled_required": require_compiled and entry.require_compiled,
+            "error": None,
+            "skipped": False,
+            "skip_reason": None,
+        }
+        try:
+            module = importlib.import_module(entry.module)
+            if entry.attribute is not None:
+                getattr(module, entry.attribute)
+            result["imported"] = True
+            result["compiled"] = is_compiled_module(module)
+            if require_compiled and entry.require_compiled and not result["compiled"]:
+                result["error"] = "module was imported from Python source, not a compiled extension"
+        except ModuleNotFoundError as exc:
+            missing_name = exc.name or ""
+            optional_dependency = entry.optional_dependency
+            if _is_missing_optional_dependency(missing_name, optional_dependency):
+                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
+                    result["error"] = "compiled extension is missing from the installed package"
+                else:
+                    result["skipped"] = True
+                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+            else:
+                result["error"] = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        results.append(result)
+    return results
+
+
+def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
+    """Run construction-time smoke checks for provider classes."""
+    return [
+        *[
+            _check_public_import_order(order, require_compiled=require_compiled)
+            for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
+        ],
+        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
+        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
+        _check_migration_first_use(require_compiled=require_compiled),
+        _check_extension_reconciliation(require_compiled=require_compiled),
+        _check_litestar_openapi(require_compiled=require_compiled),
+        _check_sqlspec_construction(),
+        _check_tenant_lease_boundary(require_compiled=require_compiled),
+        _check_session_routing_boundary(require_compiled=require_compiled),
+        _check_oracle_26ai_boundary(require_compiled=require_compiled),
+        _check_adapter_config_construction(),
+        _check_statement_sentinel_identity(require_compiled=require_compiled),
+        _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_obstore_arrow_reads(require_compiled=require_compiled),
+        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
+        _check_service_subclasses(require_compiled=require_compiled),
+        _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
+        _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
+        _check_fastapi_filter_construction(require_compiled=require_compiled),
+        _check_litestar_filter_construction(require_compiled=require_compiled),
+    ]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the mypyc smoke CLI."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--require-compiled", action="store_true", help="Fail when compiled-surface modules import from Python source."
+    )
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
+    args = parser.parse_args(argv)
+
+    results = run_smoke(require_compiled=args.require_compiled)
+    results.extend(run_construction_checks(require_compiled=args.require_compiled))
+    if args.json:
+        json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(_format_text(results))
+        sys.stdout.write("\n")
+    return 1 if _failed_results(results) else 0
+
+
 def _new_smoke_result(
     *, name: str, module: str, attribute: str | None, compiled_required: bool = False
 ) -> dict[str, Any]:
@@ -121,12 +223,6 @@ def _new_smoke_result(
         "skipped": False,
         "skip_reason": None,
     }
-
-
-def is_compiled_module(module: Any) -> bool:
-    """Return whether an imported module appears to be a compiled extension."""
-    module_file = getattr(module, "__file__", "") or ""
-    return module_file.endswith(COMPILED_SUFFIXES)
 
 
 def _has_compiled_module_file(module_name: str) -> bool:
@@ -914,46 +1010,6 @@ print("ambient:ok")
     return result
 
 
-def run_smoke(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Import the compiled-wheel smoke matrix and return per-entry results."""
-    results: list[dict[str, Any]] = []
-    for entry in SMOKE_IMPORTS:
-        result: dict[str, Any] = {
-            "name": entry.name,
-            "module": entry.module,
-            "attribute": entry.attribute,
-            "imported": False,
-            "compiled": False,
-            "compiled_required": require_compiled and entry.require_compiled,
-            "error": None,
-            "skipped": False,
-            "skip_reason": None,
-        }
-        try:
-            module = importlib.import_module(entry.module)
-            if entry.attribute is not None:
-                getattr(module, entry.attribute)
-            result["imported"] = True
-            result["compiled"] = is_compiled_module(module)
-            if require_compiled and entry.require_compiled and not result["compiled"]:
-                result["error"] = "module was imported from Python source, not a compiled extension"
-        except ModuleNotFoundError as exc:
-            missing_name = exc.name or ""
-            optional_dependency = entry.optional_dependency
-            if _is_missing_optional_dependency(missing_name, optional_dependency):
-                if require_compiled and entry.require_compiled and not _has_compiled_module_file(entry.module):
-                    result["error"] = "compiled extension is missing from the installed package"
-                else:
-                    result["skipped"] = True
-                    result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
-            else:
-                result["error"] = f"{type(exc).__name__}: {exc}"
-        except Exception as exc:
-            result["error"] = f"{type(exc).__name__}: {exc}"
-        results.append(result)
-    return results
-
-
 def _check_litestar_filter_construction(*, require_compiled: bool = False) -> dict[str, Any]:
     """Construct every paired-annotation Litestar filter provider (issue #475).
 
@@ -1217,9 +1273,9 @@ class AppSyncService(SQLSpecSyncService[SqliteDriver]):
         super().__init__(config=config)
         self.calls = 0
 
-    def provide_session(self, session=None):
+    def provide_session(self, session=None, *, read_only=False):
         self.calls += 1
-        return super().provide_session(session)
+        return super().provide_session(session, read_only=read_only)
 
 
 class SyncService(AppSyncService):
@@ -1233,9 +1289,9 @@ class AppAsyncService(SQLSpecAsyncService[AiosqliteDriver]):
         super().__init__(config=config)
         self.calls = 0
 
-    def provide_session(self, session=None):
+    def provide_session(self, session=None, *, read_only=False):
         self.calls += 1
-        return super().provide_session(session)
+        return super().provide_session(session, read_only=read_only)
 
 
 class AsyncService(AppAsyncService):
@@ -1289,6 +1345,14 @@ async def main():
 asyncio.run(main())
 print("service-subclasses:ok")
 """
+    if not require_compiled:
+        package = importlib.import_module("sqlspec")
+        source_file = package.__file__
+        if source_file is None:
+            result["error"] = "SQLSpec package origin is unavailable"
+            return result
+        source_root = str(Path(source_file).resolve().parent.parent)
+        child_script = f"import sys; sys.path.insert(0, {source_root!r})\n" + child_script
     try:
         completed = subprocess.run(
             [sys.executable, "-I", "-c", child_script, "compiled" if require_compiled else "source"],
@@ -1731,7 +1795,7 @@ def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, 
     """Build an interpreted subclass of a compiled lease that routes its hooks to callables."""
     acquire, release, invalidate, finish = hooks
 
-    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc,name-defined]
+    class SyncLease(leases.SyncTenantLease):  # type: ignore[misc]
         __slots__ = ()
 
         def _acquire(self) -> object:
@@ -1746,7 +1810,7 @@ def _smoke_tenant_lease(leases: Any, strategy: Any, hooks: tuple[Any, Any, Any, 
         def _finish_transaction(self, conn: object, exc_type: type[BaseException] | None) -> None:
             finish(conn, exc_type)
 
-    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc,name-defined]
+    class AsyncLease(leases.AsyncTenantLease):  # type: ignore[misc]
         __slots__ = ()
 
         async def _acquire(self) -> object:
@@ -1899,31 +1963,223 @@ def _check_tenant_lease_boundary(*, require_compiled: bool = False) -> dict[str,
     return result
 
 
-def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
-    """Run construction-time smoke checks for provider classes."""
-    return [
-        *[
-            _check_public_import_order(order, require_compiled=require_compiled)
-            for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
-        ],
-        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
-        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
-        _check_migration_first_use(require_compiled=require_compiled),
-        _check_extension_reconciliation(require_compiled=require_compiled),
-        _check_litestar_openapi(require_compiled=require_compiled),
-        _check_sqlspec_construction(),
-        _check_tenant_lease_boundary(require_compiled=require_compiled),
-        _check_adapter_config_construction(),
-        _check_statement_sentinel_identity(require_compiled=require_compiled),
-        _check_statement_cache_rebind(require_compiled=require_compiled),
-        _check_obstore_arrow_reads(require_compiled=require_compiled),
-        _check_pipeline_arrow_streaming(require_compiled=require_compiled),
-        _check_service_subclasses(require_compiled=require_compiled),
-        _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
-        _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
-        _check_fastapi_filter_construction(require_compiled=require_compiled),
-        _check_litestar_filter_construction(require_compiled=require_compiled),
-    ]
+def _check_oracle_26ai_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise Oracle native helpers through interpreted config and SDK boundaries."""
+    result = _new_smoke_result(
+        name="oracle_26ai_boundary",
+        module="sqlspec.adapters.oracledb.core",
+        attribute="OracleAcquireOptions",
+        compiled_required=require_compiled,
+    )
+    try:
+        sdk = importlib.import_module("oracledb")
+    except ImportError:
+        result.update(skipped=True, skip_reason="oracledb not installed")
+        return result
+    try:
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, Mock
+
+        from sqlspec.adapters.oracledb import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
+
+        oracle = importlib.import_module("sqlspec.adapters.oracledb")
+        core = importlib.import_module("sqlspec.adapters.oracledb.core")
+        tenant = importlib.import_module("sqlspec.adapters.oracledb.tenant")
+        common = importlib.import_module("sqlspec.observability._common")
+        contracts = importlib.import_module("sqlspec.utils.tenant")
+        errors = importlib.import_module("sqlspec.exceptions")
+        result["imported"] = True
+        result["compiled"] = all(is_compiled_module(module) for module in (core, tenant, common))
+        if require_compiled and not result["compiled"]:
+            raise AssertionError("Oracle core, tenant strategies and observability helpers must be native")
+        for config_type in (oracle.OracleSyncConfig, oracle.OracleAsyncConfig):
+            namespace = config_type().get_signature_namespace()
+            assert (
+                namespace["OracleSyncSessionlessTransactionContext"] is oracle.OracleSyncSessionlessTransactionContext
+            )
+            assert (
+                namespace["OracleAsyncSessionlessTransactionContext"] is oracle.OracleAsyncSessionlessTransactionContext
+            )
+        options = oracle.OracleAcquireOptions(sharding_key=("tenant",), purity="SELF")
+        assert options.sharding_key == ["tenant"]
+        assert options == core.OracleAcquireOptions(sharding_key=["tenant"], purity="SELF")
+        assert core.synthesize_session_state_tag(core.OracleSessionContextConfig(time_zone="UTC")) == "TIME_ZONE=UTC"
+        assert common.get_w3c_trace_context() == (None, "")
+        if importlib.util.find_spec("opentelemetry") is not None:
+            from opentelemetry import trace
+            from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+            propagated = SpanContext(trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(0))
+            with trace.use_span(NonRecordingSpan(propagated)):
+                traceparent, _ = common.get_w3c_trace_context()
+                assert traceparent is not None
+                assert traceparent.endswith("-00")
+
+        class FailedSyncStrategy(OracleSyncClientContextStrategy):
+            __slots__ = ()
+
+            def checkin(self, connection: Any, state: Any) -> None:
+                raise RuntimeError("cleanup failed")
+
+        class FailedAsyncStrategy(OracleAsyncClientContextStrategy):
+            __slots__ = ()
+
+            async def checkin(self, connection: Any, state: Any) -> None:
+                raise RuntimeError("cleanup failed")
+
+        async def cases() -> None:
+            for asynchronous in (False, True):
+                native = AsyncMock if asynchronous else Mock
+                for failure in (False, True):
+                    connection = SimpleNamespace(
+                        thin=True,
+                        version="23.26.3",
+                        transaction_priority=sdk.TransactionPriority.HIGH,
+                        set_app_context=Mock(),
+                        clear_app_context=Mock(),
+                        rollback=native(),
+                        begin_sessionless_transaction=native(return_value=b"txn"),
+                        suspend_sessionless_transaction=native(),
+                        transaction_in_progress=False,
+                        run_pipeline=None,
+                    )
+                    pool = MagicMock()
+                    pool.thin = True
+                    pool.acquire = native(return_value=connection)
+                    pool.release, pool.drop = native(), native()
+                    if asynchronous:
+                        strategy = FailedAsyncStrategy() if failure else oracle.OracleAsyncClientContextStrategy()
+                        config = oracle.OracleAsyncConfig(
+                            connection_instance=pool, driver_features={"tenant_strategy": strategy}
+                        )
+                    else:
+                        strategy = FailedSyncStrategy() if failure else oracle.OracleSyncClientContextStrategy()
+                        config = oracle.OracleSyncConfig(
+                            connection_instance=pool, driver_features={"tenant_strategy": strategy}
+                        )
+                    failed = False
+                    with contracts.TenantContext.scope("tenant"):
+                        try:
+                            if asynchronous:
+                                async with (
+                                    config.provide_session() as session,
+                                    session.sessionless_transaction() as transaction_id,
+                                ):
+                                    assert transaction_id == b"txn"
+                            else:
+                                with (
+                                    config.provide_session() as session,
+                                    session.sessionless_transaction() as transaction_id,
+                                ):
+                                    assert transaction_id == b"txn"
+                        except errors.TenantCleanupError:
+                            failed = True
+                    assert failed is failure
+                    if failure:
+                        pool.drop.assert_called_once_with(connection)
+                        pool.release.assert_not_called()
+                    else:
+                        pool.release.assert_called_once_with(connection)
+                        connection.clear_app_context.assert_called_once_with("CLIENTCONTEXT")
+                    connection.suspend_sessionless_transaction.assert_called_once_with()
+
+        asyncio.run(cases())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _check_session_routing_boundary(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise compiled classification with interpreted routing facades and native WAL readers."""
+    result = _new_smoke_result(
+        name="session_routing_boundary",
+        module="sqlspec.core.routing",
+        attribute="ReplicaSpec",
+        compiled_required=require_compiled,
+    )
+    expected_count = 2
+    try:
+        core = importlib.import_module("sqlspec.core.routing")
+        errors = importlib.import_module("sqlspec.exceptions")
+        registry_module = importlib.import_module("sqlspec.base")
+        context = importlib.import_module("sqlspec.utils.routing")
+        statements = importlib.import_module("sqlspec.core.statement")
+        services = importlib.import_module("sqlspec.service")
+        sqlite = importlib.import_module("sqlspec.adapters.sqlite")
+        result["imported"] = True
+        result["compiled"] = is_compiled_module(core)
+        if require_compiled:
+            assert is_compiled_module(core)
+            assert is_compiled_module(errors)
+            for module_name in (
+                "sqlspec.utils.routing",
+                "sqlspec.driver._routing",
+                "sqlspec.extensions._deferred_session",
+                "sqlspec.service._base",
+            ):
+                assert not is_compiled_module(importlib.import_module(module_name)), module_name
+        assert statements.SQL("SELECT 1").is_read_only()
+        assert not statements.SQL("SELECT nextval('sequence')", dialect="postgres").is_read_only()
+        with tempfile.TemporaryDirectory() as directory:
+            config = sqlite.SqliteConfig(
+                connection_config={"database": str(Path(directory) / "routing.db")}, replicas=True
+            )
+            registry = registry_module.SQLSpec()
+            registry.add_config(config)
+            try:
+                with registry.provide_session(config) as writer:
+                    writer.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY)")
+                    writer.execute("INSERT INTO entries VALUES (1)")
+                    writer.commit()
+                with registry.provide_read_session(config) as reader:
+                    assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+                    try:
+                        reader.execute("INSERT INTO entries VALUES (2)")
+                    except errors.ReadOnlyTransactionError:
+                        pass
+                    else:
+                        raise AssertionError("Read provider accepted a write")
+                with context.RoutingContext.scope(), registry.provide_routing_session(config) as routing:
+                    assert routing.select_value("SELECT COUNT(*) FROM entries") == 1
+                    routing.execute("INSERT INTO entries VALUES (2)")
+                    routing.commit()
+                    assert routing.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                service = services.SQLSpecSyncService(config=config)
+                with service.provide_session(read_only=True) as reader:
+                    assert reader.select_value("SELECT COUNT(*) FROM entries") == expected_count
+            finally:
+                config.close_pool()
+            if importlib.util.find_spec("aiosqlite") is not None:
+                asynchronous = importlib.import_module("sqlspec.adapters.aiosqlite")
+
+                async def run_async() -> None:
+                    config = asynchronous.AiosqliteConfig(
+                        connection_config={"database": str(Path(directory) / "async.db")}, replicas=True
+                    )
+                    registry = registry_module.SQLSpec()
+                    registry.add_config(config)
+                    try:
+                        async with registry.provide_session(config) as writer:
+                            await writer.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY)")
+                            await writer.execute("INSERT INTO entries VALUES (1)")
+                            await writer.commit()
+                        async with context.RoutingContext.scope(), registry.provide_routing_session(config) as routing:
+                            assert await routing.select_value("SELECT COUNT(*) FROM entries") == 1
+                            async with routing.select_stream("SELECT id FROM entries") as stream:
+                                assert [row async for row in stream] == [{"id": 1}]
+                            await routing.execute("INSERT INTO entries VALUES (2)")
+                            await routing.commit()
+                            assert await routing.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                        service = services.SQLSpecAsyncService(config=config)
+                        async with service.provide_session(read_only=True) as reader:
+                            assert await reader.select_value("SELECT COUNT(*) FROM entries") == expected_count
+                    finally:
+                        await config.close_pool()
+
+                asyncio.run(run_async())
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def _failed_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1948,26 +2204,6 @@ def _format_text(results: list[dict[str, Any]]) -> str:
         if result["error"] is not None:
             lines.append(f"  {result['error']}")
     return "\n".join(lines)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the mypyc smoke CLI."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--require-compiled", action="store_true", help="Fail when compiled-surface modules import from Python source."
-    )
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
-    args = parser.parse_args(argv)
-
-    results = run_smoke(require_compiled=args.require_compiled)
-    results.extend(run_construction_checks(require_compiled=args.require_compiled))
-    if args.json:
-        json.dump({"results": results}, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-    else:
-        sys.stdout.write(_format_text(results))
-        sys.stdout.write("\n")
-    return 1 if _failed_results(results) else 0
 
 
 if __name__ == "__main__":  # pragma: no cover

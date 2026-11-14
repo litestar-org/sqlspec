@@ -25,7 +25,7 @@ from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectionPool as Async
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncNullConnectionPool as AsyncNullConnectionPool
 from sqlspec.adapters.psycopg._typing import PsycopgConnectionPool as ConnectionPool
 from sqlspec.adapters.psycopg._typing import PsycopgNullConnectionPool as NullConnectionPool
-from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.psycopg.core import apply_driver_features, create_mapped_exception, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
@@ -95,6 +95,25 @@ __all__ = (
 
 PsycopgSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 _ALLOYDB_DIRECT_CONNECTION_KEYS = ("conninfo", "host", "hostaddr", "port", "user", "password", "dbname", "db")
+_PSYCOPG_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "conninfo",
+    "dsn",
+    "url",
+    "connection_string",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "database",
+    "db",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "auth_token_provider",
     "check",
@@ -125,8 +144,12 @@ class PsycopgConnectionParams(TypedDict):
     """PostgreSQL libpq connection URI or keyword/value conninfo string."""
     host: NotRequired[str]
     """Database server hostname or Unix socket directory."""
-    port: NotRequired[int]
-    """Database server TCP port (defaults to ``5432``)."""
+    port: NotRequired[int | str]
+    """Server port or comma-separated multi-host ports (defaults to ``5432``)."""
+    target_session_attrs: NotRequired[Literal["any", "read-write", "read-only", "primary", "standby", "prefer-standby"]]
+    """Required server role for multi-host libpq connections."""
+    load_balance_hosts: NotRequired[Literal["disable", "random"]]
+    """Host connection ordering policy across multi-host targets."""
     user: NotRequired[str]
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
@@ -251,18 +274,13 @@ def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str,
     that libpq rejects.
     """
     config = normalize_connection_config(connection_config)
-    conninfo = (
-        config.pop("conninfo", None)
-        or config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    conninfo = _pop_first_alias(config, ("conninfo", "dsn", "url", "connection_string"))
     if conninfo is not None:
         config["conninfo"] = conninfo
-    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    dbname = _pop_first_alias(config, ("dbname", "database", "db"))
     if dbname is not None:
         config["dbname"] = dbname
-    user = config.pop("user", None) or config.pop("username", None)
+    user = _pop_first_alias(config, ("user", "username"))
     if user is not None:
         config["user"] = user
     return config
@@ -276,8 +294,12 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> "PsycopgSyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -299,8 +321,12 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
     def acquire_connection(self) -> "PsycopgSyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -382,6 +408,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
         pooler_mode = features_dict.get("pooler_mode", "session")
         is_transaction_pooler = pooler_mode in {"transaction", "statement"}
+        self._explicit_prepare_threshold = "prepare_threshold" in connection_config
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -428,8 +455,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             return self
         conn_cfg = dict(self.connection_config)
         if isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "conninfo" in normalized_direct:
+                _strip_psycopg_endpoint_identity(conn_cfg)
+            conn_cfg.update(normalized_direct)
         else:
+            _strip_psycopg_endpoint_identity(conn_cfg)
             conn_cfg["conninfo"] = str(direct_dsn)
         is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
@@ -568,6 +599,18 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        return _prepare_psycopg_derived_config(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return _build_psycopg_replica_string_overrides(spec_input)
+        return super()._build_replica_spec_overrides(spec_input)
+
     def _validate_alloydb_config(self) -> None:
         """Validate sync-only AlloyDB connector configuration."""
         if not self.driver_features.get("enable_alloydb", False):
@@ -678,10 +721,13 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
-        if conninfo:
-            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
-        else:
-            pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        try:
+            if conninfo:
+                pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
+            else:
+                pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        except _psycopg_typing.psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
         return pool
 
@@ -795,9 +841,13 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> "PsycopgAsyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -823,9 +873,13 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     async def acquire_connection(self) -> "PsycopgAsyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -907,6 +961,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         )
         pooler_mode = features_dict.get("pooler_mode", "session")
         is_transaction_pooler = pooler_mode in {"transaction", "statement"}
+        self._explicit_prepare_threshold = "prepare_threshold" in connection_config
         if is_transaction_pooler:
             connection_config.setdefault("prepare_threshold", None)
         if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
@@ -950,8 +1005,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             return self
         conn_cfg = dict(self.connection_config)
         if isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "conninfo" in normalized_direct:
+                _strip_psycopg_endpoint_identity(conn_cfg)
+            conn_cfg.update(normalized_direct)
         else:
+            _strip_psycopg_endpoint_identity(conn_cfg)
             conn_cfg["conninfo"] = str(direct_dsn)
         is_pooled = self.driver_features.get("pooler_mode") in {"transaction", "statement"}
         if is_pooled and conn_cfg.get("prepare_threshold") is None:
@@ -1093,6 +1152,18 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        return _prepare_psycopg_derived_config(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return _build_psycopg_replica_string_overrides(spec_input)
+        return super()._build_replica_spec_overrides(spec_input)
+
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
@@ -1148,13 +1219,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
-        if conninfo:
-            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
-        else:
-            pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        try:
+            if conninfo:
+                pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
+            else:
+                pool = pool_cls("", kwargs=all_config, **pool_parameters)
 
-        if open_pool is True:
-            await pool.open()
+            if open_pool is True:
+                await pool.open()
+        except _psycopg_typing.psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
         return pool
 
@@ -1330,3 +1404,59 @@ def _make_token_provider_async_connection_class(
             return cast("Self", await super().connect(conninfo, **kwargs))
 
     return _TokenProviderPsycopgAsyncConnection
+
+
+def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+    """Pop every alias key from config and return the first non-None value."""
+    found = None
+    for alias in aliases:
+        value = config.pop(alias, None)
+        if found is None and value is not None:
+            found = value
+    return found
+
+
+def _strip_psycopg_endpoint_identity(config: "dict[str, Any]") -> None:
+    """Remove inherited endpoint identity fields from config and nested kwargs."""
+    for key in _PSYCOPG_ENDPOINT_IDENTITY_KEYS:
+        config.pop(key, None)
+    nested_kwargs = config.get("kwargs")
+    if isinstance(nested_kwargs, dict):
+        cleaned = dict(nested_kwargs)
+        for key in _PSYCOPG_ENDPOINT_IDENTITY_KEYS:
+            cleaned.pop(key, None)
+        if cleaned:
+            config["kwargs"] = cleaned
+        else:
+            config.pop("kwargs", None)
+
+
+def _prepare_psycopg_derived_config(config: "dict[str, Any]", overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize derived connection overrides and prevent stale endpoint leakage."""
+    aliases = ("conninfo", "dsn", "url", "connection_string")
+    explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+    if any(key in overrides for key in aliases):
+        _strip_psycopg_endpoint_identity(config)
+        for key, value in overrides.items():
+            if key in _PSYCOPG_ENDPOINT_IDENTITY_KEYS and key not in aliases:
+                config[key] = value
+        if explicit_dsn is not None:
+            config["conninfo"] = explicit_dsn
+    if "dbname" not in overrides and ("database" in overrides or "db" in overrides):
+        config["dbname"] = overrides.get("database", overrides.get("db"))
+    config.pop("database", None)
+    config.pop("db", None)
+    if "user" not in overrides and "username" in overrides:
+        config["user"] = overrides["username"]
+    config.pop("username", None)
+    return config
+
+
+def _build_psycopg_replica_string_overrides(spec_input: str) -> dict[str, Any]:
+    """Map string replica shorthand to conninfo or host overrides."""
+    endpoint = spec_input.strip()
+    if not endpoint:
+        msg = "Psycopg replica endpoint must not be empty"
+        raise ImproperConfigurationError(msg)
+    key = "conninfo" if ("://" in endpoint or "=" in endpoint) else "host"
+    return {"connection_config_overrides": {key: endpoint}}

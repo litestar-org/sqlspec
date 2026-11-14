@@ -3,9 +3,17 @@
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
-from sqlspec.adapters.snowflake.core import apply_driver_features, default_statement_config, normalize_connection_params
+from sqlspec.adapters.snowflake.core import (
+    apply_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+    is_snowflake_error,
+    merge_snowflake_derive_overrides,
+    normalize_connection_params,
+)
 from sqlspec.adapters.snowflake.driver import SnowflakeDriver
 from sqlspec.adapters.snowflake.migrations import SnowflakeSyncMigrationTracker
 from sqlspec.adapters.snowflake.pool import SnowflakeConnectionPool
@@ -237,30 +245,20 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
         connector = import_optional("snowflake.connector")
         if connector is None:
             raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
-        connection = cast(
-            "SnowflakeConnection", connector.connect(**normalize_connection_params(self.connection_config))
-        )
+        try:
+            connection = cast(
+                "SnowflakeConnection", connector.connect(**normalize_connection_params(self.connection_config))
+            )
+        except Exception as exc:
+            if is_snowflake_error(exc):
+                raise create_mapped_exception(exc) from exc
+            raise
         try:
             self.get_observability_runtime().emit_connection_create_sync(connection)
         except BaseException:
             connection.close()
             raise
         return connection
-
-    def _create_pool(self) -> SnowflakeConnectionPool:
-        return SnowflakeConnectionPool(
-            self.connection_config,
-            min_size=self.connection_config.get("pool_min_size", 0),
-            max_size=self.connection_config.get("pool_max_size", 5),
-            timeout=self.connection_config.get("pool_timeout", 30.0),
-            recycle_seconds=self.connection_config.get("pool_recycle_seconds", 3600),
-            health_check_interval=self.connection_config.get("health_check_interval", 60.0),
-            observability_runtime=self.get_observability_runtime(),
-        )
-
-    def _close_pool(self) -> None:
-        if self.connection_instance is not None:
-            self.connection_instance.close()
 
     def get_event_runtime_hints(self) -> EventRuntimeHints:
         """Return polling and lease defaults suitable for Snowflake warehouses."""
@@ -285,3 +283,51 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
             "SnowflakePoolSessionFactory": SnowflakePoolSessionFactory,
         })
         return namespace
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return merge_snowflake_derive_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(spec_input, str):
+            return super()._build_replica_spec_overrides(spec_input)
+        if spec_input.startswith("snowflake://"):
+            parsed = urlsplit(spec_input)
+            if not parsed.hostname:
+                msg = "Snowflake replica URLs require an account"
+                raise ImproperConfigurationError(msg)
+            options: dict[str, Any] = {"account": parsed.hostname}
+            if parsed.username is not None:
+                options["user"] = unquote(parsed.username)
+            if parsed.password is not None:
+                options["password"] = unquote(parsed.password)
+                options["auth_type"] = "password"
+            parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+            path_keys = ("database", "schema")
+            if len(parts) > len(path_keys):
+                msg = "Snowflake replica URLs support database and schema path segments"
+                raise ImproperConfigurationError(msg)
+            options.update(dict(zip(path_keys, parts, strict=False)))
+            options.update(parse_qsl(parsed.query))
+        else:
+            if not spec_input or "://" in spec_input:
+                msg = "Snowflake replicas require a warehouse name or snowflake:// URL"
+                raise ImproperConfigurationError(msg)
+            options = {"warehouse": spec_input}
+        return {"connection_config_overrides": options}
+
+    def _create_pool(self) -> SnowflakeConnectionPool:
+        return SnowflakeConnectionPool(
+            self.connection_config,
+            min_size=self.connection_config.get("pool_min_size", 0),
+            max_size=self.connection_config.get("pool_max_size", 5),
+            timeout=self.connection_config.get("pool_timeout", 30.0),
+            recycle_seconds=self.connection_config.get("pool_recycle_seconds", 3600),
+            health_check_interval=self.connection_config.get("health_check_interval", 60.0),
+            observability_runtime=self.get_observability_runtime(),
+        )
+
+    def _close_pool(self) -> None:
+        if self.connection_instance is not None:
+            self.connection_instance.close()

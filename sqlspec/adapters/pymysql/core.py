@@ -1,6 +1,7 @@
 """PyMySQL adapter compiled helpers."""
 
 import contextlib
+import math
 from collections.abc import Callable, Mapping, Sequence, Sized
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -15,16 +16,19 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_mysql_dsn
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
@@ -38,6 +42,7 @@ __all__ = (
     "PyMysqlStreamSource",
     "_resolve_column_types",
     "apply_driver_features",
+    "build_gtid_wait_query",
     "build_insert_statement",
     "build_load_data_statement",
     "build_profile",
@@ -51,9 +56,11 @@ __all__ = (
     "encode_records_for_local_infile",
     "escape_literal_percent",
     "format_identifier",
+    "merge_derive_overrides",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "parse_mysql_replica_shorthand",
     "resolve_many_rowcount",
     "resolve_row_plan",
     "resolve_rowcount",
@@ -61,6 +68,7 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.pymysql")
 
+MYSQL_ER_OPTION_PREVENTS_STATEMENT: Final[int] = 1290
 MYSQL_ER_DUP_ENTRY: Final[int] = 1062
 MYSQL_ER_NO_DEFAULT_FOR_FIELD: Final[int] = 1364
 MYSQL_ER_CHECK_CONSTRAINT_VIOLATED: Final[int] = 3819
@@ -123,6 +131,7 @@ _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str
     3024: (QueryTimeoutError, "query execution timeout"),
 }
 _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1040: (DatabaseConnectionError, "too many connections"),
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
@@ -181,17 +190,6 @@ class PyMysqlStreamSource:
         self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    def _start(self) -> None:
-        try:
-            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
-            self._cursor = cursor
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-            self.column_types = _resolve_column_types(self._cursor.description)
-        except BaseException:
-            self.close(error=True)
-            raise
-
     def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows = self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -208,6 +206,17 @@ class PyMysqlStreamSource:
         if cursor is not None:
             with contextlib.suppress(Exception):
                 cursor.close()
+
+    def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
+            self._cursor = cursor
+            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            self.column_types = _resolve_column_types(self._cursor.description)
+        except BaseException:
+            self.close(error=True)
+            raise
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -472,6 +481,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     sqlstate = error.sqlstate if has_sqlstate(error) else None
     sqlstate_prefix = sqlstate[:2] if isinstance(sqlstate, str) and sqlstate else None
 
+    read_only_message = str(error).lower().replace("-", "_")
+    if (
+        sqlstate == "25006"
+        or error_code in {1792, 1836}
+        or (error_code == MYSQL_ER_OPTION_PREVENTS_STATEMENT and "read_only" in read_only_message)
+    ):
+        return _create_mysql_error(error, sqlstate, error_code, ReadOnlyTransactionError, "read-only transaction")
+
     dispatch = _MYSQL_DDL_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
@@ -522,6 +539,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    type_name = type(error).__name__
+    if type_name == "PoolError" or "PoolError" in str(type(error)):
+        return _create_mysql_error(error, sqlstate, error_code, ConnectionTimeoutError, "connection pool error")
+    if type_name == "InterfaceError":
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "interface error")
+    if type_name == "OperationalError":
+        return _create_mysql_error(error, sqlstate, error_code, OperationalError, "operational error")
+
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
@@ -529,7 +554,7 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="mysql")}
     if len(keep) == sql.count("%"):
         return sql
     return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
@@ -551,6 +576,109 @@ def build_load_data_statement(
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )
+
+
+def merge_derive_overrides(
+    base_config: Mapping[str, Any], overrides: Mapping[str, Any], *, clear_pool_name: bool = False
+) -> dict[str, Any]:
+    """Merge clone parameters with explicit aliases taking precedence.
+
+    Args:
+        base_config: Inherited connection options.
+        overrides: Explicit clone options.
+        clear_pool_name: Remove an inherited native pool name.
+
+    Returns:
+        Independent normalized connection options.
+    """
+    result = dict(base_config)
+    dsn_keys = ("dsn", "url", "connection_string")
+    if any(overrides.get(key) is not None for key in dsn_keys):
+        for key in dsn_keys:
+            if key not in overrides:
+                result.pop(key, None)
+        for endpoint_key in (
+            "host",
+            "port",
+            "user",
+            "username",
+            "password",
+            "passwd",
+            "db",
+            "database",
+            "unix_socket",
+            "charset",
+        ):
+            if endpoint_key not in overrides:
+                result.pop(endpoint_key, None)
+    aliases = {
+        "database": ("db",),
+        "user": ("username",),
+        "password": ("passwd",),
+        "local_infile": ("allow_local_infile",),
+        "connect_timeout": ("connection_timeout",),
+        "cursorclass": ("cursor_class", "cursor_cls"),
+    }
+    for canonical, alternatives in aliases.items():
+        if canonical not in overrides and any(alias in overrides for alias in alternatives):
+            result.pop(canonical, None)
+    result.update(overrides)
+    for canonical, alternatives in aliases.items():
+        for alias in alternatives:
+            if alias in result:
+                value = result.pop(alias)
+                result.setdefault(canonical, value)
+    if clear_pool_name and "pool_name" not in overrides:
+        result.pop("pool_name", None)
+    return result
+
+
+def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+    """Parse explicit MySQL or MariaDB replica endpoints.
+
+    Args:
+        spec: Endpoint URL, host shorthand, or override mapping.
+
+    Returns:
+        Independent connection or config overrides.
+
+    Raises:
+        ImproperConfigurationError: The endpoint is missing or unsupported.
+    """
+    if isinstance(spec, bool):
+        msg = "MySQL replicas require explicit endpoints or overrides"
+        raise ImproperConfigurationError(msg)
+    if isinstance(spec, Mapping):
+        return dict(spec)
+    endpoint = spec if "://" in spec else "mysql://" + spec
+    if not endpoint.startswith(("mysql://", "mariadb://")):
+        msg = "Replica endpoint must use mysql:// or mariadb://"
+        raise ImproperConfigurationError(msg)
+    options: dict[str, Any] = parse_mysql_dsn(endpoint)
+    if not options.get("host"):
+        msg = "Replica endpoint requires a host"
+        raise ImproperConfigurationError(msg)
+    return options
+
+
+def build_gtid_wait_query(gtid_set: str, timeout: float, *, mariadb: bool) -> str:
+    """Select a parameterized native GTID wait query.
+
+    Args:
+        gtid_set: Native GTID position to await.
+        timeout: Finite nonnegative wait duration in seconds.
+        mariadb: Select the MariaDB native function.
+
+    Returns:
+        SQL containing placeholders for the GTID position and timeout.
+
+    Raises:
+        ValueError: The GTID position is blank or the timeout is invalid.
+    """
+    if not gtid_set.strip() or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+        msg = "GTID wait requires a nonempty GTID set and a finite nonnegative timeout"
+        raise ValueError(msg)
+    return "SELECT MASTER_GTID_WAIT(%s, %s)" if mariadb else "SELECT WAIT_FOR_EXECUTED_GTID_SET(%s, %s)"
 
 
 def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *, logger: Any | None = None) -> Any:

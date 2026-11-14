@@ -14,6 +14,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     UniqueViolationError,
 )
 
@@ -84,10 +85,10 @@ def test_perm_error_code_maps_to_permission_denied() -> None:
     assert result.__cause__ is err
 
 
-def test_readonly_error_code_maps_to_permission_denied() -> None:
+def test_readonly_error_code_maps_to_read_only_transaction_error() -> None:
     err = _SqliteError("attempt to write a readonly database", 8, "SQLITE_READONLY")
     result = create_mapped_exception(err)
-    assert isinstance(result, PermissionDeniedError)
+    assert isinstance(result, ReadOnlyTransactionError)
     assert result.__cause__ is err
 
 

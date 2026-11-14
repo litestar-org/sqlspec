@@ -6,7 +6,7 @@ Locks in two behaviours:
    by default. DML succeeds without the caller knowing about
    ``provide_write_session()``.
 2. ``SpannerSyncConfig.provide_read_session()`` opens a read-only Snapshot,
-   and DML through it raises ``SQLConversionError`` whose message names
+   and DML through it raises ``ReadOnlyTransactionError`` whose message names
    ``provide_read_session`` explicitly so the next reader can self-serve.
 
 Spanner DDL is processed via the ``UpdateDatabaseDdl`` admin API rather
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import ReadOnlyTransactionError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.spanner import SpannerSyncConfig
@@ -43,7 +43,7 @@ def test_default_provide_session_runs_dml(spanner_config: "SpannerSyncConfig", t
 def test_provide_read_session_blocks_writes(spanner_config: "SpannerSyncConfig", test_users_table: str) -> None:
     """provide_read_session() yields a Snapshot; DML raises and names the entrypoint."""
     with spanner_config.provide_read_session() as driver:
-        with pytest.raises(SQLConversionError, match="provide_read_session"):
+        with pytest.raises(ReadOnlyTransactionError, match="provide_read_session"):
             driver.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
                 id="u2",

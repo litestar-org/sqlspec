@@ -20,7 +20,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
-from oracledb import AuthMode, PoolGetMode, Purity
+from oracledb import AuthMode, InterfaceError, PoolGetMode, Purity, TransactionPriority
+from oracledb import Error as NativeOracleError
 
 from sqlspec.adapters.oracledb import (
     OracleEndpoint,
@@ -31,6 +32,7 @@ from sqlspec.adapters.oracledb import (
     build_session_release_plsql,
 )
 from sqlspec.adapters.oracledb import config as oracle_config_module
+from sqlspec.adapters.oracledb import core as oracle_core_module
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
@@ -38,7 +40,9 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, SQLSpecError
+from sqlspec.utils.tenant import TenantContext
 
 
 class _StubConnection:
@@ -723,10 +727,10 @@ def test_oracle_session_context_hook_sync_checkout_and_release() -> None:
     assert "TIME_ZONE = ''UTC''" in checkout_sql
     assert "DBMS_SESSION.SET_CONTEXT(:ctx_ns_0, :ctx_attr_0, :ctx_val_0);" in checkout_sql
     assert checkout_binds == {"ctx_ns_0": "APP_CTX", "ctx_attr_0": "TENANT_ID", "ctx_val_0": "42"}
-    assert "DBMS_SESSION.CLEAR_CONTEXT('APP_CTX');" in release_sql
+    assert "DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_0);" in release_sql
     assert conn_mock.module == ""
     assert conn_mock.action == ""
-    assert conn_mock.client_identifier == ""
+    assert conn_mock.client_identifier is None
 
 
 @pytest.mark.anyio
@@ -760,7 +764,7 @@ async def test_oracle_session_context_hook_async_checkout_and_release() -> None:
 
     assert len(executed_sql) == 2
     assert "DBMS_SESSION.SET_CONTEXT" in executed_sql[0][0]
-    assert "DBMS_SESSION.CLEAR_CONTEXT('CTX_NS');" in executed_sql[1][0]
+    assert "DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_0);" in executed_sql[1][0]
     pool_mock.release.assert_awaited_once_with(conn_mock)
 
 
@@ -820,9 +824,10 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
 
     hook = OracleSessionContextConfig(client_identifier="u1", clear_identifier=True, reset_package=True)
     sync_cfg = OracleSyncConfig(connection_instance=pool_sync, driver_features={"session_context_hook": hook})
-    with pytest.raises(RuntimeError, match="boom_sync"), sync_cfg.provide_session():
+    with pytest.raises(RuntimeError, match="boom_sync"), sync_cfg.provide_session() as sync_session:
         raise RuntimeError("boom_sync")
 
+    assert sync_session.connection is _DETACHED_CONNECTION
     assert len(executed_sync) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_sync[0]
     assert "DBMS_SESSION.RESET_PACKAGE;" in executed_sync[1]
@@ -839,14 +844,18 @@ async def test_oracle_sync_and_async_provide_connection_and_session_run_checkout
     cursor_async.execute = AsyncMock(side_effect=rec_async)
     conn_async = MagicMock()
     conn_async.cursor.return_value = cursor_async
+    conn_async.rollback = AsyncMock()
     pool_async = MagicMock()
     pool_async.acquire = AsyncMock(return_value=conn_async)
     pool_async.release = AsyncMock()
 
     async_cfg = OracleAsyncConfig(connection_instance=pool_async, driver_features={"session_context_hook": hook})
+    async_session: Any = None
     with pytest.raises(RuntimeError, match="boom_async"):
-        async with async_cfg.provide_session():
+        async with async_cfg.provide_session() as async_session:
             raise RuntimeError("boom_async")
+
+    assert async_session.connection is _DETACHED_CONNECTION
 
     assert len(executed_async) == 2
     assert "DBMS_SESSION.SET_IDENTIFIER" in executed_async[0]
@@ -869,6 +878,9 @@ async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool(
         zf.writestr("ewallet.p12", p12_bytes)
         zf.writestr("tnsnames.ora", tns_text)
     archive_bytes = buf.getvalue()
+    expected_dir = oracle_core_module._default_temp_wallet_dir(
+        "sqlspec_oracle_wallet_", oracle_core_module._compute_wallet_digest(archive_bytes, "WalletSecret123")
+    )
 
     with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
         OracleSyncConfig(
@@ -880,6 +892,8 @@ async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool(
                 "tns_alias": "missing_alias",
             }
         )
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS
 
     sync_cfg = OracleSyncConfig(
         connection_instance=Mock(),
@@ -1063,6 +1077,7 @@ def _make_p12_wallet_bytes(password: bytes = b"WalletSecret123", *, is_ca: bool 
 
 def _tenant_oracle_pool(mode: str) -> tuple[Any, Any]:
     conn = MagicMock()
+    conn.run_pipeline = None
     conn.client_identifier = None
     conn.transaction_in_progress = False
     conn.version = "23.5.0.0.0"
@@ -1293,3 +1308,1072 @@ def test_oracle_tenant_strategy_public_exports(name: str) -> None:
 
     assert getattr(adapter, name) is getattr(tenant, name)
     assert name in adapter.__all__
+
+
+@pytest.mark.parametrize(
+    ("dsn", "expected"),
+    [
+        ("file:///etc/ora/C.json?key=App", "config-file:///etc/ora/C.json?key=App"),
+        ("file://localhost/etc/c.json", "config-file:///etc/c.json"),
+        ("file://c.json", "config-file://c.json"),
+        ("CONFIG-AWSS3://Bucket/Key", "config-awss3://Bucket/Key"),
+        ("CONFIG-VAULT://Secret", "config-vault://Secret"),
+        ("localhost:1521/FREEPDB1", "localhost:1521/FREEPDB1"),
+    ],
+)
+def test_build_connection_config_normalizes_config_uris(dsn: str, expected: str) -> None:
+    assert build_connection_config({"dsn": dsn})["dsn"] == expected
+
+
+@pytest.mark.parametrize("dsn", ["file://", "config-file://", "CONFIG-AWS://bucket", "config-gcp://project"])
+def test_build_connection_config_rejects_invalid_config_uri(dsn: str) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config({"dsn": dsn})
+
+
+def test_build_connection_config_thick_dsn_passthrough() -> None:
+    assert build_connection_config({"dsn": "file://c.json", "thick_mode": True})["thick_mode_dsn_passthrough"] is False
+    assert (
+        build_connection_config({"dsn": "file://c.json", "thick_mode": True, "thick_mode_dsn_passthrough": True})[
+            "thick_mode_dsn_passthrough"
+        ]
+        is True
+    )
+
+
+def test_oracle_params_hooks_are_idempotent() -> None:
+    import oracledb
+
+    from sqlspec.adapters.oracledb import register_oracle_params_hook, unregister_oracle_params_hook
+
+    calls: list[str] = []
+
+    def hook(params: object) -> None:
+        calls.append("hook")
+
+    try:
+        register_oracle_params_hook(hook)
+        register_oracle_params_hook(hook)
+        pool = oracledb.create_pool(dsn="localhost:1/FREEPDB1", user="app", password="pw", min=0, max=1)
+        pool.close()
+        assert calls == ["hook"]
+    finally:
+        unregister_oracle_params_hook(hook)
+        unregister_oracle_params_hook(hook)
+    pool = oracledb.create_pool(dsn="localhost:1/FREEPDB1", user="app", password="pw", min=0, max=1)
+    pool.close()
+    assert calls == ["hook"]
+
+
+@pytest.mark.parametrize(
+    ("name", "install"),
+    [
+        ("oci_config_provider", "oci"),
+        ("aws_config_provider", "boto3"),
+        ("azure_config_provider", "azure-appconfiguration azure-keyvault-secrets azure-identity azure-core"),
+        ("gcp_config_provider", "google-cloud-storage google-cloud-secret-manager google-cloud-pubsub google-crc32c"),
+        ("oci_tokens", "oci cryptography requests"),
+        ("azure_tokens", "msal"),
+    ],
+)
+def test_oracle_plugins_missing_sdk_hints(monkeypatch: pytest.MonkeyPatch, name: str, install: str) -> None:
+    from sqlspec.adapters.oracledb import _plugins
+    from sqlspec.exceptions import MissingDependencyError
+
+    attempted: list[str] = []
+
+    def missing(module: str) -> None:
+        attempted.append(module)
+        raise ModuleNotFoundError(module)
+
+    monkeypatch.setattr(_plugins.importlib, "import_module", missing)
+    with pytest.raises(MissingDependencyError, match=install):
+        _plugins.ensure_oracle_plugin(name)
+    assert attempted == [f"oracledb.plugins.{name}"]
+
+
+def test_oracle_plugins_validation_and_cache_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.oracledb import _plugins
+
+    update = Mock()
+    monkeypatch.setattr(_plugins.oracledb, "update_config_cache", update)
+    _plugins.ensure_oracle_config_plugins(dsn="file://c.json")
+    _plugins.ensure_oracle_config_plugins(dsn="config-vault://secret")
+    _plugins.refresh_oracle_config_cache("file://c.json", remove_permanently=True)
+    update.assert_called_once_with("config-file://c.json", remove_permanently=True)
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.ensure_oracle_config_plugins(plugins="oci_tokens")
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.ensure_oracle_plugin("unknown")
+    with pytest.raises(ImproperConfigurationError):
+        _plugins.register_oracle_protocol("", None)
+    _plugins.register_oracle_protocol("config-testmissing", None)
+    _plugins.register_oracle_protocol("config-testmissing", None)
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_config_refresh_and_derive_rebind(config_type: type[Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    update = Mock()
+    monkeypatch.setattr(oracle_config_module, "refresh_oracle_config_cache", update)
+    config = config_type(connection_config={"dsn": "file://config.json"})
+    config.refresh_config_cache(remove_permanently=True)
+    update.assert_called_once_with("config-file://config.json", remove_permanently=True)
+    with pytest.raises(ImproperConfigurationError):
+        config_type().refresh_config_cache()
+    parent = config_type(driver_features={"tenant_strategy": "identifier", "session_context_hook": {"module": "a"}})
+    child = parent.derive_pool(session_context_hook={"module": "b"})
+    assert child.driver_features["tenant_strategy"].source_hook.module == "b"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"pool_boundary": "statement"},
+        {"dsn": "host/service?pool_boundary=statement"},
+        {"dsn": "(DESCRIPTION=(CONNECT_DATA=(POOL_BOUNDARY=STATEMENT)))"},
+    ],
+)
+def test_config_drcp_rejects_stateful_statement_boundary(config_type: type[Any], params: dict[str, str]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config=params, driver_features={"session_context_hook": {"edition": "V2"}})
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_stateless_drcp_normalizes_statement_boundary(config_type: type[Any]) -> None:
+    config = config_type(
+        connection_config={"pool_boundary": "STATEMENT"}, driver_features={"session_context_hook": {"module": "api"}}
+    )
+    assert config.connection_config["pool_boundary"] == "statement"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_drcp_rejects_connect_edition_with_connection_class(config_type: type[Any]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config={"edition": "V2", "cclass": "APP"})
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("session_mode", [False, True])
+async def test_oracle_checkout_forwards_options_and_restores_priority(async_mode: bool, session_mode: bool) -> None:
+    from oracledb import TransactionPriority
+
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = None
+    connection.transaction_priority = TransactionPriority.MEDIUM
+    pool = MagicMock()
+    pool.thin = False
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        pool.drop = AsyncMock()
+        connection.rollback = AsyncMock()
+        config = OracleAsyncConfig(connection_instance=pool)
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(connection_instance=pool)
+    context = (config.provide_session if session_mode else config.provide_connection)(
+        sharding_key=("tenant",),
+        super_sharding_key=("region",),
+        cclass="APP",
+        purity="SELF",
+        transaction_priority="HIGH",
+    )
+    if async_mode:
+        async with cast("Any", context):
+            assert connection.transaction_priority == TransactionPriority.HIGH
+    else:
+        with cast("Any", context):
+            assert connection.transaction_priority == TransactionPriority.HIGH
+    pool.acquire.assert_called_once_with(
+        shardingkey=["tenant"], supershardingkey=["region"], cclass="APP", purity=Purity.SELF
+    )
+    assert connection.transaction_priority == TransactionPriority.MEDIUM
+    pool.release.assert_called_once_with(connection)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("session_mode", [False, True])
+async def test_oracle_cleanup_failure_drops_and_preserves_body_exception(async_mode: bool, session_mode: bool) -> None:
+    connection = MagicMock()
+    connection.thin = True
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = True
+    hook = OracleSessionContextConfig(client_identifier="user", clear_identifier=True)
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        pool.drop = AsyncMock()
+        connection.rollback = AsyncMock()
+        cursor.execute = AsyncMock(side_effect=[None, RuntimeError("reset failed")])
+        config = OracleAsyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    else:
+        pool.acquire.return_value = connection
+        cursor.execute.side_effect = [None, RuntimeError("reset failed")]
+        config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    context = (config.provide_session if session_mode else config.provide_connection)()
+    with pytest.raises(ValueError, match="body failed") as raised:
+        if async_mode:
+            async with cast("Any", context):
+                raise ValueError("body failed")
+        else:
+            with cast("Any", context):
+                raise ValueError("body failed")
+    assert "reset failed" in raised.value.__notes__[0]
+    connection.rollback.assert_called_once_with()
+    pool.drop.assert_called_once_with(connection)
+    pool.release.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_thin_checkout_never_accesses_tag(async_mode: bool) -> None:
+    class ThinConnection:
+        thin = True
+        version = "23.0"
+        transaction_priority = None
+
+        @property
+        def tag(self) -> str:
+            msg = "Thin tag must not be read"
+            raise AssertionError(msg)
+
+    connection: Any = ThinConnection()
+    pool = MagicMock()
+    pool.thin = True
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        config = OracleAsyncConfig(connection_instance=pool)
+        async with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
+            assert cast("object", acquired) is connection
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(connection_instance=pool)
+        with config.provide_connection(tag="ROLE=ANALYST", match_any_tag=True) as acquired:
+            assert cast("object", acquired) is connection
+    pool.acquire.assert_called_once_with()
+    pool.release.assert_called_once_with(connection)
+
+
+def test_thick_warm_tag_skips_alter_session_and_retags() -> None:
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = "EDITION=V2;TIME_ZONE=UTC"
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire.return_value = connection
+    hook = OracleSessionContextConfig(edition="V2", time_zone="UTC", module="api", client_identifier="user")
+    config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    with config.provide_connection():
+        assert connection.module == "api"
+        assert connection.client_identifier == "user"
+    cursor.execute.assert_not_called()
+    pool.acquire.assert_called_once_with(tag="EDITION=V2;TIME_ZONE=UTC", matchanytag=True)
+    pool.release.assert_called_once_with(connection, tag="EDITION=V2;TIME_ZONE=UTC")
+
+
+@pytest.mark.parametrize("callback", ["", "pkg.proc; DROP TABLE t", "a.b.c.d"])
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_plsql_session_callback_rejects_invalid_names(callback: str, config_type: type[Any]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config={"session_callback": callback})
+
+
+def test_async_rejects_plsql_session_callback() -> None:
+    with pytest.raises(ImproperConfigurationError):
+        OracleAsyncConfig(connection_config={"session_callback": "app_pkg.initialize"})
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+@pytest.mark.parametrize(
+    "params", [{"thick_mode": True}, {"lib_dir": "/oracle"}, {"protocol": "tcp"}, {"dsn": "tcp://host/service"}]
+)
+def test_oracle_config_rejects_deepsec_thick_or_plain_tcp(config_type: type[Any], params: dict[str, Any]) -> None:
+    from sqlspec.adapters.oracledb import OracleEndUserSecurityConfig
+
+    security = OracleEndUserSecurityConfig("token")
+    hook = OracleSessionContextConfig(end_user_security=security)
+    with pytest.raises(ImproperConfigurationError):
+        config_type(connection_config=params, driver_features={"session_context_hook": hook})
+    secure = config_type(connection_config={"protocol": "tcps"}, driver_features={"session_context_hook": hook})
+    assert secure.get_signature_namespace()["OracleEndUserSecurityConfig"] is OracleEndUserSecurityConfig
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_oracle_security_clear_failure_rolls_back_and_drops(async_mode: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleEndUserSecurityConfig
+
+    connection = MagicMock()
+    connection.thin = True
+    connection.clear_end_user_security_context.side_effect = RuntimeError("security clear failed")
+    pool = MagicMock()
+    pool.thin = True
+    hook = OracleSessionContextConfig(end_user_security=OracleEndUserSecurityConfig("token"), reset_on_release=False)
+    if async_mode:
+        connection.rollback = AsyncMock()
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        pool.drop = AsyncMock()
+        config = OracleAsyncConfig(
+            connection_instance=pool,
+            connection_config={"protocol": "tcps"},
+            driver_features={"session_context_hook": hook},
+        )
+        with pytest.raises(RuntimeError, match="security clear failed"):
+            async with config.provide_connection():
+                pass
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(
+            connection_instance=pool,
+            connection_config={"protocol": "tcps"},
+            driver_features={"session_context_hook": hook},
+        )
+        with pytest.raises(RuntimeError, match="security clear failed"):
+            with config.provide_connection():
+                pass
+    connection.rollback.assert_called_once_with()
+    pool.drop.assert_called_once_with(connection)
+    pool.release.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_older_sdk_default_checkout_and_explicit_priority_refusal(
+    async_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OlderConnection:
+        thin = True
+        version = "23.0"
+
+    connection = OlderConnection()
+    pool = MagicMock()
+    pool.thin = True
+    if async_mode:
+        pool.acquire = AsyncMock(return_value=connection)
+        pool.release = AsyncMock()
+        config = OracleAsyncConfig(connection_instance=pool)
+    else:
+        pool.acquire.return_value = connection
+        config = OracleSyncConfig(connection_instance=pool)
+    monkeypatch.delattr(oracle_config_module.oracledb, "TransactionPriority")
+    if async_mode:
+        async with cast("Any", config.provide_connection()) as acquired:
+            assert acquired is connection
+    else:
+        with cast("Any", config.provide_connection()) as acquired:
+            assert acquired is connection
+    with pytest.raises(oracle_config_module.oracledb.NotSupportedError, match=r"26\.1"):
+        config.provide_connection(transaction_priority="HIGH")
+    pool.acquire.assert_called_once_with()
+    pool.release.assert_called_once_with(connection)
+
+
+def test_owned_thin_static_alter_session_applies_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection = MagicMock()
+    connection.version = "23.0"
+    connection.thin = True
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire.return_value = connection
+
+    def create_pool(**kwargs: Any) -> Any:
+        kwargs["session_callback"](connection, "")
+        return pool
+
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool", create_pool)
+    hook = OracleSessionContextConfig(time_zone="UTC")
+    config = OracleSyncConfig(driver_features={"session_context_hook": hook, "enable_numpy_vectors": False})
+    with config.provide_connection():
+        pass
+    with config.provide_connection():
+        pass
+    assert cursor.execute.call_count == 1
+    assert "ALTER SESSION" in cursor.execute.call_args.args[0]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("rollback_fails", [False, True])
+@pytest.mark.parametrize("body_fails", [False, True])
+async def test_session_release_rolls_back_forgotten_sessionless_before_hooks(
+    async_mode: bool, rollback_fails: bool, body_fails: bool
+) -> None:
+    events: list[str] = []
+    connection = MagicMock()
+    connection.thin = True
+    connection.begin_sessionless_transaction = AsyncMock(return_value=b"tx") if async_mode else Mock(return_value=b"tx")
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+
+    def execute(sql: str, *args: Any) -> None:
+        if "CLEAR_IDENTIFIER" in sql:
+            events.append("clear")
+
+    def rollback() -> None:
+        events.append("rollback")
+        if rollback_fails:
+            msg = "rollback failed"
+            raise RuntimeError(msg)
+
+    cursor.execute = AsyncMock(side_effect=execute) if async_mode else Mock(side_effect=execute)
+    connection.cursor.return_value = cursor
+    connection.rollback = AsyncMock(side_effect=rollback) if async_mode else Mock(side_effect=rollback)
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    pool.release = AsyncMock() if async_mode else Mock()
+    pool.drop = AsyncMock() if async_mode else Mock()
+    config_type = OracleAsyncConfig if async_mode else OracleSyncConfig
+    config = config_type(
+        connection_instance=pool,
+        driver_features={"session_context_hook": OracleSessionContextConfig(clear_identifier=True)},
+    )
+
+    async def exercise() -> None:
+        if async_mode:
+            async with cast("Any", config.provide_session()) as session:
+                await session.begin_sessionless_transaction()
+                if body_fails:
+                    raise ValueError("body failure")
+        else:
+            with cast("Any", config.provide_session()) as session:
+                session.begin_sessionless_transaction()
+                if body_fails:
+                    raise ValueError("body failure")
+
+    if body_fails or rollback_fails:
+        error = ValueError if body_fails else RuntimeError
+        with pytest.raises(error):
+            await exercise()
+    else:
+        await exercise()
+    assert events[0] == "rollback"
+    if rollback_fails:
+        assert events == ["rollback"]
+        pool.drop.assert_called_once_with(connection)
+        pool.release.assert_not_called()
+    else:
+        assert events[-1] == "clear"
+        pool.release.assert_called_once_with(connection)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_default_checkout_works_when_server_rejects_priority_probe(mode: str) -> None:
+    import oracledb
+
+    class OlderServerConnection:
+        thin = True
+
+        @property
+        def transaction_priority(self) -> Any:
+            raise oracledb.NotSupportedError("DPY-3043: database does not support transaction priority")
+
+    connection = OlderServerConnection()
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=connection) if mode == "async" else Mock(return_value=connection)
+    pool.release = AsyncMock() if mode == "async" else Mock()
+    config_type = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_type(connection_instance=pool)
+    if mode == "async":
+        async with cast("Any", config.provide_session()) as session:
+            assert session.connection is connection
+        pool.release.assert_awaited_once_with(connection)
+    else:
+        with cast("Any", config.provide_session()) as session:
+            assert session.connection is connection
+        pool.release.assert_called_once_with(connection)
+
+
+def test_oracle_multisite_topology_service_clone_and_validation() -> None:
+    from sqlspec.adapters.oracledb import OracleEndpoint, OracleTopologyConfig
+    from sqlspec.adapters.oracledb.core import build_tns_description
+
+    topology = OracleTopologyConfig(
+        service_name="APP_RW",
+        address_lists=[[OracleEndpoint("site-a-1"), OracleEndpoint("site-a-2")], [OracleEndpoint("site-b")]],
+        connect_timeout=5,
+    )
+    text = build_tns_description(topology)
+    assert text.count("(ADDRESS_LIST=") == 2
+    assert "(LOAD_BALANCE=OFF)(FAILOVER=ON)(CONNECT_TIMEOUT=5)" in text
+    assert "(SERVICE_NAME=APP_RO)" in build_tns_description(topology.with_service_name("APP_RO"))
+    assert topology.service_name == "APP_RW"
+    with pytest.raises(ImproperConfigurationError):
+        OracleTopologyConfig([OracleEndpoint("host")], "APP", address_lists=[[OracleEndpoint("other")]])
+    with pytest.raises(ImproperConfigurationError):
+        OracleTopologyConfig(service_name="APP", address_lists=[[]])
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_name"),
+    [
+        (372, "ReadOnlyTransactionError"),
+        (1456, "ReadOnlyTransactionError"),
+        (16000, "ReadOnlyTransactionError"),
+        (16397, "ReadOnlyTransactionError"),
+        (1033, "ReplicaUnavailableError"),
+        (3172, "ReplicaUnavailableError"),
+        (12757, "ReplicaUnavailableError"),
+        (16456, "ReplicaUnavailableError"),
+        (3173, "ImproperConfigurationError"),
+    ],
+)
+def test_oracle_replica_error_mapping(code: int, expected_name: str) -> None:
+    import oracledb
+
+    from sqlspec import exceptions
+    from sqlspec.adapters.oracledb.core import create_mapped_exception
+
+    native = oracledb.DatabaseError(f"ORA-{code:05d}: standby error")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, getattr(exceptions, expected_name))
+    assert mapped.__cause__ is native
+
+
+def test_thick_warm_tag_preserves_dynamic_alter_session_fields() -> None:
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection = MagicMock()
+    connection.thin = False
+    connection.tag = "EDITION=V2"
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire.return_value = connection
+    zones = iter(["UTC", "+01:00"])
+    hook = OracleSessionContextConfig(edition="V2", time_zone=lambda: next(zones))
+    config = OracleSyncConfig(connection_instance=pool, driver_features={"session_context_hook": hook})
+    for _ in range(2):
+        with config.provide_connection():
+            pass
+    assert len(cursor.execute.call_args_list) == 2
+    assert "TIME_ZONE = ''UTC''" in cursor.execute.call_args_list[0].args[0]
+    assert "TIME_ZONE = ''+01:00''" in cursor.execute.call_args_list[1].args[0]
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "writer:1521/APP_RW",
+        "//writer:1521/APP_RW",
+        "tcp://writer:1521/APP_RW",
+        "tcps://writer:1522/APP_RW?ssl_server_dn_match=yes",
+        "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=writer)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=APP_RW)))",
+    ],
+)
+def test_oracle_replica_derivation_rewrites_service_without_native_conflicts(config_type, dsn: str) -> None:
+    primary = config_type(connection_config={"dsn": dsn, "user": "app"})
+    reader = primary.derive_pool(service_name="APP_RO", is_replica=True)
+    assert reader.connection_config["dsn"] == dsn.replace("APP_RW", "APP_RO")
+    assert reader.is_replica is True
+    assert "APP_RW" in primary.connection_config["dsn"]
+    host_reader = primary.derive_pool(host="standby", service_name="APP_TC")
+    assert host_reader.connection_config["host"] == "standby"
+    assert host_reader.connection_config["service_name"] == "APP_TC"
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_oracle_topology_clone_service_and_opaque_alias_guard(config_type) -> None:
+    from sqlspec.adapters.oracledb import OracleEndpoint, OracleTopologyConfig
+
+    primary = config_type(connection_config={"topology": OracleTopologyConfig([OracleEndpoint("writer")], "APP_RW")})
+    reader = primary.derive_pool(service_name="APP_RO")
+    assert "APP_RO" in reader.connection_config["dsn"]
+    with pytest.raises(ImproperConfigurationError, match="alias"):
+        config_type(connection_config={"dsn": "OPAQUE_ALIAS"}).derive_pool(service_name="APP_RO")
+    with pytest.raises(ImproperConfigurationError):
+        config_type(replicas=True)
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("code", [3172, 16456, 16000])
+async def test_oracle_standby_retry_is_pre_checkout_and_explicit(async_mode: bool, retry: bool, code: int) -> None:
+    import oracledb
+
+    from sqlspec.adapters.oracledb import OracleAcquireOptions
+    from sqlspec.exceptions import ReadOnlyTransactionError, ReplicaUnavailableError
+
+    native = oracledb.DatabaseError(f"ORA-{code:05d}: standby checkout rejected")
+    connection = MagicMock()
+    connection.thin = True
+    connection.rollback = AsyncMock() if async_mode else Mock()
+    writer_pool = MagicMock()
+    writer_pool.thin = True
+    writer_pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    writer_pool.release = AsyncMock() if async_mode else Mock()
+    reader_pool = MagicMock()
+    reader_pool.thin = True
+    reader_pool.acquire = AsyncMock(side_effect=native) if async_mode else Mock(side_effect=native)
+    config_type: Any = OracleAsyncConfig if async_mode else OracleSyncConfig
+    reader = config_type(connection_instance=reader_pool)
+    primary = config_type(
+        connection_instance=writer_pool, replicas=[reader], driver_features={"retry_on_standby_lag": retry}
+    )
+    options = OracleAcquireOptions(cclass="REPORTING")
+
+    async def exercise() -> None:
+        if async_mode:
+            async with primary.provide_read_session(acquire_options=options) as session:
+                assert session.connection is connection
+        else:
+            with primary.provide_read_session(acquire_options=options) as session:
+                assert session.connection is connection
+
+    if retry and code != 16000:
+        await exercise()
+        writer_pool.acquire.assert_called_once_with(cclass="REPORTING")
+    else:
+        expected = ReadOnlyTransactionError if code == 16000 else ReplicaUnavailableError
+        with pytest.raises(expected) as caught:
+            await exercise()
+        assert caught.value.__cause__ is native
+        writer_pool.acquire.assert_not_called()
+    reader_pool.acquire.assert_called_once_with(cclass="REPORTING")
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_oracle_query_time_standby_error_never_replays_on_primary(async_mode: bool) -> None:
+    import oracledb
+
+    connection = MagicMock()
+    connection.thin = True
+    connection.rollback = AsyncMock() if async_mode else Mock()
+    reader_pool = MagicMock()
+    reader_pool.thin = True
+    reader_pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    reader_pool.release = AsyncMock() if async_mode else Mock()
+    writer_pool = MagicMock()
+    writer_pool.thin = True
+    config_type: Any = OracleAsyncConfig if async_mode else OracleSyncConfig
+    reader = config_type(connection_instance=reader_pool)
+    primary = config_type(
+        connection_instance=writer_pool, replicas=[reader], driver_features={"retry_on_standby_lag": True}
+    )
+    native = oracledb.DatabaseError("ORA-03172: query-time lag")
+    with pytest.raises(oracledb.DatabaseError) as caught:
+        if async_mode:
+            async with primary.provide_read_session():
+                raise native
+        else:
+            with primary.provide_read_session():
+                raise native
+    assert caught.value is native
+    reader_pool.release.assert_called_once_with(connection)
+    writer_pool.acquire.assert_not_called()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("operation", ["rollback", "commit", "suspend"])
+@pytest.mark.parametrize("native_error", [False, True])
+@pytest.mark.parametrize("tenant_scoped", [False, True])
+async def test_failed_sessionless_cleanup_is_dropped_after_caught_body_error(
+    async_mode: bool, operation: str, native_error: bool, tenant_scoped: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = MagicMock()
+    connection.thin = True
+    connection.begin_sessionless_transaction = AsyncMock(return_value=b"tx") if async_mode else Mock(return_value=b"tx")
+    failure = (
+        NativeOracleError("transaction cleanup failed") if native_error else RuntimeError("transaction cleanup failed")
+    )
+    expected_error = SQLSpecError if native_error else RuntimeError
+    connection.rollback = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    connection.commit = AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    connection.suspend_sessionless_transaction = (
+        AsyncMock(side_effect=failure) if async_mode else Mock(side_effect=failure)
+    )
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    connection.cursor.return_value = cursor
+    cursor.execute = AsyncMock() if async_mode else Mock()
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if async_mode else Mock(return_value=connection)
+    pool.release = AsyncMock() if async_mode else Mock()
+    pool.drop = AsyncMock() if async_mode else Mock()
+    config_type = OracleAsyncConfig if async_mode else OracleSyncConfig
+    features: dict[str, Any] = {"session_context_hook": OracleSessionContextConfig(clear_identifier=True)}
+    if tenant_scoped:
+        features["tenant_strategy"] = "client_context"
+    config = cast("Any", config_type(connection_instance=None if tenant_scoped else pool, driver_features=features))
+    if tenant_scoped:
+        monkeypatch.setattr(
+            config_type, "provide_pool", AsyncMock(return_value=pool) if async_mode else Mock(return_value=pool)
+        )
+    body = ValueError("request failed")
+    scope = TenantContext.scope("acme") if tenant_scoped else TenantContext.bypass()
+    with scope, pytest.raises(expected_error, match="transaction cleanup failed"):
+        if async_mode:
+            async with config.provide_session() as session:
+                if operation in {"rollback", "suspend"}:
+                    with pytest.raises(ValueError) as captured:
+                        async with session.sessionless_transaction(rollback_on_error=operation == "rollback"):
+                            raise body
+                    assert captured.value is body
+                    assert any("cleanup" in note for note in body.__notes__)
+                else:
+                    await session.begin_sessionless_transaction()
+                    with pytest.raises(expected_error):
+                        await session.commit()
+        else:
+            with config.provide_session() as session:
+                if operation in {"rollback", "suspend"}:
+                    with pytest.raises(ValueError) as captured:
+                        with session.sessionless_transaction(rollback_on_error=operation == "rollback"):
+                            raise body
+                    assert captured.value is body
+                    assert any("cleanup" in note for note in body.__notes__)
+                else:
+                    session.begin_sessionless_transaction()
+                    with pytest.raises(expected_error):
+                        session.commit()
+    pool.drop.assert_called_once_with(connection)
+    pool.release.assert_not_called()
+    cursor.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig])
+def test_signature_namespace_includes_both_sessionless_contexts(config_type: Any) -> None:
+    from sqlspec.adapters.oracledb import (
+        OracleAsyncSessionlessTransactionContext,
+        OracleSyncSessionlessTransactionContext,
+    )
+
+    namespace = config_type().get_signature_namespace()
+    assert namespace["OracleSyncSessionlessTransactionContext"] is OracleSyncSessionlessTransactionContext
+    assert namespace["OracleAsyncSessionlessTransactionContext"] is OracleAsyncSessionlessTransactionContext
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("session_provider", [False, True])
+async def test_public_providers_forward_prebuilt_acquire_options(asynchronous: bool, session_provider: bool) -> None:
+    from sqlspec.adapters.oracledb import OracleAcquireOptions
+
+    connection = MagicMock()
+    connection.thin = True
+    pool = MagicMock()
+    pool.thin = True
+    pool.acquire = AsyncMock(return_value=connection) if asynchronous else Mock(return_value=connection)
+    pool.release = AsyncMock() if asynchronous else Mock()
+    config = cast("Any", (OracleAsyncConfig if asynchronous else OracleSyncConfig)(connection_instance=pool))
+    options = OracleAcquireOptions(cclass="ANALYTICS")
+    context = (
+        config.provide_session(acquire_options=options)
+        if session_provider
+        else config.provide_connection(acquire_options=options)
+    )
+    if asynchronous:
+        async with context:
+            pass
+    else:
+        with context:
+            pass
+    pool.acquire.assert_called_once_with(cclass="ANALYTICS")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_connection_context_passes_desired_tag_on_thick_pool_release(asynchronous: bool) -> None:
+    connection = MagicMock()
+    connection.thin = False
+    connection.rollback = AsyncMock() if asynchronous else Mock()
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.execute = AsyncMock() if asynchronous else Mock()
+    connection.cursor.return_value = cursor
+    pool = MagicMock()
+    pool.thin = False
+    pool.acquire = AsyncMock(return_value=connection) if asynchronous else Mock(return_value=connection)
+    pool.release = AsyncMock() if asynchronous else Mock()
+    config = cast(
+        "Any",
+        (OracleAsyncConfig if asynchronous else OracleSyncConfig)(
+            connection_instance=pool,
+            driver_features={"session_context_hook": OracleSessionContextConfig(edition="E1", time_zone="UTC")},
+        ),
+    )
+    context = config.provide_connection()
+    if asynchronous:
+        async with context:
+            pass
+    else:
+        with context:
+            pass
+    pool.release.assert_called_once_with(connection, tag="EDITION=E1;TIME_ZONE=UTC")
+
+
+@pytest.mark.parametrize("config_cls", [OracleSyncConfig, OracleAsyncConfig], ids=["sync", "async"])
+@pytest.mark.parametrize("boundary", ["statement", "STATEMENT", " Statement "])
+def test_oracle_config_rejects_statement_pool_boundary_with_tenant_strategy(config_cls: Any, boundary: str) -> None:
+    """pool_boundary='statement' is rejected when tenant_strategy is active and accepted otherwise."""
+    with pytest.raises(ImproperConfigurationError, match="Statement-boundary DRCP"):
+        config_cls(
+            connection_config=cast("Any", {"pool_boundary": boundary}),
+            driver_features={"tenant_strategy": "identifier"},
+        )
+
+    no_tenant = config_cls(connection_config=cast("Any", {"pool_boundary": boundary}))
+    assert no_tenant.connection_config["pool_boundary"] == "statement"
+
+    tx_boundary = config_cls(
+        connection_config={"pool_boundary": "transaction"}, driver_features={"tenant_strategy": "identifier"}
+    )
+    assert tx_boundary.connection_config["pool_boundary"] == "transaction"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+async def test_oracle_non_lease_release_rolls_back_iff_autocommit_off(
+    mode: str, provider: str, autocommit: bool
+) -> None:
+    """Oracle non-lease checkin rolls back when autocommit is off and skips rollback when autocommit is on."""
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+    cursor.execute = AsyncMock() if mode == "async" else MagicMock()
+
+    conn = MagicMock(autocommit=autocommit, version="23.5.0.0.0", transaction_in_progress=False)
+    conn.cursor.return_value = cursor
+    conn.rollback = AsyncMock() if mode == "async" else MagicMock()
+
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn) if mode == "async" else MagicMock(return_value=conn)
+    pool.release = AsyncMock() if mode == "async" else MagicMock()
+    pool.drop = AsyncMock() if mode == "async" else MagicMock()
+
+    config_cls: Any = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_cls(
+        connection_instance=pool,
+        driver_features={"session_context_hook": {"module": "billing", "reset_on_release": True}},
+    )
+    if mode == "async":
+        async with getattr(config, provider)() as target:
+            pass
+    else:
+        with getattr(config, provider)() as target:
+            pass
+
+    if provider == "provide_session":
+        assert target.connection is _DETACHED_CONNECTION
+
+    expected_rollbacks = 0 if autocommit else 1
+    assert conn.rollback.call_count == expected_rollbacks
+    assert pool.release.call_count == 1
+    assert pool.drop.call_count == 0
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("failure_stage", ["hook", "rollback", "cancelled"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_oracle_release_drops_connection_when_hook_or_rollback_fails(
+    mode: str, provider: str, failure_stage: str, body_raises: bool
+) -> None:
+    """Oracle release calls pool.drop instead of pool.release when release hook or rollback raises or cancels."""
+    if mode == "sync" and failure_stage == "cancelled":
+        return
+
+    cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = False
+    hook_exc: BaseException = (
+        asyncio.CancelledError() if failure_stage == "cancelled" else RuntimeError("release hook failed")
+    )
+
+    def fail_on_release(sql: str, _binds: Any = None) -> None:
+        if "RESET_PACKAGE" in sql and failure_stage in {"hook", "cancelled"}:
+            raise hook_exc
+
+    cursor.execute = (
+        AsyncMock(side_effect=fail_on_release) if mode == "async" else MagicMock(side_effect=fail_on_release)
+    )
+    conn = MagicMock(autocommit=False, version="23.5.0.0.0", transaction_in_progress=False)
+    conn.cursor.return_value = cursor
+    rollback_side_effect = RuntimeError("rollback failed") if failure_stage == "rollback" else None
+    conn.rollback = (
+        AsyncMock(side_effect=rollback_side_effect) if mode == "async" else MagicMock(side_effect=rollback_side_effect)
+    )
+
+    pool = MagicMock()
+    pool.acquire = AsyncMock(return_value=conn) if mode == "async" else MagicMock(return_value=conn)
+    pool.release = AsyncMock() if mode == "async" else MagicMock()
+    pool.drop = AsyncMock() if mode == "async" else MagicMock()
+
+    config_cls: Any = OracleAsyncConfig if mode == "async" else OracleSyncConfig
+    config = config_cls(
+        connection_instance=pool,
+        driver_features={"session_context_hook": {"client_identifier": "u1", "reset_package": True}},
+    )
+    expected_exc: type[BaseException] = (
+        asyncio.CancelledError if failure_stage == "cancelled" else (ValueError if body_raises else RuntimeError)
+    )
+    with pytest.raises(expected_exc):
+        if mode == "async":
+            async with getattr(config, provider)():
+                if body_raises:
+                    raise ValueError("caller body failed")
+        else:
+            with getattr(config, provider)():
+                if body_raises:
+                    raise ValueError("caller body failed")
+
+    assert pool.drop.call_count == 1
+    assert pool.release.call_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_oracle_none_initial_transaction_priority_restores_default_and_skips_spurious_rollback(
+    async_mode: bool,
+) -> None:
+    """Pooled borrows restore DEFAULT when initial priority was None and avoid spurious rollbacks for string defaults."""
+
+    class NativeConnection:
+        def __init__(self) -> None:
+            self.thin = True
+            self.autocommit = True
+            self.transaction_priority: object = None
+            self.rollback = AsyncMock() if async_mode else MagicMock()
+
+    conn_override = NativeConnection()
+    pool_override = MagicMock()
+    pool_override.thin = True
+    if async_mode:
+        pool_override.acquire = AsyncMock(return_value=conn_override)
+        pool_override.release = AsyncMock()
+        pool_override.drop = AsyncMock()
+        config_override = OracleAsyncConfig(connection_instance=pool_override)
+        async with config_override.provide_connection(transaction_priority="HIGH") as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+    else:
+        pool_override.acquire.return_value = conn_override
+        config_override = OracleSyncConfig(connection_instance=pool_override)
+        with config_override.provide_connection(transaction_priority="HIGH") as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+
+    conn_override.rollback.assert_called_once_with()
+    assert conn_override.transaction_priority == TransactionPriority.DEFAULT
+    pool_override.release.assert_called_once_with(conn_override)
+
+    conn_baseline = NativeConnection()
+    pool_baseline = MagicMock()
+    pool_baseline.thin = True
+    if async_mode:
+        pool_baseline.acquire = AsyncMock(return_value=conn_baseline)
+        pool_baseline.release = AsyncMock()
+        pool_baseline.drop = AsyncMock()
+        config_baseline = OracleAsyncConfig(
+            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        )
+        async with config_baseline.provide_connection() as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+    else:
+        pool_baseline.acquire.return_value = conn_baseline
+        config_baseline = OracleSyncConfig(
+            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        )
+        with config_baseline.provide_connection() as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+
+    conn_baseline.rollback.assert_not_called()
+    assert conn_baseline.transaction_priority == TransactionPriority.HIGH
+    pool_baseline.release.assert_called_once_with(conn_baseline)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_oracle_pool_acquire_maps_interface_error(async_mode: bool) -> None:
+    """Pool acquire InterfaceError failures map to DatabaseConnectionError for replica failover."""
+    native = InterfaceError("DPY-4011: the database or network closed the connection")
+    pool = MagicMock()
+    if async_mode:
+        pool.acquire = AsyncMock(side_effect=native)
+        config_async = OracleAsyncConfig(connection_instance=pool)
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            async with config_async.provide_connection():
+                pass
+    else:
+        pool.acquire.side_effect = native
+        config_sync = OracleSyncConfig(connection_instance=pool)
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            with config_sync.provide_connection():
+                pass
+    assert exc_info.value.__cause__ is native
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig], ids=["sync", "async"])
+async def test_oracle_failed_wallet_zip_init_cleans_up_without_dropping_shared_owner(config_type: Any) -> None:
+    """Failed config construction releases its wallet temp dir without evicting an active shared owner."""
+    p12_bytes = _make_p12_wallet_bytes(b"WalletSecretFailPath")
+    tns_text = (
+        "fail_guard_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=fail_guard_tp.adb.oraclecloud.com)))\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+    archive_bytes = buf.getvalue()
+    expected_dir = oracle_core_module._default_temp_wallet_dir(
+        "sqlspec_oracle_wallet_", oracle_core_module._compute_wallet_digest(archive_bytes, "WalletSecretFailPath")
+    )
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        config_type(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecretFailPath",
+                "tns_alias": "missing_alias",
+            }
+        )
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS
+
+    active_pool = MagicMock()
+    if config_type is OracleAsyncConfig:
+        active_pool.close = AsyncMock()
+    active_cfg = config_type(
+        connection_instance=active_pool,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecretFailPath",
+            "tns_alias": "fail_guard_tp",
+        },
+    )
+    assert expected_dir.is_dir()
+    assert oracle_core_module._WALLET_DIR_REFCOUNTS.get(expected_dir.resolve()) == 1
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        config_type(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecretFailPath",
+                "tns_alias": "missing_alias",
+            }
+        )
+    assert expected_dir.is_dir()
+    assert oracle_core_module._WALLET_DIR_REFCOUNTS.get(expected_dir.resolve()) == 1
+
+    if config_type is OracleAsyncConfig:
+        await active_cfg._close_pool()
+    else:
+        active_cfg._close_pool()
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS

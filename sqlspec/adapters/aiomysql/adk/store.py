@@ -9,6 +9,7 @@ from sqlspec.adapters.aiomysql.core import format_identifier, resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -23,27 +24,6 @@ if TYPE_CHECKING:
 __all__ = ("AiomysqlADKConfig", "AiomysqlADKMemoryStore", "AiomysqlADKStore")
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
-
-
-def _mysql_split_table(table: str) -> tuple[str | None, str]:
-    """Split a validated 1- or 2-part MySQL table name into (database, bare_table)."""
-    if "." in table:
-        database_name, bare_table = table.split(".", 1)
-        return database_name, bare_table
-    return None, table
-
-
-def _mysql_table_ref(table: str) -> str:
-    """Render database.table via format_identifier while keeping bare names unquoted."""
-    if "." in table:
-        return format_identifier(table)
-    return table
-
-
-def _mysql_index_name(table: str, suffix: str) -> str:
-    """Derive a per-table MySQL index identifier from the bare table name."""
-    _, bare_table = _mysql_split_table(table)
-    return f"idx_{bare_table}_{suffix}"
 
 
 class AiomysqlADKConfig(ADKConfig):
@@ -81,9 +61,9 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AiomysqlConfig") -> None:
+    def __init__(self, config: "AiomysqlConfig", *, read_config: "AiomysqlConfig | None" = None) -> None:
         """Initialize aiomysql ADK store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -143,7 +123,8 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        result = await self.get_session(app_name, user_id, session_id)
+        with adk_primary_read_scope():
+            result = await self.get_session(app_name, user_id, session_id)
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
@@ -155,10 +136,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         """Get session by scoped identifiers."""
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=renew_for is not None) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                if self._should_renew(renew_for):
                     await cursor.execute(
                         f"""
                         UPDATE {_mysql_table_ref(self._session_table)}
@@ -220,7 +201,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -244,17 +225,30 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
 
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
         sql = f"""
         INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        )
+        SELECT %s, %s, %s, %s, %s, %s, %s
+        FROM {_mysql_table_ref(self._session_table)}
+        WHERE id = %s AND app_name = %s AND user_id = %s
         """
 
         async with (
             self._config.provide_connection() as conn,
             AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
         ):
-            await cursor.execute(sql, _event_insert_params(event_record, self._json_serializer))
+            await cursor.execute(
+                sql, (*_event_insert_params(event_record, self._json_serializer), session_id, app_name, user_id)
+            )
+            if resolve_rowcount(cursor) == 0:
+                if hasattr(conn, "rollback"):
+                    await conn.rollback()
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
             await conn.commit()
 
     async def append_event_and_update_state(
@@ -269,6 +263,18 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = (
+                "event_record scope "
+                f"({event_record['app_name']!r}, {event_record['user_id']!r}, {event_record['session_id']!r}) "
+                f"does not match ({app_name!r}, {user_id!r}, {session_id!r})"
+            )
+            raise ValueError(msg)
+
         insert_sql = f"""
         INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -291,6 +297,8 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         ):
             try:
                 await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
+                if isinstance(cursor.rowcount, int) and cursor.rowcount == 0:
+                    _raise_session_not_found(session_id)
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
                 if row is None:
@@ -335,10 +343,10 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["app_name = %s", "user_id = %s", "session_id = %s"]
+        where_clauses = ["s.app_name = %s", "s.user_id = %s", "s.id = %s"]
         params: list[Any] = [app_name, user_id, session_id]
         if after_timestamp is not None:
-            where_clauses.append("timestamp > %s")
+            where_clauses.append("e.timestamp > %s")
             params.append(after_timestamp)
         limit_clause = ""
         if limit is not None:
@@ -346,15 +354,17 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
             params.append(limit)
 
         sql = f"""
-        SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-        FROM {_mysql_table_ref(self._events_table)}
+        SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+        FROM {_mysql_table_ref(self._events_table)} e
+        JOIN {_mysql_table_ref(self._session_table)} s
+            ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {" AND ".join(where_clauses)}
-        ORDER BY timestamp ASC{limit_clause}
+        ORDER BY e.timestamp ASC{limit_clause}
         """
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -566,9 +576,9 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
     _max_table_name_parts: ClassVar[int] = 2
 
-    def __init__(self, config: "AiomysqlConfig") -> None:
+    def __init__(self, config: "AiomysqlConfig", *, read_config: "AiomysqlConfig | None" = None) -> None:
         """Initialize aiomysql memory store."""
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
@@ -595,7 +605,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             await driver.execute(statement)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
+        """Bulk insert memory entries with deduplication on (app_name, user_id, event_id)."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -708,7 +718,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
 
         try:
             async with (
-                self._config.provide_connection() as conn,
+                self._provide_read_connection(primary=False) as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
                 await cursor.execute(sql, params)
@@ -732,19 +742,29 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             records.append(rec)
         return records
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE session_id = %s"
+        clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {' AND '.join(clauses)}"
         try:
             async with (
                 self._config.provide_connection() as conn,
                 AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
             ):
-                await cursor.execute(sql, (session_id,))
+                await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
         except AiomysqlProgrammingError as exc:
@@ -796,6 +816,7 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             if fk_def:
                 fk_constraint = f",\n            {fk_def}"
 
+        unique_key_name = _mysql_index_name(self._memory_table, "app_user_event")
         indexes_sql = ",\n            ".join(
             f"{keyword} {index_name} ({columns})"
             for keyword, index_name, columns in _mysql_memory_index_specs(self._memory_table, use_fts=self._use_fts)
@@ -808,13 +829,14 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             content_json JSON NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSON,
             inserted_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            UNIQUE KEY {unique_key_name} (app_name, user_id, event_id),
             {indexes_sql}{fk_constraint}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
         """
@@ -822,6 +844,27 @@ class AiomysqlADKMemoryStore(BaseAsyncADKMemoryStore["AiomysqlConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get MySQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {_mysql_table_ref(self._memory_table)}"]
+
+
+def _mysql_split_table(table: str) -> tuple[str | None, str]:
+    """Split a validated 1- or 2-part MySQL table name into (database, bare_table)."""
+    if "." in table:
+        database_name, bare_table = table.split(".", 1)
+        return database_name, bare_table
+    return None, table
+
+
+def _mysql_table_ref(table: str) -> str:
+    """Render database.table via format_identifier while keeping bare names unquoted."""
+    if "." in table:
+        return format_identifier(table)
+    return table
+
+
+def _mysql_index_name(table: str, suffix: str) -> str:
+    """Derive a per-table MySQL index identifier from the bare table name."""
+    _, bare_table = _mysql_split_table(table)
+    return f"idx_{bare_table}_{suffix}"
 
 
 def _resolve_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[Any], Any]]":

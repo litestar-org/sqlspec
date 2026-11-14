@@ -18,7 +18,8 @@ from sqlspec.builder._parsing_utils import (
     resolve_value_expression,
     unwrap_expression_source,
 )
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
 from sqlspec.utils.type_guards import is_dict
@@ -173,7 +174,10 @@ class InsertValuesMixin:
             if not column_defs:
                 self.columns(*kwargs.keys())
                 column_defs = list(self._columns or [])
-            for col, val in kwargs.items():
+                ordered_items = list(kwargs.items())
+            else:
+                ordered_items = self._align_mapping_to_columns(kwargs, column_defs)
+            for col, val in ordered_items:
                 column_name = str(col).split(".")[-1]
                 resolved = resolve_value_expression(val, self, column_name)
                 if resolved is not None:
@@ -212,6 +216,33 @@ class InsertValuesMixin:
 
     def add_values(self, values: Sequence[Any]) -> Self:
         return self.values(*values)
+
+    def _align_mapping_to_columns(self, row: "Mapping[str, Any]", column_defs: list[str]) -> "list[tuple[str, Any]]":
+        """Order a mapping row to match the declared INSERT column list.
+
+        Keys match declared columns by exact name, or by the unqualified column
+        name when the declared columns are qualified and their leaf names are
+        distinct. A row whose key set differs from the declared columns is
+        rejected rather than bound positionally.
+
+        Args:
+            row: Mapping of column name to value for one row.
+            column_defs: Column names in the order they appear in the INSERT column list.
+
+        Returns:
+            Key-value pairs in declared column order.
+
+        Raises:
+            SQLBuilderError: If the row keys do not match the declared columns.
+        """
+        if len(row) == len(column_defs):
+            if all(column in row for column in column_defs):
+                return [(column, row[column]) for column in column_defs]
+            leaf_names = [column.rsplit(".", maxsplit=1)[-1] for column in column_defs]
+            if len(set(leaf_names)) == len(leaf_names) and all(leaf in row for leaf in leaf_names):
+                return [(leaf, row[leaf]) for leaf in leaf_names]
+        msg = f"Mapping keys {sorted(map(str, row))} do not match the declared columns {column_defs}."
+        raise SQLBuilderError(msg)
 
 
 @trait
@@ -311,12 +342,14 @@ class UpdateSetClauseMixin:
         assignments: list[exp.Expr] = []
         if len(args) == ARG_PAIR_COUNT and not kwargs:
             col, val = args
-            col_expr = col if isinstance(col, exp.Column) else exp.column(col)
+            col_expr = col if isinstance(col, exp.Column) else self._assignment_target(col)
             assignments.append(exp.EQ(this=col_expr, expression=self._process_update_value(val, col)))
         elif (len(args) == SINGLE_VALUE_COUNT and isinstance(args[0], Mapping)) or kwargs:
             all_values = dict(args[0] if args else {}, **kwargs)
             for col, val in all_values.items():
-                assignments.append(exp.EQ(this=exp.column(col), expression=self._process_update_value(val, col)))
+                assignments.append(
+                    exp.EQ(this=self._assignment_target(col), expression=self._process_update_value(val, col))
+                )
         else:
             msg = "Invalid arguments for set(): use (column, value), mapping, or kwargs."
             raise SQLBuilderError(msg)
@@ -344,6 +377,15 @@ class UpdateSetClauseMixin:
         """
         payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
         return self.set(**payload)
+
+    def _assignment_target(self, col: Any) -> exp.Expr:
+        """Build the SET target column, splitting dotted names into qualifier and column."""
+        if isinstance(col, str):
+            try:
+                return parse_column_for_condition(col)
+            except SQLSpecError as exc:
+                raise SQLBuilderError(str(exc)) from exc
+        return exp.column(col, copy=False)
 
     def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
         column_name = col if isinstance(col, str) else str(col)
@@ -389,15 +431,16 @@ class UpdateFromClauseMixin:
         if isinstance(table, str):
             table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
         elif unwrapped_source is not None:
-            if isinstance(unwrapped_source, (exp.Select, exp.SetOperation)):
-                table_expr = exp.Subquery(this=unwrapped_source.copy())
+            source_copy = unwrapped_source.copy() if isinstance(table, exp.Expr) else unwrapped_source
+            if isinstance(source_copy, (exp.Select, exp.SetOperation)):
+                table_expr = exp.Subquery(this=source_copy)
                 if alias:
-                    table_expr = exp.alias_(table_expr, alias, table=True)
+                    table_expr = exp.alias_(table_expr, alias, table=True, copy=False)
             else:
                 table_expr = (
-                    exp.alias_(unwrapped_source.copy(), alias, table=not isinstance(unwrapped_source, exp.Func))
+                    exp.alias_(source_copy, alias, table=not isinstance(source_copy, exp.Func), copy=False)
                     if alias
-                    else unwrapped_source.copy()
+                    else source_copy
                 )
         elif (
             hasattr(table, "build")
@@ -449,15 +492,15 @@ class UpdateFromClauseMixin:
                         cols = [c.name for c in existing_alias.args["columns"]]
                     elif isinstance(source_columns, (list, tuple)):
                         cols = [str(c) for c in source_columns]
-                    table_expr = exp.alias_(subquery_copy, alias, table=cols or False)
+                    table_expr = exp.alias_(subquery_copy, alias, table=cols or False, copy=False)
                 else:
                     table_expr = subquery_copy
             elif isinstance(subquery_copy, exp.Subquery):
-                table_expr = exp.alias_(subquery_copy, alias, table=True) if alias else subquery_copy
+                table_expr = exp.alias_(subquery_copy, alias, table=True, copy=False) if alias else subquery_copy
             elif isinstance(subquery_copy, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=subquery_copy)
                 if alias or builder_alias:
-                    table_expr = exp.alias_(table_expr, alias or builder_alias, table=True)
+                    table_expr = exp.alias_(table_expr, alias or builder_alias, table=True, copy=False)
             else:
                 msg = "UPDATE FROM builder sources must be SELECT, VALUES, or subquery expressions."
                 raise SQLBuilderError(msg)
@@ -538,7 +581,7 @@ def _parse_returning_column(column: str, dialect: "DialectType | None") -> exp.E
     if _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
         return _simple_column_expression(stripped)
     if _RETURNING_WORD_RE.fullmatch(stripped):
-        return exp.column(*reversed(stripped.split(".")))
+        return exp.column(*reversed(stripped.split(".")), copy=False)
     msg = f"Invalid RETURNING expression {column!r}: pass one column or expression per argument."
     try:
         statements = sqlglot.parse(f"SELECT {stripped}", dialect=_normalize_dialect(dialect))

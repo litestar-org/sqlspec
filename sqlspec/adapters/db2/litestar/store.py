@@ -78,14 +78,6 @@ def session_index_ddl(table: str) -> str:
     return f"CREATE INDEX {idx_name} ON {table}(expires_at)"
 
 
-def _session_companion_index(table_name: str) -> CompanionIndex:
-    """Build the catalog-probed Db2 session expiry index definition."""
-    schema, table = session_catalog_names(table_name)
-    return CompanionIndex(
-        name=session_index_name(table_name), table=table, schema=schema, ddl=session_index_ddl(table_name)
-    )
-
-
 def select_session_sql(table: str) -> str:
     """Return the query reading an unexpired session.
 
@@ -276,21 +268,21 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
-    def _table_ddl(self) -> str:
-        """Get Db2 CREATE TABLE SQL."""
-        return session_table_ddl(self._table_name)
-
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the catalog-probed Db2 session expiry companion index."""
         return [_session_companion_index(self._table_name)]
 
-    def _drop_table_sql(self) -> "list[str]":
-        """Get Db2 DROP TABLE statements."""
-        return [drop_session_table_sql(self._table_name)]
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the catalog-probed drop for the session table."""
         return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
+
+    def _table_ddl(self) -> str:
+        """Get Db2 CREATE TABLE SQL."""
+        return session_table_ddl(self._table_name)
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [drop_session_table_sql(self._table_name)]
 
     def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
@@ -309,7 +301,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
             row = driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if renew_for is not None and row["expires_at"] is not None:
+            if self._should_renew(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
@@ -390,7 +382,7 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
             row = await driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-            if renew_for is not None and row["expires_at"] is not None:
+            if self._should_renew(renew_for) and row["expires_at"] is not None:
                 new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
                     await driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
@@ -443,21 +435,21 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
             self._log_delete_expired(count)
         return count
 
-    def _table_ddl(self) -> str:
-        """Get Db2 CREATE TABLE SQL."""
-        return session_table_ddl(self._table_name)
-
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return the catalog-probed Db2 session expiry companion index."""
         return [_session_companion_index(self._table_name)]
 
-    def _drop_table_sql(self) -> "list[str]":
-        """Get Db2 DROP TABLE statements."""
-        return [drop_session_table_sql(self._table_name)]
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the catalog-probed drop for the session table."""
         return [build_guarded_drop_table(self._table_name, drop_session_table_sql(self._table_name))]
+
+    def _table_ddl(self) -> str:
+        """Get Db2 CREATE TABLE SQL."""
+        return session_table_ddl(self._table_name)
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [drop_session_table_sql(self._table_name)]
 
     async def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
@@ -472,6 +464,14 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
                 await driver.execute(session_index_ddl(self._table_name))
             await driver.commit()
         self._log_table_created()
+
+
+def _session_companion_index(table_name: str) -> CompanionIndex:
+    """Build the catalog-probed Db2 session expiry index definition."""
+    schema, table = session_catalog_names(table_name)
+    return CompanionIndex(
+        name=session_index_name(table_name), table=table, schema=schema, ddl=session_index_ddl(table_name)
+    )
 
 
 def _coerce_bytes(value: Any) -> "bytes | None":

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import sqlspec.core._pipeline as pipeline_module
 from sqlspec.core import SQL, get_pipeline_metrics, reset_pipeline_registry
 from sqlspec.core._pipeline import StatementPipelineRegistry
-from sqlspec.core.parameters import ParameterConverter, ParameterValidator
+from sqlspec.core.parameters import ParameterConverter, ParameterStyle, ParameterStyleConfig, ParameterValidator
 from sqlspec.core.statement import StatementConfig
 from tests.conftest import requires_interpreted, requires_patchable_internals
 
@@ -112,3 +112,18 @@ def test_fingerprint_uses_config_hash_plus_unhashed_parameter_discriminators() -
 
     assert registry._fingerprint_config(converter_a_config) != registry._fingerprint_config(converter_b_config)
     assert registry._fingerprint_config(transformer_a_config) != registry._fingerprint_config(transformer_b_config)
+
+
+def test_fingerprint_distinguishes_type_coercion_map_callables() -> None:
+    """Distinct coercion callables under the same key types produce distinct hashes and fingerprints."""
+    registry = StatementPipelineRegistry()
+    config_a = StatementConfig(
+        parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: str})
+    )
+    config_b = StatementConfig(
+        parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: repr})
+    )
+
+    assert hash(config_a.parameter_config) != hash(config_b.parameter_config)
+    assert hash(config_a) != hash(config_b)
+    assert registry._fingerprint_config(config_a) != registry._fingerprint_config(config_b)

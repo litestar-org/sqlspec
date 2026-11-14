@@ -18,43 +18,6 @@ __all__ = ("SnowflakeADKMemoryStore", "SnowflakeADKStore")
 logger = get_logger("sqlspec.adapters.snowflake.adk")
 
 
-def _decode_variant(raw: Any) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    value = from_json(raw)
-    if not isinstance(value, dict):
-        msg = "Expected a JSON object in a Snowflake VARIANT column."
-        raise TypeError(msg)
-    return value
-
-
-def _normalize_utc(value: str | datetime) -> datetime:
-    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
-
-
-def _missing_table(exc: SQLSpecError) -> bool:
-    return isinstance(exc, NotFoundError) and "does not exist" in str(exc).lower()
-
-
-def _lower_row(row: dict[str, Any]) -> dict[str, Any]:
-    return {key.lower(): value for key, value in row.items()}
-
-
-def _session(row: dict[str, Any]) -> StoredSession:
-    value = _lower_row(row)
-    return StoredSession(
-        id=str(value["id"]),
-        app_name=str(value["app_name"]),
-        user_id=str(value["user_id"]),
-        state=_decode_variant(value["state"]),
-        create_time=_normalize_utc(value["create_time"]),
-        update_time=_normalize_utc(value["update_time"]),
-    )
-
-
 class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     """Store ADK sessions and events in Snowflake VARIANT columns."""
 
@@ -107,7 +70,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     ) -> StoredSession | None:
         """Read a session and optionally refresh its update timestamp."""
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=renew_for is not None) as driver:
                 row = driver.select_one_or_none(
                     f"SELECT id, app_name, user_id, state, create_time, update_time FROM {self._session_table} "
                     "WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -116,7 +79,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 if row is None:
                     return None
                 session = _session(row)
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                if self._should_renew(renew_for):
                     now = datetime.now(UTC)
                     driver.execute(
                         f"UPDATE {self._session_table} SET update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -169,7 +132,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 sql += " OFFSET ?"
                 parameters.append(offset)
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 return [_session(row) for row in driver.select(sql, parameters)]
         except SQLSpecError as exc:
             if _missing_table(exc):
@@ -192,27 +155,20 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             if not _missing_table(exc):
                 raise
 
-    def _insert_event(self, driver: Any, event_record: StoredEvent) -> None:
-        driver.execute(
-            f"INSERT INTO {self._events_table} "
-            "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
-            "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)",
-            (
-                event_record["id"],
-                event_record["app_name"],
-                event_record["user_id"],
-                event_record["session_id"],
-                event_record["invocation_id"],
-                event_record["timestamp"],
-                to_json(event_record["event_data"]),
-            ),
-        )
-
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an ADK event to its session."""
-        with self._config.provide_session() as driver:
+        """Append an ADK event to its session after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        with self._config.provide_session() as driver, driver.transaction():
+            row = driver.select_one_or_none(
+                f"SELECT 1 FROM {self._session_table} WHERE id = ? AND app_name = ? AND user_id = ? LIMIT 1",
+                (session_id, app_name, user_id),
+            )
+            if row is None:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
             self._insert_event(driver, event_record)
-            driver.commit()
 
     def append_event_and_update_state(
         self,
@@ -226,6 +182,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         user_state: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update session, app, and user state."""
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         now = datetime.now(UTC)
         with self._config.provide_session() as driver, driver.transaction():
             row = driver.select_one_or_none(
@@ -269,19 +226,21 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         if limit == 0:
             return []
         sql = (
-            f"SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM {self._events_table} "
+            "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data "
+            f"FROM {self._events_table} e "
+            f"JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?"
         )
-        sql += "WHERE app_name = ? AND user_id = ? AND session_id = ?"
         parameters: list[Any] = [app_name, user_id, session_id]
         if after_timestamp is not None:
-            sql += " AND timestamp > ?"
+            sql += " AND e.timestamp > ?"
             parameters.append(after_timestamp)
-        sql += " ORDER BY timestamp ASC, id ASC"
+        sql += " ORDER BY e.timestamp ASC, e.id ASC"
         if limit is not None:
             sql += " LIMIT ?"
             parameters.append(limit)
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 rows = driver.select(sql, parameters)
             events: list[StoredEvent] = []
             for raw in rows:
@@ -303,22 +262,6 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             raise
         else:
             return events
-
-    def _delete_before(self, table: str, column: str, before: datetime, app_name: str | None) -> int:
-        sql = f"DELETE FROM {table} WHERE {column} < ?"
-        parameters: list[Any] = [before]
-        if app_name is not None:
-            sql += " AND app_name = ?"
-            parameters.append(app_name)
-        try:
-            with self._config.provide_session() as driver:
-                result = driver.execute(sql, parameters)
-                driver.commit()
-                return max(result.get_affected_count(), 0)
-        except SQLSpecError as exc:
-            if _missing_table(exc):
-                return 0
-            raise
 
     def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
         """Delete events older than the cutoff within an optional application."""
@@ -349,21 +292,6 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 return 0
             raise
 
-    def _read_state(self, table: str, app_name: str, user_id: str | None = None) -> dict[str, Any] | None:
-        sql = f"SELECT state FROM {table} WHERE app_name = ?"
-        parameters: list[Any] = [app_name]
-        if user_id is not None:
-            sql += " AND user_id = ?"
-            parameters.append(user_id)
-        try:
-            with self._config.provide_session() as driver:
-                row = driver.select_one_or_none(sql, parameters)
-                return None if row is None else _decode_variant(_lower_row(row)["state"])
-        except SQLSpecError as exc:
-            if _missing_table(exc):
-                return None
-            raise
-
     def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Read application-scoped state."""
         return self._read_state(self._app_state_table, app_name)
@@ -371,35 +299,6 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Read user-scoped state."""
         return self._read_state(self._user_state_table, app_name, user_id)
-
-    def _merge_state(
-        self,
-        driver: Any,
-        table: str,
-        app_name: str,
-        state: dict[str, Any],
-        now: datetime,
-        *,
-        user_id: str | None = None,
-    ) -> None:
-        source = "? AS app_name"
-        columns = "app_name"
-        values = "s.app_name"
-        predicate = "t.app_name = s.app_name"
-        parameters: list[Any] = [app_name]
-        if user_id is not None:
-            source += ", ? AS user_id"
-            columns += ", user_id"
-            values += ", s.user_id"
-            predicate += " AND t.user_id = s.user_id"
-            parameters.append(user_id)
-        parameters.extend((to_json(state), now))
-        driver.execute(
-            f"MERGE INTO {table} t USING (SELECT {source}, PARSE_JSON(?) AS state, ? AS update_time) s "
-            f"ON {predicate} WHEN MATCHED THEN UPDATE SET state = s.state, update_time = s.update_time "
-            f"WHEN NOT MATCHED THEN INSERT ({columns}, state, update_time) VALUES ({values}, s.state, s.update_time)",
-            parameters,
-        )
 
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
         """Insert or replace application-scoped state."""
@@ -433,6 +332,82 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 (key, value),
             )
             driver.commit()
+
+    def _insert_event(self, driver: Any, event_record: StoredEvent) -> None:
+        driver.execute(
+            f"INSERT INTO {self._events_table} "
+            "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+            "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)",
+            (
+                event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
+                event_record["session_id"],
+                event_record["invocation_id"],
+                event_record["timestamp"],
+                to_json(event_record["event_data"]),
+            ),
+        )
+
+    def _delete_before(self, table: str, column: str, before: datetime, app_name: str | None) -> int:
+        sql = f"DELETE FROM {table} WHERE {column} < ?"
+        parameters: list[Any] = [before]
+        if app_name is not None:
+            sql += " AND app_name = ?"
+            parameters.append(app_name)
+        try:
+            with self._config.provide_session() as driver:
+                result = driver.execute(sql, parameters)
+                driver.commit()
+                return max(result.get_affected_count(), 0)
+        except SQLSpecError as exc:
+            if _missing_table(exc):
+                return 0
+            raise
+
+    def _read_state(self, table: str, app_name: str, user_id: str | None = None) -> dict[str, Any] | None:
+        sql = f"SELECT state FROM {table} WHERE app_name = ?"
+        parameters: list[Any] = [app_name]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            parameters.append(user_id)
+        try:
+            with self._config.provide_session() as driver:
+                row = driver.select_one_or_none(sql, parameters)
+                return None if row is None else _decode_variant(_lower_row(row)["state"])
+        except SQLSpecError as exc:
+            if _missing_table(exc):
+                return None
+            raise
+
+    def _merge_state(
+        self,
+        driver: Any,
+        table: str,
+        app_name: str,
+        state: dict[str, Any],
+        now: datetime,
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        source = "? AS app_name"
+        columns = "app_name"
+        values = "s.app_name"
+        predicate = "t.app_name = s.app_name"
+        parameters: list[Any] = [app_name]
+        if user_id is not None:
+            source += ", ? AS user_id"
+            columns += ", user_id"
+            values += ", s.user_id"
+            predicate += " AND t.user_id = s.user_id"
+            parameters.append(user_id)
+        parameters.extend((to_json(state), now))
+        driver.execute(
+            f"MERGE INTO {table} t USING (SELECT {source}, PARSE_JSON(?) AS state, ? AS update_time) s "
+            f"ON {predicate} WHEN MATCHED THEN UPDATE SET state = s.state, update_time = s.update_time "
+            f"WHEN NOT MATCHED THEN INSERT ({columns}, state, update_time) VALUES ({values}, s.state, s.update_time)",
+            parameters,
+        )
 
     def _sessions_table_ddl(self) -> str:
         owner = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
@@ -523,7 +498,8 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
             for column in columns
         )
         sql = (
-            f"MERGE INTO {self._memory_table} t USING (SELECT {source}) s ON t.event_id = s.event_id "
+            f"MERGE INTO {self._memory_table} t USING (SELECT {source}) s "
+            "ON t.app_name = s.app_name AND t.user_id = s.user_id AND t.event_id = s.event_id "
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(columns)}) VALUES ({', '.join(f's.{column}' for column in columns)})"
         )
         with self._config.provide_session() as driver, driver.transaction():
@@ -577,7 +553,7 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
         parameters.extend((f"%{query.strip()}%", self._max_results if limit is None else limit))
         columns = "id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at"
         try:
-            with self._config.provide_session() as driver:
+            with self._provide_read_session(primary=False) as driver:
                 rows = driver.select(
                     f"SELECT {columns} FROM {self._memory_table} WHERE {predicate} "
                     "AND content_text ILIKE ? ORDER BY timestamp DESC, id DESC LIMIT ?",
@@ -612,20 +588,19 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
         else:
             return memories
 
-    def _delete(self, predicate: str, parameters: list[Any]) -> int:
-        try:
-            with self._config.provide_session() as driver:
-                result = driver.execute(f"DELETE FROM {self._memory_table} WHERE {predicate}", parameters)
-                driver.commit()
-                return max(result.get_affected_count(), 0)
-        except SQLSpecError as exc:
-            if _missing_table(exc):
-                return 0
-            raise
-
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete memories originating from the specified session."""
-        return self._delete("session_id = ?", [session_id])
+    def delete_entries_by_session(
+        self, session_id: str, app_name: str | None = None, user_id: str | None = None
+    ) -> int:
+        """Delete memories originating from the specified session, optionally scoped by owner."""
+        predicate = "session_id = ?"
+        parameters: list[Any] = [session_id]
+        if app_name is not None:
+            predicate += " AND app_name = ?"
+            parameters.append(app_name)
+        if user_id is not None:
+            predicate += " AND user_id = ?"
+            parameters.append(user_id)
+        return self._delete(predicate, parameters)
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memories older than the cutoff within optional scope filters."""
@@ -639,15 +614,72 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
             parameters.append(scope)
         return self._delete(predicate, parameters)
 
+    def _delete(self, predicate: str, parameters: list[Any]) -> int:
+        try:
+            with self._config.provide_session() as driver:
+                result = driver.execute(f"DELETE FROM {self._memory_table} WHERE {predicate}", parameters)
+                driver.commit()
+                return max(result.get_affected_count(), 0)
+        except SQLSpecError as exc:
+            if _missing_table(exc):
+                return 0
+            raise
+
     def _memory_table_ddl(self) -> str:
         owner = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return (
             f"CREATE TABLE IF NOT EXISTS {self._memory_table} (id VARCHAR(128) PRIMARY KEY, "
             "session_id VARCHAR(128) NOT NULL, app_name VARCHAR(128) NOT NULL, user_id VARCHAR(128) NOT NULL, "
-            f"scope VARCHAR(16) NOT NULL DEFAULT 'user', event_id VARCHAR(128) NOT NULL UNIQUE, author VARCHAR(256){owner}, "
+            f"scope VARCHAR(16) NOT NULL DEFAULT 'user', event_id VARCHAR(128) NOT NULL, author VARCHAR(256){owner}, "
             "timestamp TIMESTAMP_TZ NOT NULL, content_json VARIANT NOT NULL, content_text VARCHAR NOT NULL, "
-            "metadata_json VARIANT, inserted_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP())"
+            "metadata_json VARIANT, inserted_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(), "
+            "UNIQUE (app_name, user_id, event_id))"
         )
 
     def _drop_memory_table_sql(self) -> list[str]:
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def _decode_variant(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    value = from_json(raw)
+    if not isinstance(value, dict):
+        msg = "Expected a JSON object in a Snowflake VARIANT column."
+        raise TypeError(msg)
+    return value
+
+
+def _normalize_utc(value: str | datetime) -> datetime:
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _missing_table(exc: SQLSpecError) -> bool:
+    return isinstance(exc, NotFoundError) and "does not exist" in str(exc).lower()
+
+
+def _lower_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key.lower(): value for key, value in row.items()}
+
+
+def _session(row: dict[str, Any]) -> StoredSession:
+    value = _lower_row(row)
+    return StoredSession(
+        id=str(value["id"]),
+        app_name=str(value["app_name"]),
+        user_id=str(value["user_id"]),
+        state=_decode_variant(value["state"]),
+        create_time=_normalize_utc(value["create_time"]),
+        update_time=_normalize_utc(value["update_time"]),
+    )
+
+
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)

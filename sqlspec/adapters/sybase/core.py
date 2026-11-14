@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.dialects.sybase import Sybase as _SybaseDialect
@@ -12,12 +13,14 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -65,8 +68,10 @@ DEFAULT_SYBASE_TDS_VERSION: Final[str] = "5.0"
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _SYBASE_CONSTRAINT_547: Final[int] = 547
+_SYBASE_READ_ONLY: Final[int] = 3906
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    3906: (ReadOnlyTransactionError, "read-only database"),
     2601: (UniqueViolationError, "unique index violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
     546: (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -156,7 +161,7 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="tsql")}
     return "".join(["%%" if char == "%" and index not in keep else char for index, char in enumerate(sql)])
 
 
@@ -228,6 +233,14 @@ def apply_driver_features(
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a Sybase ASE exception to SQLSpec's exception hierarchy."""
+    if (
+        getattr(error, "sqlstate", None) == "25006"
+        or "25006" in str(error)
+        or extract_error_number(error) == _SYBASE_READ_ONLY
+    ):
+        mapped_readonly = ReadOnlyTransactionError(str(error))
+        mapped_readonly.__cause__ = error
+        return mapped_readonly
     error_number = extract_error_number(error)
 
     if error_number == _SYBASE_CONSTRAINT_547:
@@ -250,6 +263,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"Sybase ASE interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"Sybase ASE integrity error. Original error: {error}")
     if exc_name == "OperationalError":
@@ -385,6 +400,66 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         config["user"] = user_alias
     tds_version = str(config.pop("tds_version", config.pop("_sybase_tds_version", DEFAULT_SYBASE_TDS_VERSION)))
     config["_sybase_tds_version"] = tds_version
+    return config
+
+
+def merge_sybase_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve explicit endpoint aliases in a fresh derivation mapping."""
+    config = dict(base_config)
+    config.update(overrides)
+    explicit = dict(overrides)
+    if "url" in explicit:
+        explicit.update(parse_sybase_replica_endpoint(str(explicit.pop("url"))))
+        config.update(explicit)
+        config.pop("url", None)
+    for canonical, alias in (("user", "username"), ("database", "db")):
+        if alias in explicit and canonical not in explicit:
+            config[canonical] = explicit[alias]
+            config.pop(alias, None)
+    freetds_server = explicit.get("freetds_server")
+    server_alias = explicit.get("server_alias")
+    alias_name = freetds_server or server_alias
+    has_alias_flag = "is_server_alias" in explicit or "_sybase_server_alias" in explicit
+    explicit_alias_flag = bool(explicit.get("is_server_alias") or explicit.get("_sybase_server_alias"))
+    for key in ("freetds_server", "server_alias", "is_server_alias"):
+        config.pop(key, None)
+    if alias_name:
+        config["server"] = alias_name
+        config["_sybase_server_alias"] = True
+        config.pop("host", None)
+    elif "host" in explicit:
+        config.pop("_sybase_server_alias", None)
+        if "server" not in explicit:
+            config["server"] = explicit["host"]
+            config.pop("host", None)
+    elif has_alias_flag:
+        if explicit_alias_flag:
+            config["_sybase_server_alias"] = True
+        else:
+            config.pop("_sybase_server_alias", None)
+    return config
+
+
+def parse_sybase_replica_endpoint(endpoint: str) -> dict[str, Any]:
+    """Parse a reader URL or host endpoint without connecting."""
+    try:
+        parsed = urlsplit(endpoint if "://" in endpoint else "//" + endpoint)
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg) from exc
+    if not hostname or (parsed.scheme and parsed.scheme != "sybase"):
+        msg = "Invalid sybase replica endpoint"
+        raise ImproperConfigurationError(msg)
+    config: dict[str, Any] = {"host": hostname}
+    if port is not None:
+        config["port"] = port
+    if parsed.username is not None:
+        config["user"] = unquote(parsed.username)
+    if parsed.password is not None:
+        config["password"] = unquote(parsed.password)
+    if parsed.path.strip("/"):
+        config["database"] = unquote(parsed.path.strip("/"))
     return config
 
 

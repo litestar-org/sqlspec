@@ -83,6 +83,14 @@ class _SpannerLitestarStoreCommonMixin:
     _index_options: "str | None"
     _enable_row_deletion_policy: bool
 
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the session expiry index."""
+        return [
+            CompanionIndex(
+                name=f"idx_{self._table_name}_expires_at", table=self._table_name, schema=None, ddl=self._index_ddl()
+            )
+        ]
+
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
             return None
@@ -229,14 +237,6 @@ CREATE TABLE IF NOT EXISTS {self._table_name} (
             opts = f" OPTIONS ({self._index_options})"
         return f"CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at ON {self._table_name}({leading}){opts}"
 
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the session expiry index."""
-        return [
-            CompanionIndex(
-                name=f"idx_{self._table_name}_expires_at", table=self._table_name, schema=None, ddl=self._index_ddl()
-            )
-        ]
-
     def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]
 
@@ -310,7 +310,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if renew_for is not None and expires_at is not None:
+        if self._should_renew(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)
@@ -397,7 +397,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
-        if renew_for is not None and expires_at is not None:
+        if self._should_renew(renew_for) and expires_at is not None:
             new_expires = self._calculate_expires_at(renew_for)
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)

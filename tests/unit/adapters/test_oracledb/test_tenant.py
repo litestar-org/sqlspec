@@ -2,9 +2,10 @@
 
 from inspect import isawaitable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
@@ -17,7 +18,7 @@ from sqlspec.adapters.oracledb.tenant import (
     compose_tenant_session_hook,
     tenant_client_identifier,
 )
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TenantCleanupError, TenantContextError
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -357,9 +358,9 @@ async def test_identifier_cleanup_resolves_hook_with_captured_tenant(mode: str, 
         if "DBMS_SESSION.CLEAR_CONTEXT" in statement:
             if release_error:
                 raise RuntimeError("context clear failed")
-            for namespace in tuple(contexts):
-                if f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}')" in statement:
-                    contexts.pop(namespace)
+            for key, namespace in (binds or {}).items():
+                if key.startswith("p_clr_ns_"):
+                    contexts.pop(namespace, None)
 
     cursor.execute.side_effect = execute
     strategy_cls = OracleSyncIdentifierStrategy if mode == "sync" else OracleAsyncIdentifierStrategy
@@ -375,7 +376,7 @@ async def test_identifier_cleanup_resolves_hook_with_captured_tenant(mode: str, 
         assert TenantContext.get() is caller
     assert resolved == ["a", "a"]
     release_sql = next(statement for statement, _ in connection.calls if "DBMS_SESSION.CLEAR_CONTEXT" in statement)
-    assert "DBMS_SESSION.CLEAR_CONTEXT('ctx_a')" in release_sql
+    assert "DBMS_SESSION.CLEAR_CONTEXT(:p_clr_ns_0)" in release_sql
     assert contexts == (
         {"ctx_b": {"tenant": "b"}, "ctx_a": {"tenant": "a"}} if release_error else {"ctx_b": {"tenant": "b"}}
     )
@@ -543,3 +544,286 @@ def test_sync_session_builds_one_session_lease(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(OracleSyncConfig, "_create_tenant_lease", record)
     config.provide_session()
     assert len(created) == 1
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_client_context_strategy_binds_declared_variables_without_sql(mode: str) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
+
+    connection = SimpleNamespace(set_app_context=MagicMock(), clear_app_context=MagicMock(), cursor=MagicMock())
+    strategy_type = OracleSyncClientContextStrategy if mode == "sync" else OracleAsyncClientContextStrategy
+    strategy = strategy_type(variable_keys=("region",))
+    payload = TenantContextPayload("acme", variables={"region": "us"})
+    state = await _invoke(strategy.checkout, connection, payload)
+    connection.set_app_context.assert_called_once_with("CLIENTCONTEXT", TENANT_ID="acme", region="us")
+    await _invoke(strategy.checkin, connection, state)
+    connection.clear_app_context.assert_called_once_with("CLIENTCONTEXT")
+    connection.cursor.assert_not_called()
+    with pytest.raises(TenantContextError, match="Undeclared"):
+        await _invoke(strategy.checkout, connection, TenantContextPayload("acme", variables={"undeclared": "bad"}))
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("provider", [None, "database", "oci", "entra", "obo"])
+async def test_deepsec_strategy_keeps_secret_variables_out_of_attributes(
+    mode: str, provider: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncEndUserSecurityStrategy, OracleSyncEndUserSecurityStrategy
+
+    connection = SimpleNamespace(
+        thin=True,
+        set_end_user_security_context=MagicMock(),
+        clear_end_user_security_context=MagicMock(),
+        cursor=MagicMock(),
+    )
+    from sqlspec.adapters.oracledb._typing import oracledb_module
+
+    create_context = MagicMock(wraps=oracledb_module.create_end_user_security_context)
+    monkeypatch.setattr(oracledb_module, "create_end_user_security_context", create_context)
+    strategy_type = OracleSyncEndUserSecurityStrategy if mode == "sync" else OracleAsyncEndUserSecurityStrategy
+    strategy = strategy_type("database-token", identity_provider=provider, variable_keys=("region",))
+    payload = TenantContextPayload(
+        "acme", variables={"region": "us", "end_user_token": "user-token", "end_user_key": "secret-key"}
+    )
+    state = await _invoke(strategy.checkout, connection, payload)
+    assert create_context.call_args.kwargs["attributes"] == {"TENANT_ID": "acme", "region": "us"}
+    await _invoke(strategy.checkin, connection, state)
+    connection.clear_end_user_security_context.assert_called_once_with()
+    connection.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("thin", [False, True])
+async def test_tenant_shard_routing_before_socket_acquire_and_explicit_override(mode: str, thin: bool) -> None:
+    from sqlspec.adapters.oracledb.tenant import OracleAsyncClientContextStrategy, OracleSyncClientContextStrategy
+
+    connection = SimpleNamespace(
+        thin=thin,
+        set_app_context=MagicMock(),
+        clear_app_context=MagicMock(),
+        rollback=AsyncMock() if mode == "async" else MagicMock(),
+    )
+    pool = SimpleNamespace(
+        thin=thin,
+        acquire=AsyncMock(return_value=connection) if mode == "async" else MagicMock(return_value=connection),
+        release=AsyncMock() if mode == "async" else MagicMock(),
+        drop=AsyncMock() if mode == "async" else MagicMock(),
+    )
+    strategy_type = OracleSyncClientContextStrategy if mode == "sync" else OracleAsyncClientContextStrategy
+    config_type = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cast(
+        "Any",
+        config_type(
+            connection_instance=cast("Any", pool),
+            driver_features={
+                "tenant_strategy": strategy_type(variable_keys=("shard",)),
+                "sharding_key_variable": "shard",
+            },
+        ),
+    )
+    with TenantContext.scope("acme", variables={"shard": "us"}):
+        context = config.provide_connection()
+        if mode == "async":
+            async with context:
+                pass
+        else:
+            with context:
+                pass
+    pool.acquire.assert_called_once_with(**({"shardingkey": ["us"]} if not thin else {}))
+    pool.acquire.reset_mock()
+    with TenantContext.scope("acme"), pytest.raises(TenantContextError, match=r"Missing.*shard"):
+        context = config.provide_connection()
+        if mode == "async":
+            async with context:
+                pass
+        else:
+            with context:
+                pass
+    pool.acquire.assert_not_called()
+    with TenantContext.scope("acme"):
+        context = config.provide_connection(sharding_key=("override",))
+        if mode == "async":
+            async with context:
+                pass
+        else:
+            with context:
+                pass
+    pool.acquire.assert_called_once_with(**({"shardingkey": ["override"]} if not thin else {}))
+
+
+@pytest.mark.parametrize("vpd", [False, True])
+async def test_async_tenant_pipeline_single_flight_and_clear_order(vpd: bool) -> None:
+    connection = SimpleNamespace(client_identifier=None, cursor=MagicMock(), flights=[])
+
+    async def run_pipeline(pipeline: Any, *, continue_on_error: bool) -> list[Any]:
+        assert continue_on_error is False
+        operations = pipeline.operations
+        connection.flights.append([operation.statement for operation in operations])
+        release = any("CLEAR_IDENTIFIER" in operation.statement for operation in operations)
+        if vpd and release:
+            assert connection.client_identifier == "acme"
+            assert "CLEAR_TENANT" in operations[0].statement
+        identifier = None if release else connection.client_identifier
+        row = (identifier, identifier) if vpd else (identifier,)
+        return [SimpleNamespace(rows=[row]) for _ in operations]
+
+    connection.run_pipeline = run_pipeline
+    strategy = (
+        OracleAsyncVPDStrategy(
+            set_procedure="APP.SET_TENANT",
+            clear_procedure="APP.CLEAR_TENANT",
+            namespace="APP_CTX",
+            attribute="TENANT_ID",
+        )
+        if vpd
+        else OracleAsyncIdentifierStrategy()
+    )
+    state = await strategy.checkout(cast("Any", connection), TenantContextPayload("acme"))
+    await strategy.checkin(cast("Any", connection), state)
+    assert len(connection.flights) == 2
+    assert connection.client_identifier is None
+    connection.cursor.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["checkout", "checkin"])
+async def test_async_pipeline_verification_failure_physically_drops(failure: str) -> None:
+    connection = SimpleNamespace(client_identifier=None, rollback=AsyncMock())
+    rows = [("wrong",)] if failure == "checkout" else [("acme",), ("dirty",)]
+    connection.run_pipeline = AsyncMock(side_effect=[[SimpleNamespace(rows=[row])] for row in rows])
+    pool = SimpleNamespace(thin=True, acquire=AsyncMock(return_value=connection), release=AsyncMock(), drop=AsyncMock())
+    config = OracleAsyncConfig(
+        connection_instance=cast("Any", pool), driver_features={"tenant_strategy": OracleAsyncIdentifierStrategy()}
+    )
+    expected = TenantContextError if failure == "checkout" else TenantCleanupError
+    with TenantContext.scope("acme"), pytest.raises(expected):
+        async with config.provide_connection():
+            pass
+    pool.drop.assert_awaited_once_with(connection)
+    pool.release.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_vpd_strategy_binds_declared_variables_positionally(mode: str) -> None:
+    connection = _connection(mode)
+    cursor = connection.cursor.return_value
+    original = cursor.execute.side_effect
+
+    def execute(sql: str, binds: dict[str, Any] | None = None) -> None:
+        original(sql, binds)
+        if "SYS_CONTEXT" in sql:
+            cursor.fetchone.return_value = (connection.client_identifier, connection.client_identifier)
+
+    cursor.execute.side_effect = execute
+    strategy_type = OracleSyncVPDStrategy if mode == "sync" else OracleAsyncVPDStrategy
+    strategy = strategy_type(
+        set_procedure="APP.SET_TENANT",
+        clear_procedure="APP.CLEAR_TENANT",
+        namespace="APP_CTX",
+        attribute="TENANT_ID",
+        variable_keys=("region",),
+    )
+    await _invoke(strategy.checkout, connection, TenantContextPayload("acme", variables={"region": "us"}))
+    setter = next((sql, binds) for sql, binds in connection.calls if "APP.SET_TENANT" in sql)
+    assert setter == ("BEGIN APP.SET_TENANT(:tenant_id, :var_0); END;", {"tenant_id": "acme", "var_0": "us"})
+    with pytest.raises(TenantContextError, match="Undeclared"):
+        await _invoke(strategy.checkout, connection, TenantContextPayload("acme", variables={"hidden": "bad"}))
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("vpd", [False, True])
+async def test_matching_thick_tenant_tag_keeps_dynamic_session_settings(mode: str, vpd: bool) -> None:
+    connection = _vpd_connection(mode) if vpd else _connection(mode)
+    connection.thin = False
+    connection.tag = "EDITION=V2"
+    zones = iter(["UTC", "+01:00"])
+    hook = OracleSessionContextConfig(edition="V2", time_zone=lambda: next(zones))
+    strategy: Any
+    if vpd:
+        strategy_type = OracleAsyncVPDStrategy if mode == "async" else OracleSyncVPDStrategy
+        strategy = strategy_type(
+            set_procedure="app.ctx.set_tenant",
+            clear_procedure="app.ctx.clear_tenant",
+            namespace="tenant_ctx",
+            attribute="tenant_id",
+            hook=hook,
+        )
+    else:
+        identifier_type = OracleAsyncIdentifierStrategy if mode == "async" else OracleSyncIdentifierStrategy
+        strategy = identifier_type(hook)
+    for tenant in ("a", "b"):
+        state = await _invoke(strategy.checkout, connection, TenantContextPayload(tenant))
+        await _invoke(strategy.checkin, connection, state)
+    alters = [sql for sql, _ in connection.calls if "TIME_ZONE" in sql]
+    assert len(alters) == 2
+    assert "UTC" in alters[0]
+    assert "+01:00" in alters[1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("override_via_acquire", [True, False], ids=["acquire_option", "mid_lease_mutation"])
+async def test_tenant_lease_restores_none_initial_transaction_priority(mode: str, override_via_acquire: bool) -> None:
+    """Tenant leases restore DEFAULT when initial transaction_priority was None."""
+    connection = _connection(mode)
+    connection.transaction_priority = None
+    connection.rollback = (AsyncMock if mode == "async" else MagicMock)()
+    pool = SimpleNamespace(
+        acquire=(AsyncMock if mode == "async" else MagicMock)(return_value=connection),
+        release=(AsyncMock if mode == "async" else MagicMock)(),
+        drop=(AsyncMock if mode == "async" else MagicMock)(),
+    )
+    cfg_cls: Any = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cfg_cls(driver_features={"tenant_strategy": "identifier"})
+    config.connection_instance = pool
+    acquire_kwargs = {"transaction_priority": "HIGH"} if override_via_acquire else {}
+
+    with TenantContext.bind(TenantContextPayload("tenant-a")):
+        if mode == "sync":
+            with config.provide_connection(**acquire_kwargs) as acquired:
+                if not override_via_acquire:
+                    acquired.transaction_priority = oracledb.TransactionPriority.HIGH
+                assert acquired.transaction_priority == oracledb.TransactionPriority.HIGH
+        else:
+            async with config.provide_connection(**acquire_kwargs) as acquired:
+                if not override_via_acquire:
+                    acquired.transaction_priority = oracledb.TransactionPriority.HIGH
+                assert acquired.transaction_priority == oracledb.TransactionPriority.HIGH
+
+    assert connection.transaction_priority == oracledb.TransactionPriority.DEFAULT
+    pool.release.assert_called_once_with(connection)
+    pool.drop.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_tenant_lease_invalidates_connection_when_priority_rejected(mode: str) -> None:
+    """Tenant lease invalidates and drops a connection when setting transaction_priority fails."""
+    connection = _connection(mode)
+
+    class UnsupportedPriorityConnection(SimpleNamespace):
+        @property
+        def transaction_priority(self) -> Any:
+            raise oracledb.NotSupportedError("DPY-3043: unsupported")
+
+    bad_connection = UnsupportedPriorityConnection(**vars(connection))
+    bad_connection.rollback = (AsyncMock if mode == "async" else MagicMock)()
+    pool = SimpleNamespace(
+        acquire=(AsyncMock if mode == "async" else MagicMock)(return_value=bad_connection),
+        release=(AsyncMock if mode == "async" else MagicMock)(),
+        drop=(AsyncMock if mode == "async" else MagicMock)(),
+    )
+    cfg_cls: Any = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cfg_cls(driver_features={"tenant_strategy": "identifier"})
+    config.connection_instance = pool
+
+    with TenantContext.bind(TenantContextPayload("tenant-a")):
+        with pytest.raises(SQLSpecError):
+            if mode == "sync":
+                with config.provide_connection(transaction_priority="HIGH"):
+                    pass
+            else:
+                async with config.provide_connection(transaction_priority="HIGH"):
+                    pass
+
+    pool.drop.assert_called_once_with(bad_connection)
+    pool.release.assert_not_called()

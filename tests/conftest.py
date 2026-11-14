@@ -147,12 +147,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 @pytest.fixture(scope="session", autouse=True)
 def disable_spanner_builtin_metrics() -> Generator[None, None, None]:
-    """Disable Spanner built-in metrics export during tests."""
-    if os.getenv("SPANNER_DISABLE_BUILTIN_METRICS") is None:
-        os.environ["SPANNER_DISABLE_BUILTIN_METRICS"] = "true"
-        yield
-        os.environ.pop("SPANNER_DISABLE_BUILTIN_METRICS", None)
-    else:
+    """Apply and restore the upstream Spanner emulator client guards."""
+    from pytest_databases.docker.spanner import configure_spanner_emulator_client_guards
+
+    with configure_spanner_emulator_client_guards():
         yield
 
 

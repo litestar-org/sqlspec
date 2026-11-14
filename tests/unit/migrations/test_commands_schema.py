@@ -208,6 +208,7 @@ def test_sync_verify_detects_checksum_drift_and_orphaned_records(tmp_path: Path)
         "orphaned_records": [],
         "pending_versions": [],
         "partial_squash_errors": [],
+        "unrecorded_replaces": [],
     }
 
     mig1.write_text(

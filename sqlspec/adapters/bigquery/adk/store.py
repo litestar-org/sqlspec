@@ -81,13 +81,14 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     _max_table_name_parts = 3
 
-    def __init__(self, config: BigQueryConfig) -> None:
+    def __init__(self, config: BigQueryConfig, *, read_config: "BigQueryConfig | None" = None) -> None:
         """Initialize the BigQuery ADK store.
 
         Args:
+            read_config: Optional compatible reader for pure reads.
             config: BigQuery config with ``extension_config["adk"]`` settings.
         """
-        super().__init__(config)
+        super().__init__(config, read_config=read_config)
         adk_config = _adk_config_from_extension(config)
         retention_config = cast("dict[str, Any]", adk_config.get("retention") or {})
 
@@ -126,7 +127,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get a session by app, user, and session identifier."""
-        return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+        return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Replace the durable session state snapshot."""
@@ -144,7 +145,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     ) -> "list[StoredSession]":
         """List sessions for an app, optionally filtered by user."""
         return self._list_sessions(
-            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+            app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
         )
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -185,7 +186,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Get events for a session."""
-        return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+        return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than a timestamp, optionally scoped to one application."""
@@ -223,6 +224,11 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered BigQuery ADK SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
     def _qualified(self, table: str) -> str:
         """Return the dataset-qualified table identifier when available."""
         if "." in table:
@@ -236,20 +242,22 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         qualified_column = f"{alias}.{column}" if alias else column
         return f" AND {qualified_column} IS NOT NULL"
 
-    def _run_query(self, sql: str, parameters: "Iterable[Any] | None" = None) -> "list[dict[str, Any]]":
-        client = self._config.create_connection()
-        job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
-        retry_deadline = self._config.driver_features.get("job_retry_deadline")
-        result_kwargs: dict[str, Any] = {}
-        if retry_deadline is not None and float(retry_deadline) <= 0:
-            result_kwargs["job_retry"] = None
-        try:
-            job = client.query(sql, job_config=job_config)
-            rows = [dict(row) for row in job.result(**result_kwargs)]
-        except (GoogleCloudError, GoogleAPIError) as exc:
-            raise create_mapped_exception(exc) from exc
-        self._last_dml_affected_rows = build_dml_rowcount(job, 0)
-        return rows
+    def _run_query(
+        self, sql: str, parameters: "Iterable[Any] | None" = None, *, read: bool = False
+    ) -> "list[dict[str, Any]]":
+        with self._provide_read_connection(primary=not read) as client:
+            job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
+            retry_deadline = self._config.driver_features.get("job_retry_deadline")
+            result_kwargs: dict[str, Any] = {}
+            if retry_deadline is not None and float(retry_deadline) <= 0:
+                result_kwargs["job_retry"] = None
+            try:
+                job = client.query(sql, job_config=job_config)
+                rows = [dict(row) for row in job.result(**result_kwargs)]
+            except (GoogleCloudError, GoogleAPIError) as exc:
+                raise create_mapped_exception(exc) from exc
+            self._last_dml_affected_rows = build_dml_rowcount(job, 0)
+            return rows
 
     def _query_param(self, name: str, value: Any, *, bq_type: str = "STRING") -> Any:
         return bigquery.ScalarQueryParameter(name, bq_type, value)
@@ -301,10 +309,16 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         }
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            self._update_session_touch(app_name, user_id, session_id)
+        if self._should_renew(renew_for):
+            self._update_session_touch(app_name, user_id, session_id, read=read)
 
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
@@ -320,12 +334,13 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
                 self._query_param("user_id", user_id),
                 self._query_param("id", session_id),
             ],
+            read=read,
         )
         if not rows:
             return None
         return _session_record_from_row(rows[0], deserializer=self._json_deserializer)
 
-    def _update_session_touch(self, app_name: str, user_id: str, session_id: str) -> None:
+    def _update_session_touch(self, app_name: str, user_id: str, session_id: str, *, read: bool = False) -> None:
         sql = f"""
         UPDATE {self._qualified(self._session_table)}
         SET update_time = CURRENT_TIMESTAMP()
@@ -339,6 +354,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
                 self._query_param("user_id", user_id),
                 self._query_param("id", session_id),
             ],
+            read=read,
         )
 
     def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
@@ -367,6 +383,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
@@ -391,7 +408,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             sql += " LIMIT @limit OFFSET @offset"
             params.append(self._query_param("limit", page_limit, bq_type="INT64"))
             params.append(self._query_param("offset", page_offset, bq_type="INT64"))
-        rows = self._run_query(sql, params)
+        rows = self._run_query(sql, params, read=read)
         return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -405,7 +422,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         self._run_query(events_sql, params)
         self._run_query(sessions_sql, params)
 
-    def _append_event(self, event_record: StoredEvent) -> None:
+    def _insert_event_row(self, event_record: StoredEvent) -> None:
         sql = f"""
         INSERT INTO {self._qualified(self._events_table)}
             (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -422,6 +439,29 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         ]
         self._run_query(sql, params)
 
+    def _append_event(self, event_record: StoredEvent) -> None:
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = f"""
+        SELECT 1
+        FROM {self._qualified(self._session_table)}
+        WHERE id = @id AND app_name = @app_name AND user_id = @user_id{self._partition_filter("create_time")}
+        LIMIT 1
+        """
+        ownership_rows = self._run_query(
+            ownership_sql,
+            [
+                self._query_param("id", session_id),
+                self._query_param("app_name", app_name),
+                self._query_param("user_id", user_id),
+            ],
+        )
+        if not ownership_rows:
+            msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+            raise ValueError(msg)
+        self._insert_event_row(event_record)
+
     def _append_event_and_update_state(
         self,
         event_record: StoredEvent,
@@ -433,17 +473,18 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        self._append_event(event_record)
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         self._update_session_state(app_name, user_id, session_id, state)
-        if app_state is not None:
-            self._upsert_app_state(app_name, app_state)
-        if user_state is not None:
-            self._upsert_user_state(app_name, user_id, user_state)
-
         record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
+
+        self._insert_event_row(event_record)
+        if app_state is not None:
+            self._upsert_app_state(app_name, app_state)
+        if user_state is not None:
+            self._upsert_user_state(app_name, user_id, user_state)
         return record
 
     def _get_events(
@@ -453,12 +494,20 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
+            return []
         sql = f"""
         SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
         FROM {self._qualified(self._events_table)} e
-        WHERE e.app_name = @app_name AND e.user_id = @user_id AND e.session_id = @session_id
-          {self._partition_filter("timestamp", alias="e").strip()}
+        JOIN {self._qualified(self._session_table)} s
+            ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+        WHERE s.app_name = @app_name AND s.user_id = @user_id AND s.id = @session_id{self._partition_filter("timestamp", alias="e")}{self._partition_filter("create_time", alias="s")}
         """
         params = [
             self._query_param("app_name", app_name),
@@ -472,7 +521,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if limit is not None:
             sql += " LIMIT @row_limit"
             params.append(self._query_param("row_limit", limit, bq_type="INT64"))
-        rows = self._run_query(sql, params)
+        rows = self._run_query(sql, params, read=read)
         return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -678,11 +727,6 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             for table, ddl in ddl_targets
         ]
 
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return ordered BigQuery ADK SchemaTarget definitions."""
-        del driver
-        return self._schema_targets()
-
     @staticmethod
     def _decode_json(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> "dict[str, Any] | None":
         if value is None:
@@ -695,6 +739,14 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             return cast("dict[str, Any]", deserializer(value))
         msg = f"Unsupported JSON column representation from BigQuery: {type(value).__name__}"
         raise TypeError(msg)
+
+
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)
 
 
 def _resolve_config_dataset_id(config: BigQueryConfig) -> str | None:

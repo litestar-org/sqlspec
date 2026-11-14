@@ -2213,6 +2213,21 @@ def test_bulk_insert_renders_positional_placeholders(placeholder_style: str, exp
     assert rendered == f"INSERT INTO events VALUES {expected_values}"
 
 
+def test_bulk_insert_supports_schema_qualified_table_and_validates_inputs() -> None:
+    """bulk_insert parses schema-qualified table names and validates column count and placeholder style."""
+    rendered = sql.bulk_insert("analytics.events", 2, placeholder_style="$1").expression.sql()
+    assert rendered == "INSERT INTO analytics.events VALUES ($1, $2)"
+
+    with pytest.raises(SQLBuilderError, match="column_count"):
+        sql.bulk_insert("events", 0)
+    with pytest.raises(SQLBuilderError, match="column_count"):
+        sql.bulk_insert("events", True)  # type: ignore[arg-type]
+    with pytest.raises(SQLBuilderError, match="placeholder_style"):
+        sql.bulk_insert("events", 2, placeholder_style=":name")
+    with pytest.raises(SQLBuilderError, match="alias"):
+        sql.bulk_insert("events AS e", 2)
+
+
 @pytest.mark.parametrize(
     ("condition_factory", "expected_fragment"),
     [

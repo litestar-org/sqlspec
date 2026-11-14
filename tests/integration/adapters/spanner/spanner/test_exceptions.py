@@ -9,16 +9,22 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.spanner import SpannerSyncConfig
-from sqlspec.exceptions import NotFoundError, SQLConversionError, SQLParsingError, UniqueViolationError
+from sqlspec.exceptions import (
+    NotFoundError,
+    ReadOnlyTransactionError,
+    SQLConversionError,
+    SQLParsingError,
+    UniqueViolationError,
+)
 from sqlspec.exceptions import NotFoundError as SQLSpecNotFoundError
 
 pytestmark = pytest.mark.spanner
 
 
 def test_dml_in_read_only_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
-    """Test that DML in read-only session raises SQLConversionError."""
+    """Test that DML in read-only session raises ReadOnlyTransactionError."""
     with spanner_config.provide_read_session() as session:
-        with pytest.raises(SQLConversionError, match="Cannot execute DML"):
+        with pytest.raises(ReadOnlyTransactionError, match="Cannot execute DML"):
             session.execute(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
                 {"id": str(uuid4()), "name": "Test", "email": "test@example.com", "age": 30},
@@ -79,14 +85,14 @@ def test_invalid_parameter_type(spanner_config: SpannerSyncConfig) -> None:
 
 
 def test_execute_many_in_read_only_session(spanner_config: SpannerSyncConfig, test_users_table: str) -> None:
-    """Test that execute_many in read-only session raises SQLConversionError."""
+    """Test that execute_many in read-only session raises ReadOnlyTransactionError."""
     parameters = [
         {"id": str(uuid4()), "name": "User 1", "email": "u1@example.com", "age": 20},
         {"id": str(uuid4()), "name": "User 2", "email": "u2@example.com", "age": 25},
     ]
 
     with spanner_config.provide_read_session() as session:
-        with pytest.raises(SQLConversionError, match="execute_many requires"):
+        with pytest.raises(ReadOnlyTransactionError, match="read-only Snapshot"):
             session.execute_many(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)", parameters
             )

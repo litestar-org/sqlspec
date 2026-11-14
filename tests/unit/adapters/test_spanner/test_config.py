@@ -34,6 +34,7 @@ from sqlspec.adapters.spanner.config import (
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import DeadlockError, ImproperConfigurationError
 from tests.conftest import requires_interpreted
 
@@ -52,7 +53,7 @@ def _assert_sdk_call(mock: Mock, *args: object) -> None:
         mock.assert_awaited_once_with(*args)
 
 
-def _hook_checkout(is_async: bool, hook: Callable[[Any], Any]) -> SimpleNamespace:
+def _hook_checkout(is_async: bool, hook: Callable[[Any], Any], *, replicas: bool = False) -> SimpleNamespace:
     connection = MagicMock(committed=None, rolled_back=False, _transaction_id=b"txn", _mutations=[])
     snapshot = MagicMock()
     if is_async:
@@ -69,13 +70,14 @@ def _hook_checkout(is_async: bool, hook: Callable[[Any], Any]) -> SimpleNamespac
         snapshot.__exit__.return_value = False
         config_type = SpannerSyncConfig
         mock_type = Mock
-    session = SimpleNamespace(transaction=Mock(return_value=connection))
+    session = SimpleNamespace(transaction=Mock(return_value=connection), delete=mock_type())
     manager = SimpleNamespace(get_session=mock_type(return_value=session), put_session=mock_type())
     database = SimpleNamespace(snapshot=Mock(return_value=snapshot), sessions_manager=manager)
     config = config_type(
         connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
         connection_instance=cast("Any", object()),
         on_connection_create=hook,
+        replicas=replicas,
     )
     config._database = cast("Any", database)
     return SimpleNamespace(config=config, connection=connection, snapshot=snapshot, manager=manager, session=session)
@@ -101,6 +103,8 @@ async def test_connection_hook_runs_for_session_checkout(is_async: bool, transac
     async with _hook_session(checkout.config, **kwargs) as session:
         assert session.connection is checkout.connection
         hook.assert_called_once_with(checkout.connection)
+
+    assert session.connection is _DETACHED_CONNECTION
 
     if transaction:
         _assert_sdk_call(checkout.connection.commit)
@@ -134,7 +138,12 @@ async def test_connection_hook_failure_releases_checkout_and_preserves_error(
     if transaction:
         _assert_sdk_call(checkout.connection.rollback)
         checkout.connection.commit.assert_not_called()
-        _assert_sdk_call(checkout.manager.put_session, checkout.session)
+        if cleanup_fails:
+            checkout.manager.put_session.assert_not_called()
+            _assert_sdk_call(checkout.session.delete)
+        else:
+            _assert_sdk_call(checkout.manager.put_session, checkout.session)
+            checkout.session.delete.assert_not_called()
     else:
         _assert_sdk_call(snapshot_exit, error_type, error, ANY)
 
@@ -752,6 +761,7 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
 
     with config.provide_session(transaction=True) as driver:
         assert isinstance(driver.connection, _Txn)
+    assert driver.connection is _DETACHED_CONNECTION
 
 
 def test_provide_write_session_alias() -> None:
@@ -1021,11 +1031,13 @@ async def test_async_config_provide_connection_and_sessions() -> None:
 
     async with config.provide_read_session() as read_driver:
         assert read_driver.connection is snap_obj
+    assert read_driver.connection is _DETACHED_CONNECTION
     assert database.snapshot_checkout.exited is True
 
     database.sessions_manager.session.txn.committed = None
     async with config.provide_write_session() as write_driver:
         assert isinstance(write_driver.connection, _AsyncTxn)
+    assert write_driver.connection is _DETACHED_CONNECTION
     assert database.sessions_manager.session.txn.commit_calls == 2
 
 
@@ -1374,3 +1386,88 @@ async def test_pool_type_from_other_variant_is_rejected() -> None:
         await SpannerAsyncConfig(connection_config={**connection, "pool_type": FixedSizePool}).provide_pool()
     with pytest.raises(ImproperConfigurationError, match="SpannerSyncConfig requires a sync session pool"):
         SpannerSyncConfig(connection_config={**connection, "pool_type": AsyncFixedSizePool}).provide_pool()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("raw", [False, True], ids=["session", "connection"])
+@pytest.mark.parametrize("replicas", [False, True])
+async def test_strict_replica_scope_preserves_native_spanner_snapshot(
+    is_async: bool, raw: bool, replicas: bool
+) -> None:
+    from sqlspec.utils.routing import RoutingContext
+
+    checkout = _hook_checkout(is_async, Mock(return_value=None), replicas=replicas)
+    config = checkout.config
+    provider = config.provide_read_connection if raw else config.provide_read_session
+    with RoutingContext.replica():
+        if is_async:
+            async with provider(exact_staleness=timedelta(seconds=3)) as value:
+                assert (value if raw else value.connection) is checkout.connection
+        else:
+            with provider(exact_staleness=timedelta(seconds=3)) as value:
+                assert (value if raw else value.connection) is checkout.connection
+    database = await config.get_database() if is_async else config.get_database()
+    database.snapshot.assert_called_once_with(multi_use=True, exact_staleness=timedelta(seconds=3))
+    snapshot_exit = checkout.snapshot.__aexit__ if is_async else checkout.snapshot.__exit__
+    _assert_sdk_call(snapshot_exit, None, None, None)
+    checkout.manager.get_session.assert_not_called()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("multiplexed", [False, True], ids=["standard-session", "multiplexed-session"])
+@pytest.mark.parametrize("rollback_fails", [False, True], ids=["rollback-ok", "rollback-fails"])
+async def test_spanner_connection_context_evicts_non_multiplexed_session_on_failed_rollback(
+    asynchronous: bool, multiplexed: bool, rollback_fails: bool
+) -> None:
+    """Failed transaction rollback skips put_session and deletes only non-multiplexed sessions."""
+    session = MagicMock(is_multiplexed=multiplexed)
+    txn = MagicMock(_transaction_id=b"t-1", _mutations=[], committed=None, rolled_back=False)
+    manager = MagicMock()
+
+    if asynchronous:
+        txn.__aenter__ = AsyncMock(return_value=txn)
+        txn.rollback = AsyncMock(side_effect=OSError("spanner transport broken") if rollback_fails else None)
+        session.delete = AsyncMock()
+        session.transaction.return_value = txn
+        manager.get_session = AsyncMock(return_value=session)
+        manager.put_session = AsyncMock()
+        database = SimpleNamespace(sessions_manager=manager)
+        async_cfg = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+
+        async def _get_db() -> Any:
+            return database
+
+        object.__setattr__(async_cfg, "get_database", _get_db)
+        with pytest.raises(ValueError, match="spanner body failed"):
+            async with async_cfg.provide_connection(transaction=True):
+                raise ValueError("spanner body failed")
+        if rollback_fails:
+            manager.put_session.assert_not_awaited()
+            if multiplexed:
+                session.delete.assert_not_awaited()
+            else:
+                session.delete.assert_awaited_once_with()
+        else:
+            manager.put_session.assert_awaited_once_with(session)
+            session.delete.assert_not_awaited()
+    else:
+        txn.__enter__.return_value = txn
+        txn.rollback = MagicMock(side_effect=OSError("spanner transport broken") if rollback_fails else None)
+        session.delete = MagicMock()
+        session.transaction.return_value = txn
+        manager.get_session.return_value = session
+        database = SimpleNamespace(sessions_manager=manager)
+        sync_cfg = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+        object.__setattr__(sync_cfg, "get_database", lambda: database)
+        with pytest.raises(ValueError, match="spanner body failed"):
+            with sync_cfg.provide_connection(transaction=True):
+                raise ValueError("spanner body failed")
+        if rollback_fails:
+            manager.put_session.assert_not_called()
+            if multiplexed:
+                session.delete.assert_not_called()
+            else:
+                session.delete.assert_called_once_with()
+        else:
+            manager.put_session.assert_called_once_with(session)
+            session.delete.assert_not_called()

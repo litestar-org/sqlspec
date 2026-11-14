@@ -21,14 +21,17 @@ from sqlspec.adapters.db2.core import _parse_db2_dsn, build_connection_config, b
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
-from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
     FakeDb2AsyncConnection,
     FakeDb2Connection,
     FakeDb2Cursor,
+    FakeDb2OperationalError,
     FakeIbmDbDbiModule,
     FakeIbmDbModule,
+    db2_error,
 )
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
@@ -247,10 +250,28 @@ def test_cli_values_are_quoted_when_needed(value: "str | bool", rendered: str) -
     assert dsn == f"DATABASE=d;Opt={rendered};"
 
 
-def test_value_with_closing_brace_is_rejected() -> None:
-    """A value containing ``}`` cannot be represented and is rejected."""
+@pytest.mark.parametrize("raw_password", ["p}x", "p}a;ss=word}"])
+def test_value_with_closing_brace_uses_ms_odbcstr_escaping_and_roundtrips(raw_password: str) -> None:
+    """Closing braces inside Db2 CLI values escape as doubled braces and round-trip cleanly."""
+    config = Db2SyncConfig(connection_config={"database": "d", "password": raw_password})
+    rendered = config.get_connection_string()
+    assert f"PWD={{{raw_password.replace('}', '}}')}}};" in rendered
+    reparsed = Db2SyncConfig(connection_config={"dsn": rendered})
+    assert reparsed.connection_config["password"] == raw_password
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"database": "d", "password": "bad\x00pwd"},
+        {"database": "d", "password": "bad\npwd"},
+        {"dsn": "DATABASE=d;\r\nUID=u;"},
+    ],
+)
+def test_control_characters_in_db2_config_are_rejected(bad_config: "dict[str, Any]") -> None:
+    """Control characters in Db2 CLI values or DSNs raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
-        Db2SyncConfig(connection_config={"database": "d", "password": "p}x"})
+        Db2SyncConfig(connection_config=bad_config)
 
 
 def test_invalid_extra_keyword_is_rejected() -> None:
@@ -259,10 +280,17 @@ def test_invalid_extra_keyword_is_rejected() -> None:
         Db2SyncConfig(connection_config={"database": "d", "extra": {"A;B": "1"}})
 
 
-def test_extra_cannot_shadow_a_modeled_keyword() -> None:
+@pytest.mark.parametrize(
+    ("keyword", "expected_param"),
+    [("security", "security"), ("AUTOCOMMIT", "autocommit"), ("READONLY", "read_only"), ("READ_ONLY", "read_only")],
+)
+def test_extra_cannot_shadow_a_modeled_keyword(keyword: str, expected_param: str) -> None:
     """Keywords with a dedicated parameter must be configured through that parameter."""
-    with pytest.raises(ImproperConfigurationError):
-        Db2SyncConfig(connection_config={"database": "d", "extra": {"security": "SSL"}})
+    with pytest.raises(
+        ImproperConfigurationError,
+        match=f"Db2 connection keyword {keyword!r} must be configured with the {expected_param!r} parameter",
+    ):
+        Db2SyncConfig(connection_config={"database": "d", "extra": {keyword: "SSL"}})
 
 
 @pytest.mark.parametrize("connection_config", [{}, {"hostname": "h"}], ids=["empty", "host-only"])
@@ -453,19 +481,53 @@ async def test_async_config_pool_params_are_applied(fake_ibm_db: FakeModules) ->
 
 @pytest.mark.anyio
 async def test_async_provide_session_yields_async_driver(fake_ibm_db: FakeModules) -> None:
-    """Async sessions hand out an async driver over a pooled connection and return it on exit."""
+    """Async sessions hand out an async driver over a pooled connection, return it on exit, and detach the driver."""
     config = Db2AsyncConfig(connection_config={"database": "TESTDB"})
     try:
         async with config.provide_session() as driver:
             assert isinstance(driver, Db2AsyncDriver)
             assert isinstance(driver.connection, FakeDb2AsyncConnection)
+            session_connection = driver.connection
             pool = await config.provide_pool()
             assert pool.checked_out() == 1
+        assert driver.connection is _DETACHED_CONNECTION
         assert pool.checked_out() == 0
         async with config.provide_connection() as connection:
-            assert connection is driver.connection
+            assert connection is session_connection
     finally:
         await config.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_db2_provide_session_detaches_driver_on_exit(
+    db2_mode: DriverMode, fake_ibm_db: FakeModules, body_raises: bool
+) -> None:
+    """Db2 sync and async provide_session contexts detach the driver on clean and error exit."""
+    _ = fake_ibm_db
+    config = db2_mode.config(connection_config={"database": "TESTDB"})
+    session: Any = None
+    try:
+        if db2_mode.is_async:
+            if body_raises:
+                with pytest.raises(RuntimeError, match="db2 body error"):
+                    async with config.provide_session() as session:
+                        raise RuntimeError("db2 body error")
+            else:
+                async with config.provide_session() as session:
+                    pass
+        elif body_raises:
+            with pytest.raises(RuntimeError, match="db2 body error"), config.provide_session() as session:
+                raise RuntimeError("db2 body error")
+        else:
+            with config.provide_session() as session:
+                pass
+        assert session.connection is _DETACHED_CONNECTION
+    finally:
+        if db2_mode.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()
 
 
 @pytest.mark.anyio
@@ -542,3 +604,116 @@ async def test_statement_config_coerces_aware_datetime_to_naive_utc(db2_mode: Dr
     coerced = type_coercion_map[datetime](aware)
     assert coerced == datetime(2026, 9, 24, 12, 30)
     assert coerced.tzinfo is None
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        True,
+        "standby:50001",
+        "db2://reader:secret@standby:50001/ro",
+        {"hostname": "standby"},
+        "DATABASE=ro;HOSTNAME=standby;PORT=50001;READONLY=1;",
+    ],
+)
+def test_hadr_replica_shorthands_and_dsn_clone(config_type: Any, replicas: Any) -> None:
+    def hook(connection: Any) -> None:
+        pass
+
+    parent = config_type(
+        connection_config={"hostname": "primary", "database": "app"},
+        driver_features={"on_connection_create": hook},
+        replicas=replicas,
+    )
+    replica = parent.replica_groups["default"].configs[0]
+    assert replica.connection_config["read_only"] is True
+    assert "READONLY" not in replica.get_connection_string().upper()
+    derived = parent.derive_pool(dsn="DATABASE=other;HOSTNAME=other-standby;PORT=50002;")
+    assert derived.connection_config["database"] == "other"
+    assert derived.connection_config["hostname"] == "other-standby"
+    assert parent.connection_config["hostname"] == "primary"
+
+
+def test_read_only_dsn_tokens_are_cli_options_not_keywords() -> None:
+    config = Db2SyncConfig(connection_config={"dsn": "DATABASE=app;READ_ONLY=yes;"})
+    assert config.connection_config["read_only"] is True
+    assert config.get_connection_string() == "DATABASE=app;"
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        {"read_only": False},
+        "DATABASE=ro;HOSTNAME=standby;READONLY=0;",
+        {"dsn": "DATABASE=ro;HOSTNAME=standby;READ_ONLY=0;"},
+    ],
+)
+def test_hadr_replica_preserves_explicit_read_only_mode(config_type: Any, replicas: Any) -> None:
+    config = config_type(connection_config={"database": "app", "hostname": "primary"}, replicas=replicas)
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["read_only"] is False
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.anyio
+async def test_hadr_config_passes_independent_native_attributes(config_type: Any, fake_ibm_db: FakeModules) -> None:
+    _, module = fake_ibm_db
+    options = {999: 42}
+    config = config_type(connection_config={"database": "app", "conn_options": options}, replicas=True)
+    replica = config.replica_groups["default"].configs[0]
+    if config.is_async:
+        async with replica.provide_session():
+            pass
+        async with config.provide_session():
+            pass
+        await config.close_pool()
+    else:
+        with replica.provide_session():
+            pass
+        with config.provide_session():
+            pass
+        config.close_pool()
+    assert module.connect_calls[0][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON, 101: 1}
+    assert module.connect_calls[1][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON}
+    assert options == {999: 42}
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+def test_hadr_clone_replacement_dsn_controls_native_mode(config_type: Any) -> None:
+    parent = config_type(
+        connection_config={"database": "app", "hostname": "primary", "autocommit": True, "read_only": False}
+    )
+    replica = parent.derive_pool(dsn="DATABASE=standby;HOSTNAME=reader;AUTOCOMMIT=0;READONLY=1;")
+    assert replica.connection_config["autocommit"] is False
+    assert replica.connection_config["read_only"] is True
+    assert parent.connection_config["autocommit"] is True
+    assert parent.connection_config["read_only"] is False
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
+@pytest.mark.anyio
+async def test_db2_config_provide_maps_acquire_driver_error(
+    config_type: Any, method: str, fake_ibm_db: FakeModules
+) -> None:
+    """Db2 provide_connection and provide_session map native acquire failures to DatabaseConnectionError."""
+    _, module = fake_ibm_db
+    native = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.append(native)
+    config = config_type(connection_config={"database": "TESTDB"})
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            if config.is_async:
+                async with getattr(config, method)():
+                    pass
+            else:
+                with getattr(config, method)():
+                    pass
+        assert exc_info.value.__cause__ is native
+    finally:
+        if config.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()

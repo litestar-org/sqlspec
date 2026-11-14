@@ -215,16 +215,19 @@ def split_qualified_identifier(
             index += 1
             continue
 
-        if allow_bracket_quotes and char == "[":
-            quote_start = char
-            quote_end = "]"
-            index += 1
-            continue
-        if char in quote_chars:
-            quote_start = char
-            quote_end = char
-            index += 1
-            continue
+        if not "".join(chars).strip():
+            if allow_bracket_quotes and char == "[":
+                chars.clear()
+                quote_start = char
+                quote_end = "]"
+                index += 1
+                continue
+            if char in quote_chars:
+                chars.clear()
+                quote_start = char
+                quote_end = char
+                index += 1
+                continue
         if char == ".":
             part = "".join(chars).strip()
             if part:

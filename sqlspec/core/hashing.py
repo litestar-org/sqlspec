@@ -6,7 +6,7 @@ filters, and AST sub-expressions.
 
 import hashlib
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp
 
@@ -30,12 +30,15 @@ __all__ = (
 )
 
 
+_HASH_SIMPLE_TYPES: Final[frozenset[type]] = frozenset({str, int, bool, float, type(None)})
+
+
 def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) -> int:
     """Generate hash from AST structure.
 
     Args:
         expr: SQLGlot Expression to hash
-        _seen: Set of seen object IDs to handle circular references
+        _seen: Set of active ancestor object IDs to handle circular references
 
     Returns:
         Hash of the AST structure
@@ -51,19 +54,35 @@ def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) ->
         return hash(expr_id)
 
     _seen.add(expr_id)
-
     components: list[Any] = [type(expr).__name__]
 
     if isinstance(expr, exp.Expression):
-        for key, value in sorted(expr.args.items()):
-            components.extend((key, _hash_value(value, _seen)))
+        args = expr.args
+        arg_count = len(args)
+        if arg_count == 1:
+            key, value = next(iter(args.items()))
+            components.append(key)
+            components.append(
+                hash_expression(value, _seen)
+                if isinstance(value, exp.Expr)
+                else (hash(value) if type(value) in _HASH_SIMPLE_TYPES else _hash_value(value, _seen))
+            )
+        elif arg_count > 1:
+            for key, value in sorted(args.items()):
+                components.append(key)
+                components.append(
+                    hash_expression(value, _seen)
+                    if isinstance(value, exp.Expr)
+                    else (hash(value) if type(value) in _HASH_SIMPLE_TYPES else _hash_value(value, _seen))
+                )
         if has_default_nulls(expr):
             components.append("default_nulls")
         if has_explicit_nulls(expr):
             components.append("explicit_nulls")
     else:
-        components.append(hash(expr.sql()))
+        components.append(hash(expr.sql(copy=False)))
 
+    _seen.remove(expr_id)
     return hash(tuple(components))
 
 
@@ -242,20 +261,20 @@ def _expression_cache_fingerprint(
         hash_expression(expr),
         parameter_signature,
         str(dialect) if dialect is not None else "default",
-        _freeze_cache_value(schema),
-        _freeze_cache_value(settings),
+        None if schema is None else _freeze_cache_value(schema),
+        None if settings is None else _freeze_cache_value(settings),
     )
     return hashlib.blake2b(repr(components).encode(), digest_size=8).hexdigest()
 
 
 def _freeze_cache_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        items = ((key, _freeze_cache_value(item)) for key, item in value.items())
+        items = [(key, _freeze_cache_value(item)) for key, item in value.items()]
         return tuple(sorted(items, key=lambda pair: repr(pair[0])))
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_cache_value(item) for item in value)
+        return tuple([_freeze_cache_value(item) for item in value])
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted((_freeze_cache_value(item) for item in value), key=repr))
+        return tuple(sorted([_freeze_cache_value(item) for item in value], key=repr))
     try:
         hash(value)
     except TypeError:
@@ -268,19 +287,29 @@ def _hash_value(value: Any, _seen: "set[int]") -> int:
 
     Args:
         value: Value to hash (can be Expression, list, dict, or primitive)
-        _seen: Set of seen object IDs to handle circular references
+        _seen: Set of active ancestor object IDs to handle circular references
 
     Returns:
         Hash of the value
     """
     if isinstance(value, exp.Expr):
         return hash_expression(value, _seen)
-    if isinstance(value, list):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
+    value_type = type(value)
+    if value_type in _HASH_SIMPLE_TYPES:
+        return hash(value)
+    if value_type is list or value_type is tuple:
+        return hash(
+            tuple([
+                hash_expression(item, _seen)
+                if isinstance(item, exp.Expr)
+                else (hash(item) if type(item) in _HASH_SIMPLE_TYPES else _hash_value(item, _seen))
+                for item in value
+            ])
+        )
     if isinstance(value, dict):
-        items = sorted((k, _hash_value(v, _seen)) for k, v in value.items())
+        items = sorted([(k, _hash_value(v, _seen)) for k, v in value.items()])
         return hash(tuple(items))
-    if isinstance(value, tuple):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
+    if isinstance(value, (list, tuple)):
+        return hash(tuple([_hash_value(v, _seen) for v in value]))
 
     return hash(value)

@@ -1,0 +1,290 @@
+"""Flask request routing and portal context receipts with real embedded drivers."""
+
+import asyncio
+import sqlite3
+import threading
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from flask import Flask, Response
+
+from sqlspec import sign_write_pin
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._deferred_session import call_portal_with_context
+from sqlspec.extensions.flask import SQLSpecPlugin
+from sqlspec.utils.portal import Portal, PortalProvider
+from sqlspec.utils.routing import RoutingContext, RoutingEntry
+from sqlspec.utils.tenant import TenantContext
+from tests.unit.driver.test_sync_routing_session import seed_routing_databases
+
+
+@pytest.fixture
+def portal() -> Iterator[Portal]:
+    provider = PortalProvider()
+    provider.start()
+    try:
+        yield provider.portal
+    finally:
+        provider.stop()
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+def test_portal_receipts_preserve_identity_and_write_pins(portal: Portal, outcome: str) -> None:
+    async def operation() -> str:
+        assert TenantContext.get_tenant_id() == "acme"
+        assert cast(RoutingEntry, RoutingContext.get_entry("shop")).mode == "replica"
+        RoutingContext.mark_write("shop", causal_token="lsn-42")
+        if outcome == "error":
+            raise ValueError("after write")
+        if outcome == "cancel":
+            raise asyncio.CancelledError
+        return "done"
+
+    with TenantContext.scope("acme"), RoutingContext.replica("shop"):
+        if outcome == "error":
+            with pytest.raises(ValueError, match="after write"):
+                call_portal_with_context(portal, operation, routing_bind_key="shop")
+        elif outcome == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                call_portal_with_context(portal, operation, routing_bind_key="shop")
+        else:
+            assert call_portal_with_context(portal, operation, routing_bind_key="shop") == "done"
+        entry = cast(RoutingEntry, RoutingContext.get_entry("shop"))
+        assert (entry.mode, entry.pinned_by_write, entry.causal_token) == ("primary", True, "lsn-42")
+        assert TenantContext.get_tenant_id() == "acme"
+    assert RoutingContext.current() is None
+
+
+def test_portal_timeout_pins_named_bind_without_waiting_for_late_receipt(portal: Portal) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finalized = threading.Event()
+
+    async def operation() -> None:
+        RoutingContext.mark_write("shop", causal_token="unconfirmed")
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.to_thread(release.wait, 3)
+            finalized.set()
+
+    async def ping() -> str:
+        return "done"
+
+    try:
+        with RoutingContext.scope():
+            RoutingContext.mark_write("other", causal_token="other-token")
+            RoutingContext.mark_write("shop", causal_token="previous")
+            with pytest.raises(ImproperConfigurationError, match="timed out"):
+                call_portal_with_context(portal, operation, timeout=0.1, routing_bind_key="shop")
+            assert started.is_set()
+            assert not finalized.is_set()
+            assert cast(RoutingEntry, RoutingContext.get_entry("shop")).causal_token == "previous"
+            assert cast(RoutingEntry, RoutingContext.get_entry("other")).causal_token == "other-token"
+        with RoutingContext.scope():
+            release.set()
+            assert finalized.wait(3)
+            assert call_portal_with_context(portal, ping) == "done"
+            assert RoutingContext.get_entry("shop") is None
+    finally:
+        release.set()
+
+
+def test_portal_without_completion_conservatively_pins_and_overrides_tenant(portal: Portal) -> None:
+    async def observe() -> str | None:
+        return TenantContext.get_tenant_id()
+
+    with TenantContext.scope("ambient"), RoutingContext.scope():
+        assert call_portal_with_context(portal, observe, tenant_override=None) is None
+        assert TenantContext.get_tenant_id() == "ambient"
+    provider = PortalProvider()
+    with RoutingContext.scope():
+        with pytest.raises(ImproperConfigurationError, match="not running"):
+            call_portal_with_context(provider.portal, observe, routing_bind_key="named")
+        assert cast(RoutingEntry, RoutingContext.get_entry("named")).pinned_by_write
+    assert RoutingContext.current() is None
+
+
+@pytest.mark.parametrize("async_config", [False, True])
+def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_config: bool) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config_type = AiosqliteConfig if async_config else SqliteConfig
+    config = config_type(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={"flask": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/read")
+    def read() -> dict[str, Any]:
+        before = RoutingContext.get_entry("shop")
+        session = plugin.get_read_session()
+        assert plugin.get_read_session() is session
+        return {
+            "origin": session.select_value("SELECT origin FROM notes WHERE id=1"),
+            "was_pinned": bool(before and before.pinned_by_write),
+        }
+
+    @app.post("/route")
+    def route() -> dict[str, str]:
+        router = plugin.get_routing_session()
+        before = router.select_value("SELECT origin FROM notes WHERE id=1")
+        router.execute("INSERT INTO notes VALUES (4,'new')")
+        assert cast(RoutingEntry, RoutingContext.get_entry("shop")).pinned_by_write
+        after = plugin.get_read_session().select_value("SELECT origin FROM notes WHERE id=1")
+        return {"before": before, "after": after}
+
+    try:
+        client = app.test_client()
+        assert client.get("/read").json == {"origin": "replica", "was_pinned": False}
+        assert client.post("/route").json == {"before": "replica", "after": "primary"}
+        assert client.get("/read").json == {"origin": "replica", "was_pinned": False}
+    finally:
+        plugin.shutdown()
+    assert RoutingContext.current() is None
+
+
+def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_path: Path) -> None:
+    primary, replica = seed_routing_databases(tmp_path)
+    config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={
+            "flask": {
+                "routing_session_key": "router",
+                "commit_mode": "autocommit_include_redirect",
+                "write_pin_cookie": "wp",
+                "routing_secret": "flask-secret",
+            }
+        },
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/inspect")
+    def inspect_route() -> dict[str, Any]:
+        router = plugin.get_routing_session()
+        entry = RoutingContext.get_entry("shop") or RoutingEntry()
+        return {"origin": router.select_value("SELECT origin FROM notes WHERE id=1"), "token": entry.causal_token}
+
+    @app.post("/redirect-write")
+    def redirect_write() -> Response:
+        router = plugin.get_routing_session()
+        router.execute("INSERT INTO notes VALUES (4,'redirected')")
+        return Response(status=302, headers={"Location": "/inspect"})
+
+    @app.post("/bad-write")
+    def bad_write() -> Response:
+        router = plugin.get_routing_session()
+        router.execute("INSERT INTO notes VALUES (5,'rolled-back')")
+        return Response(status=400)
+
+    try:
+        client = app.test_client()
+        assert client.get("/inspect", headers={"x-sqlspec-routing": "primary"}).json == {
+            "origin": "replica",
+            "token": None,
+        }
+        client.set_cookie("wp", "1")
+        assert client.get("/inspect").json == {"origin": "replica", "token": None}
+        signed = sign_write_pin("flask-secret", bind_key="shop", causal_token="lsn-flask")
+        client.set_cookie("wp", signed)
+        assert client.get("/inspect").json == {"origin": "primary", "token": "lsn-flask"}
+        assert client.post("/redirect-write").status_code == 302
+        assert client.post("/bad-write").status_code == 400
+        with config.provide_session() as verify:
+            assert verify.select_value("SELECT origin FROM notes WHERE id=4") == "redirected"
+            assert verify.select_value_or_none("SELECT origin FROM notes WHERE id=5") is None
+    finally:
+        plugin.shutdown()
+        config.close_pool()
+
+
+def test_flask_custom_connection_key_derives_read_connection_key(tmp_path: Path) -> None:
+    """Customizing connection_key without overriding session_key avoids read_connection_key collisions."""
+    app = Flask(__name__)
+    config_a = SqliteConfig(
+        connection_config={"database": str(tmp_path / "a.db")}, extension_config={"flask": {"connection_key": "conn_a"}}
+    )
+    config_b = SqliteConfig(
+        connection_config={"database": str(tmp_path / "b.db")},
+        extension_config={"flask": {"session_key": "sess_b", "connection_key": "conn_b"}},
+    )
+    plugin = SQLSpecPlugin([config_a, config_b], app)
+    try:
+        assert plugin._config_states[0].read_connection_key == "conn_a_read"
+        assert plugin._config_states[1].read_connection_key == "conn_b_read"
+    finally:
+        plugin.shutdown()
+        config_a.close_pool()
+        config_b.close_pool()
+
+
+@pytest.mark.parametrize("async_config", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("fully_iterated", "status", "expected_present"),
+    [(True, 200, True), (False, 200, False), (True, 500, False)],
+    ids=["completed_200_commits", "abandoned_200_rolls_back", "completed_500_rolls_back"],
+)
+def test_flask_streamed_response_finalizes_and_releases_routing_session(
+    tmp_path: Path, async_config: bool, fully_iterated: bool, status: int, expected_present: bool
+) -> None:
+    """Streamed Flask responses keep routing sessions open past teardown, commit only on full 200 completion, and exit on close."""
+    primary, replica = seed_routing_databases(tmp_path)
+    config_type = AiosqliteConfig if async_config else SqliteConfig
+    config: Any = config_type(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={"flask": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/stream-route")
+    def stream_route() -> Response:
+        router = plugin.get_routing_session()
+        before = router.select_value("SELECT origin FROM notes WHERE id=1")
+        router.execute("INSERT INTO notes VALUES (4, 'streamed')")
+
+        def generate() -> "Iterator[bytes]":
+            after = router.select_value("SELECT origin FROM notes WHERE id=1")
+            yield f"{before}:".encode()
+            yield f"{after}".encode()
+
+        return Response(generate(), status=status, mimetype="text/plain")
+
+    try:
+        response = app.test_client().get("/stream-route", buffered=False)
+        try:
+            assert response.status_code == status
+            iterator = iter(response.response)
+            first_chunk = next(iterator)
+            assert first_chunk == b"replica:"
+            if fully_iterated:
+                assert next(iterator) == b"primary"
+                with pytest.raises(StopIteration):
+                    next(iterator)
+        finally:
+            response.close()
+    finally:
+        plugin.shutdown()
+        if not async_config:
+            config.close_pool()
+
+    with sqlite3.connect(primary) as conn:
+        row = conn.execute("SELECT origin FROM notes WHERE id=4").fetchone()
+    if expected_present:
+        assert row == ("streamed",)
+    else:
+        assert row is None
+    assert RoutingContext.current() is None

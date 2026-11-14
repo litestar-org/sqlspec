@@ -5,14 +5,17 @@ across different web frameworks (Starlette, FastAPI, Flask) to extract
 correlation IDs from request headers with consistent behavior.
 """
 
+import re
 from collections.abc import Callable
-from typing import ClassVar
+from typing import ClassVar, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.utils.correlation import CorrelationContext
 
 __all__ = ("CorrelationExtractor",)
+
+_CORRELATION_VALUE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._:/=;+-]+$")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -57,7 +60,7 @@ class CorrelationExtractor:
     """
 
     DEFAULT_MAX_LENGTH: ClassVar[int] = 128
-    """Maximum length for correlation IDs to prevent log injection."""
+    """Maximum length for bounded, single-line log-safe correlation identifiers."""
 
     def __init__(
         self,
@@ -124,22 +127,16 @@ class CorrelationExtractor:
         for header in self._headers:
             value = get_header(header)
             if value:
-                return self._sanitize(value)
+                cleaned = self._clean_value(value)
+                if cleaned:
+                    return cleaned
 
         return CorrelationContext.generate()
 
-    def _sanitize(self, value: str) -> str:
-        """Sanitize a correlation ID value.
-
-        Strips whitespace and truncates to max length to prevent
-        log injection attacks and excessively long IDs.
-
-        Args:
-            value: The raw correlation ID value.
-
-        Returns:
-            The sanitized correlation ID, or a generated UUID if
-            the sanitized value is empty.
-        """
-        sanitized = value.strip()[: self._max_length]
-        return sanitized or CorrelationContext.generate()
+    def _clean_value(self, value: str) -> str:
+        """Truncate at the first line break, trim, bound, and validate trace characters."""
+        first_line = value.split("\r", 1)[0].split("\n", 1)[0]
+        candidate = first_line.strip()[: self._max_length]
+        if _CORRELATION_VALUE_PATTERN.fullmatch(candidate) is None:
+            return ""
+        return candidate

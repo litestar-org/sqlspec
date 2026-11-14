@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self, cast
 
@@ -22,7 +22,7 @@ from sqlspec.extensions.adk.converters import (
     record_to_session,
     split_scoped_state,
 )
-from sqlspec.extensions.adk.store import normalize_session_list_options
+from sqlspec.extensions.adk.store import adk_primary_read_scope, normalize_session_list_options
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.uuids import uuid4
@@ -118,13 +118,13 @@ class SQLSpecSessionService(BaseSessionService):
 
         async with self._with_session_lock(app_name=app_name, user_id=user_id, session_id=resolved_session_id):
             if user_provided_id:
-                existing = await self._call_store("get_session", app_name, user_id, resolved_session_id)
+                existing = await self._call_store("get_session", app_name, user_id, resolved_session_id, _primary=True)
                 if existing is not None:
                     msg = f"Session with id {resolved_session_id} already exists."
                     raise AlreadyExistsError(msg)
 
-            current_app_state = await self._call_store("get_app_state", app_name)
-            current_user_state = await self._call_store("get_user_state", app_name, user_id)
+            current_app_state = await self._call_store("get_app_state", app_name, _primary=True)
+            current_user_state = await self._call_store("get_user_state", app_name, user_id, _primary=True)
 
             app_state = dict(current_app_state or {})
             if app_state_delta:
@@ -140,15 +140,16 @@ class SQLSpecSessionService(BaseSessionService):
                     app_name=app_name,
                     user_id=user_id,
                     state=session_state,
+                    _primary=True,
                 )
             except (UniqueViolationError, IntegrityError) as exc:
                 msg = f"Session with id {resolved_session_id} already exists."
                 raise AlreadyExistsError(msg) from exc
 
             if app_state_delta:
-                await self._call_store("upsert_app_state", app_name, app_state)
+                await self._call_store("upsert_app_state", app_name, app_state, _primary=True)
             if user_state_delta:
-                await self._call_store("upsert_user_state", app_name, user_id, user_state)
+                await self._call_store("upsert_user_state", app_name, user_id, user_state, _primary=True)
 
         record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
@@ -315,7 +316,7 @@ class SQLSpecSessionService(BaseSessionService):
             user_id: ID of the user.
             session_id: Session identifier.
         """
-        record = await self._call_store("get_session", app_name, user_id, session_id)
+        record = await self._call_store("get_session", app_name, user_id, session_id, _primary=True)
 
         if not record:
             log_with_context(
@@ -329,7 +330,7 @@ class SQLSpecSessionService(BaseSessionService):
             )
             return
 
-        await self._call_store("delete_session", app_name, user_id, session_id)
+        await self._call_store("delete_session", app_name, user_id, session_id, _primary=True)
         log_with_context(
             logger, logging.DEBUG, "adk.session.delete", app_name=app_name, session_id=session_id, deleted=True
         )
@@ -370,7 +371,9 @@ class SQLSpecSessionService(BaseSessionService):
             if any(existing == event for existing in session.events if existing.id == event.id):
                 return event
 
-            current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
+            current_record = await self._call_store(
+                "get_session", session.app_name, session.user_id, session.id, _primary=True
+            )
             if current_record is None:
                 msg = f"Session {session.id} not found."
                 raise SessionNotFoundError(msg)
@@ -403,12 +406,14 @@ class SQLSpecSessionService(BaseSessionService):
 
             app_state = None
             if app_state_delta:
-                app_state = dict(await self._call_store("get_app_state", session.app_name) or {})
+                app_state = dict(await self._call_store("get_app_state", session.app_name, _primary=True) or {})
                 app_state.update(app_state_delta)
 
             user_state = None
             if user_state_delta:
-                user_state = dict(await self._call_store("get_user_state", session.app_name, session.user_id) or {})
+                user_state = dict(
+                    await self._call_store("get_user_state", session.app_name, session.user_id, _primary=True) or {}
+                )
                 user_state.update(user_state_delta)
 
             updated_record = await self._call_store(
@@ -420,6 +425,7 @@ class SQLSpecSessionService(BaseSessionService):
                 session_state,
                 app_state=app_state,
                 user_state=user_state,
+                _primary=True,
             )
             updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
@@ -458,7 +464,9 @@ class SQLSpecSessionService(BaseSessionService):
 
     async def _session_matches_storage_revision(self, session: "Session") -> bool:
         """Return whether a marker-less session still matches stored events."""
-        stored_events = await self._call_store("get_events", session.app_name, session.user_id, session.id)
+        stored_events = await self._call_store(
+            "get_events", session.app_name, session.user_id, session.id, _primary=True
+        )
         if not session.events:
             return len(stored_events) == 0
         if not stored_events:
@@ -469,12 +477,13 @@ class SQLSpecSessionService(BaseSessionService):
         )
         return latest_stored_id == session.events[-1].id
 
-    async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+    async def _call_store(self, method_name: str, *args: Any, _primary: bool = False, **kwargs: Any) -> Any:
         """Call an async store method or offload a sync store method."""
-        method = getattr(self._store, method_name)
-        if inspect.iscoroutinefunction(method):
-            return await method(*args, **kwargs)
-        sync_method = method
-        if TYPE_CHECKING:
-            sync_method = cast("Callable[..., Any]", method)
-        return await async_(sync_method)(*args, **kwargs)
+        with adk_primary_read_scope() if _primary else nullcontext():
+            method = getattr(self._store, method_name)
+            if inspect.iscoroutinefunction(method):
+                return await method(*args, **kwargs)
+            sync_method = method
+            if TYPE_CHECKING:
+                sync_method = cast("Callable[..., Any]", method)
+            return await async_(sync_method)(*args, **kwargs)

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -1652,3 +1653,117 @@ def test_cached_pragma_returns_rows_on_repeated_execution(sqlite_sync_driver: Sq
 
     assert first_columns == {"id", "name"}
     assert second_columns == {"id", "name"}
+
+
+@pytest.mark.parametrize("auto_begin", [False, True], ids=["disabled", "enabled"])
+@pytest.mark.parametrize(
+    ("query_sql", "params", "expects_begin"),
+    [
+        ("SELECT ?", (1,), False),
+        ("INSERT INTO lazy_cache_items VALUES (?)", (1,), True),
+        ("INSERT INTO lazy_cache_items VALUES (:id)", {"id": 2}, True),
+    ],
+)
+def test_sync_statement_cache_respects_auto_begin_on_write(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, auto_begin: bool, query_sql: str, params: Any, expects_begin: bool
+) -> None:
+    cfg = SqliteConfig(connection_config={"database": str(tmp_path / "cache_sync.sqlite"), "autocommit": True})
+    try:
+        with cfg.provide_session() as setup:
+            setup.execute("CREATE TABLE lazy_cache_items (id INTEGER)")
+            setup.execute(query_sql, params)
+            setup.execute("DELETE FROM lazy_cache_items")
+
+        begins = 0
+        with cfg.provide_session() as session:
+            driver_cls = type(session)
+            orig_begin = driver_cls.begin
+
+            def tracked_begin(driver: Any) -> None:
+                nonlocal begins
+                if driver is session:
+                    begins += 1
+                orig_begin(driver)
+
+            monkeypatch.setattr(driver_cls, "begin", tracked_begin)
+            session._auto_begin_on_write = auto_begin
+            session.execute(query_sql, params)
+            if auto_begin and expects_begin:
+                assert begins == 1
+                session.rollback()
+            else:
+                assert begins == 0
+    finally:
+        cfg.close_pool()
+
+
+@pytest.mark.parametrize("auto_begin", [False, True], ids=["disabled", "enabled"])
+@pytest.mark.parametrize(
+    ("query_sql", "params", "expects_begin"),
+    [
+        ("SELECT ?", (1,), False),
+        ("INSERT INTO lazy_cache_items VALUES (?)", (1,), True),
+        ("INSERT INTO lazy_cache_items VALUES (:id)", {"id": 2}, True),
+    ],
+)
+async def test_async_statement_cache_respects_auto_begin_on_write(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, auto_begin: bool, query_sql: str, params: Any, expects_begin: bool
+) -> None:
+    cfg = AiosqliteConfig(connection_config={"database": str(tmp_path / "cache_async.sqlite"), "autocommit": True})
+    try:
+        async with cfg.provide_session() as setup:
+            await setup.execute("CREATE TABLE lazy_cache_items (id INTEGER)")
+            await setup.execute(query_sql, params)
+            await setup.execute("DELETE FROM lazy_cache_items")
+
+        begins = 0
+        async with cfg.provide_session() as session:
+            driver_cls = type(session)
+            orig_begin = driver_cls.begin
+
+            async def tracked_begin(driver: Any) -> None:
+                nonlocal begins
+                if driver is session:
+                    begins += 1
+                await orig_begin(driver)
+
+            monkeypatch.setattr(driver_cls, "begin", tracked_begin)
+            session._auto_begin_on_write = auto_begin
+            await session.execute(query_sql, params)
+            if auto_begin and expects_begin:
+                assert begins == 1
+                await session.rollback()
+            else:
+                assert begins == 0
+    finally:
+        await cfg.close_pool()
+
+
+def test_prepare_statement_cache_respects_statement_config_override(tmp_path: Path) -> None:
+    """prepare_statement does not read or populate the default cache under an override StatementConfig."""
+    cfg = SqliteConfig(connection_config={"database": str(tmp_path / "override_cache.sqlite")})
+    postgres_override = StatementConfig(dialect="postgres")
+    unparsed_override = StatementConfig(enable_parsing=False)
+    try:
+        with cfg.provide_session() as session:
+            default_first = session.prepare_statement("SELECT :y AS v", ({"y": 1},))
+            assert default_first.statement_config is session.statement_config
+
+            dialect_override = session.prepare_statement(
+                "SELECT :y AS v", ({"y": 1},), statement_config=postgres_override
+            )
+            assert dialect_override.statement_config is postgres_override
+
+            unparsed = session.prepare_statement("SELECT :y AS v", ({"y": 1},), statement_config=unparsed_override)
+            assert unparsed.statement_config is unparsed_override
+            assert unparsed.statement_config.enable_parsing is False
+            assert unparsed.is_read_only() is False
+
+            fresh_sql = "SELECT :z AS v"
+            override_first = session.prepare_statement(fresh_sql, ({"z": 1},), statement_config=postgres_override)
+            assert override_first.statement_config is postgres_override
+
+            default_after = session.prepare_statement(fresh_sql, ({"z": 2},))
+            assert default_after.statement_config is session.statement_config
+    finally:
+        cfg.close_pool()

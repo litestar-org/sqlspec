@@ -1,7 +1,7 @@
 """mssql-python ADK stores for Google Agent Development Kit session storage."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
 from sqlspec.adapters.mssql_python.core import (
@@ -50,8 +50,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "MssqlPythonConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "MssqlPythonConfig", *, read_config: "MssqlPythonConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
@@ -114,7 +114,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            if self._should_renew(renew_for):
                 self._execute(
                     f"""
                     UPDATE {_table_ref(self._session_table)}
@@ -123,6 +123,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -131,6 +132,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 WHERE app_name = ? AND user_id = ? AND id = ?
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
@@ -169,7 +171,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
@@ -177,16 +179,38 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         return [_session_record_from_row(row) for row in rows]
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete a session. Event rows cascade through the FK."""
-        self._execute(
-            f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = ? AND user_id = ? AND id = ?",
-            (app_name, user_id, session_id),
-            commit=True,
+        """Delete a session and its associated events."""
+        events_sql = (
+            f"DELETE FROM {_table_ref(self._events_table)} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         )
+        session_sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = ? AND user_id = ? AND id = ?"
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            try:
+                cursor.execute(events_sql, (app_name, user_id, session_id))
+                cursor.execute(session_sql, (app_name, user_id, session_id))
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        """Append an event after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = (
+            f"SELECT TOP (1) 1 FROM {_table_ref(self._session_table)} WHERE id = ? AND app_name = ? AND user_id = ?"
+        )
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            try:
+                cursor.execute(ownership_sql, (session_id, app_name, user_id))
+                if cursor.fetchone() is None:
+                    _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
 
     def append_event_and_update_state(
         self,
@@ -200,6 +224,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
         SET state = ?, update_time = SYSUTCDATETIME()
@@ -236,7 +261,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
@@ -394,7 +419,9 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return _events_query(
+            self._events_table, self._session_table, app_name, user_id, session_id, after_timestamp, limit
+        )
 
     def _json_column_type_sync(self) -> str:
         if self._json_column_type is not None:
@@ -410,21 +437,23 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchone(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
+    ) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             if commit:
                 conn.commit()
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -439,8 +468,8 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "MssqlPythonConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "MssqlPythonConfig", *, read_config: "MssqlPythonConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
         self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
@@ -492,7 +521,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{owner_value}
         WHERE NOT EXISTS (
             SELECT 1 FROM {_table_ref(self._memory_table)} WITH (UPDLOCK, HOLDLOCK)
-            WHERE event_id = ?
+            WHERE app_name = ? AND user_id = ? AND event_id = ?
         );
         """
         inserted = 0
@@ -513,7 +542,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
             )
             if self._owner_id_column_name:
                 params = (*params, owner_id)
-            batch_params.append((*params, entry["event_id"]))
+            batch_params.append((*params, entry["app_name"], entry["user_id"], entry["event_id"]))
 
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             try:
@@ -553,13 +582,24 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         WHERE {where_scope} AND content_text LIKE ? ESCAPE N'\\'
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"), read=True)
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        where_sql = " AND ".join(clauses)
         return self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -600,7 +640,7 @@ BEGIN
         inserted_at DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", self._memory_table, "inserted_at")}
             DEFAULT SYSUTCDATETIME(){owner_line},
         CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
-        CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
+        CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (app_name, user_id, event_id)
     );
 END;
 """
@@ -632,8 +672,8 @@ END;
             return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
@@ -869,20 +909,28 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
+    events_table: str,
+    session_table: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    after_timestamp: "datetime | None",
+    limit: "int | None",
 ) -> "tuple[str, tuple[Any, ...]]":
     top_clause = "TOP (?) " if limit is not None else ""
     params: list[Any] = [limit] if limit is not None else []
     params.extend([app_name, user_id, session_id])
     after_clause = ""
     if after_timestamp is not None:
-        after_clause = " AND timestamp > ?"
+        after_clause = " AND e.timestamp > ?"
         params.append(after_timestamp)
     sql = f"""
-    SELECT {top_clause}id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {_table_ref(table)}
-    WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause}
-    ORDER BY timestamp ASC
+    SELECT {top_clause}e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+    FROM {_table_ref(events_table)} e
+    JOIN {_table_ref(session_table)} s
+        ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+    WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause}
+    ORDER BY e.timestamp ASC
     """
     return sql, tuple(params)
 
@@ -998,8 +1046,27 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return quote_bracket_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
-def _raise_session_not_found(session_id: str) -> None:
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+        app_name,
+        user_id,
+        session_id,
+    ):
+        msg = (
+            "event_record scope "
+            f"({event_record['app_name']!r}, {event_record['user_id']!r}, {event_record['session_id']!r}) "
+            f"does not match ({app_name!r}, {user_id!r}, {session_id!r})"
+        )
+        raise ValueError(msg)
+
+
+def _raise_session_not_found(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
+    raise ValueError(msg)
+
+
+def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:
+    msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 
 

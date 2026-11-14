@@ -4,12 +4,15 @@ import contextlib
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.core import create_mapped_exception, end_transaction, is_read_only_sqlite_config
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -29,6 +32,7 @@ SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SqliteConnectionPool:
     """Thread-local connection manager for SQLite.
 
@@ -43,11 +47,13 @@ class SqliteConnectionPool:
         "_connection_depths",
         "_connection_parameters",
         "_connection_registry",
+        "_connection_tokens",
         "_enable_foreign_keys",
         "_enable_optimizations",
         "_generation",
         "_health_check_interval",
         "_is_memory_db",
+        "_is_read_only",
         "_is_shared_memory",
         "_on_connection_create",
         "_pool_id",
@@ -56,6 +62,7 @@ class SqliteConnectionPool:
         "_runtime_setup",
         "_thread_connections",
         "_thread_local",
+        "_write_lock",
     )
 
     def __init__(
@@ -67,6 +74,8 @@ class SqliteConnectionPool:
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[SqliteConnection], None] | None" = None,
         runtime_setup: "dict[str, Any] | None" = None,
+        is_read_only: bool = False,
+        serialize_writes: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -78,9 +87,13 @@ class SqliteConnectionPool:
             health_check_interval: Seconds of idle time before running health check
             on_connection_create: Callback executed when connection is created
             runtime_setup: Runtime feature configuration applied after internal PRAGMAs
+            is_read_only: Enforce read-only queries and omit write PRAGMAs.
+            serialize_writes: Hold a reentrant writer lock throughout each lease.
         """
         if "check_same_thread" not in connection_parameters:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
+        self._is_read_only = is_read_only or is_read_only_sqlite_config(connection_parameters)
+        self._write_lock = threading.RLock() if serialize_writes else None
         self._connection_parameters = connection_parameters
         database = self._connection_parameters.get("database", ":memory:")
         database_str = str(database)
@@ -89,6 +102,7 @@ class SqliteConnectionPool:
         self._anchor_connection: SqliteConnection | None = None
         self._thread_local = threading.local()
         self._connection_registry: set[SqliteConnection] = set()
+        self._connection_tokens: dict[SqliteConnection, object] = {}
         self._thread_connections: dict[threading.Thread, SqliteConnection] = {}
         self._checked_out_count = 0
         self._connection_depths: dict[SqliteConnection, int] = {}
@@ -119,7 +133,12 @@ class SqliteConnectionPool:
         Returns:
             SqliteConnection: A newly opened, fully configured connection.
         """
-        connection = sqlite3.connect(**self._connection_parameters)
+        try:
+            connection = sqlite3.connect(**self._connection_parameters)
+        except sqlite3.Error as exc:
+            if getattr(exc, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_CANTOPEN, 26):
+                raise create_mapped_exception(exc) from exc
+            raise
 
         try:
             if self._enable_optimizations:
@@ -128,11 +147,14 @@ class SqliteConnectionPool:
                     _execute_and_close(connection, "PRAGMA synchronous = OFF")
                     _execute_and_close(connection, "PRAGMA temp_store = MEMORY")
                     _execute_and_close(connection, f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
-                else:
+                elif not self._is_read_only:
                     _enable_wal(connection)
                     _execute_and_close(connection, "PRAGMA synchronous = NORMAL")
 
                 _execute_and_close(connection, f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
+
+            if self._is_read_only:
+                _execute_and_close(connection, "PRAGMA query_only = ON")
 
             if self._enable_foreign_keys:
                 _execute_and_close(connection, "PRAGMA foreign_keys = ON")
@@ -151,42 +173,16 @@ class SqliteConnectionPool:
 
     @contextmanager
     def get_connection(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a thread-local connection.
+        """Lease a connection, serializing writer leases when configured.
 
         Yields:
-            SqliteConnection: A thread-local connection.
+            A connection with its lease held until context exit.
         """
-        connection = self._get_thread_connection()
-        with self._registry_lock:
-            depth = self._connection_depths.get(connection, 0)
-            self._connection_depths[connection] = depth + 1
-            if depth == 0:
-                self._checked_out_count += 1
-        outermost = depth == 0
-        try:
+        with (
+            self._write_lock if self._write_lock is not None else contextlib.nullcontext(),
+            self._get_connection_unlocked() as connection,
+        ):
             yield connection
-        except BaseException:
-            if outermost:
-                with contextlib.suppress(Exception):
-                    end_transaction(connection, commit=False)
-            raise
-        else:
-            if outermost:
-                try:
-                    end_transaction(connection, commit=True)
-                except BaseException:
-                    with contextlib.suppress(Exception):
-                        end_transaction(connection, commit=False)
-                    raise
-        finally:
-            with self._registry_lock:
-                remaining = self._connection_depths.get(connection, 1) - 1
-                if remaining > 0:
-                    self._connection_depths[connection] = remaining
-                else:
-                    self._connection_depths.pop(connection, None)
-                if outermost and self._checked_out_count > 0:
-                    self._checked_out_count -= 1
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -194,6 +190,7 @@ class SqliteConnectionPool:
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._connection_tokens.clear()
             self._thread_connections.clear()
             self._connection_depths.clear()
             self._checked_out_count = 0
@@ -213,7 +210,14 @@ class SqliteConnectionPool:
         Returns:
             SqliteConnection: A thread-local connection
         """
-        return self._get_thread_connection()
+        if self._write_lock is not None:
+            self._write_lock.acquire()
+        try:
+            return self._get_thread_connection()
+        except BaseException:
+            if self._write_lock is not None:
+                self._write_lock.release()
+            raise
 
     def release(self, connection: SqliteConnection) -> None:
         """Release a connection and roll back any uncommitted transaction.
@@ -221,19 +225,17 @@ class SqliteConnectionPool:
         Args:
             connection: The connection to release
         """
-        with contextlib.suppress(Exception):
-            end_transaction(connection, commit=False)
-
-    def _prune_dead_threads(self) -> None:
-        """Prune connections owned by dead threads."""
-        with self._registry_lock:
-            dead_threads = [t for t in self._thread_connections if not t.is_alive()]
-            for t in dead_threads:
-                conn = self._thread_connections.pop(t, None)
-                if conn is not None:
-                    self._connection_registry.discard(conn)
-                    with contextlib.suppress(Exception):
-                        conn.close()
+        try:
+            try:
+                end_transaction(connection, commit=False)
+            except Exception:
+                if getattr(self._thread_local, "connection", None) is connection:
+                    self._close_thread_connection()
+                else:
+                    self._retire_connection(connection)
+        finally:
+            if self._write_lock is not None:
+                self._write_lock.release()
 
     def size(self) -> int:
         """Get total number of active thread-local connections in pool."""
@@ -245,6 +247,94 @@ class SqliteConnectionPool:
         """Get number of checked out connections."""
         with self._registry_lock:
             return self._checked_out_count
+
+    def connection_token(self, connection: Any) -> object | None:
+        """Return the weakref-capable live token for a pool-owned connection."""
+        with self._registry_lock:
+            return self._connection_tokens.get(connection)
+
+    @staticmethod
+    def resolve_connection_token(connection: Any, *configs: Any) -> object | None:
+        """Resolve the active pool connection token across primary and replica configs."""
+        for config in configs:
+            if config is None:
+                continue
+            pool = getattr(config, "connection_instance", None)
+            if isinstance(pool, SqliteConnectionPool):
+                token = pool.connection_token(connection)
+                if token is not None:
+                    return token
+            replica_groups = getattr(config, "replica_groups", None)
+            if isinstance(replica_groups, Mapping):
+                for group in replica_groups.values():
+                    for replica_config in getattr(group, "configs", ()):
+                        replica_pool = getattr(replica_config, "connection_instance", None)
+                        if isinstance(replica_pool, SqliteConnectionPool):
+                            token = replica_pool.connection_token(connection)
+                            if token is not None:
+                                return token
+        return None
+
+    @contextmanager
+    def _get_connection_unlocked(self) -> "Generator[SqliteConnection, None, None]":
+        """Get a thread-local connection.
+
+        Yields:
+            SqliteConnection: A thread-local connection.
+        """
+        connection = self._get_thread_connection()
+        with self._registry_lock:
+            depth = self._connection_depths.get(connection, 0)
+            self._connection_depths[connection] = depth + 1
+            if depth == 0:
+                self._checked_out_count += 1
+        outermost = depth == 0
+        try:
+            yield connection
+        except BaseException:
+            if outermost:
+                try:
+                    end_transaction(connection, commit=False)
+                except Exception:
+                    if getattr(self._thread_local, "connection", None) is connection:
+                        self._close_thread_connection()
+                    else:
+                        self._retire_connection(connection)
+            raise
+        else:
+            if outermost:
+                try:
+                    end_transaction(connection, commit=True)
+                except BaseException:
+                    try:
+                        end_transaction(connection, commit=False)
+                    except Exception:
+                        if getattr(self._thread_local, "connection", None) is connection:
+                            self._close_thread_connection()
+                        else:
+                            self._retire_connection(connection)
+                    raise
+        finally:
+            with self._registry_lock:
+                remaining = self._connection_depths.get(connection, 1) - 1
+                if remaining > 0:
+                    self._connection_depths[connection] = remaining
+                else:
+                    self._connection_depths.pop(connection, None)
+                if outermost and self._checked_out_count > 0:
+                    self._checked_out_count -= 1
+
+    def _prune_dead_threads(self) -> None:
+        """Prune connections owned by dead threads."""
+        with self._registry_lock:
+            dead_threads = [t for t in self._thread_connections if not t.is_alive()]
+            for t in dead_threads:
+                conn = self._thread_connections.pop(t, None)
+                if conn is not None:
+                    self._connection_registry.discard(conn)
+                    self._connection_tokens.pop(conn, None)
+                    with contextlib.suppress(Exception):
+                        conn.close()
 
     def _create_connection(self) -> SqliteConnection:
         """Create a pool-owned connection and record it for shutdown."""
@@ -258,6 +348,7 @@ class SqliteConnectionPool:
                 with contextlib.suppress(Exception):
                     self._anchor_connection = sqlite3.connect(**self._connection_parameters)
             self._connection_registry.add(connection)
+            self._connection_tokens[connection] = _ConnectionToken()
         return connection
 
     def _is_connection_alive(self, connection: SqliteConnection) -> bool:
@@ -350,6 +441,7 @@ class SqliteConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._registry_lock:
             self._connection_registry.discard(connection)
+            self._connection_tokens.pop(connection, None)
             dead_threads = [t for t, c in self._thread_connections.items() if c is connection]
             for t in dead_threads:
                 self._thread_connections.pop(t, None)
@@ -364,6 +456,13 @@ class SqliteConnectionPool:
             self._thread_local.connection = None
             self._thread_local.created_at = 0.0
             self._thread_local.last_used = 0.0
+
+
+@mypyc_attr(native_class=False)
+class _ConnectionToken:
+    """Weakref-capable identity token bound to the lifetime of one pooled connection."""
+
+    __slots__ = ("__weakref__",)
 
 
 def _execute_and_close(connection: "SqliteConnection", statement: str) -> None:

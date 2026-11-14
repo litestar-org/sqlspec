@@ -3,17 +3,24 @@
 import functools
 import hashlib
 import re
-from typing import Any
+from typing import Any, Final
 
 __all__ = (
     "compute_sql_hash",
     "get_trace_context",
+    "get_w3c_trace_context",
     "redact_sql_literals",
     "resolve_db_system",
     "resolve_effective_db_system",
 )
 
-_LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
+_SQL_REDACT_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
+    r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
+    r"|(?P<bquote>`(?>[^`]+|``)*(?:`|\Z))"
+    r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
+    r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
+)
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("sqlanywhere", "sqlanywhere"),
@@ -118,5 +125,58 @@ def compute_sql_hash(sql: str) -> str:
 
 
 def redact_sql_literals(sql: str) -> str:
-    """Mask single-quoted (including backslash escapes) and dollar-quoted SQL literals."""
-    return _LITERAL_PATTERN.sub("'***'", sql)
+    """Mask single-quoted and dollar-quoted SQL literals while keeping comments and quoted identifiers."""
+    return _SQL_REDACT_TOKEN_PATTERN.sub(_replace_sql_token, sql)
+
+
+_OTEL_TRACE_MODULE: Any = None
+_OTEL_TRACE_RESOLVED = False
+_SQLCOMMENTER_CONTEXT: Any = None
+
+
+def get_w3c_trace_context() -> tuple[str | None, str]:
+    """Extract W3C headers from recording or propagated OpenTelemetry spans."""
+    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
+    if not _OTEL_TRACE_RESOLVED:
+        try:
+            from opentelemetry import trace
+
+            _OTEL_TRACE_MODULE = trace
+        except ImportError:
+            _OTEL_TRACE_MODULE = None
+        _OTEL_TRACE_RESOLVED = True
+    if _OTEL_TRACE_MODULE is not None:
+        span = _OTEL_TRACE_MODULE.get_current_span()
+        context = span.get_span_context() if span is not None else None
+        if context is not None and context.is_valid and context.trace_id and context.span_id:
+            raw_flags = getattr(context, "trace_flags", None)
+            flags = int(raw_flags) & 0xFF if raw_flags is not None else 1
+            traceparent = f"00-{context.trace_id:032x}-{context.span_id:016x}-{flags:02x}"
+            state = getattr(context, "trace_state", None)
+            to_header = getattr(state, "to_header", None)
+            return traceparent, str(to_header() or "") if callable(to_header) else ""
+    fallback = _get_sqlcommenter_context() or {}
+    parent = (fallback.get("traceparent") or "").strip()
+    return (parent, (fallback.get("tracestate") or "").strip()) if parent else (None, "")
+
+
+def _reset_otel_trace_cache() -> None:
+    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
+    _OTEL_TRACE_MODULE = None
+    _OTEL_TRACE_RESOLVED = False
+
+
+def _get_sqlcommenter_context() -> Any:
+    global _SQLCOMMENTER_CONTEXT
+    if _SQLCOMMENTER_CONTEXT is None:
+        from sqlspec.core.sqlcommenter import SQLCommenterContext
+
+        _SQLCOMMENTER_CONTEXT = SQLCommenterContext
+    return _SQLCOMMENTER_CONTEXT.get()
+
+
+def _replace_sql_token(match: re.Match[str]) -> str:
+    """Preserve comments and quoted identifiers while masking SQL literals."""
+    if match.lastgroup in {"comment", "dquote", "bquote"}:
+        return match.group(0)
+    return "'***'"

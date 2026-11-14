@@ -112,7 +112,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
             data, expires_at_julian = _row_values(raw_row)
 
-            if renew_for is not None and expires_at_julian is not None:
+            if self._should_renew(renew_for) and expires_at_julian is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 new_expires_at_julian = self._datetime_to_julian(new_expires_at)
                 if new_expires_at_julian is not None:

@@ -8,6 +8,7 @@ import getpass
 import importlib
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlspec.adapters.oracledb.core import format_oracle_table_identifier
 from sqlspec.builder import CreateTable, Select, sql
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.version import parse_version
@@ -24,13 +25,6 @@ __all__ = ("OracleAsyncMigrationTracker", "OracleSyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.oracle")
 _console: Any = None
-
-
-def _get_console() -> Any:
-    global _console
-    if _console is None:
-        _console = importlib.import_module("rich.console").Console()
-    return _console
 
 
 class OracleMigrationTrackerMixin:
@@ -67,6 +61,11 @@ class OracleMigrationTrackerMixin:
         if version_table_schema:
             return f"{self._quote_oracle_identifier(version_table_schema)}.{quoted_table_name}"
         return quoted_table_name
+
+    def _escaped_plsql_version_table(self) -> str:
+        """Validate version_table and escape single quotes for PL/SQL string literals."""
+        formatted_table = format_oracle_table_identifier(self.version_table)
+        return formatted_table.replace("'", "''")
 
     def _tracking_table_builder(self) -> CreateTable:
         """Return an Oracle CREATE TABLE builder for the tracker table."""
@@ -199,10 +198,11 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
         Args:
             driver: The database driver to use.
         """
+        escaped_table = self._escaped_plsql_version_table()
         create_script = f"""
         BEGIN
             EXECUTE IMMEDIATE '
-            CREATE TABLE {self.version_table} (
+            CREATE TABLE {escaped_table} (
                 version_num VARCHAR2(32) PRIMARY KEY,
                 version_type VARCHAR2(16),
                 execution_sequence INTEGER,
@@ -400,12 +400,14 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
         if not column_def:
             return
 
+        formatted_table = format_oracle_table_identifier(self.version_table)
+        quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""
 
         alter_sql = f"""
-            ALTER TABLE {self.version_table}
-            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
+            ALTER TABLE {formatted_table}
+            ADD {quoted_col} {column_def.dtype}{default_clause}{not_null_clause}
         """
 
         driver.execute(alter_sql)
@@ -424,10 +426,11 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
         Args:
             driver: The database driver to use.
         """
+        escaped_table = self._escaped_plsql_version_table()
         create_script = f"""
         BEGIN
             EXECUTE IMMEDIATE '
-            CREATE TABLE {self.version_table} (
+            CREATE TABLE {escaped_table} (
                 version_num VARCHAR2(32) PRIMARY KEY,
                 version_type VARCHAR2(16),
                 execution_sequence INTEGER,
@@ -626,13 +629,22 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
         if not column_def:
             return
 
+        formatted_table = format_oracle_table_identifier(self.version_table)
+        quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""
 
         alter_sql = f"""
-            ALTER TABLE {self.version_table}
-            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
+            ALTER TABLE {formatted_table}
+            ADD {quoted_col} {column_def.dtype}{default_clause}{not_null_clause}
         """
 
         await driver.execute(alter_sql)
         logger.debug("Added column %s to tracking table", column_name)
+
+
+def _get_console() -> Any:
+    global _console
+    if _console is None:
+        _console = importlib.import_module("rich.console").Console()
+    return _console

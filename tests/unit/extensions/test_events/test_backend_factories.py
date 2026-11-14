@@ -303,11 +303,12 @@ def test_oracle_aq_visibility_reaches_dequeue_options(is_async: bool, setting: s
     config = OracleAsyncConfig() if is_async else OracleSyncConfig()
     backend = create_event_backend(config, "aq", {"aq_visibility": setting})
     assert isinstance(backend, (OracleAsyncAQEventBackend, OracleSyncAQEventBackend))
-    queue = SimpleNamespace(deqoptions=SimpleNamespace(visibility=2, wait=0))
+    queue = SimpleNamespace(deqoptions=SimpleNamespace(visibility=2, wait=0, correlation=None))
 
-    _apply_deq_options(queue, backend._visibility, None, 1)
+    _apply_deq_options(queue, backend._visibility, None, 1, "orders")
 
     assert queue.deqoptions.visibility == expected
+    assert queue.deqoptions.correlation == "orders"
 
 
 def test_oracle_factory_txeventq_backend() -> None:

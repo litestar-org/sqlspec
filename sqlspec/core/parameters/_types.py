@@ -128,6 +128,7 @@ PARAMETER_PROCESSING_RESULT_SLOTS: Final[tuple[str, ...]] = (
     "parameter_profile",
     "parameters",
     "parsed_expression",
+    "placeholder_only",
     "sql",
     "sqlglot_sql",
 )
@@ -279,6 +280,17 @@ class ParameterStyleConfig:
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
+            coercion_items: tuple[tuple[type, Any], ...] | None = None
+            if self.type_coercion_map:
+                items: list[tuple[type, Any]] = []
+                for key, value in sorted(self.type_coercion_map.items(), key=lambda kv: str(kv[0])):
+                    try:
+                        hash(value)
+                    except TypeError:
+                        items.append((key, id(value)))
+                    else:
+                        items.append((key, value))
+                coercion_items = tuple(items)
             hash_components = (
                 self.default_parameter_style.value,
                 frozenset(style.value for style in self.supported_parameter_styles),
@@ -288,7 +300,7 @@ class ParameterStyleConfig:
                     else None
                 ),
                 self.default_execution_parameter_style.value,
-                tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
+                coercion_items,
                 self.has_native_list_expansion,
                 self.preserve_original_params_for_many,
                 id(self.output_transformer) if self.output_transformer else None,
@@ -538,6 +550,7 @@ class ParameterProcessingResult:
         parsed_expression: Any = None,
         input_named_parameters: "tuple[str, ...] | None" = None,
         applied_wrap_types: bool = False,
+        placeholder_only: bool = False,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
@@ -546,6 +559,7 @@ class ParameterProcessingResult:
         self.parsed_expression = parsed_expression
         self.input_named_parameters = input_named_parameters or ()
         self.applied_wrap_types = applied_wrap_types
+        self.placeholder_only = placeholder_only
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql
@@ -574,6 +588,7 @@ class ParameterProcessingResult:
                 self.parsed_expression,
                 self.input_named_parameters,
                 self.applied_wrap_types,
+                self.placeholder_only,
             ),
         )
 

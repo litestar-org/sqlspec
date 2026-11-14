@@ -3,6 +3,7 @@
 import contextlib
 import re
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime, timedelta
 from functools import partial
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
@@ -28,6 +29,7 @@ from sqlspec.driver._exception_handler import _run_with_async_exception_handler,
 from sqlspec.exceptions import (
     DataError,
     DeadlockError,
+    ImproperConfigurationError,
     IntegrityError,
     NotFoundError,
     OperationalError,
@@ -40,6 +42,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -81,6 +84,7 @@ __all__ = (
     "renew_transaction",
     "resolve_column_names",
     "resolve_row_plan",
+    "resolve_snapshot_kwargs",
     "resolve_transaction_completion",
     "run_in_transaction_async",
     "run_in_transaction_sync",
@@ -1141,3 +1145,88 @@ class _SpannerAsyncUpdateJob:
 
     async def __call__(self, transaction: Any) -> int:
         return int(await transaction.execute_update(self._sql, params=self._params, param_types=self._types))
+
+
+def resolve_snapshot_kwargs(
+    *,
+    exact_staleness: timedelta | None = None,
+    max_staleness: timedelta | None = None,
+    read_timestamp: datetime | None = None,
+    min_read_timestamp: datetime | None = None,
+    multi_use: bool | None = None,
+    default_staleness: Mapping[str, Any] | None = None,
+    transaction: bool = False,
+    apply_default_staleness: bool = True,
+    bind_key: str | None = None,
+) -> dict[str, Any]:
+    """Resolve native snapshot bounds with request primary pins taking precedence."""
+    supplied: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("exact_staleness", exact_staleness),
+            ("max_staleness", max_staleness),
+            ("read_timestamp", read_timestamp),
+            ("min_read_timestamp", min_read_timestamp),
+        )
+        if value is not None
+    }
+    if len(supplied) > 1:
+        msg = "Spanner snapshot timestamp bounds are mutually exclusive"
+        raise ImproperConfigurationError(msg)
+    if multi_use is not None and not isinstance(multi_use, bool):
+        msg = "Spanner multi_use must be a boolean"
+        raise ImproperConfigurationError(msg)
+    if transaction:
+        if supplied or multi_use is not None:
+            msg = "Snapshot timestamp bounds cannot be combined with transaction=True"
+            raise ImproperConfigurationError(msg)
+        return {}
+    entry = RoutingContext.get_entry(bind_key)
+    if entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+        return {"multi_use": True}
+    if not supplied and entry is not None and entry.max_staleness_seconds is not None:
+        supplied = {"max_staleness": timedelta(seconds=entry.max_staleness_seconds)}
+    if not supplied and default_staleness is not None and apply_default_staleness:
+        supplied = dict(default_staleness)
+        if multi_use is None:
+            multi_use = supplied.pop("multi_use", None)
+        else:
+            supplied.pop("multi_use", None)
+        if len(supplied) > 1:
+            msg = "Spanner default snapshot timestamp bounds are mutually exclusive"
+            raise ImproperConfigurationError(msg)
+    if multi_use is not None and not isinstance(multi_use, bool):
+        msg = "Spanner multi_use must be a boolean"
+        raise ImproperConfigurationError(msg)
+    result: dict[str, Any] = {}
+    for key, value in supplied.items():
+        if key in {"exact_staleness", "max_staleness"}:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    value = timedelta(seconds=value)
+                except (ValueError, OverflowError) as exc:
+                    msg = "Spanner staleness must be finite and within the supported duration range"
+                    raise ImproperConfigurationError(msg) from exc
+            if not isinstance(value, timedelta) or value.total_seconds() < 0:
+                msg = "Spanner staleness must be a nonnegative duration or numeric seconds"
+                raise ImproperConfigurationError(msg)
+        elif key in {"read_timestamp", "min_read_timestamp"}:
+            if isinstance(value, str):
+                try:
+                    value = datetime.fromisoformat(value)
+                except ValueError as exc:
+                    msg = "Spanner snapshot timestamps must be valid ISO-8601 values"
+                    raise ImproperConfigurationError(msg) from exc
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+                msg = "Spanner snapshot timestamps must include a timezone"
+                raise ImproperConfigurationError(msg)
+        else:
+            msg = f"Unknown Spanner snapshot bound {key!r}"
+            raise ImproperConfigurationError(msg)
+        result[key] = value
+    single_use = bool({"max_staleness", "min_read_timestamp"} & result.keys())
+    if single_use and multi_use is True:
+        msg = "Spanner max_staleness and min_read_timestamp require multi_use=False"
+        raise ImproperConfigurationError(msg)
+    result["multi_use"] = not single_use if multi_use is None else multi_use
+    return result

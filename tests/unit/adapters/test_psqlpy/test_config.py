@@ -1,9 +1,11 @@
 """Psqlpy configuration tests covering statement config builders."""
 
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from psqlpy import exceptions as psqlpy_exceptions
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyConnectionPool, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.config import (
@@ -20,6 +22,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -478,7 +481,8 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
     result = await context.__aexit__(ValueError, exc, None)
 
     assert result is None
-    conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    assert conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
     assert context._connection is None
     assert inner_ctx.recorded_exit_args == (None, None, None)
     assert context._ctx is None
@@ -486,6 +490,7 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
     clean_context = PsqlpyConnectionContext(config)
     clean_inner_ctx = _RecordingAsyncContext()
     clean_conn = AsyncMock()
+    clean_conn.in_transaction = AsyncMock(return_value=False)
     clean_context._ctx = clean_inner_ctx
     clean_context._connection = clean_conn
 
@@ -498,12 +503,13 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
 
 @pytest.mark.anyio
 async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean_exit() -> None:
-    """_PsqlpySessionFactory.release_connection skips ROLLBACK on clean exit and suppresses rollback errors."""
+    """_PsqlpySessionFactory.release_connection skips ROLLBACK on clean idle exit and suppresses body-error rollback failures."""
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
     factory = _PsqlpySessionFactory(config)
     inner_ctx = _RecordingAsyncContext()
     factory._ctx = inner_ctx
     conn = AsyncMock()
+    conn.in_transaction = AsyncMock(return_value=False)
 
     await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
 
@@ -511,15 +517,57 @@ async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean
     assert inner_ctx.recorded_exit_args == (None, None, None)
 
     failing_conn = AsyncMock()
+    failing_conn.in_transaction = AsyncMock(return_value=False)
     failing_conn.execute.side_effect = RuntimeError("socket closed")
     err_ctx = _RecordingAsyncContext()
     factory._ctx = err_ctx
 
     await factory.release_connection(failing_conn, exc_type=RuntimeError, exc_val=RuntimeError("boom"), exc_tb=None)
 
-    failing_conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert failing_conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    assert failing_conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
     assert err_ctx.recorded_exit_args == (None, None, None)
     assert factory._ctx is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind", ["context", "factory"])
+@pytest.mark.parametrize("rollback_fails", [False, True], ids=["rollback-ok", "rollback-fails"])
+async def test_psqlpy_clean_exit_with_open_transaction_rolls_back_or_terminates_backend(
+    kind: str, rollback_fails: bool
+) -> None:
+    """Clean exit with conn.in_transaction() True rolls back, terminating the backend and raising when ROLLBACK fails."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    inner_ctx = _RecordingAsyncContext()
+    conn = AsyncMock()
+    conn.in_transaction = AsyncMock(return_value=True)
+    if rollback_fails:
+        conn.execute.side_effect = [RuntimeError("rollback broken"), None]
+
+    if kind == "context":
+        ctx = PsqlpyConnectionContext(config)
+        ctx._ctx = inner_ctx
+        ctx._connection = conn
+        if rollback_fails:
+            with pytest.raises(RuntimeError, match="rollback broken"):
+                await ctx.__aexit__(None, None, None)
+        else:
+            await ctx.__aexit__(None, None, None)
+        assert ctx._ctx is None
+    else:
+        factory = _PsqlpySessionFactory(config)
+        factory._ctx = inner_ctx
+        if rollback_fails:
+            with pytest.raises(RuntimeError, match="rollback broken"):
+                await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
+        else:
+            await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
+        assert factory._ctx is None
+
+    assert conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    if rollback_fails:
+        assert conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
+    assert inner_ctx.recorded_exit_args == (None, None, None)
 
 
 @pytest.mark.parametrize("strategy", ["default", "rls", True])
@@ -542,6 +590,7 @@ async def test_tenant_disabled_retains_native_provider(disabled: Any) -> None:
     from types import SimpleNamespace
 
     connection = AsyncMock()
+    connection.in_transaction = AsyncMock(return_value=False)
     connection.fetch.return_value = SimpleNamespace(result=lambda: [])
     context = AsyncMock()
     context.__aenter__.return_value = connection
@@ -649,3 +698,256 @@ async def test_tenant_preparation_failure_releases_once(monkeypatch: pytest.Monk
     assert caught.value is error
     context.__aexit__.assert_awaited_once()
     strategy.checkin.assert_awaited_once()
+
+
+@pytest.mark.parametrize("session", ("any", "read-write", "read-only", "primary", "standby", "prefer-standby"))
+def test_replica_derivation_normalizes_native_session_enums(session: str) -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app"})
+    replica = primary.derive_pool(
+        hosts=["reader-a", "reader-b"], target_session_attrs=session, load_balance_hosts="random"
+    )
+    expected = (
+        TargetSessionAttrs.Any
+        if session == "any"
+        else (TargetSessionAttrs.ReadWrite if session in {"read-write", "primary"} else TargetSessionAttrs.ReadOnly)
+    )
+    assert "dbname='app'" in replica.connection_config["dsn"]
+    assert "host='reader-a,reader-b'" in replica.connection_config["dsn"]
+    assert replica.connection_config["target_session_attrs"] == expected
+    expected_attr = (
+        "any" if session == "any" else ("read-write" if session in {"primary", "read-write"} else "read-only")
+    )
+    assert f"target_session_attrs='{expected_attr}'" in replica.connection_config["dsn"]
+    assert replica.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
+    assert primary.connection_config["dsn"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize("field", ("target_session_attrs", "load_balance_hosts"))
+@pytest.mark.parametrize("value", ("invalid", True, 1))
+def test_invalid_replica_enum_options_fail_configuration(field: str, value: Any) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        PsqlpyConfig(connection_config={field: value})
+
+
+def test_replica_alias_overrides_replace_primary_values() -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app", "db_name": "app", "username": "writer"})
+    replica = primary.derive_pool(host="reader", database="reader_app", user="reader")
+    assert "dbname='reader_app'" in replica.connection_config["dsn"]
+    assert "host='reader'" in replica.connection_config["dsn"]
+    assert replica.connection_config["db_name"] == "reader_app"
+    assert replica.connection_config["username"] == "reader"
+
+
+def test_native_replica_enums_and_uppercase_strings_are_supported() -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    native = PsqlpyConfig(
+        connection_config={
+            "target_session_attrs": TargetSessionAttrs.ReadOnly,
+            "load_balance_hosts": LoadBalanceHosts.Disable,
+        }
+    )
+    uppercase = PsqlpyConfig(connection_config={"target_session_attrs": "READ-ONLY", "load_balance_hosts": "DISABLE"})
+    assert native.connection_config["target_session_attrs"] == uppercase.connection_config["target_session_attrs"]
+    assert native.connection_config["load_balance_hosts"] == uppercase.connection_config["load_balance_hosts"]
+
+
+def test_replica_session_attributes_preserve_inherited_endpoint() -> None:
+    from psqlpy import LoadBalanceHosts, TargetSessionAttrs
+
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://writer/app"})
+    reader = primary.derive_pool(
+        connection_config_overrides={
+            "options": "-c default_transaction_read_only=on",
+            "target_session_attrs": "read-only",
+            "load_balance_hosts": "random",
+        }
+    )
+    assert "host='writer'" in reader.connection_config["dsn"]
+    assert "dbname='app'" in reader.connection_config["dsn"]
+    assert "target_session_attrs='read-only'" in reader.connection_config["dsn"]
+    assert reader.connection_config["target_session_attrs"] == TargetSessionAttrs.ReadOnly
+    assert reader.connection_config["load_balance_hosts"] == LoadBalanceHosts.Random
+    assert reader.connection_config["options"] == "-c default_transaction_read_only=on"
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://app:sec%27ret@writer/orders?sslmode=require&application_name=reports",
+        "postgresql://app:sec%27ret@[::1]:5433,writer:5434/orders?sslmode=require&application_name=reports",
+        "host=writer user=app password='sec\\'ret' dbname=orders sslmode=require application_name=reports",
+    ],
+)
+def test_derived_host_preserves_dsn_credentials_database_and_tls(dsn: str) -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": dsn})
+    reader = primary.derive_pool(host="reader", port=6432)
+    merged = reader.connection_config["dsn"]
+    assert "host='reader'" in merged
+    assert "port='6432'" in merged
+    assert "user='app'" in merged
+    assert "password='sec\\'ret'" in merged
+    assert "dbname='orders'" in merged
+    assert "sslmode='require'" in merged
+    assert "application_name='reports'" in merged
+    assert primary.connection_config["dsn"] == dsn
+    alternate = primary.derive_pool(host="reader", user="reporter", password="new-secret", database="reports")
+    assert "user='reporter'" in alternate.connection_config["dsn"]
+    assert "password='new-secret'" in alternate.connection_config["dsn"]
+    assert "dbname='reports'" in alternate.connection_config["dsn"]
+
+
+@pytest.mark.parametrize("dsn", ["host=writer invalid", "invalid host=writer", "postgresql://writer:invalid/orders"])
+def test_invalid_dsn_host_derivation_fails_before_pool_creation(dsn: str) -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": dsn})
+    with pytest.raises(ImproperConfigurationError, match="Invalid PostgreSQL"):
+        primary.derive_pool(host="reader")
+
+
+def test_derived_dsn_preserves_literal_plus_in_security_paths() -> None:
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://app@writer/orders?sslrootcert=/keys/ca+extra.pem"})
+    reader = primary.derive_pool(host="reader")
+    assert "sslrootcert='/keys/ca+extra.pem'" in reader.connection_config["dsn"]
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.in_transaction = AsyncMock(return_value=False)
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = AsyncMock()
+    pool.acquire = lambda: context
+    config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool))
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _DETACHED_CONNECTION
+
+
+async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
+    connection = object()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    async def acquire_connection() -> Any:
+        return connection
+
+    async def release_connection(conn: Any, **kwargs: Any) -> None:
+        release_events.append((conn is connection, captured[0].connection is connection, kwargs.get("exc_type")))
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    ctx = PsqlpySessionContext(
+        acquire_connection=acquire_connection,
+        release_connection=release_connection,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=fail_prepare,
+    )
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with ctx:
+            pytest.fail("prepare failure must abort __aenter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_psqlpy_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Psqlpy pool build and acquire errors map to DatabaseConnectionError so ReadReplicaGroup fails over."""
+    good_conn = SimpleNamespace(in_transaction=AsyncMock(return_value=False))
+    good_ctx = AsyncMock()
+    good_ctx.__aenter__.return_value = good_conn
+    good_ctx.__aexit__.return_value = None
+    good_pool = SimpleNamespace(acquire=lambda: good_ctx)
+
+    bad_ctx = AsyncMock()
+    bad_ctx.__aenter__.side_effect = psqlpy_exceptions.ConnectionPoolExecuteError("exhausted")
+    bad_pool = SimpleNamespace(acquire=lambda: bad_ctx)
+
+    def fake_pool_cls(**kwargs: Any) -> Any:
+        if "bad" in str(kwargs.get("dsn", "")):
+            if failure_stage == "pool":
+                raise psqlpy_exceptions.ConnectionPoolBuildError("cannot build pool")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.psqlpy.config.ConnectionPool", fake_pool_cls)
+    config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://primary"},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
+        replicas=["postgresql://bad", "postgresql://good"],
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_key", "expected_value"),
+    [
+        pytest.param({"database": "ro_db"}, "db_name", "ro_db", id="database"),
+        pytest.param({"dbname": "ro_db"}, "db_name", "ro_db", id="dbname"),
+        pytest.param({"db": "ro_db"}, "db_name", "ro_db", id="db"),
+        pytest.param({"user": "ro_user"}, "username", "ro_user", id="user"),
+    ],
+)
+async def test_psqlpy_derive_pool_pops_alias_keys_for_pool_creation(
+    overrides: "dict[str, Any]", expected_key: str, expected_value: str
+) -> None:
+    """Derived pools remove alias keys so psqlpy.ConnectionPool accepts the merged parameters."""
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://u:p@primary:5432/rw"})
+    derived = primary.derive_pool(**overrides)
+    for alias in overrides:
+        assert alias not in derived.connection_config
+    assert derived.connection_config[expected_key] == expected_value
+    pool = await derived._create_pool()  # pyright: ignore[reportPrivateUsage]
+    pool.close()
+
+
+async def test_psqlpy_derive_pool_reconciles_multihost_ports() -> None:
+    """Overriding host on a multi-host primary DSN avoids mismatched port lists."""
+    primary = PsqlpyConfig(connection_config={"dsn": "postgresql://u:p@127.0.0.1:5433,127.0.0.2:5434/appdb"})
+    single = primary.derive_pool(host="127.0.0.1")
+    assert "host='127.0.0.1'" in single.connection_config["dsn"]
+    assert "port=" not in single.connection_config["dsn"]
+    pool = await single._create_pool()  # pyright: ignore[reportPrivateUsage]
+    try:
+        with pytest.raises(Exception) as caught:
+            await pool.connection()
+        assert "invalid number of ports" not in str(caught.value)
+    finally:
+        pool.close()
+
+    uniform = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://u:p@127.0.0.1:5433,127.0.0.2:5433/appdb"}
+    ).derive_pool(host="127.0.0.1")
+    assert "port='5433'" in uniform.connection_config["dsn"]
+
+    with pytest.raises(ImproperConfigurationError, match="ports"):
+        primary.derive_pool(ports=[5433, 5434, 5435])
+
+
+def test_psqlpy_derive_dsn_and_direct_dsn_clear_inherited_endpoint_fields() -> None:
+    """Explicit DSN, replica string, and direct_dsn drop inherited field-based endpoint options."""
+    primary = PsqlpyConfig(
+        connection_config={"host": "primary", "port": 5432, "db_name": "rw", "username": "u", "password": "pw"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://du:dp@direct:5439/direct_db"},
+        replicas=["postgresql://ro:ropw@replica:6432/ro_db"],
+    )
+    derived = primary.derive_pool(dsn="postgresql://ro:ropw@replica:6432/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+    direct = primary.derive_direct_config()
+    for cfg in (derived, replica):
+        assert cfg.connection_config["dsn"] == "postgresql://ro:ropw@replica:6432/ro_db"
+        for stale_key in ("host", "port", "db_name", "username", "password"):
+            assert stale_key not in cfg.connection_config
+    assert direct.connection_config["dsn"] == "postgresql://du:dp@direct:5439/direct_db"
+    for stale_key in ("host", "port", "db_name", "username", "password"):
+        assert stale_key not in direct.connection_config

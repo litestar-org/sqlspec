@@ -2,7 +2,7 @@
 
 import contextlib
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, cast
 
 from sqlspec.adapters.sybase._typing import SybaseCursor, SybaseError
 from sqlspec.adapters.sybase.core import (
@@ -43,8 +43,8 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SybaseConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SybaseConfig", *, read_config: "SybaseConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create ADK tables (idempotent Sybase ASE DDL) and DD-gated indexes."""
@@ -100,7 +100,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
-            if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            if self._should_renew(renew_for):
                 self._execute(
                     f"""
                     UPDATE {_table_ref(self._session_table)}
@@ -109,6 +109,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
+                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
@@ -117,6 +118,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 WHERE app_name = %s AND user_id = %s AND id = %s
                 """,
                 (app_name, user_id, session_id),
+                read=renew_for is None,
             )
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
@@ -155,7 +157,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
@@ -164,20 +166,44 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete a session and its associated events."""
-        self._execute(
-            f"DELETE FROM {_table_ref(self._events_table)} WHERE app_name = %s AND user_id = %s AND session_id = %s",
-            (app_name, user_id, session_id),
-            commit=True,
+        events_sql = (
+            f"DELETE FROM {_table_ref(self._events_table)} WHERE app_name = %s AND user_id = %s AND session_id = %s"
         )
-        self._execute(
-            f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = %s AND user_id = %s AND id = %s",
-            (app_name, user_id, session_id),
-            commit=True,
-        )
+        session_sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = %s AND user_id = %s AND id = %s"
+        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+            try:
+                cursor.execute(events_sql, (app_name, user_id, session_id))
+                cursor.execute(session_sql, (app_name, user_id, session_id))
+                conn.commit()
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise create_mapped_exception(exc) from exc
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        self._execute(_insert_event_sql(self._events_table), _event_insert_params(event_record), commit=True)
+        """Append an event after verifying session ownership."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        ownership_sql = (
+            f"SELECT TOP 1 1 FROM {_table_ref(self._session_table)} WHERE id = %s AND app_name = %s AND user_id = %s"
+        )
+        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+            try:
+                cursor.execute(ownership_sql, (session_id, app_name, user_id))
+                row = cursor.fetchone()
+                if row is None:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
+                    _raise_session_not_found_for_scope(session_id, app_name, user_id)
+                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                conn.commit()
+            except ValueError:
+                raise
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise create_mapped_exception(exc) from exc
 
     def append_event_and_update_state(
         self,
@@ -191,6 +217,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
         SET state = %s, update_time = GETUTCDATE()
@@ -237,7 +264,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
-            rows = self._execute_fetchall(sql, params)
+            rows = self._execute_fetchall(sql, params, read=True)
         except (SybaseError, SQLSpecError) as exc:
             if _is_sybase_table_missing(exc):
                 return []
@@ -345,6 +372,15 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value, key, key, value), commit=True)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return ordered Sybase ASE ADK session-store SchemaTarget definitions."""
+        del driver
+        return self._schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing Sybase ASE ADK session and event companion indexes without committing."""
+        _reconcile_sybase_indexes(driver, self._index_specs())
+
     def _index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
@@ -378,15 +414,6 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             _build_sybase_target(table, inner_ddl, create_statement)
             for table, inner_ddl, create_statement in ddl_targets
         ]
-
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return ordered Sybase ASE ADK session-store SchemaTarget definitions."""
-        del driver
-        return self._schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing Sybase ASE ADK session and event companion indexes without committing."""
-        _reconcile_sybase_indexes(driver, self._index_specs())
 
     def _sessions_table_ddl(self) -> str:
         """Return Sybase ASE DDL for the ADK session table."""
@@ -445,10 +472,14 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return _events_query(
+            self._events_table, self._session_table, app_name, user_id, session_id, after_timestamp, limit
+        )
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchone(
+        self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False
+    ) -> "Any | None":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 row = cursor.fetchone()
@@ -461,16 +492,16 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
                 raise create_mapped_exception(exc) from exc
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())
             except Exception as exc:
                 raise create_mapped_exception(exc) from exc
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False, read: bool = False) -> int:
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 rowcount = resolve_rowcount(cursor)
@@ -491,8 +522,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
 
     _max_table_name_parts = 2
 
-    def __init__(self, config: "SybaseConfig") -> None:
-        super().__init__(config)
+    def __init__(self, config: "SybaseConfig", *, read_config: "SybaseConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
 
     def create_tables(self) -> None:
         """Create the memory table (idempotent Sybase ASE DDL) and DD-gated indexes."""
@@ -530,7 +561,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{owner_value}
         WHERE NOT EXISTS (
             SELECT 1 FROM {_table_ref(self._memory_table)} HOLDLOCK
-            WHERE event_id = %s
+            WHERE app_name = %s AND user_id = %s AND event_id = %s
         )
         """
         inserted = 0
@@ -552,7 +583,7 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
                     ]
                     if self._owner_id_column_name:
                         params.append(owner_id)
-                    params.append(entry["event_id"])
+                    params.extend((entry["app_name"], entry["user_id"], entry["event_id"]))
                     cursor.execute(sql, tuple(params))
                     inserted += resolve_rowcount(cursor)
             except Exception as exc:
@@ -587,13 +618,24 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         WHERE {where_scope} AND content_text LIKE %s ESCAPE '\\'
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"), read=True)
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        clauses = ["session_id = %s"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = %s")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        where_sql = " AND ".join(clauses)
         return self._execute(
-            f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = %s", (session_id,), commit=True
+            f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -611,13 +653,6 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True
         )
 
-    def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct the Sybase ASE ADK memory SchemaTarget when memory is enabled."""
-        if not self._enabled:
-            return []
-        inner_ddl = _memory_create_table_sql(self._memory_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
-        return [_build_sybase_target(self._memory_table, inner_ddl, self._memory_table_ddl())]
-
     def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
         """Return ordered Sybase ASE ADK memory SchemaTarget definitions."""
         del driver
@@ -628,6 +663,13 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         if not self._enabled:
             return
         _reconcile_sybase_indexes(driver, self._memory_index_specs())
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct the Sybase ASE ADK memory SchemaTarget when memory is enabled."""
+        if not self._enabled:
+            return []
+        inner_ddl = _memory_create_table_sql(self._memory_table, JSON_COLUMN_TYPE, self._owner_id_column_ddl)
+        return [_build_sybase_target(self._memory_table, inner_ddl, self._memory_table_ddl())]
 
     def _memory_table_ddl(self) -> str:
         table_ref = _table_ref(self._memory_table)
@@ -651,8 +693,8 @@ class SybaseADKMemoryStore(BaseSyncADKMemoryStore["SybaseConfig"]):
         ref = escape_sql_literal(_table_ref(self._memory_table))
         return [f"IF OBJECT_ID('{ref}') IS NOT NULL EXECUTE('DROP TABLE {ref}')"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, SybaseCursor(conn, as_dict=False) as cursor:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = (), *, read: bool = False) -> "list[Any]":
+        with self._provide_read_connection(primary=not read) as conn, SybaseCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(sql, params)
                 return list(cursor.fetchall())
@@ -847,7 +889,7 @@ def _memory_create_table_sql(table: str, json_column_type: str, owner_id_column_
         f"metadata_json {json_column_type} NULL, "
         f"inserted_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL{owner_line}, "
         f"CONSTRAINT {_constraint_ref('pk', table, 'id')} PRIMARY KEY (id), "
-        f"CONSTRAINT {_constraint_ref('uq', table, 'event_id')} UNIQUE (event_id)"
+        f"CONSTRAINT {_constraint_ref('uq', table, 'event_id')} UNIQUE (app_name, user_id, event_id)"
         ")"
     )
 
@@ -899,22 +941,30 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
+    events_table: str,
+    session_table: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    after_timestamp: "datetime | None",
+    limit: "int | None",
 ) -> "tuple[str, tuple[Any, ...]]":
     params: list[Any] = [app_name, user_id, session_id]
     after_clause = ""
     if after_timestamp is not None:
-        after_clause = " AND timestamp > %s"
+        after_clause = " AND e.timestamp > %s"
         params.append(after_timestamp)
     top_clause = ""
     if limit is not None:
         top_clause = "TOP %s "
         params.insert(0, limit)
     sql = f"""
-    SELECT {top_clause}id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {_table_ref(table)}
-    WHERE app_name = %s AND user_id = %s AND session_id = %s{after_clause}
-    ORDER BY timestamp ASC
+    SELECT {top_clause}e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+    FROM {_table_ref(events_table)} e
+    JOIN {_table_ref(session_table)} s
+        ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+    WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s{after_clause}
+    ORDER BY e.timestamp ASC
     """
     return sql, tuple(params)
 
@@ -1024,8 +1074,27 @@ def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
     return quote_bracket_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
-def _raise_session_not_found(session_id: str) -> None:
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+        app_name,
+        user_id,
+        session_id,
+    ):
+        msg = (
+            "event_record scope "
+            f"({event_record['app_name']!r}, {event_record['user_id']!r}, {event_record['session_id']!r}) "
+            f"does not match ({app_name!r}, {user_id!r}, {session_id!r})"
+        )
+        raise ValueError(msg)
+
+
+def _raise_session_not_found(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
+    raise ValueError(msg)
+
+
+def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:
+    msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
     raise ValueError(msg)
 
 

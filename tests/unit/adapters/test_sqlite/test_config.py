@@ -1,5 +1,6 @@
 """SQLite configuration normalization tests."""
 
+import sqlite3
 import threading
 from os import PathLike
 from pathlib import Path
@@ -8,10 +9,12 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import pytest
 
 import sqlspec.adapters.sqlite.core as sqlite_core
-from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory
+from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory, SqliteSessionContext
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams, SqliteDriverFeatures
-from sqlspec.adapters.sqlite.core import build_connection_config
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.adapters.sqlite.core import build_connection_config, create_mapped_exception
+from sqlspec.core import StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 
 
 def _annotation_contains(annotation: object, expected: object) -> bool:
@@ -309,3 +312,128 @@ def test_filter_connection_params_with_hoisted_helper() -> None:
     raw = {"database": ":memory:", "extra": {}, "pool_min_size": 10, "timeout": 30.0, "isolation_level": None}
     filtered = _filter_connection_params(raw)
     assert filtered == {"database": ":memory:", "timeout": 30.0, "isolation_level": None}
+
+
+def test_sqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "wal.db")}, replicas=True)
+    with config.provide_session() as session:
+        session.execute("CREATE TABLE entries (id INTEGER)")
+        session.execute("INSERT INTO entries VALUES (1)")
+    with config.provide_read_session() as reader:
+        assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        assert reader.select_value("PRAGMA query_only") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            reader.execute("INSERT INTO entries VALUES (2)")
+    config.close_pool()
+
+
+@pytest.mark.parametrize("database", [":memory:", "", "file::memory:?cache=shared", "file:x?mode=memory"])
+def test_sqlite_memory_cannot_be_readonly_replica(database: str) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError):
+        SqliteConfig(connection_config={"database": database}, replicas=True)
+
+
+def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "detach.sqlite")})
+    try:
+        with config.provide_session() as session:
+            assert session.select_value("SELECT 1") == 1
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+    finally:
+        config.close_pool()
+
+
+def test_session_context_enter_failure_releases_pool_and_detaches_driver(tmp_path: Path) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "enter_fail.sqlite")}, replicas=True)
+    pool = config.provide_pool()
+    captured: list[object] = []
+
+    def fail_prepare(driver: object) -> object:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    try:
+        with pool.get_connection() as conn:
+            release_events: list[tuple[bool, object]] = []
+
+            def release_connection(released: object, **kwargs: object) -> None:
+                release_events.append((released is conn, kwargs.get("exc_type")))
+
+            ctx = SqliteSessionContext(
+                acquire_connection=lambda: conn,
+                release_connection=release_connection,
+                statement_config=StatementConfig(dialect="sqlite"),
+                driver_features={},
+                prepare_driver=fail_prepare,  # type: ignore[arg-type]
+            )
+            with pytest.raises(RuntimeError, match="prepare boom"), ctx:
+                pytest.fail("prepare failure must abort __enter__")
+            assert release_events == [(True, RuntimeError)]
+            assert getattr(captured[0], "connection", None) is _DETACHED_CONNECTION
+
+        assert pool.checked_out() == 0
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_read_replica_enforces_deferred_transaction_mode(tmp_path: Path) -> None:
+    """SQLite read-only replicas default to DEFERRED transactions even when primary uses IMMEDIATE."""
+    db_path = tmp_path / "replica_deferred.sqlite"
+    primary = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        driver_features={"default_transaction_mode": "IMMEDIATE"},
+        replicas=True,
+    )
+    try:
+        with primary.provide_session() as writer:
+            writer.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            writer.execute("INSERT INTO items (id) VALUES (1)")
+            writer.commit()
+
+        with primary.provide_read_session() as reader, reader.transaction():
+            assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
+            row = reader.select_one("SELECT id FROM items")
+            assert row["id"] == 1
+    finally:
+        primary.close_pool()
+
+    with pytest.raises(ImproperConfigurationError, match="DEFERRED"):
+        SqliteConfig(
+            connection_config={"database": str(db_path), "query_only": True},
+            driver_features={"default_transaction_mode": "IMMEDIATE"},
+        )
+
+
+def test_sqlite_create_mapped_exception_maps_notadb_and_replica_failover(tmp_path: Path) -> None:
+    """SQLITE_NOTADB maps to DatabaseConnectionError and bad replicas fail over to healthy replicas."""
+
+    class _NotADbError(sqlite3.DatabaseError):
+        sqlite_errorcode = 26
+        sqlite_errorname = "SQLITE_NOTADB"
+
+    assert isinstance(create_mapped_exception(_NotADbError("file is not a database")), DatabaseConnectionError)
+
+    db_path = tmp_path / "healthy.sqlite"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        replicas=[
+            {"database": str(tmp_path / "missing_dir" / "bad.sqlite"), "query_only": True},
+            {"database": str(db_path), "query_only": True},
+        ],
+    )
+    try:
+        with config.provide_session() as writer:
+            writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            writer.commit()
+        with config.provide_read_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM probe").fetchone() == (0,)
+        with config.provide_read_session() as reader:
+            assert reader.select_value("SELECT COUNT(*) FROM probe") == 0
+    finally:
+        config.close_pool()

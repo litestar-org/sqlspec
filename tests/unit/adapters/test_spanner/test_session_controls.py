@@ -1,5 +1,7 @@
 """Unit tests for Spanner session-control behavior."""
 
+import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, Self, cast
 
@@ -162,3 +164,142 @@ def test_driver_nested_in_transaction_guard() -> None:
     assert mock_conn.commit.call_count == 0
     driver.rollback()
     assert mock_conn.rollback.call_count == 0
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("mode", ["default", "primary", "pinned", "bounded", "context", "cancelled"])
+@pytest.mark.parametrize("managed", [False, True])
+async def test_native_snapshot_bounds_and_selected_config_receipt(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, mode: str, managed: bool
+) -> None:
+    from datetime import timedelta
+
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.spanner.config import SpannerAsyncConfig
+    from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
+    from sqlspec.utils.routing import RoutingContext
+
+    lifecycle: list[str] = []
+    snapshots: list[dict[str, Any]] = []
+    exits: list[object] = []
+
+    class Snapshot:
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, exc_type: object, *_: object) -> None:
+            exits.append(exc_type)
+
+        async def __aenter__(self) -> "Self":
+            return self
+
+        async def __aexit__(self, exc_type: object, *_: object) -> None:
+            exits.append(exc_type)
+
+    def snapshot(**kwargs: Any) -> Snapshot:
+        snapshots.append(kwargs)
+        return Snapshot()
+
+    async def async_noop() -> None:
+        return None
+
+    close = async_noop if is_async else lambda: None
+    database = SimpleNamespace(snapshot=snapshot, close=close)
+
+    async def async_database(*args: Any, **kwargs: Any) -> Any:
+        return database
+
+    database_factory = async_database if is_async else lambda *args, **kwargs: database
+    client = SimpleNamespace(
+        instance=lambda *args, **kwargs: SimpleNamespace(database=database_factory), close=lambda: None
+    )
+    monkeypatch.setattr(spanner_config, "AsyncClient" if is_async else "Client", lambda **kwargs: client)
+    config_type = SpannerAsyncConfig if is_async else SpannerSyncConfig
+    config = cast(
+        "Any",
+        config_type(
+            connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+            connection_instance=cast("Any", SimpleNamespace(clear=close)),
+            driver_features={
+                "default_staleness": {"exact_staleness": 10},
+                "on_session_start": lambda driver: lifecycle.append("start"),
+                "on_session_end": lambda driver: lifecycle.append("end"),
+            },
+            replicas=True,
+            bind_key="orders",
+        ),
+    )
+    assert not config.has_replicas
+    assert config.supports_read_routing
+    registry = SQLSpec()
+    registry.add_config(config)
+    scope = (
+        RoutingContext.primary("orders")
+        if mode == "primary"
+        else RoutingContext.replica("orders", max_staleness_seconds=6)
+        if mode == "context"
+        else RoutingContext.scope()
+    )
+    with scope:
+        if mode == "pinned":
+            RoutingContext.mark_write("orders")
+        explicit: dict[str, Any] = (
+            {"max_staleness": timedelta(seconds=8)} if mode in {"primary", "pinned", "bounded"} else {}
+        )
+        context = (
+            registry.provide_read_session(config, **explicit) if managed else config.provide_read_session(**explicit)
+        )
+        error_type = asyncio.CancelledError if is_async else RuntimeError
+        expectation = pytest.raises(error_type) if mode == "cancelled" else nullcontext()
+        with expectation:
+            if is_async:
+                async with context as session:
+                    assert isinstance(session.connection, Snapshot)
+                    with pytest.raises(ReadOnlyTransactionError):
+                        await session.execute("INSERT INTO items (id) VALUES (1)")
+                    with pytest.raises(ReadOnlyTransactionError):
+                        await session.execute_many("INSERT INTO items (id) VALUES (@id)", [{"id": 1}])
+                    with pytest.raises(SQLConversionError):
+                        await session.execute("CREATE TABLE items (id INT64)")
+                    if mode == "cancelled":
+                        raise asyncio.CancelledError
+            else:
+                with context as session:
+                    assert isinstance(session.connection, Snapshot)
+                    with pytest.raises(ReadOnlyTransactionError):
+                        session.execute("INSERT INTO items (id) VALUES (1)")
+                    with pytest.raises(ReadOnlyTransactionError):
+                        session.execute_many("INSERT INTO items (id) VALUES (@id)", [{"id": 1}])
+                    with pytest.raises(SQLConversionError):
+                        session.execute("CREATE TABLE items (id INT64)")
+                    if mode == "cancelled":
+                        raise RuntimeError("caller failure")
+        if not managed:
+            assert cast("Any", context)._selection_receipt.config is config
+        raw = (
+            registry.provide_read_connection(config, **explicit)
+            if managed
+            else config.provide_read_connection(**explicit)
+        )
+        if is_async:
+            async with raw as connection:
+                assert isinstance(connection, Snapshot)
+        else:
+            with raw as connection:
+                assert isinstance(connection, Snapshot)
+    expected = (
+        {"multi_use": True}
+        if mode in {"primary", "pinned"}
+        else {"max_staleness": timedelta(seconds=8), "multi_use": False}
+        if mode == "bounded"
+        else {"max_staleness": timedelta(seconds=6), "multi_use": False}
+        if mode == "context"
+        else {"exact_staleness": timedelta(seconds=10), "multi_use": True}
+    )
+    assert snapshots == [expected, expected]
+    assert exits == [error_type if mode == "cancelled" else None, None]
+    assert lifecycle == (["start", "end"] if managed else [])
+    if is_async:
+        await config.close_pool()
+    else:
+        config.close_pool()

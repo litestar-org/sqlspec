@@ -12,15 +12,29 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyCursor,
     AsyncmyDictCursor,
     AsyncmyModule,
+    AsyncmyMySQLError,
     AsyncmyPool,
     AsyncmyRawCursor,
 )
-from sqlspec.adapters.asyncmy.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.asyncmy.core import (
+    append_read_only_init_command,
+    apply_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+    merge_derive_overrides,
+    parse_mysql_replica_shorthand,
+)
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -207,9 +221,13 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AsyncmyConnection":
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
-        connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._contexts[id(connection)] = ctx
         try:
             ensure_conn = self._config._ensure_connection
@@ -223,15 +241,18 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
-        if ctx is not None:
+        if ctx is None:
+            return
+        exc_type = kwargs.get("exc_type")
+        try:
             if _conn is not None:
-                in_transaction = False
-                with contextlib.suppress(AttributeError):
-                    in_transaction = bool(_conn.server_status & 1)
-                if in_transaction:
-                    with contextlib.suppress(Exception):
-                        await _conn.rollback()
-            await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+                try:
+                    await _rollback_before_release(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            await ctx.__aexit__(exc_type, kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AsyncmyConnectionContext(AsyncPoolConnectionContext):
@@ -244,10 +265,14 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         self._ctx: Any = None
 
     async def __aenter__(self) -> AsyncmyConnection:
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._ctx = ctx
-        connection = cast("AsyncmyConnection", await ctx.__aenter__())
         self._connection = connection
         try:
             ensure_conn = self._config._ensure_connection
@@ -265,18 +290,20 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
     ) -> bool | None:
         conn = self._connection
         self._connection = None
-        if conn is not None:
-            in_transaction = False
-            with contextlib.suppress(AttributeError):
-                in_transaction = bool(conn.server_status & 1)
-            if in_transaction:
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-        if self._ctx:
-            ctx = self._ctx
-            self._ctx = None
-            return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
-        return None
+        ctx = self._ctx
+        self._ctx = None
+        exit_result: bool | None = None
+        try:
+            if conn is not None:
+                try:
+                    await _rollback_before_release(conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if ctx is not None:
+                exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
+        return exit_result
 
 
 class AsyncmySessionContext:
@@ -314,17 +341,30 @@ class AsyncmySessionContext:
 
     async def __aenter__(self) -> "AsyncmyDriver":
         self._connection = await self._acquire_connection()
-        self._driver = AsyncmyDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = AsyncmyDriver(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if self._connection is not None:
+                await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None
 
 
@@ -413,7 +453,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
         pool_kwargs, connection_kwargs = _split_pool_config(self.connection_config)
         connection_kwargs.update({key: value for key, value in pool_kwargs.items() if key in _ASYNCMY_SHARED_POOL_KEYS})
-        connection = await asyncmy.connect(**connection_kwargs)
+        try:
+            connection = await asyncmy.connect(**connection_kwargs)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -460,6 +504,33 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        if read_only is not False:
+            connection["init_command"] = append_read_only_init_command(
+                connection.get("init_command", self.connection_config.get("init_command"))
+            )
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     def _build_storage_capabilities(self) -> "StorageCapabilities":
         capabilities = super()._build_storage_capabilities()
         arrow_ready = self._dependency_available(ensure_pyarrow)
@@ -478,7 +549,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         Future driver_features can be added here if needed.
         """
-        return await asyncmy.create_pool(**_pool_config(self.connection_config))
+        try:
+            return await asyncmy.create_pool(**_pool_config(self.connection_config))
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
@@ -581,3 +656,36 @@ def _split_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[st
 def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     pool_kwargs, connection_kwargs = _split_pool_config(connection_config)
     return {**connection_kwargs, **pool_kwargs}
+
+
+def _autocommit_enabled(connection: Any) -> bool:
+    """Return whether autocommit is active on an asyncmy connection."""
+    get_autocommit = getattr(connection, "get_autocommit", None)
+    if callable(get_autocommit):
+        return bool(get_autocommit())
+    return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _rollback_before_release(connection: Any) -> None:
+    """Roll back open work before pool release and close the connection when rollback fails."""
+    if getattr(connection, "closed", False) or _autocommit_enabled(connection):
+        return
+    try:
+        await connection.rollback()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            connection.close()
+        raise
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, AsyncmyMySQLError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

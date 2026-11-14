@@ -145,7 +145,7 @@ async def test_asyncmy_execute_cache_hit_invokes_collect_rows_on_clean_query(mon
 def test_asyncmy_mapped_exceptions_without_sqlstate() -> None:
     """Explicit MySQL errnos map correctly even when exception object lacks sqlstate."""
     from sqlspec.adapters.asyncmy.core import create_mapped_exception
-    from sqlspec.exceptions import DatabaseConnectionError, PermissionDeniedError, SQLParsingError
+    from sqlspec.exceptions import DatabaseConnectionError, ReadOnlyTransactionError, SQLParsingError
 
     class _FakeErr(Exception):
         pass
@@ -155,9 +155,9 @@ def test_asyncmy_mapped_exceptions_without_sqlstate() -> None:
     assert isinstance(create_mapped_exception(_FakeErr(1040, "Too many connections")), DatabaseConnectionError)
     assert isinstance(
         create_mapped_exception(_FakeErr(1290, "The MySQL server is running with the --read-only option")),
-        PermissionDeniedError,
+        ReadOnlyTransactionError,
     )
-    assert isinstance(create_mapped_exception(_FakeErr(1836, "Running in read-only mode")), PermissionDeniedError)
+    assert isinstance(create_mapped_exception(_FakeErr(1836, "Running in read-only mode")), ReadOnlyTransactionError)
 
 
 async def test_asyncmy_dispatch_execute_uses_statement_statement_config() -> None:

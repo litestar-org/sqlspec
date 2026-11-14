@@ -9,6 +9,7 @@ from sqlspec.adapters.db2._typing import (
     Db2AsyncCursor,
     Db2AsyncRawCursor,
     Db2AsyncSessionContext,
+    Db2Error,
     Db2RawCursor,
     Db2SyncConnection,
     Db2SyncCursor,
@@ -18,7 +19,9 @@ from sqlspec.adapters.db2.core import (
     apply_driver_features,
     build_connection_config,
     build_dsn_string,
+    create_mapped_exception,
     default_statement_config,
+    resolve_connection_overrides,
 )
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2AsyncExceptionHandler, Db2SyncDriver, Db2SyncExceptionHandler
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
@@ -64,6 +67,10 @@ _ASYNC_POOL_KEYS = ("max_size", "acquire_timeout")
 class Db2ConnectionParams(TypedDict):
     """IBM Db2 CLI connection parameters compiled into a ``KEY=VALUE;...`` DSN."""
 
+    conn_options: NotRequired[dict[int, Any]]
+    """Native CLI connection attributes copied for each connection."""
+    read_only: NotRequired[bool]
+    """Open connections using native CLI read-only access mode."""
     database: NotRequired[str]
     """Database name or cataloged alias mapped to the ``DATABASE`` CLI keyword."""
     hostname: NotRequired[str]
@@ -137,9 +144,21 @@ class Db2SyncConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "Db2SyncConnection":
+        try:
+            return cast("Db2SyncConnection", super().__enter__())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class _Db2SyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "Db2SyncConnection":
+        try:
+            return cast("Db2SyncConnection", super().acquire_connection())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -248,16 +267,26 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         """Return runtime hints for Db2 event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return resolve_connection_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        return _build_db2_replica_overrides(spec_input, self.connection_config)
+
     def _create_pool(self) -> "Db2SyncConnectionPool":
         """Create a new thread-local connection pool."""
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
+        conn_options = config.pop("conn_options", None)
         return Db2SyncConnectionPool(
             config,
             recycle_seconds=pool_recycle,
             health_check_interval=health_check,
             on_connection_create=self._user_connection_hook,
+            conn_options=conn_options,
         )
 
     def _provide_session_impl(
@@ -298,9 +327,21 @@ class Db2AsyncConnectionContext(AsyncPoolConnectionContext):
 
     __slots__ = ()
 
+    async def __aenter__(self) -> "Db2AsyncConnection":
+        try:
+            return cast("Db2AsyncConnection", await super().__aenter__())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class _Db2AsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
+
+    async def acquire_connection(self) -> "Db2AsyncConnection":
+        try:
+            return cast("Db2AsyncConnection", await super().acquire_connection())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -421,6 +462,14 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
         """Return runtime hints for Db2 event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return resolve_connection_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        return _build_db2_replica_overrides(spec_input, self.connection_config)
+
     async def _create_pool(self) -> "Db2AsyncConnectionPool":
         """Create a new bounded asyncio connection pool."""
         config = dict(self.connection_config)
@@ -428,6 +477,7 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
         acquire_timeout = config.pop("acquire_timeout", 30.0)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
+        conn_options = config.pop("conn_options", None)
         return Db2AsyncConnectionPool(
             config,
             max_size=max_size,
@@ -435,6 +485,7 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
             recycle_seconds=pool_recycle,
             health_check_interval=health_check,
             on_connection_create=self._user_connection_hook,
+            conn_options=conn_options,
         )
 
     def _provide_session_impl(
@@ -495,3 +546,31 @@ def _resolve_events_extension_config(
         events_cfg.setdefault("backend", events_backend)
     resolved["events"] = events_cfg
     return cast("ExtensionConfigs", resolved)
+
+
+def _build_db2_replica_overrides(
+    spec_input: "str | bool | Mapping[str, Any]", base_config: "Mapping[str, Any]"
+) -> dict[str, Any]:
+    """Normalize standby endpoint shorthand into independent clone options."""
+    result: dict[str, Any] = {}
+    if isinstance(spec_input, bool):
+        options: dict[str, Any] = {}
+    elif isinstance(spec_input, str):
+        if "://" in spec_input or "=" in spec_input:
+            options = {"dsn": spec_input}
+        else:
+            host, separator, port = spec_input.rpartition(":")
+            options = {"hostname": host, "port": int(port)} if separator else {"hostname": spec_input}
+    else:
+        result = dict(spec_input)
+        options = dict(result.pop("connection_config_overrides", {}))
+        for key in tuple(result):
+            if key in Db2ConnectionParams.__annotations__:
+                options[key] = result.pop(key)
+    if "dsn" in options and "read_only" not in options:
+        options["read_only"] = build_connection_config({
+            "database": base_config["database"],
+            "dsn": options["dsn"],
+        }).get("read_only", True)
+    options.setdefault("read_only", True)
+    return {**result, "connection_config_overrides": options}

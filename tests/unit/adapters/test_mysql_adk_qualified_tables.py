@@ -378,7 +378,9 @@ _DML_CASES: list[_DMLCase] = [
     ),
     _DMLCase("list_sessions", False, "list_sessions", lambda: ("a",), dict, None, False, ("`app`.`t`",)),
     _DMLCase("delete_session", False, "delete_session", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`t`",)),
-    _DMLCase("append_event", False, "append_event", lambda: (_SAMPLE_EVENT,), dict, None, False, ("`app`.`e`",)),
+    _DMLCase(
+        "append_event", False, "append_event", lambda: (_SAMPLE_EVENT,), dict, None, False, ("`app`.`e`", "`app`.`t`")
+    ),
     _DMLCase(
         "append_event_and_update_state",
         False,
@@ -389,7 +391,7 @@ _DML_CASES: list[_DMLCase] = [
         True,
         ("`app`.`e`", "`app`.`t`"),
     ),
-    _DMLCase("get_events", False, "get_events", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`e`",)),
+    _DMLCase("get_events", False, "get_events", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`e`", "`app`.`t`")),
     _DMLCase(
         "delete_expired_events", False, "delete_expired_events", lambda: (_NOW, "a"), dict, None, False, ("`app`.`e`",)
     ),
@@ -620,3 +622,31 @@ async def test_mysql_adk_insert_memory_entries_returns_zero_on_duplicates(
     store, _ = _store(adapter_info, _QUALIFIED_MEMORY_SETTINGS, is_memory=True, cursor_rowcount=0)
     inserted = await _call(adapter_info[3], store, "insert_memory_entries", [_SAMPLE_MEMORY])
     assert inserted == 0
+
+
+@pytest.mark.parametrize("adapter_info", _ADAPTERS, ids=_adapter_id)
+@pytest.mark.parametrize(
+    ("memory_table", "expected_key", "expected_schema", "expected_bare"),
+    [
+        pytest.param("adk_memory", "idx_adk_memory_app_user_event", None, "adk_memory", id="bare"),
+        pytest.param("app.m", "idx_m_app_user_event", "app", "m", id="qualified"),
+    ],
+)
+async def test_mysql_adk_memory_unique_key_derives_from_bare_table(
+    adapter_info: tuple[str, str, str, bool],
+    memory_table: str,
+    expected_key: str,
+    expected_schema: str | None,
+    expected_bare: str,
+) -> None:
+    """Memory DDL emits a bare-table composite UNIQUE KEY (app_name, user_id, event_id) for bare and qualified tables."""
+    store, _ = _store(adapter_info, {"memory_table": memory_table}, is_memory=True)
+    ddl = await _call(adapter_info[3], store, "_memory_table_ddl")
+
+    assert f"UNIQUE KEY {expected_key} (app_name, user_id, event_id)" in ddl
+    assert "event_id VARCHAR(128) NOT NULL," in ddl
+    assert "NOT NULL UNIQUE" not in ddl
+    assert "idx_app" not in ddl
+    target = SchemaTarget.from_ddl(memory_table, ddl, dialect="mysql")
+    assert target.schema == expected_schema
+    assert target.table_name == expected_bare

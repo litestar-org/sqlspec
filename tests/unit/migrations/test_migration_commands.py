@@ -8,21 +8,32 @@ Tests focused on MigrationCommands class behavior including:
 - Command routing and parameter passing
 """
 
+import gzip
+import hashlib
 import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import sqlspec.migrations.commands as commands_module
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.exceptions import MigrationError
-from sqlspec.migrations.base import BaseMigrationCommands
-from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
+from sqlspec.migrations.base import AppliedMigrationRecord, BaseMigrationCommands, LoadedMigrationMetadata
+from sqlspec.migrations.commands import (
+    AsyncMigrationCommands,
+    MigrationCommandsCore,
+    SyncMigrationCommands,
+    create_migration_commands,
+)
+from sqlspec.migrations.runner import BaseMigrationRunner
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.migrations.validation import detect_out_of_order_migrations
+from sqlspec.observability import ObservabilityRuntime
 from sqlspec.utils.tenant import TenantContext
 
 
@@ -813,6 +824,7 @@ async def test_retained_reconcile_ledger_survives_checksum_collision_verify_stam
         "checksum_mismatches": [],
         "pending_versions": [],
         "partial_squash_errors": [],
+        "unrecorded_replaces": [],
     }
 
     if isinstance(cfg_reconcile, AiosqliteConfig):
@@ -1388,6 +1400,15 @@ def downgrade(context):
     assert any("Would downgrade reconciler 2/2: first" in m for m in preview_msgs)
 
     await _run_downgrade(cfg, revision="-1", echo=False)
+    ledger_after_step = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
+    tables_after_step = {
+        r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert ledger_after_step == []
+    assert "app_t" not in tables_after_step
+    assert {"ext_first_t", "ext_second_t"}.issubset(tables_after_step)
+
+    await _run_downgrade(cfg, revision="base", echo=False)
     ledger_after_base = [r["version_num"] for r in await _fetch_rows(cfg, "SELECT version_num FROM ddl_migrations")]
     tables_after_base = {
         r["name"] for r in await _fetch_rows(cfg, "SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -1680,10 +1701,7 @@ async def test_current_is_read_only_and_verbose_renders_configured_reconcilers_t
 
 
 def test_versioned_extensions_skip_out_of_order_and_checksum_warnings(tmp_path: Path) -> None:
-    """Versioned extensions never emit out-of-order gaps or checksum mismatch failures when modified."""
-    from sqlspec.migrations.base import AppliedMigrationRecord, LoadedMigrationMetadata
-    from sqlspec.migrations.validation import detect_out_of_order_migrations
-
+    """Versioned extensions skip out-of-order checks, report modified checksums, and honor retained reconcile rows."""
     assert detect_out_of_order_migrations(["ext_demo_0001"], ["0002", "20260101120000"]) == []
     assert detect_out_of_order_migrations(["20260101120000"], ["ext_demo_20270101120000"]) == []
 
@@ -1713,5 +1731,182 @@ def test_versioned_extensions_skip_out_of_order_and_checksum_warnings(tmp_path: 
         }
     }
     report = SyncMigrationCommands._evaluate_verification(applied, loaded)
-    assert report["valid"] is True
-    assert report["checksum_mismatches"] == []
+    assert report["valid"] is False
+    assert [item["version"] for item in report["checksum_mismatches"]] == ["ext_demo_0001"]
+
+    retained_report = SyncMigrationCommands._evaluate_verification(applied, loaded, retained_versions={"ext_demo_0001"})
+    assert retained_report["valid"] is True
+    assert retained_report["checksum_mismatches"] == []
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_read_data_file_records_enforces_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compressed: bool
+) -> None:
+    """MigrationCommandsCore._read_data_file_records rejects oversized plain and gzipped data files."""
+    monkeypatch.setattr(commands_module, "_MAX_DATA_FILE_BYTES", 64)
+    payload = b'[{"id": "' + (b"a" * 128) + b'"}]'
+    suffix = ".json.gz" if compressed else ".json"
+    data_path = tmp_path / f"seed{suffix}"
+    if compressed:
+        data_path.write_bytes(gzip.compress(payload))
+    else:
+        data_path.write_bytes(payload)
+
+    with pytest.raises(MigrationError, match="exceeds maximum allowed size"):
+        MigrationCommandsCore._read_data_file_records(data_path, suffix)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("failure_kind", ["upgrade_sql", "downgrade_sql", "downgrade_missing_down", "stamp_unknown"])
+async def test_commands_propagate_migration_error_and_increment_span_error_once(
+    tmp_path: Path, is_async: bool, failure_kind: str
+) -> None:
+    """upgrade, downgrade, and stamp raise MigrationError on failure without double-counting span errors."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    if failure_kind == "upgrade_sql":
+        (migrations_dir / "0001_bad.sql").write_text("-- name: migrate-0001-up\nINVALID SQL HERE;\n", encoding="utf-8")
+    elif failure_kind == "downgrade_sql":
+        (migrations_dir / "0001_bad_down.sql").write_text(
+            "-- name: migrate-0001-up\nCREATE TABLE tmp_t (id INTEGER PRIMARY KEY);\n\n"
+            "-- name: migrate-0001-down\nINVALID DOWNGRADE SQL;\n",
+            encoding="utf-8",
+        )
+    elif failure_kind == "downgrade_missing_down":
+        (migrations_dir / "0001_irreversible.sql").write_text(
+            "-- name: migrate-0001-up\nCREATE TABLE tmp_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+        )
+    else:
+        (migrations_dir / "0001_ok.sql").write_text(
+            "-- name: migrate-0001-up\nCREATE TABLE tmp_t (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+        )
+
+    runtime = ObservabilityRuntime(config_name="mig_cfg")
+    cfg = _build_sqlite_mode_config(tmp_path / "errors.db", migrations_dir, is_async=is_async)
+    cmds = create_migration_commands(cfg)
+    cmds._runtime = runtime
+
+    try:
+        if failure_kind in {"downgrade_sql", "downgrade_missing_down"}:
+            await _run_upgrade(cfg, echo=False)
+
+        with pytest.raises(MigrationError):
+            if failure_kind == "upgrade_sql":
+                if isinstance(cmds, AsyncMigrationCommands):
+                    await cmds.upgrade(echo=False)
+                else:
+                    cmds.upgrade(echo=False)
+            elif failure_kind in {"downgrade_sql", "downgrade_missing_down"}:
+                if isinstance(cmds, AsyncMigrationCommands):
+                    await cmds.downgrade(revision="base", echo=False)
+                else:
+                    cmds.downgrade(revision="base", echo=False)
+            elif isinstance(cmds, AsyncMigrationCommands):
+                await cmds.stamp("9999_missing")
+            else:
+                cmds.stamp("9999_missing")
+
+        snapshot = runtime.metrics_snapshot()
+        if failure_kind == "upgrade_sql":
+            assert snapshot["mig_cfg.migrations.command.upgrade.errors"] == 1.0
+        elif failure_kind in {"downgrade_sql", "downgrade_missing_down"}:
+            assert snapshot["mig_cfg.migrations.command.downgrade.errors"] == 1.0
+    finally:
+        await _close_config_pool(cfg)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["ext_drift", "unrecorded_replaces", "modified_single_replace", "legacy_md5_valid"]
+)
+def test_verify_strict_covers_extension_drift_unrecorded_squash_and_legacy_md5(tmp_path: Path, scenario: str) -> None:
+    """verify(strict=True) rejects modified ext_* and unrecorded replaces while validating legacy MD5 digests."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    mig_file = migrations_dir / "0001_users.sql"
+    mig_content = "-- name: migrate-0001-up\nCREATE TABLE users (id INTEGER PRIMARY KEY);\n"
+    mig_file.write_text(mig_content, encoding="utf-8")
+
+    ext_dir = tmp_path / "ext_demo"
+    if scenario == "ext_drift":
+        ext_dir.mkdir()
+        (ext_dir / "0001_demo.sql").write_text(
+            "-- name: migrate-0001-up\nCREATE TABLE demo_ext (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+        )
+        cfg = _build_sqlite_mode_config(
+            tmp_path / "verify_strict.db",
+            migrations_dir,
+            is_async=False,
+            include_extensions=["demo"],
+            extension_config={"demo": {"migrations_path": ext_dir}},
+        )
+    else:
+        cfg = _build_sqlite_mode_config(tmp_path / "verify_strict.db", migrations_dir, is_async=False)
+
+    assert isinstance(cfg, SqliteConfig)
+    commands = SyncMigrationCommands(cfg)
+    try:
+        commands.upgrade(echo=False)
+        if scenario == "ext_drift":
+            (ext_dir / "0001_demo.sql").write_text(
+                "-- name: migrate-0001-up\nCREATE TABLE demo_ext (id INTEGER PRIMARY KEY, extra TEXT);\n",
+                encoding="utf-8",
+            )
+            report = commands.verify(echo=False)
+            assert report["valid"] is False
+            assert [item["version"] for item in report["checksum_mismatches"]] == ["ext_demo_0001"]
+            with pytest.raises(MigrationError, match="ext_demo_0001"):
+                commands.verify(strict=True, echo=False)
+        elif scenario == "unrecorded_replaces":
+            mig2 = migrations_dir / "0002_posts.sql"
+            mig2.write_text(
+                "-- name: migrate-0002-up\nCREATE TABLE posts (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+            )
+            commands.upgrade(echo=False)
+            mig2.unlink()
+            mig_file.write_text(
+                "-- name: migrate-0001-up\nCREATE TABLE users (id INTEGER PRIMARY KEY);\n"
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY);\n",
+                encoding="utf-8",
+            )
+            squashed_py = migrations_dir / "0001_release.py"
+            mig_file.unlink()
+            squashed_py.write_text(
+                '__replaces__ = ["0001", "0002"]\n'
+                "def up():\n"
+                '    return ["CREATE TABLE users (id INTEGER PRIMARY KEY);", "CREATE TABLE posts (id INTEGER PRIMARY KEY);"]\n',
+                encoding="utf-8",
+            )
+            report = commands.verify(echo=False)
+            assert report["valid"] is False
+            assert report["unrecorded_replaces"] == [{"version": "0001", "replaces": ["0001", "0002"]}]
+            with pytest.raises(MigrationError, match=r"unrecorded squash replacements in \[0001\]"):
+                commands.verify(strict=True, echo=False)
+        elif scenario == "modified_single_replace":
+            squashed_py = migrations_dir / "0001_release.py"
+            mig_file.unlink()
+            squashed_py.write_text(
+                '__replaces__ = ["0001"]\n'
+                "def up():\n"
+                '    return ["CREATE TABLE users (id INTEGER PRIMARY KEY, modified TEXT);"]\n',
+                encoding="utf-8",
+            )
+            report = commands.verify(echo=False)
+            assert report["valid"] is False
+            with pytest.raises(MigrationError, match="0001"):
+                commands.verify(strict=True, echo=False)
+        else:
+            canonical = BaseMigrationRunner._canonicalize_migration_content(mig_content)  # pyright: ignore[reportPrivateUsage]
+            legacy_md5 = hashlib.md5(canonical.encode("utf-8"), usedforsecurity=False).hexdigest()
+            with cfg.provide_session() as driver:
+                driver.execute(
+                    "UPDATE ddl_migrations SET checksum = :checksum WHERE version_num = :version",
+                    {"checksum": legacy_md5, "version": "0001"},
+                )
+                driver.commit()
+            report = commands.verify(strict=True, echo=False)
+            assert report["valid"] is True
+            assert report["checksum_mismatches"] == []
+    finally:
+        cfg.close_pool()

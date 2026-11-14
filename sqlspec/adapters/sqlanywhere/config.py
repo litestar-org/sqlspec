@@ -1,20 +1,37 @@
 """SAP SQL Anywhere database configuration."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereConnection,
     SqlanywhereCursor,
+    SqlanywhereError,
     SqlanywhereRawCursor,
     SqlanywhereSessionContext,
 )
-from sqlspec.adapters.sqlanywhere.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sqlanywhere.core import (
+    _normalize_raw_connection_config,
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+    merge_sqlanywhere_derive_overrides,
+)
 from sqlspec.adapters.sqlanywhere.driver import SqlanywhereDriver, SqlanywhereExceptionHandler
 from sqlspec.adapters.sqlanywhere.migrations import SqlanywhereSyncMigrationTracker
 from sqlspec.adapters.sqlanywhere.pool import SqlanywhereConnectionPool
-from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.config import DRIVER_FEATURE_LIFECYCLE_HOOKS, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -36,6 +53,8 @@ __all__ = (
 class SqlanywhereConnectionParams(TypedDict):
     """SAP SQL Anywhere connection parameters."""
 
+    nodetype: NotRequired[str]
+    """SQL Anywhere mirror node role, including READONLY."""
     uid: NotRequired[str]
     """User ID / login name for authentication."""
     user: NotRequired[str]
@@ -113,9 +132,23 @@ class SqlanywhereConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "SqlanywhereConnection":
+        try:
+            return cast("SqlanywhereConnection", super().__enter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
+
 
 class _SqlanywhereSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "SqlanywhereConnection":
+        try:
+            return cast("SqlanywhereConnection", super().acquire_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
 
 class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereConnectionPool, SqlanywhereDriver]):
@@ -127,6 +160,7 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         "_pool_min_size",
         "_pool_recycle_seconds",
         "_pool_timeout",
+        "_raw_connection_config",
         "_user_connection_hook",
     )
 
@@ -171,7 +205,9 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         self._pool_timeout = float(raw_config.pop("pool_timeout", 30.0))
         self._pool_recycle_seconds = int(raw_config.pop("pool_recycle_seconds", 86400))
         self._health_check_interval = float(raw_config.pop("health_check_interval", 30.0))
-        normalized_connection_config = build_connection_config(raw_config)
+        unformatted_config = _normalize_raw_connection_config(raw_config)
+        self._raw_connection_config = dict(unformatted_config)
+        normalized_connection_config = build_connection_config(unformatted_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -195,7 +231,11 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
 
     def create_connection(self) -> "SqlanywhereConnection":
         """Open a standalone SAP SQL Anywhere connection owned by the caller."""
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -218,18 +258,102 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, lease_seconds=30, select_for_update=False, skip_locked=False)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        merged = merge_sqlanywhere_derive_overrides(self._raw_connection_config, overrides)
+        config.update(merged)
+        for key in ("uid", "pwd", "dbn", "eng", "host", "port", "links"):
+            if key not in merged:
+                config.pop(key, None)
+        for key, value in (
+            ("pool_min_size", self._pool_min_size),
+            ("pool_max_size", self._pool_max_size),
+            ("pool_timeout", self._pool_timeout),
+            ("pool_recycle_seconds", self._pool_recycle_seconds),
+            ("health_check_interval", self._health_check_interval),
+        ):
+            config.setdefault(key, value)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            if not spec_input:
+                msg = f"{type(self).__name__} does not support False replica entries; pass True or explicit overrides"
+                raise ImproperConfigurationError(msg)
+            return {"connection_config_overrides": {"nodetype": "READONLY"}}
+        if isinstance(spec_input, str):
+            try:
+                parsed = urlsplit(spec_input if "://" in spec_input else f"sqlanywhere://{spec_input}")
+                hostname, port = parsed.hostname, parsed.port
+            except ValueError as exc:
+                msg = "Invalid SQL Anywhere replica endpoint"
+                raise ImproperConfigurationError(msg) from exc
+            if not hostname or (parsed.scheme and parsed.scheme != "sqlanywhere"):
+                msg = "Invalid SQL Anywhere replica endpoint"
+                raise ImproperConfigurationError(msg)
+            connection: dict[str, Any] = {"nodetype": "READONLY", "host": hostname}
+            if port is not None:
+                connection["port"] = port
+            if parsed.username is not None:
+                connection["uid"] = unquote(parsed.username)
+            if parsed.password is not None:
+                connection["pwd"] = unquote(parsed.password)
+            if parsed.path.strip("/"):
+                connection["dbn"] = unquote(parsed.path.strip("/"))
+            return {"connection_config_overrides": connection}
+        values = dict(spec_input)
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {
+            key: values.pop(key)
+            for key in tuple(values)
+            if key in config_keys or key in self.driver_features or key in DRIVER_FEATURE_LIFECYCLE_HOOKS
+        }
+        connection = dict(values.pop("connection_config_overrides", {}))
+        connection.update(values)
+        extra = connection.get("extra")
+        has_extra_nodetype = isinstance(extra, Mapping) and "nodetype" in extra
+        if "nodetype" not in connection and not has_extra_nodetype:
+            connection["nodetype"] = "READONLY"
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
+
     def _create_pool(self) -> "SqlanywhereConnectionPool":
-        return SqlanywhereConnectionPool(
-            self.connection_config,
-            min_size=self._pool_min_size,
-            max_size=self._pool_max_size,
-            timeout=self._pool_timeout,
-            recycle_seconds=self._pool_recycle_seconds,
-            health_check_interval=self._health_check_interval,
-            on_connection_create=self._user_connection_hook,
-        )
+        try:
+            return SqlanywhereConnectionPool(
+                self.connection_config,
+                min_size=self._pool_min_size,
+                max_size=self._pool_max_size,
+                timeout=self._pool_timeout,
+                recycle_seconds=self._pool_recycle_seconds,
+                health_check_interval=self._health_check_interval,
+                on_connection_create=self._user_connection_hook,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, SqlanywhereError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

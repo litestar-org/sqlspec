@@ -96,6 +96,33 @@ def test_teradata_native_byte_types() -> None:
         ),
         ("SELECT id FROM a UNION ALL SELECT id FROM b", "SELECT id FROM a UNION ALL SELECT id FROM b"),
         ("SELECT id FROM a FETCH FIRST 2 ROWS ONLY", "SELECT TOP 2 id FROM a"),
+        ("SELECT id FROM a FETCH FIRST 50 PERCENT ROWS ONLY", "SELECT TOP 50 PERCENT id FROM a"),
+        ("SELECT id FROM a ORDER BY id FETCH FIRST 5 ROWS WITH TIES", "SELECT TOP 5 WITH TIES id FROM a ORDER BY id"),
+        (
+            "SELECT id FROM a ORDER BY id OFFSET 2 ROWS FETCH FIRST 50 PERCENT ROWS ONLY",
+            "SELECT id FROM a QUALIFY ROW_NUMBER() OVER (ORDER BY id) BETWEEN 3 AND 2 + CEIL(CAST(COUNT(*) OVER () * 50 AS DOUBLE PRECISION) / 100.0)",
+        ),
+        (
+            "SELECT id FROM a ORDER BY id OFFSET 2 ROWS FETCH FIRST 5 ROWS WITH TIES",
+            "SELECT id FROM a QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 3 AND RANK() OVER (ORDER BY id) <= 7",
+        ),
+        (
+            "SELECT id FROM a ORDER BY id OFFSET 2 ROWS FETCH FIRST 50 PERCENT ROWS WITH TIES",
+            "SELECT id FROM a QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 3 AND RANK() OVER (ORDER BY id) <= 2 + CEIL(CAST(COUNT(*) OVER () * 50 AS DOUBLE PRECISION) / 100.0)",
+        ),
+        ("SELECT id FROM a ORDER BY id OFFSET 2 ROWS FETCH FIRST 0 ROWS WITH TIES", "SELECT id FROM a QUALIFY 1 = 0"),
+        (
+            "SELECT id FROM a ORDER BY id OFFSET :off ROWS FETCH FIRST :lim ROWS WITH TIES",
+            "SELECT id FROM a QUALIFY :lim > 0 AND ROW_NUMBER() OVER (ORDER BY id) >= :off + 1 AND RANK() OVER (ORDER BY id) <= :off + :lim",
+        ),
+        (
+            "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id OFFSET 2 ROWS FETCH FIRST 5 ROWS WITH TIES",
+            "SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _sqlspec_paged QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 3 AND RANK() OVER (ORDER BY id) <= 7",
+        ),
+        (
+            "SELECT DISTINCT id FROM a ORDER BY id OFFSET 2 ROWS FETCH FIRST 50 PERCENT ROWS ONLY",
+            "SELECT * FROM (SELECT DISTINCT id FROM a) AS _sqlspec_paged QUALIFY ROW_NUMBER() OVER (ORDER BY id) BETWEEN 3 AND 2 + CEIL(CAST(COUNT(*) OVER () * 50 AS DOUBLE PRECISION) / 100.0)",
+        ),
     ],
 )
 def test_teradata_set_limits_and_fetch(source: str, expected: str) -> None:

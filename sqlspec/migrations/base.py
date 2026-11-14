@@ -1,11 +1,13 @@
 """Base classes for SQLSpec migrations."""
 
+import hashlib
 import importlib
+import inspect
 import os
 from abc import abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, NotRequired, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NotRequired, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -17,7 +19,7 @@ from sqlspec.builder._delete import Delete
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
-from sqlspec.exceptions import MigrationError
+from sqlspec.exceptions import MigrationError, SQLSpecError
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import (
@@ -48,6 +50,9 @@ DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.migrations.base")
+_MAX_LOCK_NAME_LENGTH: Final[int] = 64
+_LOCK_NAME_HASH_BYTES: Final[int] = 6
+_LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
 
 
 class LoadedMigrationMetadata(TypedDict):
@@ -113,6 +118,29 @@ class AppliedMigrationRecord(TypedDict):
 class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
 
+    _POSTGRES_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        "postgres",
+        "postgresql",
+        "pgvector",
+        "paradedb",
+        "pg_textsearch",
+    })
+    _MYSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mysql", "mariadb"})
+    _MSSQL_LOCK_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({"mssql", "tsql"})
+    _SEQUENCED_INSERT_DIALECTS: "ClassVar[frozenset[str]]" = frozenset({
+        *_POSTGRES_LOCK_DIALECTS,
+        *_MYSQL_LOCK_DIALECTS,
+        "sqlite",
+        "duckdb",
+    })
+    _MSSQL_ACQUIRE_LOCK_SQL: "ClassVar[str]" = (
+        "DECLARE @sqlspec_res INT; "
+        "EXEC @sqlspec_res = sp_getapplock :lock_name, 'Exclusive', 'Session', :timeout_ms; "
+        "IF @sqlspec_res < 0 THROW 51000, 'Migration lock acquisition failed', 1; "
+        "SELECT @sqlspec_res"
+    )
+    _MSSQL_RELEASE_LOCK_SQL: "ClassVar[str]" = "EXEC sp_releaseapplock :lock_name, 'Session'"
+
     def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
 
@@ -155,10 +183,15 @@ class BaseMigrationTracker(Generic[DriverT]):
             resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
+        self._sqlite_lock_owners: set[int] = set()
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
         """Set output policy for tracker console/logging behavior."""
         self._output_policy = {"use_logger": use_logger, "echo": echo, "summary_only": summary_only}
+
+    def holds_transaction_lock(self, driver: Any) -> bool:
+        """Return True while this tracker owns an outer SQLite transaction lock on ``driver``."""
+        return id(driver) in self._sqlite_lock_owners
 
     @abstractmethod
     def ensure_tracking_table(self, driver: DriverT) -> "Awaitable[None] | None":
@@ -200,6 +233,14 @@ class BaseMigrationTracker(Generic[DriverT]):
         """Remove a migration record."""
         ...
 
+    def catalog_schema_name(self) -> "str | None":
+        """Return the tracking table's schema in the form data dictionary getters accept.
+
+        Returns:
+            Schema name for metadata lookups, or None when the table is unqualified.
+        """
+        return self.version_table_schema
+
     @staticmethod
     def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
         """Split a ``schema.table`` value into unquoted ``(table, schema)`` names."""
@@ -218,14 +259,6 @@ class BaseMigrationTracker(Generic[DriverT]):
         if version_table_schema:
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
-
-    def catalog_schema_name(self) -> "str | None":
-        """Return the tracking table's schema in the form data dictionary getters accept.
-
-        Returns:
-            Schema name for metadata lookups, or None when the table is unqualified.
-        """
-        return self.version_table_schema
 
     def _tracking_schema_target(self) -> SchemaTarget:
         """Return the schema target that compares the tracking table's columns with its DDL.
@@ -253,7 +286,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             - description: Human-readable migration description
             - applied_at: Timestamp when migration was applied
             - execution_time_ms: Migration execution duration
-            - checksum: MD5 hash for content verification
+            - checksum: SHA-256 hex digest for content verification
             - applied_by: User who applied the migration
 
         Returns:
@@ -322,7 +355,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
 
         Returns:
@@ -418,7 +451,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             execution_sequence: Auto-incrementing application order.
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
+            checksum: SHA-256 checksum hex string of the migration content.
             applied_by: User who applied the migration.
             replaces: Comma-separated list of replaced versions.
 
@@ -448,6 +481,109 @@ class BaseMigrationTracker(Generic[DriverT]):
                 replaces,
             )
         )
+
+    def _record_migration_sequenced_statement(
+        self,
+        version: str,
+        version_type: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        applied_by: str,
+        replaces: str | None = None,
+    ) -> "Insert":
+        """Get SQL builder for atomically inserting a migration record with next sequence."""
+        columns: list[str] = [
+            "version_num",
+            "version_type",
+            "execution_sequence",
+            "description",
+            "execution_time_ms",
+            "checksum",
+            "applied_by",
+        ]
+        select_query = Select()
+        _, version_param = select_query.add_parameter(version, name="version_num")
+        _, type_param = select_query.add_parameter(version_type, name="version_type")
+        _, desc_param = select_query.add_parameter(description, name="description")
+        _, duration_param = select_query.add_parameter(execution_time_ms, name="execution_time_ms")
+        _, checksum_param = select_query.add_parameter(checksum, name="checksum")
+        _, actor_param = select_query.add_parameter(applied_by, name="applied_by")
+        projections: list[exp.Expr] = [
+            exp.Placeholder(this=version_param),
+            exp.Placeholder(this=type_param),
+            exp.column("next_seq", table="seq_src"),
+            exp.Placeholder(this=desc_param),
+            exp.Placeholder(this=duration_param),
+            exp.Placeholder(this=checksum_param),
+            exp.Placeholder(this=actor_param),
+        ]
+        if replaces is not None:
+            columns.append("replaces")
+            _, replaces_param = select_query.add_parameter(replaces, name="replaces")
+            projections.append(exp.Placeholder(this=replaces_param))
+        next_seq_subquery = Select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
+        select_query = select_query.select(*projections).from_(next_seq_subquery, alias="seq_src")
+        return Insert(self.version_table).columns(*columns).from_select(select_query)
+
+    def _migration_lock_key(self) -> "tuple[str, int]":
+        """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
+        raw_key = f"sqlspec_mig_{self.version_table}"
+        digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
+        lock_name = (
+            raw_key
+            if len(raw_key) <= _MAX_LOCK_NAME_LENGTH
+            else f"{raw_key[:_LOCK_NAME_PREFIX_LENGTH]}_{digest[:_LOCK_NAME_HASH_BYTES].hex()}"
+        )
+        lock_id = int.from_bytes(digest[:8], "big", signed=True)
+        return lock_name, lock_id
+
+    @classmethod
+    def _lock_backend_kind(cls, driver: Any) -> str:
+        """Classify ``driver`` into its migration lock backend family or empty string."""
+        raw_dialect = getattr(type(driver), "dialect", None)
+        dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+            return ""
+        if dialect in cls._POSTGRES_LOCK_DIALECTS:
+            return "postgres"
+        if dialect in cls._MYSQL_LOCK_DIALECTS:
+            return "mysql"
+        if dialect in cls._MSSQL_LOCK_DIALECTS:
+            return "mssql"
+        if dialect == "sqlite":
+            return "sqlite"
+        return ""
+
+    def _uses_sequenced_insert(self, driver: Any) -> bool:
+        """Return True when ``driver`` uses single-statement ``execution_sequence`` inserts."""
+        return str(getattr(driver, "dialect", "") or "").lower() in self._SEQUENCED_INSERT_DIALECTS
+
+    @staticmethod
+    def _translate_mssql_lock_exception(
+        lock_name: str, timeout_seconds: int, exc: SQLSpecError
+    ) -> MigrationError | None:
+        """Convert T-SQL lock acquisition errors into ``MigrationError`` when matched."""
+        if "Migration lock acquisition failed" in str(exc):
+            msg = f"Failed to acquire SQL Server migration lock {lock_name!r} within {timeout_seconds}s"
+            return MigrationError(msg)
+        return None
+
+    @staticmethod
+    def _validate_mssql_lock_result(lock_name: str, result: Any) -> None:
+        """Raise ``MigrationError`` when ``sp_getapplock`` returns a negative status code."""
+        if result.data:
+            lock_code = result.scalar()
+            if isinstance(lock_code, int) and lock_code < 0:
+                msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
+                raise MigrationError(msg)
+
+    @staticmethod
+    def _validate_mysql_lock_result(lock_name: str, timeout_seconds: int, lock_result: Any) -> None:
+        """Raise ``MigrationError`` when MySQL ``GET_LOCK`` does not acquire ownership."""
+        if lock_result != 1:
+            msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+            raise MigrationError(msg)
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.
@@ -520,6 +656,9 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
+        if getattr(config, "is_replica", False):
+            msg = "Migrations cannot run against a read replica configuration; use the primary configuration instead"
+            raise MigrationError(msg)
         raw_features = getattr(config, "driver_features", None)
         driver_features = raw_features if isinstance(raw_features, dict) else {}
         direct_dsn = driver_features.get("direct_dsn")
@@ -1012,3 +1151,17 @@ out-of-order migrations gracefully.
         resolved_echo = self._resolve_echo(echo)
         resolved_summary_only = self._resolve_summary_only(summary_only)
         return resolved_use_logger, resolved_echo, resolved_summary_only
+
+
+async def _driver_in_transaction_async(driver: Any) -> bool:
+    """Return True when ``driver`` reports an active transaction via async or sync hooks."""
+    transaction_open = getattr(driver, "_transaction_open", None)
+    if callable(transaction_open):
+        return bool(await cast("Awaitable[Any]", transaction_open()))
+    conn_checker = getattr(driver, "_connection_in_transaction", None)
+    if callable(conn_checker):
+        result = conn_checker()
+        if inspect.isawaitable(result):
+            return bool(await result)
+        return bool(result)
+    return False

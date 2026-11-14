@@ -111,20 +111,32 @@ class SybaseSessionContext:
             _DRIVER_CLS = module.SybaseDriver
         assert _DRIVER_CLS is not None
         self._connection = self._acquire_connection()
-        self._driver = _DRIVER_CLS(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        assert self._driver is not None
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = _DRIVER_CLS(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            assert self._driver is not None
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
-            with contextlib.suppress(Exception):
-                self._driver.rollback()
-        if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
+                with contextlib.suppress(Exception):
+                    self._driver.rollback()
+            if self._connection is not None:
+                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+        finally:
             self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None

@@ -3,21 +3,32 @@
 import inspect
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
-from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
+from sqlspec.extensions.adk._table_utils import (
+    ensure_table_name,
+    owner_id_column_name,
+    unique_statements,
+    validate_owner_id_column_ddl,
+)
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.routing import RoutingContext, is_valid_routing_token
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 
-__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "normalize_session_list_options")
+__all__ = ("BaseAsyncADKStore", "BaseSyncADKStore", "adk_primary_read_scope", "normalize_session_list_options")
 
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
@@ -31,6 +42,23 @@ ADK_RESET_TABLE_PROFILES: Final = (
     ("adk_sessions", "adk_events", "adk_app_states", "adk_user_states", "adk_internal_metadata"),
     ("adk_sessions", "adk_events", "adk_app_states", "adk_user_states", "adk_metadata"),
 )
+
+
+_ADK_PRIMARY_READ: ContextVar[bool] = ContextVar("sqlspec_adk_primary_read", default=False)
+
+
+@contextmanager
+def adk_primary_read_scope() -> Iterator[None]:
+    """Keep reads inside a mutating ADK operation on the primary.
+
+    Yields:
+        None while the primary read directive is bound to this context.
+    """
+    token = _ADK_PRIMARY_READ.set(True)
+    try:
+        yield
+    finally:
+        _ADK_PRIMARY_READ.reset(token)
 
 
 class _ADKStoreCommon(Generic[ConfigT]):
@@ -47,6 +75,9 @@ class _ADKStoreCommon(Generic[ConfigT]):
         "_metadata_table",
         "_owner_id_column_ddl",
         "_owner_id_column_name",
+        "_read_bind_group",
+        "_read_config",
+        "_read_config_enabled",
         "_session_table",
         "_user_state_table",
     )
@@ -55,11 +86,12 @@ class _ADKStoreCommon(Generic[ConfigT]):
     adapter_name: ClassVar[str | None] = None
     extension_config_options: ClassVar[frozenset[str]] = frozenset()
 
-    def __init__(self, config: ConfigT) -> None:
+    def __init__(self, config: ConfigT, *, read_config: ConfigT | None = None) -> None:
         """Initialize the ADK store.
 
         Args:
             config: SQLSpec database configuration.
+            read_config: Optional compatible configuration for pure reads.
 
         Notes:
             Reads configuration from config.extension_config["adk"]:
@@ -71,21 +103,41 @@ class _ADKStoreCommon(Generic[ConfigT]):
             - owner_id_column: Optional owner FK column DDL (default: None)
         """
         self._config = config
+        self._read_config = read_config
+        self._read_config_enabled, self._read_bind_group = _adk_read_settings(config, read_config)
         store_config = self._store_config_from_extension()
         self._session_table: str = str(store_config["session_table"])
         self._events_table: str = str(store_config["events_table"])
         self._app_state_table: str = str(store_config["app_state_table"])
         self._user_state_table: str = str(store_config["user_state_table"])
         self._metadata_table: str = str(store_config["metadata_table"])
-        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        raw_owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_ddl: str | None = (
+            validate_owner_id_column_ddl(raw_owner_id_column_ddl) if raw_owner_id_column_ddl is not None else None
+        )
         self._owner_id_column_name: str | None = (
-            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl is not None else None
         )
         ensure_table_name(self._session_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._events_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._app_state_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._user_state_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._metadata_table, max_parts=self._max_table_name_parts)
+
+    @property
+    def read_config(self) -> ConfigT | None:
+        """Return the explicitly configured reader, when supplied."""
+        return self._read_config
+
+    @property
+    def read_config_enabled(self) -> bool:
+        """Return whether this store opts into pure-read offload."""
+        return self._read_config_enabled
+
+    @property
+    def read_bind_group(self) -> str | None:
+        """Return the configured named replica group for ADK reads."""
+        return self._read_bind_group
 
     @property
     def config(self) -> ConfigT:
@@ -133,13 +185,27 @@ class _ADKStoreCommon(Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
 
-    def _drop_tables_sql(self) -> "list[str]":
-        """Get the DROP TABLE SQL statements for this database dialect."""
-        raise NotImplementedError
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the extension-downgrade drops for the session store tables in FK-safe order."""
         return [DropStatement(statement) for statement in self._drop_tables_sql()]
+
+    def _provide_read_connection(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(
+            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, False, kwargs
+        )
+
+    def _provide_read_session(
+        self, *, primary: bool = False, **kwargs: Any
+    ) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+        return _adk_read_provider(
+            self._config, self._read_config, self._read_config_enabled, self._read_bind_group, primary, True, kwargs
+        )
+
+    def _drop_tables_sql(self) -> "list[str]":
+        """Get the DROP TABLE SQL statements for this database dialect."""
+        raise NotImplementedError
 
     def _reset_drop_statements(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""
@@ -163,23 +229,39 @@ class _ADKStoreCommon(Generic[ConfigT]):
         return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in.
+        """Calculate expiration timestamp from ``expires_in``.
+
+        Non-positive durations return an already-expired UTC timestamp rather than
+        ``None`` so sessions expire immediately instead of becoming persistent.
 
         Args:
-            expires_in: Seconds or timedelta until expiration.
+            expires_in: Seconds or timedelta until expiration, or ``None`` for no expiration.
 
         Returns:
-            UTC datetime of expiration, or None if no expiration.
+            UTC datetime of expiration, or ``None`` when ``expires_in`` is ``None``.
         """
         if expires_in is None:
             return None
 
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+        expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
 
         if expires_in_seconds <= 0:
-            return None
+            return datetime.now(UTC) - timedelta(microseconds=1)
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+
+    def _should_renew(self, renew_for: "int | timedelta | None") -> bool:
+        """Return whether ``renew_for`` requests session expiration renewal.
+
+        Args:
+            renew_for: Seconds or timedelta to extend expiration by, or ``None``.
+
+        Returns:
+            ``True`` only when ``renew_for`` represents a positive duration.
+        """
+        if renew_for is None:
+            return False
+        return (renew_for.total_seconds() if isinstance(renew_for, timedelta) else float(renew_for)) > 0
 
     def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
@@ -552,19 +634,6 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
-    async def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct SchemaTarget definitions for all ADK session tables."""
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        ddl_targets = (
-            (self._session_table, await self._sessions_table_ddl()),
-            (self._events_table, await self._events_table_ddl()),
-            (self._app_state_table, await self._app_states_table_ddl()),
-            (self._user_state_table, await self._user_states_table_ddl()),
-            (self._metadata_table, await self._metadata_table_ddl()),
-        )
-        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
-
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive ADK table changes from canonical adapter DDL.
 
@@ -604,6 +673,19 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         await self.drop_tables()
         await self.ensure_tables()
         self._log_tables_recreated()
+
+    async def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for all ADK session tables."""
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl_targets = (
+            (self._session_table, await self._sessions_table_ddl()),
+            (self._events_table, await self._events_table_ddl()),
+            (self._app_state_table, await self._app_states_table_ddl()),
+            (self._user_state_table, await self._user_states_table_ddl()),
+            (self._metadata_table, await self._metadata_table_ddl()),
+        )
+        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
 
     async def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts for async and sync-backed configs."""
@@ -713,6 +795,12 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Return the drops that remove configured and legacy ADK session tables."""
         return self._reset_drop_statements()
 
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return cast("AbstractAsyncContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
+
 
 class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK session stores.
@@ -760,7 +848,17 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        """Get a session."""
+        """Get a session.
+
+        Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
+            session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp while reading.
+
+        Returns:
+            Session record if found, None otherwise.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -879,19 +977,6 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """Set a value in the ADK internal metadata table."""
         raise NotImplementedError
 
-    def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct SchemaTarget definitions for all ADK session tables."""
-        statement_config = getattr(self._config, "statement_config", None)
-        dialect = getattr(statement_config, "dialect", None)
-        ddl_targets = (
-            (self._session_table, self._sessions_table_ddl()),
-            (self._events_table, self._events_table_ddl()),
-            (self._app_state_table, self._app_states_table_ddl()),
-            (self._user_state_table, self._user_states_table_ddl()),
-            (self._metadata_table, self._metadata_table_ddl()),
-        )
-        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
-
     def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive ADK table changes from canonical adapter DDL.
 
@@ -922,6 +1007,19 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         self.drop_tables()
         self.ensure_tables()
         self._log_tables_recreated()
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct SchemaTarget definitions for all ADK session tables."""
+        statement_config = getattr(self._config, "statement_config", None)
+        dialect = getattr(statement_config, "dialect", None)
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        return [SchemaTarget.from_ddl(table, ddl, dialect=dialect) for table, ddl in ddl_targets]
 
     def _execute_lifecycle_scripts(self, statements: list[str]) -> None:
         """Execute lifecycle DDL scripts using the sync driver session."""
@@ -975,6 +1073,12 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def _reset_drop_tables_sql(self) -> "list[str]":
         """Return the drops that remove configured and legacy ADK session tables."""
         return self._reset_drop_statements()
+
+    def _provide_read_connection(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_connection(primary=primary, **kwargs))
+
+    def _provide_read_session(self, *, primary: bool = False, **kwargs: Any) -> AbstractContextManager[Any]:
+        return cast("AbstractContextManager[Any]", super()._provide_read_session(primary=primary, **kwargs))
 
 
 def normalize_session_list_options(
@@ -1040,3 +1144,59 @@ def _reconcile_adk_schema_sync(
         ensure_schema_sync(
             driver, targets, manage_schema=True, create_schema=create_schema, assume_existing=assume_existing
         )
+
+
+def _adk_read_settings(
+    config: "DatabaseConfigProtocol[Any, Any, Any]", read_config: "DatabaseConfigProtocol[Any, Any, Any] | None"
+) -> tuple[bool, str | None]:
+    settings = config.extension_config.get("adk", {})
+    read_bind_group = settings.get("read_bind_group")
+    if read_bind_group is not None and (
+        not isinstance(read_bind_group, str) or not is_valid_routing_token(read_bind_group)
+    ):
+        msg = "ADK read_bind_group must be None or a non-empty printable string of at most 256 characters"
+        raise ImproperConfigurationError(msg)
+    enabled = settings.get("read_config_enabled", read_config is not None or read_bind_group is not None)
+    if not isinstance(enabled, bool):
+        msg = "ADK read_config_enabled must be a boolean"
+        raise ImproperConfigurationError(msg)
+    if read_config is not None and (
+        config.is_async != read_config.is_async or resolve_adapter_name(config) != resolve_adapter_name(read_config)
+    ):
+        msg = "ADK reader configuration must use the same adapter and execution mode as the primary"
+        raise ImproperConfigurationError(msg)
+    return enabled, read_bind_group
+
+
+def _adk_read_provider(
+    config: "DatabaseConfigProtocol[Any, Any, Any]",
+    read_config: "DatabaseConfigProtocol[Any, Any, Any] | None",
+    enabled: bool,
+    read_bind_group: str | None,
+    primary: bool,
+    session: bool,
+    kwargs: dict[str, Any],
+) -> AbstractContextManager[Any] | AbstractAsyncContextManager[Any]:
+    if primary or not enabled or _ADK_PRIMARY_READ.get():
+        return config.provide_session(**kwargs) if session else config.provide_connection(**kwargs)
+    entry = RoutingContext.get_entry(config.bind_key)
+    if entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+        return config.provide_session(**kwargs) if session else config.provide_connection(**kwargs)
+    if read_config is not None:
+        return read_config.provide_session(**kwargs) if session else read_config.provide_connection(**kwargs)
+    call_kwargs = dict(kwargs)
+    explicit_group = call_kwargs.pop("bind_group", None)
+    effective_group = (
+        explicit_group
+        if explicit_group is not None
+        else entry.bind_group
+        if entry is not None and entry.bind_group is not None
+        else read_bind_group
+    )
+    if effective_group is not None:
+        return (
+            config.provide_read_session(bind_group=effective_group, **call_kwargs)
+            if session
+            else config.provide_read_connection(bind_group=effective_group, **call_kwargs)
+        )
+    return config.provide_read_session(**call_kwargs) if session else config.provide_read_connection(**call_kwargs)

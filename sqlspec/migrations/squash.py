@@ -30,6 +30,7 @@ from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations._backup import create_backup, remove_backup, restore_backup
 from sqlspec.migrations.loaders import _load_migration_sql
+from sqlspec.migrations.templates import escape_python_docstring, sanitize_header_field
 from sqlspec.migrations.validation import (
     validate_extension_consistency,
     validate_squash_idempotency,
@@ -37,7 +38,7 @@ from sqlspec.migrations.validation import (
 )
 from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import slugify
+from sqlspec.utils.text import slugify, split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.migrations.runner import SyncMigrationRunner
@@ -1922,26 +1923,32 @@ class MigrationSquasher:
         if self.template_settings and self.template_settings.profile:
             title = self.template_settings.profile.title
 
+        safe_title = sanitize_header_field(title)
+        safe_version = sanitize_header_field(plan.target_version)
+        safe_description = sanitize_header_field(plan.description)
+        safe_sources = ", ".join(sanitize_header_field(version) for version in plan.source_versions)
+
         lines.extend((
-            f"-- {title}",
-            f"-- Version: {plan.target_version}",
-            f"-- Description: {plan.description}",
-            f"-- Squashed from: {', '.join(plan.source_versions)}",
+            f"-- {safe_title}",
+            f"-- Version: {safe_version}",
+            f"-- Description: {safe_description}",
+            f"-- Squashed from: {safe_sources}",
         ))
         if plan.transactional is not None:
             lines.append(f"-- transactional: {'true' if plan.transactional else 'false'}")
         if plan.schema is not None:
-            lines.append(f"-- schema: {plan.schema}")
-        lines.extend(("", f"-- name: migrate-{plan.target_version}-up"))
+            lines.append(f"-- schema: {sanitize_header_field(plan.schema)}")
+        lines.extend(("", f"-- name: migrate-{safe_version}-up"))
         lines.extend(statement.rstrip() for statement in up_sql)
         lines.append("")
 
         if down_sql:
-            lines.append(f"-- name: migrate-{plan.target_version}-down")
+            lines.append(f"-- name: migrate-{safe_version}-down")
             lines.extend(statement.rstrip() for statement in down_sql)
             lines.append("")
         elif plan.missing_down_versions:
-            lines.append(f"-- Note: Irreversible squash (missing down in {', '.join(plan.missing_down_versions)})")
+            safe_missing = ", ".join(sanitize_header_field(version) for version in plan.missing_down_versions)
+            lines.append(f"-- Note: Irreversible squash (missing down in {safe_missing})")
             lines.append("")
 
         return "\n".join(lines)
@@ -1966,15 +1973,21 @@ class MigrationSquasher:
         if self.template_settings and self.template_settings.profile:
             title = self.template_settings.profile.title
 
-        lines.extend([
-            '"""' + title + ".",
-            "",
-            f"Version: {plan.target_version}",
-            f"Description: {plan.description}",
-            f"Squashed from: {', '.join(plan.source_versions)}",
-            '"""',
-            "",
-        ])
+        safe_title = sanitize_header_field(title)
+        safe_version = sanitize_header_field(plan.target_version)
+        safe_description = sanitize_header_field(plan.description)
+        safe_sources = ", ".join(sanitize_header_field(version) for version in plan.source_versions)
+        docstring_body = escape_python_docstring(
+            "\n".join((
+                f"{safe_title}.",
+                "",
+                f"Version: {safe_version}",
+                f"Description: {safe_description}",
+                f"Squashed from: {safe_sources}",
+            ))
+        )
+
+        lines.extend([f'"""{docstring_body}', '"""', ""])
 
         if plan.source_versions:
             lines.extend([f"__replaces__ = {list(plan.source_versions)!r}", ""])
@@ -2158,7 +2171,8 @@ class MigrationSquasher:
                 "pass schema_ddl when reflecting through an async driver"
             )
             raise SquashValidationError(msg)
-        version_table = self.version_table.rsplit(".", 1)[-1].strip('"`[]')
+        version_parts = split_qualified_identifier(self.version_table, quote_chars='"`', allow_bracket_quotes=True)
+        version_table = version_parts[-1] if version_parts else self.version_table.strip('"`[]')
         data_dictionary = driver.data_dictionary
         create_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="create")
         drop_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="drop")

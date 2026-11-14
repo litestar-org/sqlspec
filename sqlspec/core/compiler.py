@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "OPERATION_PROFILE_SLOTS",
     "CompiledSQL",
     "OperationProfile",
     "OperationType",
@@ -42,6 +43,135 @@ __all__ = (
     "is_copy_operation",
     "is_copy_to_operation",
 )
+
+OPERATION_PROFILE_SLOTS: Final[tuple[str, ...]] = ("is_read_only", "modifies_rows", "returns_rows")
+
+VOLATILE_FUNCTIONS: Final[frozenset[str]] = frozenset({
+    "NEXTVAL",
+    "SETVAL",
+    "CURRVAL",
+    "LASTVAL",
+    "GET_LOCK",
+    "RELEASE_LOCK",
+    "RELEASE_ALL_LOCKS",
+    "SLEEP",
+    "PG_SLEEP",
+    "PG_SLEEP_FOR",
+    "PG_SLEEP_UNTIL",
+    "PG_TERMINATE_BACKEND",
+    "PG_CANCEL_BACKEND",
+    "PG_RELOAD_CONF",
+    "PG_ROTATE_LOGFILE",
+    "LO_CREAT",
+    "LO_CREATE",
+    "LO_UNLINK",
+    "LO_IMPORT",
+    "LO_EXPORT",
+    "SET_CONFIG",
+    "TXID_CURRENT",
+    "PG_CURRENT_XACT_ID",
+    "PG_NOTIFY",
+    "DBLINK_EXEC",
+    "PG_SWITCH_WAL",
+    "PG_CREATE_RESTORE_POINT",
+    "PG_CREATE_LOGICAL_REPLICATION_SLOT",
+    "PG_LOGICAL_EMIT_MESSAGE",
+    "PG_EXPORT_SNAPSHOT",
+    "PG_STAT_RESET",
+    "PG_PROMOTE",
+    "GIN_CLEAN_PENDING_LIST",
+    "PG_REPLICATION_SLOT_ADVANCE",
+    "PG_COPY_LOGICAL_REPLICATION_SLOT",
+    "PG_COPY_PHYSICAL_REPLICATION_SLOT",
+    "PG_SYNC_REPLICATION_SLOTS",
+    "PG_LOG_BACKEND_MEMORY_CONTEXTS",
+    "PG_SIGNAL_BACKEND",
+    "PG_STAT_CLEAR_SNAPSHOT",
+    "PG_BACKUP_START",
+    "PG_BACKUP_STOP",
+    "PG_START_BACKUP",
+    "PG_STOP_BACKUP",
+    "PG_LOGICAL_SLOT_GET_CHANGES",
+    "PG_LOGICAL_SLOT_GET_BINARY_CHANGES",
+    "DBLINK_CONNECT",
+    "DBLINK_DISCONNECT",
+    "DBLINK_SEND_QUERY",
+})
+_VOLATILE_FUNCTION_PREFIXES: Final[tuple[str, ...]] = (
+    "PG_ADVISORY_",
+    "PG_TRY_ADVISORY_",
+    "PG_STAT_RESET",
+    "PG_REPLICATION_ORIGIN_",
+    "PG_CREATE_",
+    "PG_DROP_",
+    "LO_",
+    "BRIN_",
+)
+_READ_ONLY_DBMS_SESSION_FUNCTIONS: Final[frozenset[str]] = frozenset({
+    "UNIQUE_SESSION_ID",
+    "IS_ROLE_ENABLED",
+    "IS_SESSION_ALIVE",
+    "LIST_CONTEXT",
+})
+_SAFE_COPY_STDOUT_PARAMS: Final[frozenset[str]] = frozenset({
+    "FORMAT",
+    "DELIMITER",
+    "NULL",
+    "DEFAULT",
+    "HEADER",
+    "QUOTE",
+    "ESCAPE",
+    "FORCE_QUOTE",
+    "ENCODING",
+})
+
+_MODIFIES_ROWS_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Into,
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Merge,
+    exp.TruncateTable,
+)
+_NON_READ_ONLY_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Lock,
+    exp.Into,
+    exp.NextValueFor,
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Merge,
+    exp.TruncateTable,
+    exp.Command,
+    exp.DDL,
+    exp.Set,
+    exp.LoadData,
+)
+_READ_ONLY_ROOT_TYPES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Select,
+    exp.Union,
+    exp.Except,
+    exp.Intersect,
+    exp.Values,
+    exp.Table,
+    exp.TableSample,
+    exp.Show,
+    exp.Describe,
+    exp.Copy,
+)
+_RETURNS_ROWS_ROOT_TYPES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Select,
+    exp.Union,
+    exp.Except,
+    exp.Intersect,
+    exp.Values,
+    exp.Table,
+    exp.TableSample,
+    exp.Summarize,
+)
+_READ_ONLY_TABLE_HINTS: Final[frozenset[str]] = frozenset({"NOLOCK", "READUNCOMMITTED"})
+_READ_ONLY_EXTRA_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (exp.Column, exp.WithTableHint, exp.Func)
+_POSITIONAL_NON_INDEXED_STYLES: Final[frozenset[str]] = frozenset({"qmark", "pyformat_positional"})
 
 logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 OperationType = Literal[
@@ -152,14 +282,18 @@ def is_copy_to_operation(operation_type: "OperationType") -> bool:
 class OperationProfile:
     """Semantic characteristics derived from the parsed SQL expression."""
 
-    __slots__ = ("modifies_rows", "returns_rows")
+    __slots__ = OPERATION_PROFILE_SLOTS
 
-    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False) -> None:
+    def __init__(self, returns_rows: bool = False, modifies_rows: bool = False, is_read_only: bool = False) -> None:
         self.returns_rows = returns_rows
         self.modifies_rows = modifies_rows
+        self.is_read_only = is_read_only
 
     def __repr__(self) -> str:
-        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
+        return (
+            f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r}, "
+            f"is_read_only={self.is_read_only!r})"
+        )
 
     @classmethod
     def empty(cls) -> "OperationProfile":
@@ -337,7 +471,9 @@ class SQLProcessor:
         )
         self._cache_hits = 0
         self._cache_misses = 0
-        self._parse_cache: OrderedDict[Any, tuple[exp.Expr | None, OperationType, tuple[bool, bool]]] = OrderedDict()
+        self._parse_cache: OrderedDict[Any, tuple[exp.Expr | None, OperationType, tuple[bool, bool, bool]]] = (
+            OrderedDict()
+        )
         self._parse_cache_hits = 0
         self._parse_cache_misses = 0
         self._last_cache_key: Any | None = None
@@ -402,10 +538,15 @@ class SQLProcessor:
         Returns:
             CompiledSQL with execution information
         """
-        if not self._cache_enabled or self._parameter_config.ast_transformer is not None:
-            return self._apply_dynamic_sqlcommenter(
-                self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
+        if (
+            not self._cache_enabled
+            or self._parameter_config.ast_transformer is not None
+            or (self._parameter_config.needs_static_script_compilation and parameters)
+        ):
+            result, _ = self._compile_uncached_with_template(
+                sql, parameters, is_many, expression, param_fingerprint=None
             )
+            return self._apply_dynamic_sqlcommenter(result)
 
         if param_fingerprint is None:
             param_fingerprint = self._parameter_fingerprint(parameters, is_many)
@@ -427,17 +568,22 @@ class SQLProcessor:
             return self._apply_dynamic_sqlcommenter(self._materialize_cached_result(cached_result, parameters, is_many))
 
         self._cache_misses += 1
-        result = self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=param_fingerprint)
+        result, cached_expression_template = self._compile_uncached_with_template(
+            sql, parameters, is_many, expression, param_fingerprint=param_fingerprint
+        )
 
         if len(self._cache) >= self._max_cache_size:
             self._cache.popitem(last=False)
 
-        cached_entry = (
-            CompiledSQL(
+        if result.expression is not None:
+            cached_expr = (
+                cached_expression_template if cached_expression_template is not None else result.expression.copy()
+            )
+            cached_entry = CompiledSQL(
                 compiled_sql=result.compiled_sql,
                 execution_parameters=result.execution_parameters,
                 operation_type=result.operation_type,
-                expression=result.expression.copy(),
+                expression=cached_expr,
                 parameter_style=result.parameter_style,
                 supports_many=result.supports_many,
                 parameter_casts=result.parameter_casts,
@@ -446,9 +592,8 @@ class SQLProcessor:
                 input_named_parameters=result.input_named_parameters,
                 applied_wrap_types=result.applied_wrap_types,
             )
-            if result.expression is not None
-            else result
-        )
+        else:
+            cached_entry = result
         self._cache[cache_key] = cached_entry
         self._last_cache_key = cache_key
         self._last_result = cached_entry
@@ -473,6 +618,12 @@ class SQLProcessor:
             and (self._config.sqlcommenter_enable_context or self._config.sqlcommenter_enable_traceparent)
         )
 
+    def _effective_statement_transformers(self) -> "tuple[Any, ...]":
+        statement_transformers = self._config.statement_transformers
+        if statement_transformers and self._has_dynamic_sqlcommenter():
+            return statement_transformers[:-1]
+        return statement_transformers
+
     def _apply_dynamic_sqlcommenter(self, result: CompiledSQL) -> CompiledSQL:
         """Append current dynamic SQLCommenter attributes to a compiled result."""
         if not self._has_dynamic_sqlcommenter():
@@ -491,7 +642,7 @@ class SQLProcessor:
             compiled_sql=compiled_sql,
             execution_parameters=result.execution_parameters,
             operation_type=result.operation_type,
-            expression=result.expression.copy() if result.expression is not None else None,
+            expression=result.expression,
             parameter_style=result.parameter_style,
             supports_many=result.supports_many,
             parameter_casts=result.parameter_casts,
@@ -536,7 +687,7 @@ class SQLProcessor:
 
     @staticmethod
     def _normalize_expression_override(
-        expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
+        expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str, *, allow_placeholder_rewrite: bool = False
     ) -> "exp.Expr | None":
         """Validate expression overrides against the input SQL.
 
@@ -544,28 +695,35 @@ class SQLProcessor:
             expression_override: Pre-parsed SQLGlot expression.
             sqlglot_sql: SQL passed to SQLGlot.
             sql: Original SQL string.
+            allow_placeholder_rewrite: Whether 1-to-1 placeholder conversions preserve override validity.
 
         Returns:
             Expression override when it is safe to reuse.
         """
         if expression_override is None:
             return None
-        if sqlglot_sql != sql:
+        if sqlglot_sql != sql and not allow_placeholder_rewrite:
             return None
         return expression_override
 
     def _parse_expression_uncached(
-        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
-    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
+        self,
+        sqlglot_sql: str,
+        dialect_str: "str | None",
+        expression_override: "exp.Expr | None",
+        *,
+        collect_casts: bool = False,
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, dict[int, str]]":
         """Parse SQL into an expression without cache.
 
         Args:
             sqlglot_sql: SQL string for SQLGlot.
             dialect_str: Dialect name.
             expression_override: Pre-parsed SQLGlot expression.
+            collect_casts: Whether to collect parameter casts in the same AST walk.
 
         Returns:
-            Expression details and derived metadata.
+            Expression details, derived metadata, and optional parameter casts.
         """
         try:
             if expression_override is not None:
@@ -574,17 +732,19 @@ class SQLProcessor:
                 expression = sqlglot.parse_one(sqlglot_sql, dialect=dialect_str)
         except ParseError:
             returns_rows = SQLProcessor._statement_text_returns_rows(sqlglot_sql)
-            return None, "COMMAND", OperationProfile(returns_rows=returns_rows)
+            return None, "COMMAND", OperationProfile(returns_rows=returns_rows), {}
         else:
             operation_type = SQLProcessor._operation_type(expression)
-            operation_profile = SQLProcessor._operation_profile(expression, operation_type)
+            operation_profile, parameter_casts = _inspect_operation_profile(
+                expression, operation_type, dialect_str, collect_casts=collect_casts
+            )
             if (
                 operation_type == "COMMAND"
                 and not operation_profile.returns_rows
                 and SQLProcessor._statement_text_returns_rows(sqlglot_sql)
             ):
                 operation_profile.returns_rows = True
-            return expression, operation_type, operation_profile
+            return expression, operation_type, operation_profile, parameter_casts
 
     def _store_parse_cache(
         self,
@@ -592,7 +752,7 @@ class SQLProcessor:
         expression: "exp.Expr | None",
         operation_type: "OperationType",
         operation_profile: "OperationProfile",
-    ) -> None:
+    ) -> "exp.Expr | None":
         """Store parsed expression details in cache.
 
         Args:
@@ -600,18 +760,23 @@ class SQLProcessor:
             expression: Parsed SQLGlot expression.
             operation_type: Detected operation type.
             operation_profile: Operation metadata.
+
+        Returns:
+            Cached copy of the parsed expression when present.
         """
         if len(self._parse_cache) >= self._parse_cache_max_size:
             self._parse_cache.popitem(last=False)
+        cached_expression = expression.copy() if expression is not None else None
         self._parse_cache[parse_cache_key] = (
-            expression.copy() if expression is not None else None,
+            cached_expression,
             operation_type,
-            (operation_profile.returns_rows, operation_profile.modifies_rows),
+            (operation_profile.returns_rows, operation_profile.modifies_rows, operation_profile.is_read_only),
         )
+        return cached_expression
 
     @staticmethod
     def _unpack_parse_cache_entry(
-        parse_cache_entry: "tuple[exp.Expr | None, OperationType, tuple[bool, bool]]",
+        parse_cache_entry: "tuple[exp.Expr | None, OperationType, tuple[bool, bool, bool]]",
     ) -> "tuple[exp.Expr | None, OperationType, OperationProfile]":
         """Expand cached parse results into runtime objects.
 
@@ -622,25 +787,35 @@ class SQLProcessor:
             Parsed expression metadata.
         """
         cached_expression, cached_operation, cached_profile = parse_cache_entry
-        operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
+        operation_profile = OperationProfile(
+            returns_rows=cached_profile[0], modifies_rows=cached_profile[1], is_read_only=cached_profile[2]
+        )
         return (cached_expression, cached_operation, operation_profile)
 
     def _resolve_expression(
-        self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
-    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None]":
+        self,
+        sqlglot_sql: str,
+        dialect_str: "str | None",
+        expression_override: "exp.Expr | None",
+        cache_parse: bool = True,
+        *,
+        collect_casts: bool = False,
+    ) -> "tuple[exp.Expr | None, OperationType, OperationProfile, Any | None, dict[int, str] | None, exp.Expr | None]":
         """Resolve an SQLGlot expression with caching.
 
         Args:
             sqlglot_sql: SQL string for SQLGlot.
             dialect_str: Dialect name.
             expression_override: Pre-parsed SQLGlot expression.
+            cache_parse: Whether the parse result may be read from and stored in the parse cache.
+            collect_casts: Whether to collect parameter casts on a parse miss.
 
         Returns:
-            Expression metadata and parse cache information.
+            Expression metadata, parse cache information, optional parameter casts, and shared template.
         """
         parse_cache_key = None
         parse_cache_entry = None
-        if self._parse_cache_max_size > 0 and expression_override is None:
+        if cache_parse and self._parse_cache_max_size > 0 and expression_override is None:
             parse_cache_key = SQLProcessor._make_parse_cache_key(sqlglot_sql, dialect_str)
             parse_cache_entry = self._parse_cache.get(parse_cache_key)
             if parse_cache_entry is not None:
@@ -648,14 +823,18 @@ class SQLProcessor:
                 self._parse_cache.move_to_end(parse_cache_key)
         if parse_cache_entry is None:
             self._parse_cache_misses += 1
-            expression, operation_type, operation_profile = self._parse_expression_uncached(
-                sqlglot_sql, dialect_str, expression_override
+            expression, operation_type, operation_profile, parameter_casts = self._parse_expression_uncached(
+                sqlglot_sql, dialect_str, expression_override, collect_casts=collect_casts
             )
+            cached_template: exp.Expr | None = None
             if parse_cache_key is not None:
-                self._store_parse_cache(parse_cache_key, expression, operation_type, operation_profile)
-        else:
-            expression, operation_type, operation_profile = SQLProcessor._unpack_parse_cache_entry(parse_cache_entry)
-        return expression, operation_type, operation_profile, parse_cache_key
+                cached_template = self._store_parse_cache(
+                    parse_cache_key, expression, operation_type, operation_profile
+                )
+            resolved_casts: dict[int, str] | None = parameter_casts if collect_casts else None
+            return expression, operation_type, operation_profile, parse_cache_key, resolved_casts, cached_template
+        expression, operation_type, operation_profile = SQLProcessor._unpack_parse_cache_entry(parse_cache_entry)
+        return expression, operation_type, operation_profile, parse_cache_key, None, expression
 
     def _apply_ast_transformers(
         self,
@@ -684,9 +863,7 @@ class SQLProcessor:
         Returns:
             Updated expression metadata and transformation state.
         """
-        statement_transformers = self._config.statement_transformers
-        if statement_transformers and self._has_dynamic_sqlcommenter():
-            statement_transformers = statement_transformers[:-1]
+        statement_transformers = self._effective_statement_transformers()
         ast_transformer = self._parameter_config.ast_transformer
         if expression is None or (not statement_transformers and not ast_transformer):
             return expression, parameters, False, operation_type, operation_profile
@@ -717,7 +894,7 @@ class SQLProcessor:
             if expression is None:
                 return expression, parameters, ast_was_transformed, operation_type, operation_profile
             operation_type = SQLProcessor._operation_type(expression)
-            operation_profile = SQLProcessor._operation_profile(expression, operation_type)
+            operation_profile = SQLProcessor._operation_profile(expression, operation_type, dialect=self._dialect_str)
 
         return expression, parameters, ast_was_transformed, operation_type, operation_profile
 
@@ -826,6 +1003,9 @@ class SQLProcessor:
     ) -> CompiledSQL:
         """Compile SQL without caching.
 
+        Scripts compiled with embedded parameter values also bypass the parse
+        cache, since each parameter set yields distinct SQL text.
+
         Args:
             sql: SQL string
             parameters: Parameter values
@@ -836,6 +1016,20 @@ class SQLProcessor:
         Returns:
             CompiledSQL result
         """
+        result, _ = self._compile_uncached_with_template(
+            sql, parameters, is_many, expression_override, param_fingerprint=param_fingerprint
+        )
+        return result
+
+    def _compile_uncached_with_template(
+        self,
+        sql: str,
+        parameters: Any,
+        is_many: bool = False,
+        expression_override: "exp.Expr | None" = None,
+        *,
+        param_fingerprint: Any | None,
+    ) -> "tuple[CompiledSQL, exp.Expr | None]":
         parameter_profile = ParameterProfile.empty()
         operation_profile = OperationProfile.empty()
 
@@ -849,8 +1043,22 @@ class SQLProcessor:
                 wrap_types=self._enable_parameter_type_wrapping,
                 param_fingerprint=param_fingerprint,
             )
+            has_ast_transforms = bool(
+                self._effective_statement_transformers() or self._parameter_config.ast_transformer is not None
+            )
+            allow_placeholder_rewrite = (
+                process_result.placeholder_only
+                and not has_ast_transforms
+                and not (
+                    bool(process_result.parameter_profile.reused_ordinals)
+                    and self._exec_style in _POSITIONAL_NON_INDEXED_STYLES
+                )
+            )
             expression_override = SQLProcessor._normalize_expression_override(
-                expression_override, process_result.sqlglot_sql, sql
+                expression_override,
+                process_result.sqlglot_sql,
+                sql,
+                allow_placeholder_rewrite=allow_placeholder_rewrite,
             )
 
             final_parameters = process_result.parameters
@@ -859,10 +1067,18 @@ class SQLProcessor:
             operation_type: OperationType = "COMMAND"
             parameter_casts: dict[int, str] = {}
             parse_cache_key = None
+            cached_template: exp.Expr | None = None
 
             if self._config.enable_parsing:
-                (expression, operation_type, operation_profile, parse_cache_key) = self._resolve_expression(
-                    process_result.sqlglot_sql, self._dialect_str, expression_override
+                collect_casts = not has_ast_transforms
+                (expression, operation_type, operation_profile, parse_cache_key, resolved_casts, cached_template) = (
+                    self._resolve_expression(
+                        process_result.sqlglot_sql,
+                        self._dialect_str,
+                        expression_override,
+                        cache_parse=not (self._parameter_config.needs_static_script_compilation and parameters),
+                        collect_casts=collect_casts,
+                    )
                 )
                 (expression, final_parameters, ast_was_transformed, operation_type, operation_profile) = (
                     self._apply_ast_transformers(
@@ -877,7 +1093,12 @@ class SQLProcessor:
                     )
                 )
                 if expression is not None:
-                    parameter_casts = SQLProcessor._parameter_casts(expression)
+                    if resolved_casts is not None and not ast_was_transformed:
+                        parameter_casts = resolved_casts
+                    else:
+                        parameter_casts = SQLProcessor._parameter_casts(expression)
+                if ast_was_transformed:
+                    cached_template = None
 
             final_sql, final_params, parameter_profile, input_named_params, applied_wrap = self._finalize_compilation(
                 process_result.sql,
@@ -898,7 +1119,7 @@ class SQLProcessor:
             if self._should_validate_parameters(final_params, parameters, is_many):
                 self._validate_parameters(parameter_profile, final_params, is_many)
 
-            return CompiledSQL(
+            compiled = CompiledSQL(
                 compiled_sql=final_sql,
                 execution_parameters=final_params,
                 operation_type=operation_type,
@@ -916,7 +1137,7 @@ class SQLProcessor:
             raise
         except ParseError as exc:
             log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
-            return CompiledSQL(
+            fallback = CompiledSQL(
                 compiled_sql=sql,
                 execution_parameters=parameters,
                 operation_type="COMMAND",
@@ -924,9 +1145,12 @@ class SQLProcessor:
                 parameter_profile=parameter_profile,
                 operation_profile=operation_profile,
             )
+            return fallback, None
         except Exception as exc:
             log_with_context(logger, logging.ERROR, "sql.compile", error_type=type(exc).__name__, status="error")
             raise
+        else:
+            return compiled, cached_template
 
     def _parameter_fingerprint(self, parameters: Any, is_many: bool) -> Any:
         if self._parameter_config.needs_static_script_compilation:
@@ -998,26 +1222,7 @@ class SQLProcessor:
             if isinstance(node, exp.Placeholder):
                 _placeholder_position(node, placeholder_positions, placeholder_counter)
             if isinstance(node, exp.Cast):
-                cast_target = node.this
-                position = None
-
-                if isinstance(cast_target, exp.Parameter):
-                    param_value = cast_target.this
-                    if isinstance(param_value, exp.Literal):
-                        position = int(param_value.this)
-                elif isinstance(cast_target, exp.Placeholder):
-                    position = _placeholder_position(cast_target, placeholder_positions, placeholder_counter)
-                elif isinstance(cast_target, exp.Column):
-                    column_name = str(cast_target.this) if cast_target.this else str(cast_target)
-                    if column_name.startswith("$") and column_name[1:].isdigit():
-                        position = int(column_name[1:])
-
-                if position is not None:
-                    if isinstance(node.to, exp.DataType):
-                        cast_type = str(get_value_attribute(node.to.this))
-                    else:
-                        cast_type = str(node.to)
-                    cast_positions[position] = cast_type.upper()
+                _record_cast_position(node, cast_positions, placeholder_positions, placeholder_counter)
 
         return cast_positions
 
@@ -1042,41 +1247,28 @@ class SQLProcessor:
         return sql, parameters
 
     @staticmethod
-    def _operation_profile(expression: "exp.Expr | None", operation_type: "OperationType") -> "OperationProfile":
-        if expression is None:
-            return OperationProfile.empty()
+    def _operation_profile(
+        expression: "exp.Expr | None", operation_type: "OperationType", dialect: "str | None" = None
+    ) -> "OperationProfile":
+        operation_profile, _ = _inspect_operation_profile(expression, operation_type, dialect, collect_casts=False)
+        return operation_profile
 
-        returns_rows = False
-        modifies_rows = False
-
-        expr = expression
-        if isinstance(
-            expr,
-            (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values, exp.Table, exp.TableSample, exp.Summarize),
-        ):
-            returns_rows = True
-        elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
-            modifies_rows = True
-            returning = expr.args.get("returning")
-            returns_rows = bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
-        elif isinstance(expr, exp.TruncateTable):
-            modifies_rows = True
-        elif isinstance(expr, exp.Copy):
-            copy_kind = expr.args.get("kind")
-            modifies_rows = copy_kind is True
-            returns_rows = copy_kind is False
-        elif isinstance(expr, (exp.Describe, exp.Show)):
-            returns_rows = True
-        elif isinstance(expr, exp.Command):
-            returns_rows = SQLProcessor._command_returns_rows(expr)
-
-        if not returns_rows and operation_type == "SELECT":
-            returns_rows = True
-
-        if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
-            modifies_rows = True
-
-        return OperationProfile(returns_rows=returns_rows, modifies_rows=modifies_rows)
+    @staticmethod
+    def _expression_is_read_only(expression: "exp.Expr", modifies_rows: bool, dialect: "str | None" = None) -> bool:
+        if modifies_rows:
+            return False
+        if isinstance(expression, exp.Command):
+            return _command_explain_is_read_only(expression, dialect)
+        if not isinstance(expression, _READ_ONLY_ROOT_TYPES):
+            return False
+        if isinstance(expression, exp.Copy) and not _copy_is_read_only(expression):
+            return False
+        if isinstance(expression, exp.Describe) and _describe_is_analyze(expression):
+            return False
+        for node in expression.walk():
+            if isinstance(node, _NON_READ_ONLY_AST_TYPES) or _node_disqualifies_read_only_extra(node):
+                return False
+        return True
 
     @staticmethod
     def _command_returns_rows(expression: "exp.Command") -> bool:
@@ -1134,15 +1326,218 @@ class SQLProcessor:
         return (dialect_marker, sql)
 
 
+def _describe_is_analyze(expression: "exp.Describe") -> bool:
+    for key in ("style", "kind", "format"):
+        val = expression.args.get(key)
+        if isinstance(val, str) and "ANALYZE" in val.upper():
+            return True
+    return False
+
+
+def _dot_package_name(node: "exp.Func") -> str | None:
+    parent = node.parent
+    if not isinstance(parent, exp.Dot):
+        return None
+    qualifier = parent.this
+    if isinstance(qualifier, exp.Identifier):
+        return str(qualifier.name).upper()
+    if isinstance(qualifier, exp.Dot):
+        inner = qualifier.expression
+        if isinstance(inner, (exp.Identifier, exp.Column)):
+            return str(inner.name).upper()
+    return None
+
+
+def _copy_is_read_only(expression: "exp.Copy") -> bool:
+    """Return True only for COPY ... TO STDOUT streaming without file, stage, or program targets."""
+    if expression.args.get("kind") is not False:
+        return False
+    credentials = expression.args.get("credentials")
+    if isinstance(credentials, exp.Expr) and bool(credentials.args):
+        return False
+    if credentials is not None and not isinstance(credentials, exp.Expr):
+        return False
+    files = expression.args.get("files")
+    if not isinstance(files, list) or len(files) != 1:
+        return False
+    target = files[0]
+    if not isinstance(target, exp.Identifier) or target.args.get("quoted") or target.name.upper() != "STDOUT":
+        return False
+    params = expression.args.get("params")
+    if params:
+        for param in params:
+            if not isinstance(param, exp.CopyParameter):
+                return False
+            param_this = param.this
+            param_name = param_this.name.upper() if isinstance(param_this, exp.Expr) else str(param_this).upper()
+            if param_name not in _SAFE_COPY_STDOUT_PARAMS:
+                return False
+    return True
+
+
+def _func_is_volatile(node: "exp.Func") -> bool:
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else node.sql_name().upper()
+    if name in VOLATILE_FUNCTIONS or name.startswith(_VOLATILE_FUNCTION_PREFIXES):
+        return True
+    package = _dot_package_name(node)
+    if package == "DBMS_SESSION":
+        return name not in _READ_ONLY_DBMS_SESSION_FUNCTIONS
+    return package == "DBMS_LOCK"
+
+
+def _node_disqualifies_read_only_extra(node: "exp.Expr") -> bool:
+    if isinstance(node, exp.Column) and node.table and node.name.upper() in {"NEXTVAL", "CURRVAL"}:
+        identifier = node.this
+        if isinstance(identifier, exp.Identifier) and not identifier.args.get("quoted"):
+            return True
+    if isinstance(node, exp.WithTableHint):
+        for hint in node.expressions:
+            if not isinstance(hint, exp.Var) or hint.name.upper() not in _READ_ONLY_TABLE_HINTS:
+                return True
+    if isinstance(node, exp.Func):
+        return _func_is_volatile(node)
+    return False
+
+
+def _command_explain_is_read_only(expression: "exp.Command", dialect: "str | None") -> bool:
+    if expression.name.upper() != "EXPLAIN":
+        return False
+    payload = expression.args.get("expression")
+    if not isinstance(payload, exp.Literal):
+        return False
+    text = payload.name.lstrip()
+    prefix = text.upper()
+    if prefix.startswith("PLAN") or "ANALYZE" in prefix:
+        return False
+    try:
+        explained = sqlglot.parse_one(text, dialect=dialect)
+    except ParseError:
+        return False
+    return SQLProcessor._expression_is_read_only(explained, False, dialect=dialect)  # pyright: ignore[reportPrivateUsage]
+
+
+def _record_cast_position(
+    node: "exp.Cast",
+    cast_positions: "dict[int, str]",
+    placeholder_positions: "dict[str, int]",
+    placeholder_counter: "list[int]",
+) -> None:
+    cast_target = node.this
+    position: int | None = None
+
+    if isinstance(cast_target, exp.Parameter):
+        param_value = cast_target.this
+        if isinstance(param_value, exp.Literal):
+            position = int(param_value.this)
+    elif isinstance(cast_target, exp.Placeholder):
+        position = _placeholder_position(cast_target, placeholder_positions, placeholder_counter)
+    elif isinstance(cast_target, exp.Column):
+        column_name = str(cast_target.this) if cast_target.this else str(cast_target)
+        if column_name.startswith("$") and column_name[1:].isdigit():
+            position = int(column_name[1:])
+
+    if position is not None:
+        cast_type = str(get_value_attribute(node.to.this)) if isinstance(node.to, exp.DataType) else str(node.to)
+        cast_positions[position] = cast_type.upper()
+
+
+def _classify_root_operation(
+    expr: "exp.Expr", operation_type: "OperationType", dialect: "str | None"
+) -> "tuple[bool, bool, bool, bool]":
+    returns_rows = False
+    modifies_rows = False
+
+    if isinstance(expr, _RETURNS_ROWS_ROOT_TYPES):
+        returns_rows = True
+    elif isinstance(expr, (exp.Insert, exp.Update, exp.Delete, exp.Merge)):
+        modifies_rows = True
+        returning = expr.args.get("returning")
+        returns_rows = bool(returning) and not (isinstance(returning, exp.Returning) and returning.args.get("into"))
+    elif isinstance(expr, exp.TruncateTable):
+        modifies_rows = True
+    elif isinstance(expr, exp.Copy):
+        copy_kind = expr.args.get("kind")
+        modifies_rows = copy_kind is True
+        returns_rows = copy_kind is False
+    elif isinstance(expr, (exp.Describe, exp.Show)):
+        returns_rows = True
+    elif isinstance(expr, exp.Command):
+        returns_rows = SQLProcessor._command_returns_rows(expr)  # pyright: ignore[reportPrivateUsage]
+
+    if not returns_rows and operation_type == "SELECT":
+        returns_rows = True
+
+    if not modifies_rows and operation_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+        modifies_rows = True
+
+    is_read_only = False
+    need_ro_walk = False
+    if not modifies_rows:
+        if isinstance(expr, exp.Command):
+            is_read_only = _command_explain_is_read_only(expr, dialect)
+        elif isinstance(expr, _READ_ONLY_ROOT_TYPES):
+            if (isinstance(expr, exp.Copy) and not _copy_is_read_only(expr)) or (
+                isinstance(expr, exp.Describe) and _describe_is_analyze(expr)
+            ):
+                is_read_only = False
+            else:
+                is_read_only = True
+                need_ro_walk = True
+
+    return returns_rows, modifies_rows, is_read_only, need_ro_walk
+
+
+def _inspect_operation_profile(
+    expression: "exp.Expr | None", operation_type: "OperationType", dialect: "str | None", *, collect_casts: bool
+) -> "tuple[OperationProfile, dict[int, str]]":
+    if expression is None:
+        return OperationProfile.empty(), {}
+
+    returns_rows, modifies_rows, is_read_only, need_ro_walk = _classify_root_operation(
+        expression, operation_type, dialect
+    )
+
+    cast_positions: dict[int, str] = {}
+    if not modifies_rows or need_ro_walk or collect_casts:
+        placeholder_positions: dict[str, int] = {}
+        placeholder_counter = [0]
+        for node in expression.walk():
+            if collect_casts:
+                if isinstance(node, exp.Placeholder):
+                    _placeholder_position(node, placeholder_positions, placeholder_counter)
+                if isinstance(node, exp.Cast):
+                    _record_cast_position(node, cast_positions, placeholder_positions, placeholder_counter)
+            if need_ro_walk:
+                if isinstance(node, _NON_READ_ONLY_AST_TYPES):
+                    is_read_only = False
+                    need_ro_walk = False
+                    if isinstance(node, _MODIFIES_ROWS_AST_TYPES):
+                        modifies_rows = True
+                elif isinstance(node, _READ_ONLY_EXTRA_AST_TYPES) and _node_disqualifies_read_only_extra(node):
+                    is_read_only = False
+                    need_ro_walk = False
+            elif not modifies_rows and isinstance(node, _MODIFIES_ROWS_AST_TYPES):
+                modifies_rows = True
+            if modifies_rows and not need_ro_walk and not collect_casts:
+                break
+
+    return OperationProfile(
+        returns_rows=returns_rows, modifies_rows=modifies_rows, is_read_only=is_read_only
+    ), cast_positions
+
+
 def _placeholder_position(
     placeholder: "exp.Placeholder", placeholder_positions: "dict[str, int]", placeholder_counter: "list[int]"
 ) -> "int | None":
-    name_expr = placeholder.name if placeholder.name is not None else None
-    if name_expr is not None:
-        placeholder_key = str(name_expr)
+    value = placeholder.args.get("this")
+    if value is None:
+        if not placeholder.args:
+            placeholder_counter[0] += 1
+            return placeholder_counter[0]
+        placeholder_key = placeholder.sql(copy=False)
     else:
-        value = placeholder.args.get("this")
-        placeholder_key = str(value) if value is not None else placeholder.sql()
+        name_expr = placeholder.name
+        placeholder_key = str(name_expr) if name_expr else str(value)
 
     if not placeholder_key:
         return None

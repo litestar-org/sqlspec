@@ -91,6 +91,8 @@ Pass `Db2ConnectionParams`, `Db2PoolParams`, and `Db2AsyncPoolParams` keys insid
 <!-- GENERATED:START config-table:sqlspec.adapters.db2.config.Db2ConnectionParams,sqlspec.adapters.db2.config.Db2PoolParams,sqlspec.adapters.db2.config.Db2AsyncPoolParams -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
+| `conn_options` | `dict[int, Any]` | - | Native CLI connection attributes copied for each connection. |
+| `read_only` | `bool` | - | Open connections using native CLI read-only access mode. |
 | `database` | `str` | - | Database name or cataloged alias mapped to the `DATABASE` CLI keyword. |
 | `hostname` | `str` | - | Db2 server hostname mapped to `HOSTNAME` (omit for cataloged local aliases). |
 | `port` | `int` | `50000` | Db2 TCP listener port mapped to `PORT` (defaults to `50000` when `hostname` is set). |
@@ -142,6 +144,12 @@ Pass `Db2DriverFeatures` keys inside `driver_features={...}` on `Db2SyncConfig` 
 - **Strict Connection Key Validation**: `Db2SyncConfig` and `Db2AsyncConfig` validate `connection_config` keys eagerly, raising `ImproperConfigurationError` if unknown aliases such as `host`, `username`, or `min_size` are passed instead of `hostname`, `user`, and `max_size`.
 - **Savepoint Cursor Retention**: Db2 closes open cursors on savepoint rollback unless `ON ROLLBACK RETAIN CURSORS` is specified; SQLSpec emits `SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS` and `RELEASE SAVEPOINT <name>` automatically.
 - **Event Queue and ADK Stores**: `Db2SyncEventQueueStore` and `Db2AsyncEventQueueStore` claim rows with `FETCH FIRST n ROWS ONLY` and `WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA` so concurrent queue workers skip rows that are already claimed. `Db2SyncADKMemoryStore` and `Db2AsyncADKMemoryStore` match text with `LOCATE(LOWER(?), LOWER(content_text)) > 0` for case-insensitive search.
+
+## HADR Reader Pools
+
+Pass explicit HADR reader endpoints through `replicas=` with `read_only=True`. The adapter sets `SQL_ATTR_ACCESS_MODE=SQL_MODE_READ_ONLY` before it yields the socket. Set up the reader database, role, and HADR rules on the server first.
+
+SQLCODE `-817`, `-1773`, and `-1776` keep their mapped read-only or unavailable meaning. `derive_pool()` keeps tenant hooks and explicit Db2 options. See [Read Replicas](../learn/recipes/read-replicas.md) for group choice and primary fallback.
 
 ## See Also
 

@@ -21,6 +21,7 @@ from sqlspec.adapters.asyncmy._typing import (
 from sqlspec.adapters.asyncmy.core import (
     AsyncmyStreamSource,
     _resolve_column_types,
+    build_gtid_wait_query,
     build_insert_statement,
     build_load_data_statement,
     can_use_local_infile_records,
@@ -120,6 +121,21 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AsyncmyDataDictionary()
         return self._data_dictionary
+
+    async def wait_for_gtid_set(self, gtid_set: str, *, timeout: float = 2.0, mariadb: bool = False) -> bool:
+        """Wait for the server to apply a GTID set within a bounded timeout.
+
+        Args:
+            gtid_set: Native GTID position to await.
+            timeout: Nonnegative wait duration in seconds.
+            mariadb: Use MariaDB's native GTID wait function.
+
+        Returns:
+            Whether the server reached the requested position.
+        """
+        query = build_gtid_wait_query(gtid_set, timeout, mariadb=mariadb)
+        result = await self.select_value(query, (gtid_set, timeout))
+        return bool(result == 0)
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.

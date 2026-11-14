@@ -67,9 +67,23 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask 
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
+| `read_session_key` | `str` | - | Request key for a read session. |
+| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
+| `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 <!-- GENERATED:END config-table:sqlspec.config.FlaskConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.
+
+## Read Replica Sessions and Portal Context
+
+`db_ext.get_read_session(key=...)` uses the selected reader on first database use. `get_read_connection(key=...)` exposes its physical connection after checkout. `get_routing_session(key=...)` supplies the opt-in routing facade. A bind key or config instance selects the database.
+
+For an async adapter, Flask runs these calls through `PortalProvider`. Tenant and routing payloads copy into that work. Writes merge their primary pin back to the request; a portal timeout pins conservatively before it raises if completion is uncertain. Each request still owns cleanup. Use explicit worker scopes outside HTTP requests. See [Replica Operations](../learn/recipes/read-replicas-operations.md) for lag and failure behavior.
 
 ## Recap
 

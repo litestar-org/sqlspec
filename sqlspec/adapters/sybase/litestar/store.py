@@ -65,6 +65,18 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the Sybase ASE session expiry companion index and guarded DDL."""
+        schema_name, bare_table = split_schema_and_table(self._table_name)
+        return [
+            CompanionIndex(
+                name=f"IX_{bare_table}_expires_at",
+                table=bare_table,
+                schema=schema_name,
+                ddl=_session_index_guard_sql(self._table_name),
+            )
+        ]
+
     def _schema_target(self) -> SchemaTarget:
         """Build the Sybase ASE session SchemaTarget from unwrapped DDL."""
         schema_name, bare_table = split_schema_and_table(self._table_name)
@@ -79,18 +91,6 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
             constraint_columns=parsed.constraint_columns,
             unsafe_add_columns=parsed.unsafe_add_columns,
         )
-
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the Sybase ASE session expiry companion index and guarded DDL."""
-        schema_name, bare_table = split_schema_and_table(self._table_name)
-        return [
-            CompanionIndex(
-                name=f"IX_{bare_table}_expires_at",
-                table=bare_table,
-                schema=schema_name,
-                ddl=_session_index_guard_sql(self._table_name),
-            )
-        ]
 
     def _table_ddl(self) -> str:
         """Get Sybase ASE CREATE TABLE SQL with OBJECT_ID existence guards."""
@@ -131,7 +131,7 @@ class SybaseStore(BaseSQLSpecStore["SybaseConfig"]):
                     return None
 
                 expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-                if renew_for is not None and expires_at is not None:
+                if self._should_renew(renew_for) and expires_at is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
                     if new_expires_at is not None:
                         with SybaseCursor(conn) as update_cursor:

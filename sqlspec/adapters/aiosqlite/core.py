@@ -6,7 +6,9 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from sqlglot import exp
 
@@ -25,6 +27,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -53,6 +56,7 @@ __all__ = (
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
+    "build_readonly_sqlite_uri",
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
@@ -67,6 +71,7 @@ __all__ = (
     "execute_many_on_worker_thread",
     "extension_pragma_statements",
     "format_identifier",
+    "is_read_only_sqlite_config",
     "julian_to_datetime",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -406,6 +411,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 
 _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    "query_only",
     "enable_foreign_keys",
     "enable_optimizations",
     "pool_size",
@@ -425,15 +431,30 @@ _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
 })
 
 
-def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
-    return {
-        key: value
-        for key, value in mapping.items()
-        if key not in _EXCLUDED_CONNECTION_KEYS
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
+def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
+    """Return whether a configuration requests SQLite read-only enforcement."""
+    if connection_config.get("query_only"):
+        return True
+    database = str(connection_config.get("database", ""))
+    return database.startswith("file:") and dict(parse_qsl(urlsplit(database).query)).get("mode") == "ro"
+
+
+def build_readonly_sqlite_uri(database: str) -> str:
+    """Build a read-only URI for a file-backed SQLite database."""
+    uri = urlsplit(database) if database.startswith("file:") else None
+    query = dict(parse_qsl(uri.query)) if uri is not None else {}
+    if (
+        not database
+        or database == ":memory:"
+        or (uri is not None and unquote(uri.path) == ":memory:")
+        or query.get("mode") == "memory"
+    ):
+        msg = "SQLite read replicas require a file-backed database"
+        raise ImproperConfigurationError(msg)
+    if uri is None:
+        uri = urlsplit(Path(database).resolve().as_uri())
+    query["mode"] = "ro"
+    return urlunsplit((uri.scheme, uri.netloc, uri.path, urlencode(query), uri.fragment))
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
@@ -458,6 +479,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
         connection_parameters.update(_filter_connection_params(extra))
+    database = str(connection_parameters.get("database", ""))
+    if database.startswith("file:"):
+        connection_parameters["uri"] = True
     return connection_parameters
 
 
@@ -484,6 +508,13 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_name = None
     error_msg = str(error).lower()
     primary_code = (error_code & 0xFF) if isinstance(error_code, int) else None
+    if (
+        primary_code == sqlite3.SQLITE_READONLY
+        or (isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY"))
+        or "readonly database" in error_msg
+        or "read-only database" in error_msg
+    ):
+        return _create_aiosqlite_error(error, error_code, ReadOnlyTransactionError, "read-only database")
 
     constraint_error = _map_constraint_exception(error, error_code, error_name, primary_code, error_msg)
     if constraint_error is not None:
@@ -658,6 +689,17 @@ def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
             raise ImproperConfigurationError(msg)
         rendered.append((pragma_name, rendered_value))
     return rendered
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
 
 
 driver_profile = build_profile()

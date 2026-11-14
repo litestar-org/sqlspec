@@ -4,6 +4,7 @@ import contextlib
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
@@ -65,6 +66,7 @@ __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSess
 logger = get_logger("sqlspec.adapters.duckdb")
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
@@ -116,12 +118,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._transaction_active = False
         self._migration_schema_restore: str | None = None
 
-    def close(self) -> None:
-        """Close driver and clean up temporary statement profile files."""
-        if self._created_profile_path is not None:
-            cleanup_duckdb_profile_path(self._created_profile_path)
-            self._created_profile_path = None
-
     def __del__(self) -> None:
         self.close()
 
@@ -135,6 +131,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = DuckDBDataDictionary()
         return self._data_dictionary
+
+    def close(self) -> None:
+        """Close driver and clean up temporary statement profile files."""
+        if self._created_profile_path is not None:
+            cleanup_duckdb_profile_path(self._created_profile_path)
+            self._created_profile_path = None
 
     def dispatch_execute(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
@@ -312,7 +314,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._transaction_active = True
 
     def commit(self) -> None:
-        """Commit the current transaction."""
+        """Commit the current transaction, ignoring idle connections."""
+        if not self._transaction_active:
+            self._end_idle_transaction(commit=True)
+            return
         handler = self.handle_database_exceptions()
         try:
             self._run_with_exception_handler(handler, self.connection.commit)
@@ -321,7 +326,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
             self._transaction_active = False
 
     def rollback(self) -> None:
-        """Rollback the current transaction."""
+        """Roll back the current transaction, ignoring idle connections."""
+        if not self._transaction_active:
+            self._end_idle_transaction(commit=False)
+            return
         handler = self.handle_database_exceptions()
         try:
             self._run_with_exception_handler(handler, self.connection.rollback)
@@ -376,12 +384,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._run_with_exception_handler(handler, self.connection.execute, f"SET search_path = '{literal}'")
         self._check_pending_exception(handler)
         self._migration_schema_restore = None
-
-    def _switch_migration_search_path(self, schema: str) -> None:
-        if self._migration_schema_restore is None:
-            row = self.connection.execute("SELECT current_setting('search_path')").fetchone()
-            self._migration_schema_restore = "" if row is None else str(row[0])
-        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
 
     def has_schema(self, schema: str) -> bool:
         """Return whether a DuckDB schema exists."""
@@ -936,8 +938,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if cached_sql_pair is not None:
             target_table, column_sql = cached_sql_pair
         else:
-            target_table = table_expr.sql(dialect="duckdb")
-            column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
+            target_table = table_expr.sql(dialect="duckdb", copy=False)
+            column_sql = ", ".join(column.sql(dialect="duckdb", copy=False) for column in expression.this.expressions)
             if cache_key:
                 self._cache_holder.set_bulk_insert_sql(cache_key, (target_table, column_sql))
         temp_view = f"_sqlspec_batch_{uuid4().hex}"
@@ -974,6 +976,24 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 return None
 
         return None
+
+    def _switch_migration_search_path(self, schema: str) -> None:
+        if self._migration_schema_restore is None:
+            row = self.connection.execute("SELECT current_setting('search_path')").fetchone()
+            self._migration_schema_restore = "" if row is None else str(row[0])
+        self.connection.execute(f"SET search_path = {quote_identifier(schema)}")
+
+    def _end_idle_transaction(self, *, commit: bool) -> None:
+        """End a manually opened transaction or ignore DuckDB's idle transaction error."""
+        action = self.connection.commit if commit else self.connection.rollback
+        try:
+            action()
+        except duckdb.TransactionException as exc:
+            if not str(exc) or "no transaction is active" in str(exc).lower():
+                return
+            raise create_mapped_exception(exc) from exc
+        except duckdb.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -1041,6 +1061,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 register_driver_profile("duckdb", driver_profile)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _DuckDBFetchManyBatch:
     __slots__ = ("_rows",)
 
@@ -1051,6 +1072,7 @@ class _DuckDBFetchManyBatch:
         return self._rows
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _DuckDBFetchManyReader:
     __slots__ = ("_chunk_size", "_close_callback", "_column_names", "_description", "_target")
 
@@ -1075,6 +1097,7 @@ class _DuckDBFetchManyReader:
         return _DuckDBFetchManyBatch(dict_rows)
 
     def close(self) -> None:
+        """Close the reader or complete the DuckDB 2 execute result."""
         target = self._target
         self._target = None
         if self._close_callback is not None:
@@ -1082,7 +1105,6 @@ class _DuckDBFetchManyReader:
             self._close_callback = None
             callback()
         elif target is not None:
-            # DuckDB 2 keeps execute results active until they are completed.
             complete_method = getattr(target, "complete", None)
             if callable(complete_method):
                 complete_method()

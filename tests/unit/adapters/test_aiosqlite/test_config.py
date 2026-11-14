@@ -1,10 +1,10 @@
 import sqlite3
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import Any, get_args, get_type_hints
 
 import pytest
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.config import (
     AiosqliteConfig,
     AiosqliteConnectionParams,
@@ -12,7 +12,10 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import build_connection_config
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectTimeoutError
+from sqlspec.core import StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 
 class CustomConnection(sqlite3.Connection):
@@ -339,3 +342,111 @@ async def test_create_pool_preserves_zero_timeouts(tmp_path: Path) -> None:
         assert pool._operation_timeout == 0.0
     finally:
         await pool.close()
+
+
+async def test_aiosqlite_wal_read_replica_rejects_writes(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "wal.db")}, replicas=True)
+    async with config.provide_session() as session:
+        await session.execute("CREATE TABLE entries (id INTEGER)")
+        await session.execute("INSERT INTO entries VALUES (1)")
+        await session.commit()
+    async with config.provide_read_session() as reader:
+        assert await reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        assert await reader.select_value("PRAGMA query_only") == 1
+        async with reader.transaction():
+            assert await reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            await reader.execute("INSERT INTO entries VALUES (2)")
+    await config.close_pool()
+
+
+def test_aiosqlite_readonly_clone_defaults_deferred_without_changing_writer(tmp_path) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    primary = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "writer.db")},
+        driver_features={"default_transaction_mode": "IMMEDIATE"},
+    )
+    reader = primary.derive_pool(database=f"file:{tmp_path / 'writer.db'}?mode=ro")
+    assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
+    assert primary.driver_features["default_transaction_mode"] == "IMMEDIATE"
+    with pytest.raises(ImproperConfigurationError, match="DEFERRED"):
+        primary.derive_pool(
+            database=f"file:{tmp_path / 'writer.db'}?mode=ro",
+            driver_features_overrides={"default_transaction_mode": "EXCLUSIVE"},
+        )
+    with pytest.raises(ImproperConfigurationError, match="file-backed"):
+        AiosqliteConfig(replicas=True)
+
+
+async def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "detach.sqlite")})
+    try:
+        async with config.provide_session() as session:
+            assert await session.select_value("SELECT 1") == 1
+            assert session.connection is not _DETACHED_CONNECTION
+
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await session.execute("SELECT 1")
+    finally:
+        await config.close_pool()
+
+
+async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
+    stub_conn = object()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    async def acquire_connection() -> Any:
+        return stub_conn
+
+    async def release_connection(conn: Any, **kwargs: Any) -> None:
+        release_events.append((conn is stub_conn, captured[0].connection is stub_conn, kwargs.get("exc_type")))
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    ctx = AiosqliteSessionContext(
+        acquire_connection=acquire_connection,
+        release_connection=release_connection,
+        statement_config=StatementConfig(dialect="sqlite"),
+        driver_features={},
+        prepare_driver=fail_prepare,
+    )
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with ctx:
+            pytest.fail("prepare failure must abort __aenter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION
+
+
+async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path: Path) -> None:
+    """AiosqliteConnectTimeoutError and SQLITE_CANTOPEN trigger ReadReplicaGroup failover."""
+    assert issubclass(AiosqliteConnectTimeoutError, ConnectionTimeoutError)
+    assert issubclass(AiosqliteConnectTimeoutError, DatabaseConnectionError)
+
+    db_path = tmp_path / "healthy_async.sqlite"
+    config = AiosqliteConfig(
+        connection_config={"database": str(db_path)},
+        replicas=[
+            {"database": str(tmp_path / "missing_dir" / "bad.sqlite"), "query_only": True},
+            {"database": str(db_path), "query_only": True},
+        ],
+    )
+    try:
+        async with config.provide_session() as writer:
+            await writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            await writer.commit()
+        async with config.provide_read_connection() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM probe")
+            assert await cursor.fetchone() == (0,)
+            await cursor.close()
+        async with config.provide_read_session() as reader:
+            assert await reader.select_value("SELECT COUNT(*) FROM probe") == 0
+    finally:
+        await config.close_pool()

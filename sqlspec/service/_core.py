@@ -14,6 +14,7 @@ from sqlspec.core.filters import find_filter
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.routing import RoutingContext
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -439,6 +440,8 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
                         service._transaction_state = None
         if stack is not None:
             await stack.__aexit__(exc_type, exc, traceback)
+            if exc_type is None:
+                RoutingContext.mark_write(service._config.bind_key if service._config is not None else None)
             return False
         if state is None:
             return False
@@ -449,6 +452,7 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
                 return False
             try:
                 await service.commit()
+                RoutingContext.mark_write(session.observability.bind_key)
             except BaseException:
                 try:
                     await service.rollback()
@@ -536,6 +540,8 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
                         service._transaction_state = None
         if stack is not None:
             stack.__exit__(exc_type, exc, traceback)
+            if exc_type is None:
+                RoutingContext.mark_write(service._config.bind_key if service._config is not None else None)
             return False
         if state is None:
             return False
@@ -546,6 +552,7 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
                 return False
             try:
                 service.commit()
+                RoutingContext.mark_write(session.observability.bind_key)
             except BaseException:
                 try:
                     service.rollback()

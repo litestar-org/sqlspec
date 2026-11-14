@@ -2,15 +2,29 @@
 
 import contextlib
 import inspect
+import re
 import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import (
+    LoadBalanceHosts,
+    PsqlpyConnection,
+    PsqlpyCursor,
+    PsqlpyError,
+    PsqlpySessionContext,
+    TargetSessionAttrs,
+)
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
-from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.psqlpy.core import (
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+)
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
 from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, PsqlpyTenantLease
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -40,6 +54,25 @@ if TYPE_CHECKING:
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
 
 _MAX_INITIALIZED_CONNECTION_IDS: Final[int] = 4096
+_PSQLPY_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "hosts",
+    "port",
+    "ports",
+    "username",
+    "user",
+    "password",
+    "db_name",
+    "database",
+    "dbname",
+    "db",
+    "target_session_attrs",
+    "load_balance_hosts",
+)
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -83,7 +116,9 @@ class PsqlpyConnectionParams(TypedDict):
     """TLS negotiation policy (``disable``, ``prefer``, ``require``, ``verify-ca``, or ``verify-full``)."""
     ca_file: NotRequired[str]
     """Path to a PEM root CA bundle used to verify server certificates."""
-    target_session_attrs: NotRequired[str]
+    target_session_attrs: NotRequired[
+        Literal["any", "read-write", "read-only", "primary", "standby", "prefer-standby"] | TargetSessionAttrs
+    ]
     """Required server session state for multi-host routing (such as ``read-write``)."""
     options: NotRequired[str]
     """Command-line startup GUC options sent to the PostgreSQL backend."""
@@ -119,7 +154,7 @@ class PsqlpyConnectionParams(TypedDict):
     """Whether to delegate GSSAPI credentials to the PostgreSQL server."""
     service: NotRequired[str]
     """Service profile name defined in ``pg_service.conf``."""
-    load_balance_hosts: NotRequired[str]
+    load_balance_hosts: NotRequired[Literal["disable", "random"] | LoadBalanceHosts]
     """Host ordering policy across multi-host configurations (``disable`` or ``random``)."""
 
 
@@ -183,33 +218,46 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
     async def acquire_connection(self) -> "PsqlpyConnection":
         if self._tenant_lease is not None:
             return cast("PsqlpyConnection", await self._tenant_lease.acquire())
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        ctx = pool.acquire()
-        self._ctx = ctx
-        connection = cast("PsqlpyConnection", await ctx.__aenter__())
         try:
-            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
-        except BaseException:
-            await ctx.__aexit__(*sys.exc_info())
-            self._ctx = None
-            raise
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+            ctx = pool.acquire()
+            self._ctx = ctx
+            try:
+                connection = cast("PsqlpyConnection", await ctx.__aenter__())
+            except BaseException:
+                self._ctx = None
+                raise
+            try:
+                await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+            except BaseException:
+                await ctx.__aexit__(*sys.exc_info())
+                self._ctx = None
+                raise
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
             await self._tenant_lease.release(_conn, **kwargs)
             return
-        if kwargs.get("exc_type") is not None and _conn is not None:
-            with contextlib.suppress(Exception):
-                await _conn.execute("ROLLBACK")
-        if self._ctx is not None:
-            try:
-                await self._ctx.__aexit__(None, None, None)
-            finally:
-                self._ctx = None
+        exc_type = kwargs.get("exc_type")
+        try:
+            if _conn is not None and (exc_type is not None or await _psqlpy_in_transaction(_conn)):
+                try:
+                    await _rollback_or_terminate(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if self._ctx is not None:
+                try:
+                    await self._ctx.__aexit__(None, None, None)
+                finally:
+                    self._ctx = None
 
 
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):
@@ -224,20 +272,27 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> PsqlpyConnection:
         if self._tenant_lease is not None:
             return cast("PsqlpyConnection", await self._tenant_lease.acquire())
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-
-        ctx = pool.acquire()
-        self._ctx = ctx
-        connection = await ctx.__aenter__()
         try:
-            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
-        except BaseException:
-            await ctx.__aexit__(*sys.exc_info())
-            self._ctx = None
-            raise
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+
+            ctx = pool.acquire()
+            self._ctx = ctx
+            try:
+                connection = await ctx.__aenter__()
+            except BaseException:
+                self._ctx = None
+                raise
+            try:
+                await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+            except BaseException:
+                await ctx.__aexit__(*sys.exc_info())
+                self._ctx = None
+                raise
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
         typed_connection = cast("PsqlpyConnection", connection)
         self._connection = typed_connection
         return typed_connection
@@ -250,14 +305,19 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
             return None
         connection = self._connection
         self._connection = None
-        if exc_type is not None and connection is not None:
-            with contextlib.suppress(Exception):
-                await connection.execute("ROLLBACK")
-        if self._ctx is not None:
-            try:
-                await self._ctx.__aexit__(None, None, None)
-            finally:
-                self._ctx = None
+        try:
+            if connection is not None and (exc_type is not None or await _psqlpy_in_transaction(connection)):
+                try:
+                    await _rollback_or_terminate(connection)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if self._ctx is not None:
+                try:
+                    await self._ctx.__aexit__(None, None, None)
+                finally:
+                    self._ctx = None
         return None
 
 
@@ -482,9 +542,15 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         else:
             conn_cfg.pop("options", None)
         if isinstance(direct_dsn, str):
+            for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
+                conn_cfg.pop(key, None)
             conn_cfg["dsn"] = direct_dsn
         elif isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "dsn" in normalized_direct:
+                for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
+                    conn_cfg.pop(key, None)
+            conn_cfg.update(normalized_direct)
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
@@ -500,6 +566,142 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             extension_config=cast("ExtensionConfigs", dict(self.extension_config)),
             observability_config=self.observability_config,
         )
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("dsn", "conninfo", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in _PSQLPY_ENDPOINT_IDENTITY_KEYS:
+                config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _PSQLPY_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        for canonical, aliases_for_field in (("db_name", ("database", "dbname", "db")), ("username", ("user",))):
+            if canonical not in overrides:
+                for key in aliases_for_field:
+                    if key in overrides:
+                        config[canonical] = overrides[key]
+                        break
+            for key in aliases_for_field:
+                config.pop(key, None)
+        identity_fields = {
+            "host",
+            "hosts",
+            "port",
+            "ports",
+            "username",
+            "user",
+            "password",
+            "database",
+            "dbname",
+            "db",
+            "db_name",
+            "target_session_attrs",
+        }
+        if isinstance(config.get("dsn"), str) and identity_fields.intersection(overrides):
+            normalized_overrides = build_connection_config(overrides)
+            config["dsn"] = self._merge_derived_dsn(config["dsn"], normalized_overrides)
+        if "options" not in overrides:
+            if self._explicit_options is None:
+                config.pop("options", None)
+            else:
+                config["options"] = self._explicit_options
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "PsqlpyConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
+
+    @staticmethod
+    def _merge_derived_dsn(dsn: str, overrides: Mapping[str, Any]) -> str:
+        """Merge explicit connection identity overrides without losing DSN security settings."""
+        fields: dict[str, str] = {}
+        if dsn.startswith(("postgres://", "postgresql://")):
+            parsed = urlsplit(dsn)
+            authority = parsed.netloc.rsplit("@", 1)[-1]
+            hosts = []
+            ports = []
+            for endpoint in authority.split(","):
+                match = re.fullmatch(r"(?:\[([^]]+)\]|([^:]*))(?::([0-9]+))?", endpoint)
+                if match is None:
+                    message = "Invalid PostgreSQL DSN endpoint"
+                    raise ImproperConfigurationError(message)
+                hosts.append(unquote(match.group(1) or match.group(2) or ""))
+                ports.append(match.group(3) or "5432")
+            fields["host"] = ",".join(hosts)
+            fields["port"] = ",".join(ports)
+            if parsed.username is not None:
+                fields["user"] = unquote(parsed.username)
+            if parsed.password is not None:
+                fields["password"] = unquote(parsed.password)
+            if parsed.path[1:]:
+                fields["dbname"] = unquote(parsed.path[1:])
+            fields.update(parse_qsl(parsed.query.replace("+", "%2B"), keep_blank_values=True))
+        else:
+            pattern = r"([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*('(?:[^'\\]|\\.)*'|(?:[^\s\\]|\\.)*)"
+            position = 0
+            for match in re.finditer(pattern, dsn):
+                if dsn[position : match.start()].strip():
+                    message = "Invalid PostgreSQL connection string"
+                    raise ImproperConfigurationError(message)
+                raw = match.group(2)
+                fields[match.group(1)] = re.sub(r"\\(.)", r"\1", raw[1:-1] if raw.startswith("'") else raw)
+                position = match.end()
+            if dsn[position:].strip():
+                message = "Invalid PostgreSQL connection string"
+                raise ImproperConfigurationError(message)
+        for source, target in (
+            ("host", "host"),
+            ("hosts", "host"),
+            ("port", "port"),
+            ("ports", "port"),
+            ("username", "user"),
+            ("password", "password"),
+            ("db_name", "dbname"),
+        ):
+            if source in overrides:
+                value = overrides[source]
+                fields[target] = (
+                    ",".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
+                )
+        host_overridden = "host" in overrides or "hosts" in overrides
+        port_overridden = "port" in overrides or "ports" in overrides
+        if "host" in fields and "port" in fields:
+            merged_hosts = [item for item in fields["host"].split(",") if item]
+            merged_ports = [item for item in fields["port"].split(",") if item]
+            if len(merged_ports) > 1 and len(merged_ports) != len(merged_hosts):
+                if port_overridden:
+                    message = "Number of derived ports must match number of hosts"
+                    raise ImproperConfigurationError(message)
+                if host_overridden:
+                    if len(set(merged_ports)) == 1:
+                        fields["port"] = merged_ports[0]
+                    else:
+                        fields.pop("port", None)
+        if "target_session_attrs" in overrides:
+            attrs = overrides["target_session_attrs"]
+            fields["target_session_attrs"] = (
+                "any"
+                if attrs == TargetSessionAttrs.Any
+                else ("read-write" if attrs == TargetSessionAttrs.ReadWrite else "read-only")
+            )
+        parts = []
+        for key, value in fields.items():
+            escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+            parts.append(f"{key}='{escaped}'")
+        return " ".join(parts)
 
     async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called once for this connection.
@@ -553,7 +755,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             if inspect.isawaitable(token_result):
                 token_result = await token_result
             pool_cfg["password"] = str(token_result)
-        return ConnectionPool(**pool_cfg)
+        try:
+            return ConnectionPool(**pool_cfg)
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
@@ -563,3 +768,22 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         self.connection_instance.close()
         self.connection_instance = None
         self._initialized_connection_ids.clear()
+
+
+async def _psqlpy_in_transaction(connection: Any) -> bool:
+    """Return whether a psqlpy connection currently holds an open transaction."""
+    in_transaction = getattr(connection, "in_transaction", None)
+    if callable(in_transaction):
+        res = in_transaction()
+        return bool(await res) if inspect.isawaitable(res) else bool(res)
+    return False
+
+
+async def _rollback_or_terminate(connection: Any) -> None:
+    """Roll back open work on a psqlpy connection or terminate the backend on failure."""
+    try:
+        await connection.execute("ROLLBACK")
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
+        raise

@@ -7,13 +7,17 @@ persisted lease token instead of trusting the zero rowcount.
 """
 
 from collections.abc import AsyncIterator
-from datetime import timedelta
-from typing import Any
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.events.store import AiosqliteEventQueueStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
+from sqlspec.core import StatementConfig
 from sqlspec.extensions.events import AsyncTableEventQueue, SyncTableEventQueue
 from tests.conftest import requires_interpreted
 
@@ -78,7 +82,7 @@ def test_sync_dequeue_by_event_id_delivers_when_rows_affected_unreported(tmp_pat
             return 0
 
         monkeypatch.setattr(SyncTableEventQueue, "_execute_with_driver", _zero_reporting)
-        event = queue.dequeue_by_event_id(event_id)
+        event = queue.dequeue_by_event_id(event_id, "alerts")
         assert event is not None
         assert event.event_id == event_id
     finally:
@@ -129,14 +133,6 @@ async def test_async_dequeue_delivers_when_rows_affected_unreported(tmp_path: An
 
 async def test_async_locked_candidate_verifies_claim_when_rowcount_unreported() -> None:
     """Locking async queues (FOR UPDATE) verify claim ownership when UPDATE reports zero rows."""
-    from contextlib import asynccontextmanager
-    from datetime import UTC, datetime
-    from types import SimpleNamespace
-    from typing import cast
-    from unittest.mock import AsyncMock
-
-    from sqlspec.core import StatementConfig
-
     now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
     candidate_row: dict[str, Any] = {
         "event_id": "evt-locked-1",
@@ -174,3 +170,41 @@ async def test_async_locked_candidate_verifies_claim_when_rowcount_unreported() 
     claimed = await queue.dequeue("alerts")
     assert getattr(claimed, "event_id", None) == "evt-locked-1"
     driver.commit.assert_awaited_once()
+
+
+@requires_interpreted
+def test_claim_update_binds_channel_availability_and_max_attempts_and_verifies_unfiltered(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """Claim UPDATE binds channel, available_cutoff, and max_attempts while post-claim verification uses unfiltered _select_by_id_statement."""
+    config, queue = _create_sync_claim_queue(tmp_path)
+    try:
+        event_id = queue.publish("alerts", {"type": "alert"})
+        captured_claims: list[dict[str, Any]] = []
+        captured_selects: list[str] = []
+        original_execute = SyncTableEventQueue._execute_with_driver
+        original_fetch_by_id = SyncTableEventQueue._fetch_by_event_id
+
+        def _capture_claim(self: Any, driver: Any, sql: str, parameters: "dict[str, Any]") -> int:
+            if sql == self._claim_statement:
+                captured_claims.append(dict(parameters))
+            original_execute(self, driver, sql, parameters)
+            return 0
+
+        def _capture_verify(self: Any, target_id: str) -> "dict[str, Any] | None":
+            captured_selects.append(self._select_by_id_statement)
+            return original_fetch_by_id(self, target_id)
+
+        monkeypatch.setattr(SyncTableEventQueue, "_execute_with_driver", _capture_claim)
+        monkeypatch.setattr(SyncTableEventQueue, "_fetch_by_event_id", _capture_verify)
+
+        claimed = queue.dequeue_by_event_id(event_id, "alerts")
+        assert claimed is not None
+        assert len(captured_claims) == 1
+        assert captured_claims[0]["channel"] == "alerts"
+        assert "available_cutoff" in captured_claims[0]
+        assert captured_claims[0]["max_attempts"] == 5
+        assert captured_selects == [queue._select_by_id_statement]
+        assert "attempts < :max_attempts" not in queue._select_by_id_statement
+    finally:
+        config.close_pool()

@@ -11,6 +11,7 @@ from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions._deferred_session import PortalSession, call_portal_with_context
 from sqlspec.extensions.flask._state import FlaskConfigState
 from sqlspec.extensions.flask._utils import (
     get_context_value,
@@ -24,6 +25,7 @@ from sqlspec.extensions.flask._utils import (
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.portal import PortalProvider
+from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
 from sqlspec.utils.tenant import (
     TenantContext,
     TenantContextPayload,
@@ -33,7 +35,7 @@ from sqlspec.utils.tenant import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Iterator, Sequence
     from uuid import UUID
 
     from flask import Flask, Response
@@ -47,6 +49,8 @@ logger = get_logger("sqlspec.extensions.flask")
 
 DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
 DEFAULT_SESSION_KEY = "db_session"
+_ROUTING_SCOPE_KEY: Final = "sqlspec_routing_token"
+_RESOURCE_CONTEXTS_KEY: Final = "sqlspec_read_routing_contexts"
 _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 _TENANT_BINDING_KEY: Final = "sqlspec_tenant_binding"
 
@@ -145,7 +149,7 @@ class SQLSpecPlugin:
         for config_state in self._config_states:
             if config_state.config.supports_connection_pooling:
                 if config_state.is_async:
-                    pool = self._portal.portal.call(config_state.config.create_pool)  # type: ignore[union-attr,arg-type]
+                    pool = self._call_portal(config_state, config_state.config.create_pool)
                 else:
                     pool = config_state.config.create_pool()
                 pools[config_state.session_key] = pool
@@ -216,7 +220,13 @@ class SQLSpecPlugin:
                 if getattr(state.config, "bind_key", None) == name:
                     return state.config
             for state in self._config_states:
-                if name in {state.session_key, state.connection_key}:
+                if name in {
+                    state.session_key,
+                    state.connection_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.routing_session_key,
+                }:
                     return state.config
             msg = f"No configuration found for key '{name}'."
             raise KeyError(msg)
@@ -261,7 +271,10 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         self._ensure_request_connection(config_state)
-        return get_or_create_session(config_state, self._portal.portal if self._portal else None)
+        session = get_or_create_session(config_state, self._portal.portal if self._portal else None)
+        if isinstance(session, PortalSession):
+            session._routing_bind_key = config_state.config.bind_key
+        return session
 
     def get_connection(self, key: Any = None) -> Any:
         """Get database connection for current request, acquiring deferred tenant leases on demand.
@@ -274,6 +287,18 @@ class SQLSpecPlugin:
         """
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return self._ensure_request_connection(config_state)
+
+    def get_read_session(self, key: Any = None) -> Any:
+        """Return the request's read session, bridging async drivers through the portal."""
+        return self._get_read_routing_resource(key, "session")
+
+    def get_read_connection(self, key: Any = None) -> Any:
+        """Return the request-owned raw read connection."""
+        return self._get_read_routing_resource(key, "connection")
+
+    def get_routing_session(self, key: Any = None) -> Any:
+        """Return the request's lazy automatic routing facade."""
+        return self._get_read_routing_resource(key, "routing")
 
     def shutdown(self) -> None:
         """Dispose connection pools and stop async portal."""
@@ -302,6 +327,74 @@ class SQLSpecPlugin:
                 )
             finally:
                 self._portal = None
+
+    def _call_portal(
+        self,
+        state: FlaskConfigState,
+        callback: Any,
+        *args: Any,
+        tenant_override: TenantContextPayload | Literal["ambient"] | None = "ambient",
+        **kwargs: Any,
+    ) -> Any:
+        if self._portal is None:
+            msg = "Async database configuration requires a running portal"
+            raise ImproperConfigurationError(msg)
+        timeout = kwargs.pop("timeout", 300.0)
+
+        async def invoke() -> Any:
+            result = callback(*args, **kwargs)
+            return await result if inspect.isawaitable(result) else result
+
+        return call_portal_with_context(
+            self._portal.portal,
+            invoke,
+            tenant_override=tenant_override,
+            routing_bind_key=state.config.bind_key,
+            timeout=timeout,
+        )
+
+    def _get_read_routing_resource(self, key: Any, kind: str) -> Any:
+        from flask import g
+
+        state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = (
+            state.read_session_key
+            if kind == "session"
+            else state.read_connection_key
+            if kind == "connection"
+            else state.routing_session_key
+        )
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        current = get_context_value(g, resource_key, None)
+        if current is not None:
+            return current
+        captured_payload = (
+            TenantContext.require(state.config) if _has_tenant_strategy(state.config) else _current_tenant_payload()
+        )
+        context: Any
+        with TenantContext.bind(captured_payload):
+            if kind == "routing":
+                context = state.config.provide_routing_session()
+            elif kind == "session":
+                context = state.config.provide_read_session()
+            else:
+                context = state.config.provide_read_connection()
+            if state.is_async:
+                assert self._portal is not None
+                current = self._call_portal(state, context.__aenter__, tenant_override=captured_payload)
+                if kind != "connection":
+                    current = PortalSession(current, self._portal.portal, routing_bind_key=state.config.bind_key)
+            else:
+                current = context.__enter__()
+        contexts = get_context_value(g, _RESOURCE_CONTEXTS_KEY, None)
+        if contexts is None:
+            contexts = []
+            set_context_value(g, _RESOURCE_CONTEXTS_KEY, contexts)
+        contexts.append((state, resource_key, context, current, captured_payload))
+        set_context_value(g, resource_key, current)
+        return current
 
     def _config_state(self, config: Any) -> FlaskConfigState:
         """Create configuration state from database config.
@@ -349,6 +442,21 @@ class SQLSpecPlugin:
             correlation_headers=correlation_headers,
             auto_trace_headers=auto_trace_headers,
             enable_sqlcommenter_middleware=enable_sqlcommenter,
+            read_session_key=flask_config.get(
+                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            ),
+            read_connection_key=flask_config.get(
+                "read_connection_key",
+                "read_connection"
+                if connection_key == f"sqlspec_connection_{DEFAULT_SESSION_KEY}"
+                else f"{connection_key}_read",
+            ),
+            routing_session_key=flask_config.get("routing_session_key"),
+            default_routing_mode=flask_config.get("default_routing_mode", "auto"),
+            enable_routing_middleware=flask_config.get("enable_routing_middleware", True),
+            routing_header=flask_config.get("routing_header"),
+            write_pin_cookie=flask_config.get("write_pin_cookie"),
+            routing_secret=flask_config.get("routing_secret"),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -359,9 +467,19 @@ class SQLSpecPlugin:
         """
         all_keys: set[str] = set()
         for state in self._config_states:
-            keys = {state.connection_key, state.session_key}
-            duplicates = all_keys & keys
-            if duplicates:
+            keys = [
+                key
+                for key in (
+                    state.connection_key,
+                    state.session_key,
+                    state.read_connection_key,
+                    state.read_session_key,
+                    state.routing_session_key,
+                )
+                if key is not None
+            ]
+            duplicates = all_keys.intersection(keys)
+            if duplicates or len(keys) != len(set(keys)):
                 msg = f"Duplicate state keys found: {duplicates}. Use unique session_key values."
                 raise ImproperConfigurationError(msg)
             all_keys.update(keys)
@@ -385,6 +503,26 @@ class SQLSpecPlugin:
             Imports flask components dynamically at runtime to avoid hard dependency.
         """
         from flask import g, request
+
+        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
+        if routing_states and not has_context_value(g, _ROUTING_SCOPE_KEY):
+            payload = RoutingContext.current() or RoutingContextPayload()
+            for state in routing_states:
+                if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
+                    payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+                payload = apply_request_routing_hints(
+                    payload,
+                    bind_key=state.config.bind_key,
+                    routing_header_value=request.headers.get(state.routing_header)
+                    if state.routing_header is not None
+                    else None,
+                    cookie_value=request.cookies.get(state.write_pin_cookie)
+                    if state.write_pin_cookie is not None
+                    else None,
+                    write_pin_cookie=state.write_pin_cookie,
+                    routing_secret=state.routing_secret,
+                )
+            set_context_value(g, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
 
         if self._enable_correlation and self._extractor is not None:
             correlation_id = self._extractor.extract(lambda h: request.headers.get(h))
@@ -432,6 +570,37 @@ class SQLSpecPlugin:
             if correlation_id:
                 response.headers["X-Correlation-ID"] = correlation_id
 
+        if response.is_streamed:
+            entries: list[tuple[Any, ...]] = []
+            for config_state in self._config_states:
+                if config_state.disable_di:
+                    continue
+                connection = get_context_value(g, config_state.connection_key, None)
+                if connection is None:
+                    continue
+                cache_key = f"sqlspec_session_cache_{config_state.session_key}"
+                blocking_key = f"sqlspec_portal_session_{config_state.session_key}"
+                ctx_key = f"{config_state.connection_key}_ctx"
+                payload_key = f"{config_state.connection_key}_tenant_payload"
+                session = pop_context_value(g, cache_key)
+                pop_context_value(g, blocking_key)
+                pop_context_value(g, config_state.connection_key)
+                conn_ctx = pop_context_value(g, ctx_key)
+                has_captured_payload = has_context_value(g, payload_key)
+                captured_payload = pop_context_value(g, payload_key)
+                entries.append((config_state, session, connection, conn_ctx, captured_payload, has_captured_payload))
+            raw_contexts = pop_context_value(g, _RESOURCE_CONTEXTS_KEY) or []
+            resource_contexts = list(reversed(raw_contexts))
+            for _, resource_key, _, _, _ in resource_contexts:
+                pop_context_value(g, resource_key)
+            if entries or resource_contexts:
+                release = _StreamedResponseRelease(
+                    self, response.status_code, entries, resource_contexts=resource_contexts
+                )
+                response.response = release.track(response.response)
+                response.call_on_close(release)
+            return response
+
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
@@ -441,15 +610,25 @@ class SQLSpecPlugin:
 
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
             session = get_context_value(g, cache_key, None)
+            connection = get_context_value(g, config_state.connection_key, None)
 
-            if session is None and get_context_value(g, config_state.connection_key, None) is None:
+            if session is None and connection is None:
                 continue
 
             if config_state.should_commit(response.status_code):
-                self._execute_commit(session, config_state)
+                self._execute_commit(session, config_state, connection=connection)
             elif config_state.should_rollback(response.status_code):
-                self._execute_rollback(session, config_state)
+                self._execute_rollback(session, config_state, connection=connection)
 
+        for config_state in self._config_states:
+            if config_state.routing_session_key is None or config_state.commit_mode == "manual":
+                continue
+            facade = get_context_value(g, config_state.routing_session_key, None)
+            if facade is not None and facade.pinned_to_primary:
+                if config_state.should_commit(response.status_code):
+                    self._execute_commit(facade, config_state)
+                elif config_state.should_rollback(response.status_code):
+                    self._execute_rollback(facade, config_state)
         return response
 
     def _teardown_appcontext_handler(self, _exc: "BaseException | None" = None) -> None:
@@ -462,6 +641,9 @@ class SQLSpecPlugin:
             token = pop_context_value(g, _TENANT_SCOPE_KEY)
             if token is not None:
                 TenantContext.reset(token)
+            routing_token = pop_context_value(g, _ROUTING_SCOPE_KEY)
+            if routing_token is not None:
+                RoutingContext.reset(routing_token)
 
     def _close_request_connections(self, _exc: "BaseException | None" = None) -> None:
         """Clean up connections when request context ends.
@@ -487,46 +669,121 @@ class SQLSpecPlugin:
 
         exc_info = (type(_exc), _exc, _exc.__traceback__) if _exc is not None else (None, None, None)
 
+        contexts = pop_context_value(g, _RESOURCE_CONTEXTS_KEY) or []
+        resource_errors: list[BaseException] = []
+        for config_state, resource_key, context, resource, captured_payload in reversed(contexts):
+            try:
+                if (
+                    resource_key == config_state.routing_session_key
+                    and _exc is not None
+                    and config_state.commit_mode != "manual"
+                    and resource.pinned_to_primary
+                ):
+                    self._execute_rollback(resource, config_state)
+                if config_state.is_async:
+                    assert self._portal is not None
+                    self._call_portal(config_state, context.__aexit__, *exc_info, tenant_override=captured_payload)
+                else:
+                    with TenantContext.bind(captured_payload):
+                        context.__exit__(*exc_info)
+            except BaseException as error:
+                resource_errors.append(error)
+            finally:
+                pop_context_value(g, resource_key)
+
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
 
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
+            blocking_key = f"sqlspec_portal_session_{config_state.session_key}"
+            ctx_key = f"{config_state.connection_key}_ctx"
+            payload_key = f"{config_state.connection_key}_tenant_payload"
+
             session = get_context_value(g, cache_key, None)
             connection = get_context_value(g, config_state.connection_key, None)
-            ctx_key = f"{config_state.connection_key}_ctx"
             conn_ctx = get_context_value(g, ctx_key, None)
-
-            if (
-                _exc is not None
-                and config_state.commit_mode != "manual"
-                and (session is not None or connection is not None)
-            ):
-                self._execute_rollback(session, config_state)
-
-            payload_key = f"{config_state.connection_key}_tenant_payload"
             has_captured_payload = has_context_value(g, payload_key)
             captured_payload = pop_context_value(g, payload_key)
 
-            if connection is not None:
+            try:
+                if (
+                    _exc is not None
+                    and config_state.commit_mode != "manual"
+                    and (session is not None or connection is not None)
+                ):
+                    self._execute_rollback(session, config_state, connection=connection)
+            finally:
+                try:
+                    if session is not None or connection is not None or conn_ctx is not None:
+                        self._release_config_connection(
+                            config_state,
+                            session,
+                            connection,
+                            conn_ctx,
+                            captured_payload,
+                            has_captured_payload,
+                            exc_info,
+                        )
+                finally:
+                    pop_context_value(g, config_state.connection_key)
+                    pop_context_value(g, ctx_key)
+                    pop_context_value(g, cache_key)
+                    pop_context_value(g, blocking_key)
+
+        if resource_errors:
+            raise resource_errors[0]
+
+    def _release_config_connection(
+        self,
+        config_state: FlaskConfigState,
+        session: Any,
+        connection: Any,
+        conn_ctx: Any,
+        captured_payload: "TenantContextPayload | None",
+        has_captured_payload: bool,
+        exc_info: "tuple[Any, Any, Any]",
+    ) -> None:
+        """Emit session end, detach the session, and exit the request connection context."""
+        try:
+            if session is not None:
+                try:
+                    runtime = getattr(session, "observability", None)
+                    if runtime is not None and not runtime.is_idle:
+                        if config_state.is_async and self._portal is not None:
+                            self._call_portal(
+                                config_state,
+                                runtime.emit_session_end_async,
+                                session,
+                                tenant_override=captured_payload if has_captured_payload else "ambient",
+                            )
+                        else:
+                            runtime.emit_session_end_sync(session)
+                finally:
+                    detach = getattr(session, "_detach_connection", None)
+                    if detach is not None:
+                        detach()
+        finally:
+            if connection is not None or conn_ctx is not None:
                 try:
                     if conn_ctx is not None:
                         if config_state.is_async:
                             if has_captured_payload:
-                                self._portal.portal.call(  # type: ignore[union-attr]
-                                    _exit_tenant_connection, conn_ctx, captured_payload, exc_info
+                                self._call_portal(
+                                    config_state, _exit_tenant_connection, conn_ctx, captured_payload, exc_info
                                 )
                             else:
-                                self._portal.portal.call(conn_ctx.__aexit__, *exc_info)  # type: ignore[union-attr]
+                                self._call_portal(config_state, conn_ctx.__aexit__, *exc_info)
                         elif has_captured_payload:
                             with TenantContext.bind(captured_payload):
                                 conn_ctx.__exit__(*exc_info)
                         else:
                             conn_ctx.__exit__(*exc_info)
-                    elif config_state.is_async:
-                        self._portal.portal.call(connection.close)  # type: ignore[union-attr]
-                    else:
-                        connection.close()
+                    elif connection is not None:
+                        if config_state.is_async:
+                            self._call_portal(config_state, connection.close)
+                        else:
+                            connection.close()
                 except Exception as exc:
                     log_with_context(
                         logger,
@@ -538,14 +795,6 @@ class SQLSpecPlugin:
                         status="failed",
                         error_type=type(exc).__name__,
                     )
-
-                if has_context_value(g, config_state.connection_key):
-                    pop_context_value(g, config_state.connection_key)
-                if has_context_value(g, ctx_key):
-                    pop_context_value(g, ctx_key)
-
-            if has_context_value(g, cache_key):
-                pop_context_value(g, cache_key)
 
     def _invoke_extractor(self, config_state: FlaskConfigState, request: Any) -> TenantContextPayload | None:
         extractor = config_state.tenant_extractor
@@ -605,8 +854,7 @@ class SQLSpecPlugin:
         bind_payload: bool,
     ) -> Any:
         payload_key = f"{config_state.connection_key}_tenant_payload"
-        if bind_payload:
-            set_context_value(g_obj, payload_key, payload)
+        set_context_value(g_obj, payload_key, payload if bind_payload else _current_tenant_payload())
         try:
             conn_ctx: Any = None
             if config_state.config.supports_connection_pooling:
@@ -621,9 +869,9 @@ class SQLSpecPlugin:
                 if config_state.is_async:
                     assert self._portal is not None
                     if bind_payload:
-                        connection = self._portal.portal.call(_enter_tenant_connection, conn_ctx, payload)
+                        connection = self._call_portal(config_state, _enter_tenant_connection, conn_ctx, payload)
                     else:
-                        connection = self._portal.portal.call(conn_ctx.__aenter__)
+                        connection = self._call_portal(config_state, conn_ctx.__aenter__)
                 elif bind_payload:
                     with TenantContext.bind(payload):
                         connection = conn_ctx.__enter__()
@@ -631,7 +879,7 @@ class SQLSpecPlugin:
                     connection = conn_ctx.__enter__()
                 set_context_value(g_obj, f"{config_state.connection_key}_ctx", conn_ctx)
             elif config_state.is_async:
-                connection = self._portal.portal.call(config_state.config.create_connection)  # type: ignore[union-attr,arg-type]
+                connection = self._call_portal(config_state, config_state.config.create_connection)
             else:
                 connection = config_state.config.create_connection()
         except BaseException:
@@ -658,7 +906,13 @@ class SQLSpecPlugin:
                 if state.session_key == key:
                     return state
             for state in self._config_states:
-                if key in {state.connection_key, getattr(state.config, "bind_key", None)}:
+                if key in {
+                    state.connection_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.routing_session_key,
+                    getattr(state.config, "bind_key", None),
+                }:
                     return state
             msg = f"No configuration found for key: {key}"
             raise ImproperConfigurationError(msg)
@@ -694,7 +948,7 @@ class SQLSpecPlugin:
                         reason="portal_not_initialized",
                     )
                     return
-                _ = self._portal.portal.call(config_state.config.close_pool)  # type: ignore[arg-type]
+                _ = self._call_portal(config_state, config_state.config.close_pool)
             else:
                 config_state.config.close_pool()
             log_with_context(
@@ -718,24 +972,32 @@ class SQLSpecPlugin:
                 error_type=type(exc).__name__,
             )
 
-    def _execute_commit(self, session: Any, config_state: FlaskConfigState) -> None:
+    def _execute_commit(self, session: Any, config_state: FlaskConfigState, connection: Any = None) -> None:
         """Execute commit on session or connection.
 
         Args:
             session: Database session.
             config_state: Configuration state.
+            connection: Optional raw connection when request context has already exited.
         """
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         try:
-            target = (
-                session
-                if session is not None and hasattr(session, "commit")
-                else self.get_connection(config_state.session_key)
-            )
+            if session is not None and hasattr(session, "commit"):
+                target = session
+            elif connection is not None:
+                target = connection
+            else:
+                target = self.get_connection(config_state.session_key)
             if config_state.is_async:
-                self._portal.portal.call(target.commit)  # type: ignore[union-attr]
+                self._call_portal(config_state, target.commit)
             else:
                 target.commit()
-        except Exception as exc:
+        except BaseException as exc:
             log_with_context(
                 logger,
                 logging.ERROR,
@@ -746,24 +1008,32 @@ class SQLSpecPlugin:
                 status="failed",
                 error_type=type(exc).__name__,
             )
-            self._execute_rollback(session, config_state)
+            self._execute_rollback(session, config_state, connection=connection)
             raise
 
-    def _execute_rollback(self, session: Any, config_state: FlaskConfigState) -> None:
+    def _execute_rollback(self, session: Any, config_state: FlaskConfigState, connection: Any = None) -> None:
         """Execute rollback on session or connection.
 
         Args:
             session: Database session.
             config_state: Configuration state.
+            connection: Optional raw connection when request context has already exited.
         """
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         try:
-            target = (
-                session
-                if session is not None and hasattr(session, "rollback")
-                else self.get_connection(config_state.session_key)
-            )
+            if session is not None and hasattr(session, "rollback"):
+                target = session
+            elif connection is not None:
+                target = connection
+            else:
+                target = self.get_connection(config_state.session_key)
             if config_state.is_async:
-                self._portal.portal.call(target.rollback)  # type: ignore[union-attr]
+                self._call_portal(config_state, target.rollback)
             else:
                 target.rollback()
         except Exception as exc:
@@ -777,6 +1047,92 @@ class SQLSpecPlugin:
                 status="failed",
                 error_type=type(exc).__name__,
             )
+
+
+class _StreamedResponseRelease:
+    """Finalize and release request connections when a streamed response closes."""
+
+    __slots__ = ("_completed", "_entries", "_plugin", "_resource_contexts", "_status_code")
+
+    def __init__(
+        self,
+        plugin: SQLSpecPlugin,
+        status_code: int,
+        entries: "list[tuple[Any, ...]]",
+        *,
+        resource_contexts: "list[tuple[Any, ...]] | None" = None,
+    ) -> None:
+        self._plugin = plugin
+        self._status_code = status_code
+        self._entries = entries
+        self._resource_contexts = resource_contexts or []
+        self._completed = False
+
+    def track(self, iterable: "Iterable[Any]") -> "Iterator[Any]":
+        """Yield every item from the streamed response body and record full completion."""
+        close = getattr(iterable, "close", None)
+        try:
+            yield from iterable
+            self._completed = True
+        finally:
+            if callable(close):
+                close()
+
+    def __call__(self) -> None:
+        """Finalize transactions and release connections once when the response closes."""
+        if not self._entries and not self._resource_contexts:
+            return
+        entries = list(self._entries)
+        self._entries.clear()
+        resource_contexts = list(self._resource_contexts)
+        self._resource_contexts.clear()
+        primary_exc: BaseException | None = None
+        for config_state, resource_key, context, resource, captured_payload in resource_contexts:
+            try:
+                try:
+                    if (
+                        resource_key == config_state.routing_session_key
+                        and config_state.commit_mode != "manual"
+                        and resource.pinned_to_primary
+                    ):
+                        if self._completed and config_state.should_commit(self._status_code):
+                            self._plugin._execute_commit(resource, config_state)
+                        else:
+                            self._plugin._execute_rollback(resource, config_state)
+                finally:
+                    if config_state.is_async:
+                        self._plugin._call_portal(
+                            config_state, context.__aexit__, None, None, None, tenant_override=captured_payload
+                        )
+                    else:
+                        with TenantContext.bind(captured_payload):
+                            context.__exit__(None, None, None)
+            except BaseException as exc:
+                if primary_exc is None or (isinstance(primary_exc, Exception) and not isinstance(exc, Exception)):
+                    primary_exc = exc
+        for config_state, session, connection, conn_ctx, captured_payload, has_captured_payload in entries:
+            try:
+                try:
+                    if config_state.commit_mode != "manual" and (session is not None or connection is not None):
+                        if self._completed and config_state.should_commit(self._status_code):
+                            self._plugin._execute_commit(session, config_state, connection=connection)
+                        else:
+                            self._plugin._execute_rollback(session, config_state, connection=connection)
+                finally:
+                    self._plugin._release_config_connection(
+                        config_state,
+                        session,
+                        connection,
+                        conn_ctx,
+                        captured_payload,
+                        has_captured_payload,
+                        (None, None, None),
+                    )
+            except BaseException as exc:
+                if primary_exc is None or (isinstance(primary_exc, Exception) and not isinstance(exc, Exception)):
+                    primary_exc = exc
+        if primary_exc is not None:
+            raise primary_exc
 
 
 def _rebind_streamed_tenant(_app: Any, **_: Any) -> None:
@@ -831,3 +1187,8 @@ async def _exit_tenant_connection(
 ) -> Any:
     with TenantContext.bind(payload):
         return await conn_ctx.__aexit__(*exc_info)
+
+
+def _current_tenant_payload() -> TenantContextPayload | None:
+    binding = TenantContext.current_binding()
+    return binding if isinstance(binding, TenantContextPayload) else None

@@ -3,7 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,6 +24,7 @@ from sqlspec.adapters.oracledb.core import (
     truncate_utf8_bytes,
 )
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub, _apply_deq_options
 from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.storage.pipeline import ResolvedStorageTarget
@@ -48,6 +49,8 @@ def test_apply_oracle_session_trace_attributes_ecid_fallback() -> None:
     """apply_oracle_session_trace_attributes falls back to conn.ecid when conn.econtext_id is absent."""
 
     class _StrictConn:
+        thin = False
+
         __slots__ = ("action", "client_identifier", "ecid", "module")
 
         def __init__(self) -> None:
@@ -71,7 +74,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
     """OracleSyncDriver and OracleAsyncDriver piggyback trace attributes on slow and cached fast paths without SQL comments."""
     sync_executed: list[tuple[str, dict[str, str | None]]] = []
     sync_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _SyncFakeCursor:
@@ -147,7 +150,7 @@ async def test_oracle_sync_and_async_driver_piggyback_trace_attributes_on_slow_a
 
     async_executed: list[tuple[str, dict[str, str | None]]] = []
     async_conn: Any = SimpleNamespace(
-        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False
+        module=None, action=None, client_identifier=None, econtext_id=None, transaction_in_progress=False, thin=False
     )
 
     class _AsyncFakeCursor:
@@ -669,3 +672,68 @@ def test_oracle_aq_commit_at_dequeue_and_noop_ack_nack() -> None:
     backend._hub = hub
     backend.ack("ev-pinned")
     backend.nack("ev-pinned")
+
+
+def test_oracle_thin_trace_context_uses_native_api_without_ecid() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.oracledb.core import apply_oracle_session_trace_attributes, clear_oracle_otel_trace_context
+
+    setter = Mock()
+    connection = SimpleNamespace(thin=True, supports_opentelemetry_tracing=True, set_opentelemetry_trace_context=setter)
+    with SQLCommenterContext.scope({"traceparent": "00-parent", "tracestate": "vendor=state"}):
+        apply_oracle_session_trace_attributes(
+            connection, econtext_id="ecid", enable_session_attributes=False, enable_otel_trace_context=True
+        )
+    setter.assert_called_once_with("00-parent", "vendor=state")
+    clear_oracle_otel_trace_context(connection)
+    assert setter.call_args.args == (None,)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("channel", "expected_condition", "expected_correlation"),
+    [("user_1", "corrid = 'user_1'", None), ("OrderEvents", None, "OrderEvents")],
+    ids=["underscore-exact-condition", "plain-correlation"],
+)
+async def test_oracle_aq_hubs_avoid_wildcard_correlation_for_underscores(
+    is_async: bool, channel: str, expected_condition: str | None, expected_correlation: str | None
+) -> None:
+    """AQ dequeue avoids LIKE wildcard matching when normalized channel names contain '_'."""
+    deqoptions = SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    queue = MagicMock()
+    queue.deqoptions = deqoptions
+    config = MagicMock()
+    config.get_observability_runtime.return_value = MagicMock()
+
+    if is_async:
+        queue.deqone = AsyncMock(return_value=None)
+        driver = MagicMock()
+        driver.rollback = AsyncMock()
+        hub: Any = OracleAsyncAQHub(
+            config, queue_name_template="SQLSPEC_EVENTS_QUEUE", visibility=None, default_visibility=None, wait_ceiling=5
+        )
+        hub._session_driver = driver
+        hub._queues[channel] = queue
+        assert await hub.dequeue(channel, 0.5) is None
+    else:
+        queue.deqone.return_value = None
+        driver = MagicMock()
+        hub = OracleSyncAQHub(
+            config, queue_name_template="SQLSPEC_EVENTS_QUEUE", visibility=None, default_visibility=None, wait_ceiling=5
+        )
+        hub._session_driver = driver
+        hub._queues[channel] = queue
+        assert hub.dequeue(channel, 0.5) is None
+
+    assert deqoptions.condition == expected_condition
+    assert deqoptions.correlation == expected_correlation
+
+    direct_queue = SimpleNamespace(
+        deqoptions=SimpleNamespace(wait=0, correlation=None, condition=None, visibility=None)
+    )
+    _apply_deq_options(direct_queue, None, None, 0.5, "a%b'c")
+    assert direct_queue.deqoptions.condition == "corrid = 'a%b''c'"
+    assert direct_queue.deqoptions.correlation is None

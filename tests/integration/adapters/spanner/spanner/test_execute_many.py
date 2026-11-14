@@ -11,7 +11,7 @@ import pytest
 
 from sqlspec import SQLResult
 from sqlspec.adapters.spanner import SpannerSyncConfig
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import ReadOnlyTransactionError
 
 pytestmark = pytest.mark.spanner
 
@@ -161,7 +161,7 @@ def test_execute_many_requires_write_session(spanner_config: SpannerSyncConfig, 
     parameters = [{"id": str(uuid4()), "name": "Fail", "email": "fail@example.com", "age": 30}]
 
     with spanner_config.provide_read_session() as session:
-        with pytest.raises(SQLConversionError, match="execute_many requires"):
+        with pytest.raises(ReadOnlyTransactionError, match="read-only Snapshot"):
             session.execute_many(
                 f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)", parameters
             )

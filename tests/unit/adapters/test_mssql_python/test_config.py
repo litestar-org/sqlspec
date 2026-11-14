@@ -20,7 +20,16 @@ from sqlspec.adapters.mssql_python.core import build_connection_config
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
+    TenantCleanupError,
+    TenantContextError,
+)
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 
@@ -255,9 +264,10 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
         connection_config={"server": "localhost"}, driver_features={"on_connection_create": seen.append}
     )
 
-    with config.provide_session():
-        pass
+    with config.provide_session() as session:
+        assert session.connection is connection
 
+    assert session.connection is _DETACHED_CONNECTION
     assert seen == [connection]
 
 
@@ -409,10 +419,11 @@ def test_failed_session_rolls_back_before_release() -> None:
         prepare_driver=lambda driver: driver,
     )
 
-    with pytest.raises(RuntimeError), context:
+    with pytest.raises(RuntimeError), context as session:
         raise RuntimeError
 
     assert calls == ["rollback", "release"]
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_pool_does_not_reconfigure_when_params_match(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -479,6 +490,7 @@ def test_session_clean_exit_rolls_back_active_transaction() -> None:
         session.begin()
 
     assert calls == ["rollback", "release"]
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_connection_context_rolls_back_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -903,3 +915,252 @@ def test_tenant_connection_hook_failure_closes_acquired_connection(
     with TenantContext.scope("a"), pytest.raises(RuntimeError, match="hook"), config.provide_connection():
         pass
     assert calls == ["close"]
+
+
+def test_ag_replica_defaults_and_database_guard() -> None:
+    config = MssqlPythonConfig(connection_config={"server": "listener", "database": "app"}, replicas=True)
+    replica = config.replica_groups["default"].configs[0]
+    connection_string, _ = build_connection_config(dict(replica.connection_config))
+    assert "ApplicationIntent=ReadOnly" in connection_string
+    assert "MultiSubnetFailover=yes" in connection_string
+    assert config.connection_config == {"server": "listener", "database": "app"}
+    with pytest.raises(ImproperConfigurationError, match="database"):
+        MssqlPythonConfig(connection_config={"server": "listener"}, replicas=True)
+
+
+def test_ag_derive_alias_and_tenant_pooling_hook_are_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kwargs: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MssqlPythonPoolingManager.is_enabled", lambda: False)
+    seen: list[object] = []
+    hook = seen.append
+    strategy = MssqlPythonSessionContextStrategy()
+    config = MssqlPythonConfig(
+        connection_config={"server": "primary", "database": "app"},
+        driver_features={"tenant_strategy": strategy, "on_connection_create": hook},
+        replicas=True,
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.driver_features["enable_pooling"] is False
+    pool = replica.create_pool()
+    try:
+        assert pool.enabled is False
+        assert pool.require_unpooled
+        assert pool.on_connection_create is hook
+    finally:
+        replica.close_pool()
+    derived = config.derive_pool(host="standby")
+    assert build_connection_config(dict(derived.connection_config))[0].startswith("Server=standby;")
+
+
+def test_ag_derive_new_connection_string_replaces_inherited_aliases() -> None:
+    config = MssqlPythonConfig(connection_config={"server": "primary", "database": "old", "uid": "old-user"})
+    derived = config.derive_pool(connection_string="Server=standby;Database=new;UID=new-user;")
+    assert build_connection_config(dict(derived.connection_config))[0] == "Server=standby;Database=new;UID=new-user;"
+    assert config.connection_config["database"] == "old"
+
+
+def test_ag_acquire_maps_unavailable_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.exceptions import ReplicaUnavailableError
+
+    native = Exception(976, "The target database is not available for queries")
+
+    def fail_connect(*args: Any, **kwargs: Any) -> None:
+        raise native
+
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **kwargs: None)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", fail_connect)
+    config = MssqlPythonConfig(connection_config={"server": "listener", "database": "app"}, replicas=True)
+    try:
+        replica = config.replica_groups["default"].configs[0]
+        with pytest.raises(ReplicaUnavailableError) as caught, replica.provide_session():
+            pass
+        assert caught.value.__cause__ is native
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    "shorthand",
+    [
+        True,
+        "Server=reader;Database=app;",
+        {"host": "reader", "application_intent": "ReadWrite", "multi_subnet_failover": False},
+    ],
+)
+def test_ag_shorthand_uses_connection_string_database_and_explicit_intent(shorthand: Any) -> None:
+    config = MssqlPythonConfig(
+        connection_config={"connection_string": "Server=primary;Database={app};"}, replicas=shorthand
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    if isinstance(shorthand, dict):
+        assert "ApplicationIntent=ReadWrite" in text
+        assert "MultiSubnetFailover=no" in text
+    else:
+        assert "ApplicationIntent=ReadOnly" in text
+        assert "MultiSubnetFailover=yes" in text
+
+
+def test_connection_string_primary_merges_host_and_port_overrides() -> None:
+    """Host and port overrides replace the primary Server entry inside connection_string."""
+    primary = MssqlPythonConfig(
+        connection_config={"connection_string": "Server=pri,1433;Database=app;"},
+        replicas=[{"host": "reader", "port": 1434}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(host="reader", port=1434)
+
+    replica_conn_str, replica_kwargs = build_connection_config(replica.connection_config)
+    derived_conn_str, derived_kwargs = build_connection_config(derived.connection_config)
+
+    assert replica_conn_str == "Server=reader,1434;Database=app;MultiSubnetFailover=yes;ApplicationIntent=ReadOnly;"
+    assert replica_kwargs == {}
+    assert derived_conn_str == "Server=reader,1434;Database=app;"
+    assert derived_kwargs == {}
+
+
+def test_replica_spec_rejects_false_boolean() -> None:
+    """Boolean False replica entries should raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        MssqlPythonConfig(connection_config={"server": "pri", "database": "app"}, replicas=[False])
+
+
+@pytest.mark.parametrize(
+    "replicas",
+    [
+        "Server=reader;Database=app;ApplicationIntent=ReadWrite;MultiSubnetFailover=no;",
+        {"host": "reader", "applicationintent": "ReadWrite", "multisubnetfailover": False},
+    ],
+)
+def test_ag_replica_preserves_explicit_odbc_intent_aliases(replicas: Any) -> None:
+    config = MssqlPythonConfig(connection_config={"server": "primary", "database": "app"}, replicas=replicas)
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "ApplicationIntent=ReadWrite" in text
+    assert "MultiSubnetFailover=no" in text
+
+
+def test_ag_clone_replaces_inherited_extra_endpoint_without_mutation() -> None:
+    extra = {"Server": "primary", "KeepAlive": 60}
+    parent = MssqlPythonConfig(connection_config={"server": "primary", "database": "app", "extra": extra})
+    replica = parent.derive_pool(host="standby")
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "Server=standby" in text
+    assert "primary" not in text
+    assert "KeepAlive=60" in text
+    assert extra == {"Server": "primary", "KeepAlive": 60}
+    assert parent.connection_config["server"] == "primary"
+
+
+def test_ag_replica_mixed_case_intent_overrides_omit_readonly_defaults() -> None:
+    config = MssqlPythonConfig(
+        connection_config={"server": "primary", "database": "app"},
+        replicas=[{"host": "reader", "ApplicationIntent": "ReadWrite", "MultiSubnetFailover": False}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert "ApplicationIntent=ReadWrite" in text
+    assert "ApplicationIntent=ReadOnly" not in text
+    assert "MultiSubnetFailover=no" in text
+    assert "MultiSubnetFailover=yes" not in text
+
+
+def test_ag_replica_mixed_case_intent_replaces_inherited_parent_options() -> None:
+    config = MssqlPythonConfig(
+        connection_config={
+            "server": "primary",
+            "database": "app",
+            "application_intent": "ReadOnly",
+            "extra": {"MultiSubnetFailover": True},
+        },
+        replicas=[{"host": "reader", "ApplicationIntent": "ReadWrite", "MultiSubnetFailover": False}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    text = build_connection_config(dict(replica.connection_config))[0]
+    assert text.count("ApplicationIntent=") == 1
+    assert "ApplicationIntent=ReadWrite" in text
+    assert text.count("MultiSubnetFailover=") == 1
+    assert "MultiSubnetFailover=no" in text
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc_factory", "expected_mapped"),
+    [
+        (
+            lambda: _mssql_pool.MSSQL_PYTHON_MODULE.OperationalError("08001", "Unable to connect"),
+            DatabaseConnectionError,
+        ),
+        (
+            lambda: _mssql_pool.MSSQL_PYTHON_MODULE.InterfaceError("HY000", "Socket disconnected"),
+            DatabaseConnectionError,
+        ),
+        (lambda: _mssql_pool.MSSQL_PYTHON_MODULE.OperationalError("HY000", "Server lost"), OperationalError),
+        (lambda: Exception(976, "Replica unavailable"), ReplicaUnavailableError),
+    ],
+)
+def test_mssql_python_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc_factory: Any, expected_mapped: type[Exception]
+) -> None:
+    """Connection errors map beyond code 976 and trigger read-replica failover."""
+    driver_exc = driver_exc_factory()
+    healthy_conn = DummyConnection()
+
+    def fake_connect(conn_str: str, **_kwargs: Any) -> DummyConnection:
+        if "Server=r1;" in conn_str:
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **_kwargs: None)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", fake_connect)
+    config = MssqlPythonConfig(
+        connection_config={"server": "writer", "database": "app"}, replicas=[{"host": "r1"}, {"host": "r2"}]
+    )
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = MssqlPythonConfig(connection_config={"server": "r1", "database": "app"})
+        try:
+            with pytest.raises(expected_mapped) as exc_info, failing_only.provide_connection():
+                pass
+            assert exc_info.value.__cause__ is driver_exc
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_mssql_python_maps_978_and_preserves_hook_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Error 978 maps to ReadOnlyTransactionError while user hook RuntimeError stays unmapped."""
+    native_978 = Exception(978, "Replica is read-only")
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        _mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *_args, **_kwargs: (_ for _ in ()).throw(native_978)
+    )
+    failing_cfg = MssqlPythonConfig(connection_config={"server": "r1", "database": "app"})
+    try:
+        with pytest.raises(ReadOnlyTransactionError) as exc_info, failing_cfg.provide_session():
+            pass
+        assert exc_info.value.__cause__ is native_978
+    finally:
+        failing_cfg.close_pool()
+
+    hook_conn = DummyConnection()
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *_args, **_kwargs: hook_conn)
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    hook_cfg = MssqlPythonConfig(
+        connection_config={"server": "writer", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=[{"host": "r1"}, {"host": "r2"}],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), hook_cfg.provide_read_session():
+            pass
+        assert hook_conn.closed is True
+    finally:
+        hook_cfg.close_pool()

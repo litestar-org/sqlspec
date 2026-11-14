@@ -313,3 +313,10 @@ def test_grouped_query_traversal() -> None:
 def test_every_page_row_has_valid_cursor_keys(rows: list[dict[str, Any]]) -> None:
     with pytest.raises(ImproperConfigurationError):
         CursorFilter([CursorKey("id")], 2).build_page(rows)
+
+
+@pytest.mark.parametrize("field_name", ["u..id", ".id", "u.", "a.b.c.d.e", "id\x00"])
+def test_cursor_key_rejects_malformed_field_names(field_name: str) -> None:
+    """Qualified field names need nonempty segments and at most four parts."""
+    with pytest.raises(ValueError, match="field_name"):
+        CursorKey(field_name, result_name="id")

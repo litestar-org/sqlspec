@@ -4,9 +4,14 @@ from typing import Any, Self, cast
 
 import pytest
 
+from sqlspec.adapters.aiomysql._typing import AiomysqlPymysqlMySQLError
+from sqlspec.adapters.aiomysql.core import create_mapped_exception
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
+from sqlspec.exceptions import DatabaseConnectionError, OperationalError
 
 pytest.importorskip("aiomysql", reason="aiomysql adapter requires the aiomysql package")
+
+import aiomysql  # pyright: ignore
 
 
 class _FakeConnection:
@@ -286,3 +291,21 @@ async def test_aiomysql_stream_source_exposes_column_types_to_arrow_batches() ->
     assert len(batches) == 1
     assert batches[0].schema.field("id").type == pa.int64()
     assert batches[0].column("id").to_pylist() == [None, None]
+
+
+def test_aiomysql_maps_1040_and_bare_connection_error_classes() -> None:
+    """Errno 1040 and uncoded InterfaceError/OperationalError map to failover-safe SQLSpec exceptions."""
+    too_many = AiomysqlPymysqlMySQLError(1040, "Too many connections")
+    iface_err = aiomysql.InterfaceError("Socket disconnected")
+    op_err = aiomysql.OperationalError("Server lost")
+
+    mapped_too_many = create_mapped_exception(too_many)
+    mapped_iface = create_mapped_exception(iface_err)
+    mapped_op = create_mapped_exception(op_err)
+
+    assert type(mapped_too_many) is DatabaseConnectionError
+    assert mapped_too_many.__cause__ is too_many
+    assert type(mapped_iface) is DatabaseConnectionError
+    assert mapped_iface.__cause__ is iface_err
+    assert type(mapped_op) is OperationalError
+    assert mapped_op.__cause__ is op_err

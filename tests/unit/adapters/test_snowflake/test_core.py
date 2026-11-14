@@ -277,3 +277,18 @@ def test_core_validation_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None:
             })
     finally:
         reset_dependency_cache("cryptography.hazmat.primitives.serialization")
+
+
+def test_read_only_mapping_keeps_snowflake_query_id_and_native_cause() -> None:
+    from sqlspec.adapters.snowflake.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    class NativeReadOnlyError(Exception):
+        sqlstate = "25006"
+        sfqid = "01b-ro"
+
+    native = NativeReadOnlyError("Cannot write to a read-only database")
+    mapped = create_mapped_exception(native)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert "[sfqid=01b-ro]" in str(mapped)
+    assert mapped.__cause__ is native

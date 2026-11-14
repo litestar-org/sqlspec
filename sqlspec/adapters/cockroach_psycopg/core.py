@@ -10,8 +10,15 @@ from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features as psycopg_apply_driver_features
 from sqlspec.adapters.psycopg.core import build_copy_from_command, build_statement_config, driver_profile
-from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
+from sqlspec.adapters.psycopg.core import create_mapped_exception as _map_parent_exception
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    ReadOnlyTransactionError,
+    SerializationConflictError,
+    SQLSpecError,
+)
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -23,6 +30,7 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
+    "DEFAULT_FOLLOWER_READ_STALENESS",
     "CockroachPsycopgRetryConfig",
     "apply_driver_features",
     "build_connection_config",
@@ -31,11 +39,13 @@ __all__ = (
     "build_native_import",
     "build_statement_config",
     "calculate_backoff_seconds",
+    "create_mapped_exception",
     "driver_profile",
     "is_retryable_error",
     "native_export_telemetry",
     "native_import_telemetry",
     "normalize_native_export_query",
+    "resolve_follower_read_options",
     "validate_follower_read_staleness",
 )
 
@@ -105,28 +115,30 @@ def build_connection_config(
 ) -> dict[str, Any]:
     """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility."""
     config = normalize_connection_config(connection_config)
-    conninfo = (
-        config.pop("conninfo", None)
-        or config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    conninfo = _pop_first_alias(config, ("conninfo", "dsn", "url", "connection_string"))
     if conninfo is not None:
         config["conninfo"] = conninfo
-    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    dbname = _pop_first_alias(config, ("dbname", "database", "db"))
     if dbname is not None:
         config["dbname"] = dbname
-    user = config.pop("user", None) or config.pop("username", None)
+    user = _pop_first_alias(config, ("user", "username"))
     if user is not None:
         config["user"] = user
 
-    session_options: list[str] = []
+    managed: dict[str, str] = {}
+    pattern = re.compile(
+        r"(?<!\S)(?:-c\s*|--)(default_transaction_use_follower_reads|results_buffer_size|statement_timeout|idle_in_transaction_session_timeout)=([^\s]+)"
+    )
+    existing = str(config.get("options") or "")
+    for match in pattern.finditer(existing):
+        managed[match.group(1)] = match.group(2)
+    remaining = pattern.sub("", existing).strip()
     if "default_transaction_use_follower_reads" in config:
-        val = config.pop("default_transaction_use_follower_reads")
-        if not isinstance(val, bool):
+        value = config.pop("default_transaction_use_follower_reads")
+        if not isinstance(value, bool):
             msg = "default_transaction_use_follower_reads must be a boolean"
             raise ImproperConfigurationError(msg)
-        session_options.append(f"-c default_transaction_use_follower_reads={'on' if val else 'off'}")
+        managed["default_transaction_use_follower_reads"] = "on" if value else "off"
     for key in ("results_buffer_size", "statement_timeout", "idle_in_transaction_session_timeout"):
         if key not in config:
             continue
@@ -134,11 +146,14 @@ def build_connection_config(
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             msg = f"{key} must be a non-negative integer"
             raise ImproperConfigurationError(msg)
-        session_options.append(f"-c {key}={value}")
-    if session_options:
-        existing = config.get("options")
-        opt_str = " ".join(session_options)
-        config["options"] = f"{existing} {opt_str}" if existing else opt_str
+        managed[key] = str(value)
+    if existing or managed:
+        option_parts: list[str] = []
+        if remaining:
+            option_parts.append(remaining)
+        for key, value in managed.items():
+            option_parts.append(f"-c {key}={value}")
+        config["options"] = " ".join(option_parts)
 
     return config
 
@@ -310,3 +325,52 @@ def normalize_native_export_query(query: str) -> str | None:
         return None
     delimiter = delimiters[0]
     return query[: delimiter.start] + query[delimiter.end + 1 :]
+
+
+DEFAULT_FOLLOWER_READ_STALENESS: Final[str] = "follower_read_timestamp()"
+
+
+def resolve_follower_read_options(
+    driver_features: "Mapping[str, Any]",
+    *,
+    follower_reads: bool | None = None,
+    staleness: str | None = None,
+    read_only_session: bool = False,
+    bind_key: str | None = None,
+) -> tuple[bool, str | None, bool]:
+    """Resolve follower bounds with primary consistency taking precedence."""
+    entry = RoutingContext.get_entry(bind_key)
+    if entry is not None and (entry.mode == "primary" or entry.pinned_by_write):
+        return False, None, read_only_session
+    enabled = bool(driver_features.get("enable_follower_reads", False)) if follower_reads is None else follower_reads
+    if staleness is not None:
+        return enabled, validate_follower_read_staleness(staleness), read_only_session
+    if entry is not None and entry.max_staleness_seconds is not None:
+        seconds = entry.max_staleness_seconds
+        if seconds <= 0:
+            return False, None, read_only_session
+        return True, validate_follower_read_staleness(f"'-{seconds:g}s'"), read_only_session
+    value = driver_features.get("default_staleness") or (DEFAULT_FOLLOWER_READ_STALENESS if enabled else None)
+    return enabled, validate_follower_read_staleness(value) if value is not None else None, read_only_session
+
+
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
+    """Map native read-only violations before generic transaction errors."""
+    if (has_sqlstate(error) and error.sqlstate == "25006") or type(error).__name__ in {
+        "ReadOnlySqlTransaction",
+        "ReadOnlySQLTransactionError",
+    }:
+        mapped = ReadOnlyTransactionError(str(error))
+        mapped.__cause__ = error if isinstance(error, BaseException) else None
+        return mapped
+    return _map_parent_exception(error, logger=logger)
+
+
+def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+    """Pop every alias key from config and return the first non-None value."""
+    found = None
+    for alias in aliases:
+        value = config.pop(alias, None)
+        if found is None and value is not None:
+            found = value
+    return found

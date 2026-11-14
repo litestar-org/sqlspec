@@ -9,7 +9,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.snowflake.core import normalize_connection_params
+from sqlspec.adapters.snowflake.core import create_mapped_exception, is_snowflake_error, normalize_connection_params
 from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.typing import import_optional
 
@@ -114,32 +114,6 @@ class SnowflakeConnectionPool:
             msg = "Snowflake connection pool cannot be reused after a process fork"
             raise DatabaseConnectionError(msg)
 
-    def _open_connection(self) -> "SnowflakeConnection":
-        connector = import_optional("snowflake.connector")
-        if connector is None:
-            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
-        return cast(
-            "SnowflakeConnection", connector.connect(**normalize_connection_params(self._connection_parameters))
-        )
-
-    def _create_physical_connection(self) -> "SnowflakeConnection":
-        connection: SnowflakeConnection | None = None
-        try:
-            connection = self._open_connection()
-            if self._observability_runtime is not None:
-                self._observability_runtime.emit_connection_create_sync(connection)
-        except BaseException:
-            try:
-                if connection is not None:
-                    self._destroy_connection(connection)
-            finally:
-                with self._condition:
-                    self._total_count -= 1
-                    self._condition.notify_all()
-            raise
-        else:
-            return connection
-
     def new_connection(self) -> "SnowflakeConnection":
         """Open a standalone connection configured like a pooled one.
 
@@ -194,14 +168,6 @@ class SnowflakeConnectionPool:
             finally:
                 if owned:
                     self._standalone_slots.release()
-
-    def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
-        try:
-            if self._observability_runtime is not None:
-                self._observability_runtime.emit_connection_destroy_sync(connection)
-        finally:
-            with contextlib.suppress(Exception):
-                connection.close()
 
     def acquire(self) -> "SnowflakeConnection":
         """Acquire one exclusive healthy handle within the configured timeout."""
@@ -338,3 +304,42 @@ class SnowflakeConnectionPool:
         self.check_pid()
         with self._condition:
             return len(self._checked_out)
+
+    def _open_connection(self) -> "SnowflakeConnection":
+        connector = import_optional("snowflake.connector")
+        if connector is None:
+            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
+        try:
+            return cast(
+                "SnowflakeConnection", connector.connect(**normalize_connection_params(self._connection_parameters))
+            )
+        except Exception as exc:
+            if is_snowflake_error(exc):
+                raise create_mapped_exception(exc) from exc
+            raise
+
+    def _create_physical_connection(self) -> "SnowflakeConnection":
+        connection: SnowflakeConnection | None = None
+        try:
+            connection = self._open_connection()
+            if self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_create_sync(connection)
+        except BaseException:
+            try:
+                if connection is not None:
+                    self._destroy_connection(connection)
+            finally:
+                with self._condition:
+                    self._total_count -= 1
+                    self._condition.notify_all()
+            raise
+        else:
+            return connection
+
+    def _destroy_connection(self, connection: "SnowflakeConnection") -> None:
+        try:
+            if self._observability_runtime is not None:
+                self._observability_runtime.emit_connection_destroy_sync(connection)
+        finally:
+            with contextlib.suppress(Exception):
+                connection.close()

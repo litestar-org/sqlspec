@@ -8,10 +8,16 @@ Tests cover:
 - Connection config normalization
 """
 
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import psycopg
+import psycopg_pool
 import pytest
+from psycopg import Error as PsycopgError
+from psycopg import pq
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgAsyncConfig,
@@ -34,7 +40,8 @@ from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.adapters.cockroach_psycopg.core import build_native_export
 from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
 from sqlspec.core import SQL
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 @pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
@@ -395,6 +402,8 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
 
     with patch("sqlspec.adapters.cockroach_psycopg._typing._resolve_cockroach_psycopg_async_driver") as resolver:
         driver_type = resolver.return_value
+        driver_type.return_value._transaction_active = False
+        driver_type.return_value._connection_in_transaction.return_value = False
         async with ctx:
             pass
 
@@ -630,7 +639,7 @@ def test_cockroach_psycopg_follower_reads_apply_once_at_transaction_start(monkey
     driver.begin()
 
     assert connection.execute.call_count == 1
-    assert connection.execute.call_args.args[0] == "SET TRANSACTION AS OF SYSTEM TIME '-10s'"
+    assert connection.execute.call_args.args[0] == "SET TRANSACTION AS OF SYSTEM TIME '-10s', READ ONLY"
 
 
 def test_cockroach_psycopg_follower_reads_stay_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1424,3 +1433,306 @@ async def test_tenant_session_entry_failure_releases_once(asynchronous: bool, st
     release.assert_called_once()
     assert release.call_args.args == (connection,)
     assert release.call_args.kwargs["exc_val"] is error
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> None:
+    config = config_type(replicas=True)
+    assert not config.has_replicas
+    assert config.supports_read_routing
+    assert config.driver_features["enable_follower_reads"] is True
+    assert config.driver_features["default_staleness"] == "follower_read_timestamp()"
+
+
+@pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
+def test_derive_replaces_managed_options_without_duplicating_user_options(config_type: Any) -> None:
+    primary = config_type(
+        connection_config={
+            "options": "-c search_path=app -c statement_timeout=1000 -c statement_timeout=2000",
+            "default_transaction_use_follower_reads": True,
+        }
+    )
+    derived = primary.derive_pool(
+        driver_features_overrides={"enable_follower_reads": False, "statement_timeout_ms": 5000}
+    )
+    options = derived.connection_config["options"]
+    assert options.count("search_path=app") == 1
+    assert options.count("statement_timeout=") == 1
+    assert "statement_timeout=5000" in options
+    assert "default_transaction_use_follower_reads=on" not in options
+    assert "default_transaction_use_follower_reads=off" in options
+    assert "statement_timeout=2000" in primary.connection_config["options"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tx_active", "in_tx_probe"), [(True, False), (False, True)], ids=["driver-flag", "connection-probe"]
+)
+async def test_cockroach_psycopg_session_context_rolls_back_active_transaction_on_clean_exit(
+    asynchronous: bool, tx_active: bool, in_tx_probe: bool
+) -> None:
+    """CockroachPsycopg session contexts roll back uncommitted driver work before releasing the connection."""
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(
+        transaction_status=pq.TransactionStatus.INTRANS if in_tx_probe else pq.TransactionStatus.IDLE
+    )
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = CockroachPsycopgAsyncSessionContext if asynchronous else CockroachPsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    if isinstance(ctx, CockroachPsycopgAsyncSessionContext):
+        async with ctx as driver:
+            driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_awaited_once()
+        release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+    else:
+        with ctx as sync_driver:
+            sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert sync_driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_called_once()
+        release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_cockroach_psycopg_session_context_propagates_or_preserves_rollback_error(
+    asynchronous: bool, body_raises: bool
+) -> None:
+    """Rollback failure propagates on clean exit, preserves body exceptions, and passes error info to release."""
+    rollback_err = PsycopgError("crdb rollback failed")
+    body_err = ValueError("crdb body failed")
+    expected_type: type[BaseException] = ValueError if body_raises else SQLSpecError
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(transaction_status=pq.TransactionStatus.INTRANS)
+    conn.rollback = AsyncMock(side_effect=rollback_err) if asynchronous else MagicMock(side_effect=rollback_err)
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = CockroachPsycopgAsyncSessionContext if asynchronous else CockroachPsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=default_statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with pytest.raises(expected_type) as caught:
+        if isinstance(ctx, CockroachPsycopgAsyncSessionContext):
+            async with ctx as driver:
+                driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+        else:
+            with ctx as sync_driver:
+                sync_driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+    if body_raises:
+        assert caught.value is body_err
+    else:
+        assert caught.value.__cause__ is rollback_err
+    assert release.call_args.args == (conn,)
+    assert release.call_args.kwargs["exc_type"] is type(caught.value)
+    assert release.call_args.kwargs["exc_val"] is caught.value
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_cockroach_psycopg_derive_pool_overrides_dsn_and_aliases(asynchronous: bool) -> None:
+    """Derived replica configs replace primary conninfo/dsn, dbname, and user aliases cleanly."""
+    config_cls = CockroachPsycopgAsyncConfig if asynchronous else CockroachPsycopgSyncConfig
+    primary = config_cls(
+        connection_config={"dsn": "postgresql://primary:26257/rw", "database": "rw_db", "user": "rw_user"}
+    )
+    derived = primary.derive_pool(url="postgresql://replica:26257/ro", db="ro_db", username="ro_user")
+    assert derived.connection_config["conninfo"] == "postgresql://replica:26257/ro"
+    assert not any(k in derived.connection_config for k in ("dsn", "url", "connection_string"))
+    assert derived.connection_config["dbname"] == "ro_db"
+    assert derived.connection_config["user"] == "ro_user"
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_cockroach_psycopg_sync_read_connection_rollback_error_handling(body_raises: bool) -> None:
+    """Sync _read_connection preserves caller exceptions if rollback fails and propagates rollback error on clean exit."""
+    connection = object()
+    session = MagicMock()
+    session.connection = connection
+    session.rollback.side_effect = RuntimeError("rollback boom")
+
+    class _FakeSyncCtx:
+        def __enter__(self) -> Any:
+            return session
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    config = CockroachPsycopgSyncConfig(connection_config={"conninfo": "postgresql://localhost:26257/db"})
+    expected_exc = ValueError if body_raises else RuntimeError
+    with pytest.raises(expected_exc, match="body boom" if body_raises else "rollback boom"):
+        with config._read_connection(_FakeSyncCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
+            assert conn is connection
+            if body_raises:
+                raise ValueError("body boom")
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_cockroach_psycopg_async_read_connection_rollback_error_handling(body_raises: bool) -> None:
+    """Async _read_connection preserves caller exceptions if rollback fails and propagates rollback error on clean exit."""
+    connection = object()
+    session = AsyncMock()
+    session.connection = connection
+    session.begin = AsyncMock()
+    session.rollback = AsyncMock(side_effect=RuntimeError("rollback boom"))
+
+    class _FakeAsyncCtx:
+        async def __aenter__(self) -> Any:
+            return session
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    config = CockroachPsycopgAsyncConfig(connection_config={"conninfo": "postgresql://localhost:26257/db"})
+    expected_exc = ValueError if body_raises else RuntimeError
+    with pytest.raises(expected_exc, match="body boom" if body_raises else "rollback boom"):
+        async with config._read_connection(_FakeAsyncCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
+            assert conn is connection
+            if body_raises:
+                raise ValueError("body boom")
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+def test_cockroach_psycopg_sync_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CockroachPsycopgSync pool and connection acquire errors map for ReadReplicaGroup failover."""
+
+    class _GoodSyncConn:
+        def __init__(self) -> None:
+            self.autocommit = False
+            self.info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
+
+        def execute(self, query: Any, *args: Any) -> Any:
+            _ = query, args
+            self.info.transaction_status = pq.TransactionStatus.INTRANS
+            return SimpleNamespace(close=lambda: None)
+
+        def commit(self) -> None:
+            self.info.transaction_status = pq.TransactionStatus.IDLE
+
+        def rollback(self) -> None:
+            self.info.transaction_status = pq.TransactionStatus.IDLE
+
+    good_conn = _GoodSyncConn()
+    good_ctx = MagicMock()
+    good_ctx.__enter__.return_value = good_conn
+    good_ctx.__exit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = MagicMock()
+    bad_ctx.__enter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            if failure_stage == "pool":
+                raise psycopg.OperationalError("replica down")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", fake_pool_cls)
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://primary:26257/db"},
+        replicas=["postgresql://bad:26257/db", "postgresql://good:26257/db"],
+    )
+    with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_cockroach_psycopg_async_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CockroachPsycopgAsync pool and connection acquire errors map for ReadReplicaGroup failover."""
+
+    class _GoodAsyncConn:
+        def __init__(self) -> None:
+            self.autocommit = False
+            self.info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
+
+        async def set_autocommit(self, value: bool) -> None:
+            self.autocommit = value
+
+        async def execute(self, query: Any, *args: Any) -> Any:
+            _ = query, args
+            self.info.transaction_status = pq.TransactionStatus.INTRANS
+            return AsyncMock()
+
+        async def commit(self) -> None:
+            self.info.transaction_status = pq.TransactionStatus.IDLE
+
+        async def rollback(self) -> None:
+            self.info.transaction_status = pq.TransactionStatus.IDLE
+
+    good_conn = _GoodAsyncConn()
+    good_ctx = AsyncMock()
+    good_ctx.__aenter__.return_value = good_conn
+    good_ctx.__aexit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.open = AsyncMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = AsyncMock()
+    bad_ctx.__aenter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.open = (
+        AsyncMock(side_effect=psycopg.OperationalError("replica down")) if failure_stage == "pool" else AsyncMock()
+    )
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_async_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_psycopg.config.AsyncConnectionPool", fake_async_pool_cls)
+    config = CockroachPsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://primary:26257/db"},
+        replicas=["postgresql://bad:26257/db", "postgresql://good:26257/db"],
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("config_type", (CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig))
+def test_cockroach_psycopg_replica_and_conninfo_override_clear_inherited_endpoints(config_type: Any) -> None:
+    """String replicas and conninfo overrides drop inherited field-based primary endpoints."""
+    primary = config_type(
+        connection_config={"host": "primary", "port": 26257, "dbname": "rw", "user": "u", "password": "pw"},
+        replicas=["postgresql://ro:ropw@replica:26258/ro_db"],
+    )
+    derived = primary.derive_pool(conninfo="postgresql://ro:ropw@replica:26258/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+
+    for cfg in (derived, replica):
+        parsed = conninfo_to_dict(
+            make_conninfo(
+                cfg.connection_config["conninfo"], **{k: v for k, v in cfg.connection_config.items() if k != "conninfo"}
+            )
+        )
+        assert parsed["host"] == "replica"
+        assert parsed["port"] == "26258"
+        assert parsed["dbname"] == "ro_db"
+        assert parsed["user"] == "ro"

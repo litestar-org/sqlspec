@@ -1,23 +1,32 @@
 """Tests for FastAPI SQLSpec plugin."""
 
+import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, ClassVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
 
 import pytest
 
 pytest.importorskip("fastapi")
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.exceptions import TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.fastapi import SQLSpecPlugin, set_request_tenant
+from sqlspec.extensions.starlette._utils import get_state_value
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
+from sqlspec.extensions.starlette.middleware import _response_owner_key, _ResponseCompletion
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.tenant import TenantContext
+
+if TYPE_CHECKING:
+    from sqlspec.config import LifecycleConfig
 
 
 def test_provide_session_method_exists() -> None:
@@ -200,8 +209,29 @@ class _TenantConn:
 
 
 class _TenantDriver:
-    def __init__(self, connection: _TenantConn, **_kwargs: Any) -> None:
-        self.connection = connection
+    _cache_holder = None
+
+    def __init__(self, connection: _TenantConn, statement_config: Any = None, driver_features: Any = None) -> None:
+        self.connection: Any = connection
+        self.statement_config = statement_config
+        self.driver_features = driver_features or {}
+        self.observability = _IdleObservability()
+
+    def attach_observability(self, observability: Any) -> None:
+        self.observability = observability
+
+    async def commit(self) -> None:
+        await self.connection.commit()
+
+    async def rollback(self) -> None:
+        await self.connection.rollback()
+
+    def _detach_connection(self) -> None:
+        self.connection = None  # type: ignore[assignment]
+
+
+class _IdleObservability:
+    is_idle = True
 
 
 def _make_deferred_tenant_config(checkouts: list[_TenantConn]) -> AiosqliteConfig:
@@ -319,7 +349,118 @@ def test_fastapi_deferred_tenant_depends_skips_public_routes_and_handles_transac
         assert checkouts[1].commits == []
         assert checkouts[1].rollbacks == ["acme"]
 
-    with TestClient(app, raise_server_exceptions=True) as strict_client, pytest.raises(TenantContextError):
-        strict_client.get("/unguarded")
+    with TestClient(app, raise_server_exceptions=True) as strict_client:
+        assert strict_client.get("/unguarded").status_code == 401
     assert len(checkouts) == 2
     assert TenantContext.get() is None
+
+
+@pytest.mark.parametrize(("status_code", "expected_rows"), [(200, [(1,), (2,)]), (500, [])])
+def test_fastapi_prepared_session_streaming_completion_and_detachment(
+    tmp_path: Any, status_code: int, expected_rows: list[tuple[int]]
+) -> None:
+    """FastAPI prepares sessions once, emits start/end, stores _ResponseCompletion, keeps StreamingResponse connected through exhaustion, and detaches."""
+    database = str(tmp_path / f"fastapi_stream_{status_code}.db")
+    setup = sqlite3.connect(database)
+    setup.execute("CREATE TABLE stream_items (value INTEGER)")
+    setup.commit()
+    setup.close()
+
+    events: list[str] = []
+    config = AiosqliteConfig(
+        connection_config={"database": database},
+        extension_config={"fastapi": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast(
+                "LifecycleConfig",
+                {
+                    "on_session_start": [lambda _ctx: events.append("start")],
+                    "on_session_end": [lambda _ctx: events.append("end")],
+                },
+            )
+        ),
+    )
+    prepare_count = 0
+    original_prepare = config._prepare_driver
+
+    def _prepare(driver: Any) -> Any:
+        nonlocal prepare_count
+        prepare_count += 1
+        return original_prepare(driver)
+
+    config._prepare_driver = _prepare  # type: ignore[method-assign]
+    app = FastAPI()
+    plugin = SQLSpecPlugin(config, app)
+    retained: list[Any] = []
+    owners: list[Any] = []
+
+    @app.get("/stream")
+    async def stream_items(
+        request: Request, db: Annotated[Any, Depends(plugin.provide_session())]
+    ) -> StreamingResponse:
+        retained.append(db)
+        owners.append(get_state_value(request.state, _response_owner_key("db_connection")))
+        await db.begin()
+        await db.execute("INSERT INTO stream_items VALUES (1)")
+        val = await db.select_value("SELECT 1")
+
+        async def body() -> AsyncIterator[bytes]:
+            await db.execute("INSERT INTO stream_items VALUES (2)")
+            second = await db.select_value("SELECT 2")
+            yield f"{val}:{second}".encode()
+
+        return StreamingResponse(body(), status_code=status_code)
+
+    with TestClient(app) as client:
+        response = client.get("/stream")
+        assert response.status_code == status_code
+        assert response.text == "1:2"
+
+    assert prepare_count == 1
+    assert events == ["start", "end"]
+    assert len(owners) == 1
+    assert isinstance(owners[0], _ResponseCompletion)
+    assert not hasattr(owners[0], "__dict__")
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = retained[0].connection.cursor
+
+    reader = sqlite3.connect(database)
+    try:
+        assert reader.execute("SELECT value FROM stream_items ORDER BY value").fetchall() == expected_rows
+    finally:
+        reader.close()
+
+
+def test_fastapi_async_lifecycle_hooks_via_provide_session(caplog: pytest.LogCaptureFixture) -> None:
+    """FastAPI awaits async on_session_start and on_session_end hooks through provide_session."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"fastapi": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+    app = FastAPI()
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/check")
+    async def check(db: Annotated[Any, Depends(plugin.provide_session())]) -> dict[str, Any]:
+        return {"value": await db.select_value("SELECT 1")}
+
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.get("/check")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text

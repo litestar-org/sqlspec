@@ -1,21 +1,27 @@
 """CockroachDB AsyncPG configuration."""
 
-from contextlib import suppress
+from collections.abc import Mapping
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
 from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs, register_pgvector_support
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
+    CockroachAsyncpgInterfaceError,
     CockroachAsyncpgPool,
+    CockroachAsyncpgPostgresError,
     CockroachAsyncpgSessionContext,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgRecord as Record
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_connect as asyncpg_connect
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_create_pool as asyncpg_create_pool
 from sqlspec.adapters.cockroach_asyncpg.core import (
+    DEFAULT_FOLLOWER_READ_STALENESS,
     CockroachAsyncpgRetryConfig,
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
+    resolve_follower_read_options,
     validate_follower_read_staleness,
 )
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
@@ -24,7 +30,7 @@ from sqlspec.adapters.cockroach_asyncpg.tenant import (
     CockroachAsyncpgTenantLease,
     validate_cockroach_asyncpg_tenant_config,
 )
-from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, _ReadAsyncContext, _ReadSelectionReceipt
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.core.tenant import AsyncTenantStrategy, TenantStrategyShorthand
@@ -37,7 +43,7 @@ from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable
     from contextlib import AbstractAsyncContextManager
     from uuid import UUID
 
@@ -64,6 +70,24 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "reset",
     "setup",
 })
+_COCKROACH_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "port",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "database",
+    "dbname",
+    "db",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 
 
 CockroachAsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]
@@ -215,11 +239,23 @@ class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
 
     __slots__ = ()
 
+    async def acquire_connection(self) -> "CockroachAsyncpgConnection":
+        try:
+            return cast("CockroachAsyncpgConnection", await super().acquire_connection())
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class CockroachAsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for CockroachDB AsyncPG connections."""
 
     __slots__ = ()
+
+    async def __aenter__(self) -> "CockroachAsyncpgConnection":
+        try:
+            return cast("CockroachAsyncpgConnection", await super().__aenter__())
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 class CockroachAsyncpgConfig(
@@ -262,6 +298,11 @@ class CockroachAsyncpgConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
+        if kwargs.get("replicas") is True:
+            kwargs.pop("replicas")
+            driver_features = dict(driver_features or {})
+            driver_features.setdefault("enable_follower_reads", True)
+            driver_features.setdefault("default_staleness", DEFAULT_FOLLOWER_READ_STALENESS)
         raw_strategy = (driver_features or {}).get("tenant_strategy")
         if raw_strategy is not None and raw_strategy is not False:
             validate_cockroach_asyncpg_tenant_config(
@@ -332,6 +373,7 @@ class CockroachAsyncpgConfig(
         bypass_tenant: Literal[False] = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachAsyncpgSessionContext": ...
 
@@ -344,6 +386,7 @@ class CockroachAsyncpgConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[CockroachAsyncpgDriver]": ...
 
@@ -355,6 +398,7 @@ class CockroachAsyncpgConfig(
         bypass_tenant: bool = False,
         follower_reads: bool | None = None,
         staleness: str | None = None,
+        read_only_session: bool = False,
         **kwargs: Any,
     ) -> "CockroachAsyncpgSessionContext | AbstractAsyncContextManager[CockroachAsyncpgDriver]":
         if bypass_tenant:
@@ -367,6 +411,7 @@ class CockroachAsyncpgConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         if tenant is not None:
@@ -376,14 +421,21 @@ class CockroachAsyncpgConfig(
                 statement_config=statement_config,
                 follower_reads=follower_reads,
                 staleness=staleness,
+                read_only_session=read_only_session,
                 **kwargs,
             )
         factory = _CockroachAsyncpgSessionFactory(self)
         driver_features = dict(self.driver_features)
-        if follower_reads is not None:
-            driver_features["enable_follower_reads"] = follower_reads
-        if staleness is not None:
-            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
+        enabled, resolved_staleness, read_only = resolve_follower_read_options(
+            driver_features,
+            follower_reads=follower_reads,
+            staleness=staleness,
+            read_only_session=read_only_session,
+            bind_key=self.bind_key,
+        )
+        driver_features.update(
+            enable_follower_reads=enabled, default_staleness=resolved_staleness, read_only_session=read_only
+        )
 
         return CockroachAsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,
@@ -393,6 +445,49 @@ class CockroachAsyncpgConfig(
             driver_features=driver_features,
             prepare_driver=self._prepare_driver,
         )
+
+    def provide_read_session(
+        self,
+        *args: Any,
+        bind_group: str | None = None,
+        statement_config: "StatementConfig | None" = None,
+        tenant: "str | UUID | TenantContextPayload | None" = None,
+        bypass_tenant: bool = False,
+        staleness: str | None = None,
+        **kwargs: Any,
+    ) -> "AbstractAsyncContextManager[CockroachAsyncpgDriver]":
+        """Provide read-only follower or strongly consistent sessions."""
+        if self.has_replicas or bind_group is not None:
+            return super().provide_read_session(
+                *args,
+                bind_group=bind_group,
+                statement_config=statement_config,
+                tenant=tenant,
+                bypass_tenant=bypass_tenant,
+                follower_reads=True,
+                staleness=staleness,
+                read_only_session=True,
+                **kwargs,
+            )
+        receipt = _ReadSelectionReceipt()
+        context = self.provide_session(
+            *args,
+            statement_config=statement_config,
+            tenant=tenant,
+            bypass_tenant=bypass_tenant,
+            follower_reads=True,
+            staleness=staleness,
+            read_only_session=True,
+            **kwargs,
+        )
+        return _ReadAsyncContext(self._primary_read_async(context, receipt), receipt)
+
+    def provide_read_connection(
+        self, *args: Any, bind_group: str | None = None, **kwargs: Any
+    ) -> "AbstractAsyncContextManager[Any]":
+        """Provide a native connection inside a read-only transaction."""
+        context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
+        return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
 
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "CockroachAsyncpgPool":
         if not self.connection_instance:
@@ -419,10 +514,66 @@ class CockroachAsyncpgConfig(
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("dsn", "url", "conninfo", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in _COCKROACH_ENDPOINT_IDENTITY_KEYS:
+                config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _COCKROACH_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        if "database" not in overrides and ("dbname" in overrides or "db" in overrides):
+            config["database"] = overrides.get("dbname", overrides.get("db"))
+        config.pop("dbname", None)
+        config.pop("db", None)
+        if "user" not in overrides and "username" in overrides:
+            config["user"] = overrides["username"]
+        config.pop("username", None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "CockroachAsyncpgConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
+
+    @asynccontextmanager
+    async def _read_connection(
+        self, context: "AbstractAsyncContextManager[CockroachAsyncpgDriver]"
+    ) -> "AsyncIterator[Any]":
+        async with context as session:
+            await session.begin()
+            failed = False
+            try:
+                yield session.connection
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                if failed:
+                    with suppress(Exception):
+                        await session.rollback()
+                else:
+                    await session.rollback()
+
     async def _create_pool(self) -> "CockroachAsyncpgPool":
         config = build_connection_config(self.connection_config)
         config.setdefault("init", self._init_connection)
-        return await asyncpg_create_pool(**config)
+        try:
+            return await asyncpg_create_pool(**config)
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
         """Initialize connection with JSON codecs and user callback."""

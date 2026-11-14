@@ -15,6 +15,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
@@ -44,6 +45,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -109,10 +111,14 @@ __all__ = (
     "resolve_parameter_casts",
     "resolve_reconcile_adbc_dialect",
     "resolve_rowcount",
+    "split_db2_table_name",
     "split_teradata_table_name",
 )
 
 _MAX_TCP_PORT: Final = 65535
+_MIN_BRACED_VALUE_LEN: Final = 2
+_FLIGHTSQL_HEADER_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]+$")
+_URI_HOST_FORBIDDEN_CHARS: Final[frozenset[str]] = frozenset({"/", "?", "#", "@", " ", "\t", "\r", "\n", "\x00"})
 COLUMN_CACHE_MAX_SIZE: int = 256
 RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "bigquery",
@@ -1036,22 +1042,8 @@ _ADBC_STATUS_CODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "INTERNAL": (OperationalError, "internal error"),
     "NOT_IMPLEMENTED": (SQLSpecError, "not implemented"),
 }
-
-
-def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
-    status_code = getattr(error, "status_code", None)
-    if status_code is None:
-        return None
-    status_name: str | None = getattr(status_code, "name", None)
-    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
-        with contextlib.suppress(ValueError):
-            status_name = AdbcStatusCode(status_code).name
-    if status_name is None:
-        status_name = str(status_code).upper()
-    if status_name in _ADBC_STATUS_CODE_MAP:
-        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
-        return _create_adbc_error(error, exc_cls, desc)
-    return None
+_MIN_QUALIFIED_PARTS: Final = 2
+_MAX_TERADATA_QUALIFIED_PARTS: Final[int] = 2
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
@@ -1094,58 +1086,6 @@ def create_teradata_mapped_exception(error: Any) -> SQLSpecError:
         A SQLSpec exception that wraps the original error.
     """
     return _create_mapped_exception(error, assume_teradata=True)
-
-
-def _create_mapped_exception(error: Any, *, assume_teradata: bool) -> SQLSpecError:
-    status_mapped = _map_adbc_status_exception(error)
-    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
-        return status_mapped
-
-    raw_message = str(error)
-    error_msg = raw_message.lower()
-    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
-    sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
-
-    if enterprise_mapped := _map_enterprise_exception(
-        error, raw_message, error_msg, sqlstate, assume_teradata=assume_teradata
-    ):
-        return enterprise_mapped
-
-    if sqlstate:
-        return _map_sqlstate_exception(error, sqlstate)
-
-    if "unique" in error_msg or "duplicate" in error_msg:
-        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
-    if "foreign key" in error_msg:
-        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-    if "not null" in error_msg or "null value" in error_msg:
-        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
-    if "check constraint" in error_msg:
-        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
-    if "constraint" in error_msg:
-        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
-
-    if "deadlock" in error_msg:
-        return _create_adbc_error(error, DeadlockError, "deadlock detected")
-    if "serialization" in error_msg or "concurrent update" in error_msg:
-        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
-
-    if message_class := _classify_timeout_or_cancellation(error_msg):
-        return _create_adbc_error(error, message_class, "query terminated")
-
-    if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
-        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
-
-    if "syntax" in error_msg:
-        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
-
-    if "connection" in error_msg or "connect" in error_msg:
-        return _create_adbc_error(error, DatabaseConnectionError, "connection error")
-
-    if status_mapped is not None:
-        return status_mapped
-
-    return _create_adbc_error(error, SQLSpecError, "database error")
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -1565,6 +1505,111 @@ def prepare_postgres_uuid_bindings(
     return rewritten_sql, converted_parameters
 
 
+def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    """Split qualified DB2 table name into schema and table components."""
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
+
+
+def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
+    """Split a qualified Teradata table name into optional database and table identifiers.
+
+    Args:
+        table_name: Bare or database-qualified Teradata table name.
+
+    Returns:
+        Tuple of ``(database_or_none, table)`` with unquoted segments uppercased
+        and double-quoted segments preserved with ``""`` unescaped.
+
+    Raises:
+        ImproperConfigurationError: If the table name is empty, malformed, or has more than two parts.
+    """
+    cleaned = table_name.strip()
+    if not cleaned or cleaned.startswith(".") or cleaned.endswith("."):
+        msg = f"Invalid Teradata table name: {table_name!r}"
+        raise ImproperConfigurationError(msg)
+    parts = _split_raw_teradata_segments(cleaned)
+    if not parts or len(parts) > _MAX_TERADATA_QUALIFIED_PARTS or any(not part.strip() for part in parts):
+        msg = f"Invalid Teradata table name {table_name!r}: expected '[database.]table'"
+        raise ImproperConfigurationError(msg)
+    if len(parts) == _MAX_TERADATA_QUALIFIED_PARTS:
+        return (
+            _normalize_teradata_identifier_segment(parts[0], table_name),
+            _normalize_teradata_identifier_segment(parts[1], table_name),
+        )
+    return None, _normalize_teradata_identifier_segment(parts[0], table_name)
+
+
+def _map_adbc_status_exception(error: Any) -> "SQLSpecError | None":
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        return None
+    status_name: str | None = getattr(status_code, "name", None)
+    if status_name is None and isinstance(status_code, int) and AdbcStatusCode is not None:
+        with contextlib.suppress(ValueError):
+            status_name = AdbcStatusCode(status_code).name
+    if status_name is None:
+        status_name = str(status_code).upper()
+    if status_name in _ADBC_STATUS_CODE_MAP:
+        exc_cls, desc = _ADBC_STATUS_CODE_MAP[status_name]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
+def _create_mapped_exception(error: Any, *, assume_teradata: bool) -> SQLSpecError:
+    status_mapped = _map_adbc_status_exception(error)
+    if isinstance(status_mapped, (QueryTimeoutError, OperationCancelledError)):
+        return status_mapped
+
+    raw_message = str(error)
+    error_msg = raw_message.lower()
+    sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
+    sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
+
+    if enterprise_mapped := _map_enterprise_exception(
+        error, raw_message, error_msg, sqlstate, assume_teradata=assume_teradata
+    ):
+        return enterprise_mapped
+
+    if sqlstate:
+        return _map_sqlstate_exception(error, sqlstate)
+
+    if "unique" in error_msg or "duplicate" in error_msg:
+        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
+    if "foreign key" in error_msg:
+        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if "not null" in error_msg or "null value" in error_msg:
+        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+    if "check constraint" in error_msg:
+        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+    if "constraint" in error_msg:
+        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+
+    if "deadlock" in error_msg:
+        return _create_adbc_error(error, DeadlockError, "deadlock detected")
+    if "serialization" in error_msg or "concurrent update" in error_msg:
+        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
+
+    if message_class := _classify_timeout_or_cancellation(error_msg):
+        return _create_adbc_error(error, message_class, "query terminated")
+
+    if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
+        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
+
+    if "syntax" in error_msg:
+        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+
+    if "connection" in error_msg or "connect" in error_msg:
+        return _create_adbc_error(error, DatabaseConnectionError, "connection error")
+
+    if status_mapped is not None:
+        return status_mapped
+
+    return _create_adbc_error(error, SQLSpecError, "database error")
+
+
 def _try_rollback(rollback: "Callable[[], Any]") -> bool:
     """Run a rollback callable and report whether it succeeded.
 
@@ -1667,6 +1712,7 @@ def _is_uuid_array_data_type(target: Any) -> bool:
     return len(element_types) == 1 and _is_uuid_data_type(element_types[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _RewriteCacheState:
     __slots__ = ("cache", "hits", "maxsize", "misses")
 
@@ -1977,6 +2023,8 @@ def _map_enterprise_exception(
 
 
 def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
+    if sqlstate == "25006":
+        return _create_adbc_error(error, ReadOnlyTransactionError, "read-only transaction")
     if sqlstate == "23505":
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
     if sqlstate == "23503":
@@ -2197,7 +2245,13 @@ def _lift_flightsql_common_options(
     config: "dict[str, Any]", db_kwargs_dict: "dict[str, Any]", authorization_header_key: str
 ) -> None:
     if "authorization_header" in config:
-        db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
+        auth_header = config.pop("authorization_header")
+        if auth_header is not None:
+            auth_header_text = str(auth_header)
+            if "\x00" in auth_header_text or "\r" in auth_header_text or "\n" in auth_header_text:
+                msg = "FlightSQL authorization_header contains disallowed control characters."
+                raise ImproperConfigurationError(msg)
+            db_kwargs_dict.setdefault(authorization_header_key, auth_header_text)
 
     if "grpc_max_message_size" in config:
         db_kwargs_dict.setdefault(_FLIGHTSQL_WITH_MAX_MSG_SIZE_KEY, str(config.pop("grpc_max_message_size")))
@@ -2225,9 +2279,25 @@ def _lift_flightsql_common_options(
 
     if "headers" in config:
         headers = config.pop("headers")
-        if isinstance(headers, dict):
+        if headers is not None:
+            if not isinstance(headers, Mapping):
+                msg = "FlightSQL headers must be a mapping."
+                raise ImproperConfigurationError(msg)
             for hdr_key, hdr_val in headers.items():
-                db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", str(hdr_val))
+                if (
+                    not isinstance(hdr_key, str)
+                    or "\x00" in hdr_key
+                    or "\r" in hdr_key
+                    or "\n" in hdr_key
+                    or _FLIGHTSQL_HEADER_KEY_PATTERN.fullmatch(hdr_key) is None
+                ):
+                    msg = f"Invalid FlightSQL header key: {hdr_key!r}."
+                    raise ImproperConfigurationError(msg)
+                hdr_val_text = str(hdr_val)
+                if "\x00" in hdr_val_text or "\r" in hdr_val_text or "\n" in hdr_val_text:
+                    msg = f"FlightSQL header {hdr_key!r} contains disallowed control characters."
+                    raise ImproperConfigurationError(msg)
+                db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", hdr_val_text)
 
 
 def _get_adbc_driver_info(connection: Any) -> "dict[Any, Any]":
@@ -2560,18 +2630,98 @@ def _lift_driver_specific_db_kwargs(
             config["db_kwargs"] = db_kwargs_dict
 
 
+def _validate_uri_host(host: str, *, backend: str) -> str:
+    """Validate a discrete URI host token, supporting IPv4, hostname, and IPv6 literals."""
+    if not host or any(ch in _URI_HOST_FORBIDDEN_CHARS for ch in host):
+        msg = f"Invalid {backend} host: {host!r}."
+        raise ImproperConfigurationError(msg)
+    if host.startswith("[") or host.endswith("]"):
+        if (
+            len(host) <= _MIN_BRACED_VALUE_LEN
+            or not (host.startswith("[") and host.endswith("]"))
+            or "[" in host[1:-1]
+            or "]" in host[1:-1]
+        ):
+            msg = f"Invalid {backend} host: {host!r}."
+            raise ImproperConfigurationError(msg)
+        return host
+    if ":" in host:
+        if "[" in host or "]" in host:
+            msg = f"Invalid {backend} host: {host!r}."
+            raise ImproperConfigurationError(msg)
+        return f"[{host}]"
+    return host
+
+
 def _parse_db2_cli_dsn(uri: str) -> "dict[str, str] | None":
-    """Parse a semicolon-delimited IBM Db2 CLI keyword DSN when valid."""
+    """Parse semicolon-delimited Db2 CLI keyword=value pairs with MS-ODBCSTR brace awareness."""
     if "://" in uri or ";" not in uri:
         return None
+    if "\x00" in uri or "\r" in uri or "\n" in uri:
+        msg = "Db2 CLI DSN contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    segments: list[str] = []
+    buf: list[str] = []
+    in_braces = False
+    idx = 0
+    length = len(uri)
+    while idx < length:
+        ch = uri[idx]
+        if in_braces:
+            if ch == "}":
+                if idx + 1 < length and uri[idx + 1] == "}":
+                    buf.append("}}")
+                    idx += 2
+                    continue
+                in_braces = False
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "{":
+            in_braces = True
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "}":
+            msg = "Db2 CLI DSN contains an unmatched closing brace."
+            raise ImproperConfigurationError(msg)
+        if ch == ";":
+            segments.append("".join(buf))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if in_braces:
+        msg = "Db2 CLI DSN contains an unclosed opening brace."
+        raise ImproperConfigurationError(msg)
+    segments.append("".join(buf))
+
     parsed: dict[str, str] = {}
-    for raw_segment in uri.split(";"):
+    for raw_segment in segments:
         segment = raw_segment.strip()
         if not segment or "=" not in segment:
             continue
-        key, value = segment.split("=", 1)
+        key, raw_value = segment.split("=", 1)
         normalized_key = key.strip().lower()
-        normalized_val = value.strip()
+        if "{" in normalized_key or "}" in normalized_key:
+            msg = f"Invalid Db2 CLI DSN keyword: {key.strip()!r}."
+            raise ImproperConfigurationError(msg)
+        trimmed_val = raw_value.strip()
+        if trimmed_val.startswith("{"):
+            if len(trimmed_val) < _MIN_BRACED_VALUE_LEN or not trimmed_val.endswith("}"):
+                msg = f"Malformed braced value for Db2 CLI keyword {key.strip()!r}."
+                raise ImproperConfigurationError(msg)
+            inner = trimmed_val[1:-1]
+            if "}" in inner.replace("}}", ""):
+                msg = f"Unescaped closing brace in Db2 CLI keyword {key.strip()!r}."
+                raise ImproperConfigurationError(msg)
+            normalized_val = inner.replace("}}", "}")
+        elif "{" in trimmed_val or "}" in trimmed_val:
+            msg = f"Malformed brace in Db2 CLI keyword {key.strip()!r}."
+            raise ImproperConfigurationError(msg)
+        else:
+            normalized_val = trimmed_val
         if normalized_key and normalized_val:
             parsed[normalized_key] = normalized_val
     if "driver" in parsed:
@@ -2590,9 +2740,21 @@ def _normalize_db2_cli_dsn(config: "dict[str, Any]", uri: str) -> None:
         return
     database = parsed.get("database") or parsed.get("dbalias") or ""
     host = parsed.get("hostname") or parsed.get("host") or ""
-    port = parsed.get("port", "")
-    formatted_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    config["uri"] = f"db2://{formatted_host}:{port}/{database}" if port else f"db2://{formatted_host}/{database}"
+    port_raw = parsed.get("port", "")
+    formatted_host = _validate_uri_host(host, backend="Db2")
+    encoded_database = quote(database, safe="")
+    if port_raw:
+        try:
+            port_num = int(port_raw)
+        except ValueError as exc:
+            msg = f"Db2 port must be an integer between 1 and 65535, got {port_raw!r}."
+            raise ImproperConfigurationError(msg) from exc
+        if not 1 <= port_num <= _MAX_TCP_PORT:
+            msg = f"Db2 port must be an integer between 1 and 65535, got {port_num}."
+            raise ImproperConfigurationError(msg)
+        config["uri"] = f"db2://{formatted_host}:{port_num}/{encoded_database}"
+    else:
+        config["uri"] = f"db2://{formatted_host}/{encoded_database}"
 
     uid = parsed.get("uid") or parsed.get("user")
     if uid is not None:
@@ -2650,15 +2812,6 @@ _DB2_TABLE_EXISTS_SQL: Final = (
 _DB2_INDEX_EXISTS_SQL: Final = (
     "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
 )
-_MIN_QUALIFIED_PARTS: Final = 2
-
-
-def split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
-    """Split qualified DB2 table name into schema and table components."""
-    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
-    if len(parts) >= _MIN_QUALIFIED_PARTS:
-        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
-    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
 
 
 _TERADATA_ERROR_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\s*Error\s+(\d+)\s*\]", re.IGNORECASE)
@@ -2769,9 +2922,12 @@ def _build_or_augment_teradata_uri(config: dict[str, Any]) -> None:
     if isinstance(uri, str) and all(value is None for value in (host, port, database, username, password)):
         return
     parsed = urlsplit(uri) if isinstance(uri, str) else None
-    host_text = str(host) if host is not None else (parsed.hostname or "" if parsed is not None else "")
-    if ":" in host_text and not host_text.startswith("["):
-        host_text = "[" + host_text + "]"
+    if host is not None:
+        host_text = _validate_uri_host(str(host), backend="Teradata")
+    elif parsed is not None and parsed.hostname:
+        host_text = _validate_uri_host(parsed.hostname, backend="Teradata")
+    else:
+        host_text = ""
     resolved_port = port if port is not None else (parsed.port if parsed is not None else 1025)
     raw_auth = parsed.netloc.rsplit("@", 1)[0] if parsed is not None and "@" in parsed.netloc else ""
     raw_user, separator, raw_password = raw_auth.partition(":")
@@ -2810,7 +2966,6 @@ _TERADATA_INDEX_EXISTS_SQL: Final[str] = (
     "AND UPPER(TRIM(TableName)) = UPPER(TRIM(CAST(? AS VARCHAR(128)))) "
     "AND UPPER(TRIM(IndexName)) = UPPER(TRIM(CAST(? AS VARCHAR(128))))"
 )
-_MAX_TERADATA_QUALIFIED_PARTS: Final[int] = 2
 
 
 def _normalize_teradata_identifier_segment(segment: str, raw_table_name: str) -> str:
@@ -2865,32 +3020,3 @@ def _split_raw_teradata_segments(table_name: str) -> list[str]:
         raise ImproperConfigurationError(msg)
     segments.append("".join(buf))
     return segments
-
-
-def split_teradata_table_name(table_name: str) -> tuple[str | None, str]:
-    """Split a qualified Teradata table name into optional database and table identifiers.
-
-    Args:
-        table_name: Bare or database-qualified Teradata table name.
-
-    Returns:
-        Tuple of ``(database_or_none, table)`` with unquoted segments uppercased
-        and double-quoted segments preserved with ``""`` unescaped.
-
-    Raises:
-        ImproperConfigurationError: If the table name is empty, malformed, or has more than two parts.
-    """
-    cleaned = table_name.strip()
-    if not cleaned or cleaned.startswith(".") or cleaned.endswith("."):
-        msg = f"Invalid Teradata table name: {table_name!r}"
-        raise ImproperConfigurationError(msg)
-    parts = _split_raw_teradata_segments(cleaned)
-    if not parts or len(parts) > _MAX_TERADATA_QUALIFIED_PARTS or any(not part.strip() for part in parts):
-        msg = f"Invalid Teradata table name {table_name!r}: expected '[database.]table'"
-        raise ImproperConfigurationError(msg)
-    if len(parts) == _MAX_TERADATA_QUALIFIED_PARTS:
-        return (
-            _normalize_teradata_identifier_segment(parts[0], table_name),
-            _normalize_teradata_identifier_segment(parts[1], table_name),
-        )
-    return None, _normalize_teradata_identifier_segment(parts[0], table_name)

@@ -17,7 +17,10 @@ from uuid import uuid4
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.extensions._deferred_session import DeferredAsyncSession, PortalSession
+from sqlspec.utils.portal import PortalProvider
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
 FRAMEWORKS = ["litestar", "fastapi", "starlette", "sanic"]
@@ -323,3 +326,73 @@ def test_flask_session_on_async_configuration_blocks_through_the_portal(tmp_path
     assert checkouts == [1, 1, 1]
     assert strategy.checkouts == ["acme", "acme"]
     assert _stored(database) == [201, 7]
+
+
+@pytest.mark.parametrize("opened", [False, True])
+async def test_deferred_async_session_detach_connection_blocks_reuse_and_detaches_driver(
+    opened: bool, tmp_path: Path
+) -> None:
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "deferred_detach.db")})
+    session_ctx = config.provide_session()
+    active_session: Any = None
+    open_calls = 0
+
+    async def open_session() -> Any:
+        nonlocal active_session, open_calls
+        open_calls += 1
+        active_session = await session_ctx.__aenter__()
+        return active_session
+
+    deferred = DeferredAsyncSession(
+        config=config,
+        open_session=open_session,
+        current_session=lambda: active_session,
+        accessor="await plugin.get_session_async(request)",
+    )
+    try:
+        if opened:
+            assert await deferred.select_value("SELECT 1") == 1
+            assert active_session is not None
+            assert active_session.connection is not _DETACHED_CONNECTION
+
+        deferred._detach_connection()
+
+        if opened:
+            assert active_session is not None
+            assert active_session.connection is _DETACHED_CONNECTION
+
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await deferred.select_value("SELECT 1")
+
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = deferred.dialect
+
+        assert open_calls == (1 if opened else 0)
+    finally:
+        if active_session is not None:
+            await session_ctx.__aexit__(None, None, None)
+        await config.close_pool()
+
+
+def test_portal_session_detach_connection_detaches_without_portal_hop(tmp_path: Path) -> None:
+    provider = PortalProvider()
+    provider.start()
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "portal_detach.db")})
+    session_ctx = config.provide_session()
+    real_session: Any = None
+    try:
+        real_session = provider.portal.call(session_ctx.__aenter__)
+        live_view = PortalSession(real_session, provider.portal)
+        unstarted_view = PortalSession(real_session, PortalProvider().portal)
+
+        assert live_view.select_value("SELECT 1") == 1
+        unstarted_view._detach_connection()
+        assert real_session.connection is _DETACHED_CONNECTION
+
+        with pytest.raises(SQLSpecError, match="already closed"):
+            live_view.select_value("SELECT 1")
+    finally:
+        if real_session is not None:
+            provider.portal.call(session_ctx.__aexit__, None, None, None)
+        provider.portal.call(config.close_pool)
+        provider.stop()

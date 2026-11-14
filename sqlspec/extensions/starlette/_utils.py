@@ -1,10 +1,11 @@
 """Request state helpers for the Starlette SQLSpec extension."""
 
 from collections.abc import Mapping, MutableMapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
 from sqlspec.extensions.starlette._state import tenant_receipt_key
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -16,6 +17,7 @@ __all__ = (
     "deferred_session_key",
     "get_connection_from_request",
     "get_or_create_driver_session",
+    "get_or_create_driver_session_async",
     "get_or_create_session",
     "get_request_tenant",
     "get_scope_tenant",
@@ -27,6 +29,15 @@ __all__ = (
 )
 
 _MISSING = object()
+_LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
+    "adbc",
+    "arrow_odbc",
+    "asyncpg",
+    "cockroach_asyncpg",
+    "duckdb",
+    "psqlpy",
+    "teradata",
+})
 
 
 def get_state_value(state: Any, key: str, default: Any = _MISSING) -> Any:
@@ -116,17 +127,29 @@ def get_or_create_driver_session(request: "Request", config_state: "SQLSpecConfi
     Returns:
         Database session (driver instance).
     """
-    session_instance_key = f"{config_state.session_key}_instance"
+    session, created = _resolve_or_build_driver_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
+    return session
 
-    existing_session = get_state_value(request.state, session_instance_key, None)
-    if existing_session is not None:
-        return existing_session
-    session = config_state.config.driver_type(
-        connection=get_connection_from_request(request, config_state),
-        statement_config=config_state.config.statement_config,
-        driver_features=config_state.config.driver_features,
-    )
-    set_state_value(request.state, session_instance_key, session)
+
+async def get_or_create_driver_session_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
+    """Get or create the driver session asynchronously, awaiting session-start hooks.
+
+    Args:
+        request: Starlette request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session (driver instance).
+    """
+    session, created = _resolve_or_build_driver_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            await runtime.emit_session_start_async(session)
     return session
 
 
@@ -196,6 +219,29 @@ def get_scope_tenant(scope: "Mapping[str, Any]", config_state: "SQLSpecConfigSta
         if stored is not None:
             return stored
     return None
+
+
+def _resolve_or_build_driver_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
+    """Return the cached driver session or build and cache a fresh one."""
+    session_instance_key = f"{config_state.session_key}_instance"
+    existing_session = get_state_value(request.state, session_instance_key, None)
+    if existing_session is not None:
+        return existing_session, False
+    config = config_state.config
+    session = config._prepare_driver(
+        config.driver_type(
+            connection=get_connection_from_request(request, config_state),
+            statement_config=config.statement_config,
+            driver_features=config.driver_features,
+        )
+    )
+    if (
+        config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
+        and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+    ):
+        session._auto_begin_on_write = True
+    set_state_value(request.state, session_instance_key, session)
+    return session, True
 
 
 def _state_dict(state: Any) -> dict[str, Any]:

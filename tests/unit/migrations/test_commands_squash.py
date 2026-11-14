@@ -5,6 +5,7 @@ Tests for:
 - AsyncMigrationCommands.squash()
 """
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,12 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.data_dictionary import DDLResult, MetadataSupport, ObjectIdentity
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.squash import MigrationSquasher
 
 
 def _write_users_posts_migrations(migrations_dir: Path) -> None:
@@ -58,7 +62,7 @@ def test_sync_migration_commands_squash_squash_valid_range(tmp_path: Path) -> No
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
     (tmp_path / "0003_posts.sql").write_text("-- name: migrate-0003-up\nCREATE TABLE t3 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -72,7 +76,7 @@ def test_sync_migration_commands_squash_squash_invalid_range_raises_error(tmp_pa
     """Test squash raises error when end version is before start."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -87,7 +91,7 @@ def test_sync_migration_commands_squash_squash_dry_run_does_not_modify_files(tmp
     """Test dry_run mode previews without modifying files."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -103,7 +107,7 @@ def test_sync_migration_commands_squash_squash_update_database_false_skips_track
     """Test update_database=False skips tracker operations by verifying no DB session is opened."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     tracker_mock = Mock()
     config.migration_tracker_type = Mock(return_value=tracker_mock)
@@ -121,7 +125,7 @@ def test_sync_migration_commands_squash_squash_update_database_false_skips_track
 async def test_async_squash_builds_sync_runner_with_migration_context(tmp_path: Path) -> None:
     """Async squash should mirror the sync path and pass a real migration context."""
     (tmp_path / "0001_initial.py").write_text("def up(context): pass\n\ndef down(context): pass\n")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -142,7 +146,7 @@ async def test_async_migration_commands_squash_async_squash_valid_range(tmp_path
     """Test async squash succeeds with valid version range."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -156,7 +160,7 @@ async def test_async_migration_commands_squash_async_squash_invalid_range_raises
     """Test async squash raises error when end version is before start."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = True
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -171,7 +175,7 @@ def test_sync_squash_defaults_squash_defaults_to_all_migrations(tmp_path: Path) 
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
     (tmp_path / "0002_users.sql").write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);")
     (tmp_path / "0003_posts.sql").write_text("-- name: migrate-0003-up\nCREATE TABLE t3 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -184,7 +188,7 @@ def test_sync_squash_defaults_squash_defaults_to_all_migrations(tmp_path: Path) 
 def test_sync_squash_defaults_squash_prompts_for_description(tmp_path: Path) -> None:
     """Test that missing description triggers interactive prompt."""
     (tmp_path / "0001_initial.sql").write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);")
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -198,7 +202,7 @@ def test_sync_squash_defaults_squash_prompts_for_description(tmp_path: Path) -> 
 
 def test_sync_squash_defaults_squash_no_migrations_returns_early(tmp_path: Path) -> None:
     """Test that empty directory returns early when no range given."""
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -219,7 +223,7 @@ def test_sync_squash_auto_discovers_timestamp_migrations_and_defaults_descriptio
     (tmp_path / "20251012153000_alter.sql").write_text(
         "-- name: migrate-20251012153000-up\nALTER TABLE widgets ADD COLUMN label VARCHAR(80);\n", encoding="utf-8"
     )
-    config = Mock(driver_features={})
+    config = Mock(driver_features={}, is_replica=False)
     config.is_async = False
     config.migration_tracker_type = Mock(return_value=Mock())
     config.migration_config = {"script_location": str(tmp_path)}
@@ -312,3 +316,80 @@ async def test_async_default_concat_squash_round_trip(tmp_path: Path) -> None:
 
     assert _schema_and_rows(tmp_path / "author.db")[1] == [("0001", "0001,0002,0003")]
     assert _schema_and_rows(tmp_path / "fresh.db") == (expected_schema, [("0001", "0001,0002,0003")], expected_users)
+
+
+def test_schema_squash_unquotes_dotted_version_table_exclusion(tmp_path: Path) -> None:
+    """MigrationSquasher unquotes dotted schema-qualified version table names before excluding from DDL."""
+    seen_exclusions: list[tuple[str, ...]] = []
+
+    class _FakeDataDictionary:
+        def get_schema_ddl(self, _driver: Any, *, exclude_tables: tuple[str, ...], direction: str) -> list[DDLResult]:
+            seen_exclusions.append(exclude_tables)
+            sql_text = "CREATE TABLE users (id INTEGER);" if direction == "create" else "DROP TABLE users;"
+            return [DDLResult(ObjectIdentity("users", "table"), MetadataSupport.SUPPORTED, ddl=sql_text)]
+
+    class _FakeDriver(SyncDriverAdapterBase):
+        dialect = "sqlite"
+
+        @property
+        def data_dictionary(self) -> Any:
+            return _FakeDataDictionary()
+
+        def __init__(self) -> None:
+            pass
+
+    runner = Mock()
+    runner.context = MigrationContext(driver=_FakeDriver(), dialect="sqlite")
+    squasher = MigrationSquasher(tmp_path, runner, strategy="schema", version_table='"audit.v1"."ddl.migrations"')
+    create_stmts, drop_stmts = squasher._extract_schema_ddl_from_context()  # pyright: ignore[reportPrivateUsage]
+    assert seen_exclusions == [("ddl.migrations",), ("ddl.migrations",)]
+    assert create_stmts == ["CREATE TABLE users (id INTEGER);"]
+    assert drop_stmts == ["DROP TABLE users;"]
+
+
+@pytest.mark.anyio
+async def test_squash_and_fix_restore_backups_on_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BaseException interrupts during squash or fix restore backup files instead of leaving partial edits."""
+    squash_dir = tmp_path / "squash_migrations"
+    _write_users_posts_migrations(squash_dir)
+    squash_cfg = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "squash_cancel.db")},
+        migration_config={"script_location": str(squash_dir), "enabled": True},
+    )
+    try:
+        squash_cmds = AsyncMigrationCommands(squash_cfg)
+        await squash_cmds.upgrade(echo=False)
+
+        async def _cancel_replace(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(squash_cmds.tracker, "replace_with_squash", _cancel_replace)
+        with pytest.raises(asyncio.CancelledError):
+            await squash_cmds.squash(yes=True)
+    finally:
+        await squash_cfg.close_pool()
+
+    assert sorted(p.name for p in squash_dir.glob("*.sql")) == ["0001_users.sql", "0002_email.sql", "0003_posts.sql"]
+
+    fix_dir = tmp_path / "fix_migrations"
+    fix_dir.mkdir()
+    (fix_dir / "20250101120000_first.sql").write_text(
+        "-- name: migrate-20250101120000-up\nCREATE TABLE a (id INT);", encoding="utf-8"
+    )
+    fix_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "fix_cancel.db")},
+        migration_config={"script_location": str(fix_dir), "enabled": True},
+    )
+    try:
+        fix_cmds = SyncMigrationCommands(fix_cfg)
+
+        def _interrupt_ensure(*_args: Any, **_kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(fix_cmds.tracker, "ensure_tracking_table", _interrupt_ensure)
+        with pytest.raises(KeyboardInterrupt):
+            fix_cmds.fix(yes=True)
+    finally:
+        fix_cfg.close_pool()
+
+    assert sorted(p.name for p in fix_dir.glob("*.sql")) == ["20250101120000_first.sql"]

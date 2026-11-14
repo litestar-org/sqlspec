@@ -3,12 +3,15 @@
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.snowflake._typing import SnowflakeSessionContext
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
 from sqlspec.adapters.snowflake.core import apply_driver_features, build_statement_config, normalize_connection_params
 from sqlspec.core import ParameterStyle
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -193,6 +196,7 @@ def test_config_preserves_query_tag_when_correlating_cached_statements(
                 with CorrelationContext.context(correlation_id):
                     assert session.select("SELECT 1 AS ID") == [{"id": 1}]
             session.select("SELECT 1 AS ID")
+        assert session.connection is _DETACHED_CONNECTION
         assert [call[2] for call in snowflake_connection.calls] == [
             {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-a"}},
             {"_statement_params": {"QUERY_TAG": f"{expected_tag}:request-b"}},
@@ -229,6 +233,7 @@ def test_named_profile_query_tag_is_preserved_for_correlation(
     try:
         with config.provide_session() as session, CorrelationContext.context("request-a"):
             session.select("SELECT 1 AS ID")
+        assert session.connection is _DETACHED_CONNECTION
         assert snowflake_connection.calls[-1][2] == {"_statement_params": {"QUERY_TAG": "profile-report:request-a"}}
     finally:
         config.close_pool()
@@ -241,3 +246,108 @@ def test_derive_pool_routes_query_tag_to_session_parameters() -> None:
     assert derived.connection_config["query_tag"] == "etl"
     assert "query_tag" not in derived.driver_features
     assert normalize_connection_params(derived.connection_config)["session_parameters"]["QUERY_TAG"] == "etl"
+
+
+def test_derive_aliases_replace_inherited_auth_and_session_settings() -> None:
+    primary = SnowflakeConfig(
+        connection_config={
+            "account": "acct",
+            "user": "writer",
+            "auth_type": "jwt",
+            "session_parameters": {"QUERY_TAG": "etl", "TIMEZONE": "America/New_York"},
+        }
+    )
+    replica = primary.derive_pool(
+        username="reader", auth_type="password", password="pw", query_tag="bi_ro", timezone="UTC"
+    )
+    assert replica.connection_config["user"] == "reader"
+    assert "authenticator" not in replica.connection_config
+    normalized = normalize_connection_params(replica.connection_config)
+    assert normalized["session_parameters"] == {"QUERY_TAG": "bi_ro", "TIMEZONE": "UTC"}
+    assert primary.connection_config["session_parameters"] == {"QUERY_TAG": "etl", "TIMEZONE": "America/New_York"}
+
+
+def test_replica_warehouse_and_url_shorthands() -> None:
+    primary = SnowflakeConfig(
+        connection_config={"account": "acct", "user": "writer"},
+        replicas=["COMPUTE_WH_RO", "snowflake://reader:pw@acct/db/public?warehouse=WH2&role=ANALYST"],
+    )
+    first, second = primary.replica_groups["default"].configs
+    assert first.connection_config["warehouse"] == "COMPUTE_WH_RO"
+    assert second.connection_config["warehouse"] == "WH2"
+    assert second.connection_config["role"] == "ANALYST"
+    assert second.connection_config["user"] == "reader"
+    with pytest.raises(ImproperConfigurationError):
+        SnowflakeConfig(replicas=True)
+
+
+def test_derived_auth_and_passphrase_aliases_do_not_mutate_parent_or_eagerly_resolve_tokens() -> None:
+    calls: list[str] = []
+
+    def token() -> str:
+        calls.append("token")
+        return "credential"
+
+    primary = SnowflakeConfig(
+        connection_config={
+            "account": "acct",
+            "user": "writer",
+            "auth_type": "jwt",
+            "private_key_file": "writer.pem",
+            "private_key_file_pwd": "old",
+            "session_parameters": {"QUERY_TAG": "parent"},
+            "auth_token_provider": token,
+        }
+    )
+    password = primary.derive_pool(auth_type="password", password="pw")
+    assert normalize_connection_params(password.connection_config)["password"] == "pw"
+    assert calls == []
+    changed = primary.derive_pool(
+        private_key_passphrase="new",
+        query_tag="shortcut",
+        connection_config_overrides={"session_parameters": {"QUERY_TAG": "explicit"}},
+    )
+    normalized = normalize_connection_params(changed.connection_config)
+    assert normalized["private_key_file_pwd"] == "new"
+    assert normalized["session_parameters"]["QUERY_TAG"] == "explicit"
+    assert primary.connection_config["private_key_file_pwd"] == "old"
+    assert primary.connection_config["session_parameters"]["QUERY_TAG"] == "parent"
+
+
+@pytest.mark.parametrize("mode", ["clean", "body-error", "prepare-error"])
+def test_snowflake_session_context_detaches_driver_after_release(mode: str) -> None:
+    """SnowflakeSessionContext releases the live connection first and detaches the driver across exit and enter failures."""
+    conn = MagicMock()
+    released_while_attached: list[bool] = []
+    holder: list[Any] = []
+
+    def prepare(driver: Any) -> Any:
+        holder.append(driver)
+        if mode == "prepare-error":
+            raise RuntimeError("snowflake prepare failed")
+        return driver
+
+    def release(released_conn: Any, **_kwargs: Any) -> None:
+        assert released_conn is conn
+        released_while_attached.append(holder[0].connection is conn)
+
+    ctx = SnowflakeSessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=release,
+        statement_config=build_statement_config(),
+        driver_features={},
+        prepare_driver=prepare,
+    )
+    if mode == "prepare-error":
+        with pytest.raises(RuntimeError, match="snowflake prepare failed"), ctx:
+            pytest.fail("prepare failure must abort __enter__")
+    elif mode == "body-error":
+        with pytest.raises(ValueError, match="snowflake body failed"), ctx as session:
+            raise ValueError("snowflake body failed")
+        assert session is holder[0]
+    else:
+        with ctx as session:
+            assert session.connection is conn
+
+    assert released_while_attached == [True]
+    assert holder[0].connection is _DETACHED_CONNECTION

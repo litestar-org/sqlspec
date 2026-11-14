@@ -84,14 +84,19 @@ class SnowflakeSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver = self._driver
             try:
-                if self._driver is not None:
+                if driver is not None:
                     with contextlib.suppress(Exception):
-                        self._driver.close()
+                        driver.close()
             finally:
                 self._driver = None
                 self._connection = None
-                self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+                try:
+                    self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+                finally:
+                    if driver is not None:
+                        driver._detach_connection()
             raise
 
     def __exit__(
@@ -109,3 +114,6 @@ class SnowflakeSessionContext:
         else:
             if connection is not None:
                 self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+        finally:
+            if driver is not None:
+                driver._detach_connection()

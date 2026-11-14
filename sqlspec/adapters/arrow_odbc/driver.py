@@ -765,7 +765,7 @@ def _inline_mssql_pagination_parameters(
             or statement_config.parameter_config.output_transformer is not None
         )
     ):
-        parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql))
+        parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect="tsql"))
     positions = {parameter.position: parameter.ordinal for parameter in parameter_info}
     replacements: list[tuple[int, str]] = []
     consumed: set[int] = set()

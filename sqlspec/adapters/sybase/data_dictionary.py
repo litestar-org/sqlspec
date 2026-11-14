@@ -93,32 +93,6 @@ def build_column_metadata(rows: "Iterable[dict[str, Any]]") -> "list[ColumnMetad
     ]
 
 
-def _catalog_flag(value: object) -> bool:
-    if isinstance(value, str):
-        return value.strip().upper() in {"YES", "Y", "TRUE", "1"}
-    return bool(value)
-
-
-def _merge_definition_rows(
-    rows: "Iterable[dict[str, Any]]", identity_fields: "tuple[str, ...]", text_fields: "tuple[str, ...]"
-) -> "list[dict[str, Any]]":
-    """Assemble catalog definition chunks without changing their whitespace or multiplicity."""
-    chunk_fields = ("_definition_id", "_definition_number", "_definition_colid2", "_definition_colid")
-    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for row in rows:
-        key = tuple(row.get(field) for field in identity_fields)
-        grouped.setdefault(key, []).append(row)
-    result: list[dict[str, Any]] = []
-    for chunks in grouped.values():
-        ordered = sorted(chunks, key=lambda row: tuple(int(row.get(field) or 0) for field in chunk_fields))
-        merged = {field: value for field, value in ordered[0].items() if field not in chunk_fields}
-        for field in text_fields:
-            parts = [str(row[field]) for row in ordered if row.get(field) is not None]
-            merged[field] = "".join(parts) if parts else None
-        result.append(merged)
-    return result
-
-
 def build_index_metadata(rows: "Iterable[dict[str, Any]]") -> "list[IndexMetadata]":
     """Group per-column Sybase sysindexes rows into index metadata."""
     indexes_map: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -353,6 +327,32 @@ class SybaseSyncDataDictionary(SyncDataDictionaryBase):
         query = self.get_query("schemas", "by_schema")
         rows = driver.select(query, schema_name=None)
         return MetadataResult("schemas", items=tuple(rows))
+
+
+def _catalog_flag(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().upper() in {"YES", "Y", "TRUE", "1"}
+    return bool(value)
+
+
+def _merge_definition_rows(
+    rows: "Iterable[dict[str, Any]]", identity_fields: "tuple[str, ...]", text_fields: "tuple[str, ...]"
+) -> "list[dict[str, Any]]":
+    """Assemble catalog definition chunks without changing their whitespace or multiplicity."""
+    chunk_fields = ("_definition_id", "_definition_number", "_definition_colid2", "_definition_colid")
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = tuple(row.get(field) for field in identity_fields)
+        grouped.setdefault(key, []).append(row)
+    result: list[dict[str, Any]] = []
+    for chunks in grouped.values():
+        ordered = sorted(chunks, key=lambda row: tuple(int(row.get(field) or 0) for field in chunk_fields))
+        merged = {field: value for field, value in ordered[0].items() if field not in chunk_fields}
+        for field in text_fields:
+            parts = [str(row[field]) for row in ordered if row.get(field) is not None]
+            merged[field] = "".join(parts) if parts else None
+        result.append(merged)
+    return result
 
 
 SybaseDataDictionary = SybaseSyncDataDictionary

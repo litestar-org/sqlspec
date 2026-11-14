@@ -6,13 +6,16 @@ from collections.abc import Mapping
 from typing import Any, NotRequired, get_args, get_origin, get_type_hints
 from unittest.mock import MagicMock
 
+import pymysql
 import pytest
 
+import sqlspec.adapters.pymysql.pool as _pymysql_pool
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
-from sqlspec.exceptions import DatabaseConnectionError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -243,9 +246,9 @@ def test_pymysql_config_with_dsn_applies_to_connection_parameters() -> None:
 
 
 def test_pool_discards_connection_after_rollback_failure() -> None:
-    broken = MagicMock(server_status=1)
+    broken = MagicMock(server_status=1, get_autocommit=MagicMock(return_value=False))
     broken.rollback.side_effect = RuntimeError("rollback failed")
-    replacement = MagicMock(server_status=0)
+    replacement = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
     factory = MagicMock(side_effect=[broken, replacement])
     pool = PyMysqlConnectionPool({}, connection_factory=factory)
     try:
@@ -281,13 +284,18 @@ def test_pool_checked_out_tracks_acquire_and_release_and_retires_unbuffered() ->
         pool.close()
 
 
-def test_pool_new_connection_closes_connection_when_hook_raises() -> None:
+@pytest.mark.parametrize("failure_stage", ["read_only", "hook"])
+def test_pool_new_connection_closes_connection_when_initialization_raises(failure_stage: str) -> None:
     raw_conn = MagicMock(server_status=0)
+    if failure_stage == "read_only":
+        raw_conn.cursor.return_value.__enter__.return_value.execute.side_effect = RuntimeError("hook boom")
 
     def _bad_hook(_conn: object) -> None:
         raise RuntimeError("hook boom")
 
-    pool = PyMysqlConnectionPool({}, on_connection_create=_bad_hook, connection_factory=lambda: raw_conn)
+    pool = PyMysqlConnectionPool(
+        {}, on_connection_create=_bad_hook, connection_factory=lambda: raw_conn, read_only=failure_stage == "read_only"
+    )
     try:
         with pytest.raises(RuntimeError, match="hook boom"):
             pool.acquire()
@@ -336,3 +344,191 @@ def test_pool_health_check_bypassed_when_interval_zero() -> None:
         assert not raw_conn.ping.called
     finally:
         pool.close()
+
+
+def test_pymysqlconfig_replica_shorthands_preserve_overrides() -> None:
+    from sqlspec.adapters.pymysql.config import PyMysqlConfig
+
+    config = PyMysqlConfig(
+        connection_config={"host": "writer", "user": "writer", "database": "app"},
+        replicas=["mysql://reader:pw@replica:3307/reporting", "standby:3308"],
+    )
+    replicas = config.replica_groups["default"].configs
+    assert replicas[0].connection_config["host"] == "replica"
+    assert replicas[0].connection_config["port"] == 3307
+    assert replicas[0].connection_config["user"] == "reader"
+    assert replicas[0].connection_config.get("database", replicas[0].connection_config.get("db")) == "reporting"
+    assert replicas[1].connection_config["host"] == "standby"
+    assert replicas[1].connection_config["port"] == 3308
+    assert replicas[0].connection_config["read_only"] is True
+    assert config.connection_config["host"] == "writer"
+
+
+def test_pymysqlconfig_derive_alias_overrides_replace_inherited_values() -> None:
+    from sqlspec.adapters.pymysql.config import PyMysqlConfig
+
+    config = PyMysqlConfig(connection_config={"host": "writer", "user": "writer", "password": "old", "database": "app"})
+    derived = config.derive_pool(username="reader", passwd="new", db="reporting")
+    assert derived.connection_config["user"] == "reader"
+    assert derived.connection_config["password"] == "new"
+    assert derived.connection_config.get("database", derived.connection_config.get("db")) == "reporting"
+    assert config.connection_config["user"] == "writer"
+
+
+def test_pymysqlconfig_explicit_read_write_replica_preserves_init_command() -> None:
+    from sqlspec.adapters.pymysql.config import PyMysqlConfig
+
+    config = PyMysqlConfig(replicas=[{"host": "replica", "read_only": False, "init_command": "SET @probe = 1"}])
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "SET @probe = 1"
+    assert replica.connection_config["read_only"] is False
+
+
+def test_pymysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
+    from sqlspec.adapters.pymysql.config import PyMysqlConfig
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = PyMysqlConfig(
+        connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
+    )
+    replica = config.replica_groups["default"].configs[0]
+    assert replica.connection_config["init_command"] == "set session transaction read only"
+    with pytest.raises(ImproperConfigurationError):
+        PyMysqlConfig(replicas=True)
+    with pytest.raises(ImproperConfigurationError):
+        PyMysqlConfig(replicas=["postgres://replica"])
+    with pytest.raises(ImproperConfigurationError):
+        PyMysqlConfig(replicas=[""])
+
+
+@pytest.mark.parametrize("override_key", ["dsn", "url", "connection_string"])
+def test_pymysqlconfig_dsn_override_replaces_inherited_primary_endpoint(override_key: str) -> None:
+    """Supplying a DSN override clears inherited primary endpoint parameters."""
+    primary = PyMysqlConfig(
+        connection_config={"dsn": "mysql://u1:p1@pri:3306/d1", "unix_socket": "/tmp/pri.sock"},
+        replicas=[{override_key: "mysql://u2:p2@rep2:3308/d2"}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    override_kwargs: dict[str, Any] = {override_key: "mysql://u3:p3@rep3:3309/d3"}
+    derived = primary.derive_pool(**override_kwargs)
+
+    assert replica.connection_config["user"] == "u2"
+    assert replica.connection_config["password"] == "p2"
+    assert replica.connection_config["host"] == "rep2"
+    assert replica.connection_config["port"] == 3308
+    assert replica.connection_config["database"] == "d2"
+    assert "unix_socket" not in replica.connection_config
+    assert derived.connection_config["user"] == "u3"
+    assert derived.connection_config["password"] == "p3"
+    assert derived.connection_config["host"] == "rep3"
+    assert derived.connection_config["port"] == 3309
+    assert derived.connection_config["database"] == "d3"
+    assert "unix_socket" not in derived.connection_config
+    assert primary.connection_config["host"] == "pri"
+    assert primary.connection_config["database"] == "d1"
+
+
+def test_provide_session_detaches_driver_on_exit() -> None:
+    raw_conn = MagicMock(server_status=0)
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    config = PyMysqlConfig(connection_instance=pool)
+    try:
+        with config.provide_session() as session:
+            assert session.connection is raw_conn
+
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+    finally:
+        pool.close()
+
+
+def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    config = PyMysqlConfig(connection_instance=pool)
+    seen: list[Any] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+    try:
+        with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+            pass
+
+        assert pool.checked_out() == 0
+        assert seen[0].connection is _DETACHED_CONNECTION
+    finally:
+        pool.close()
+
+
+def test_pymysql_pool_close_resets_checked_out() -> None:
+    raw_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    pool.acquire()
+    assert pool.checked_out() == 1
+    pool.close()
+    assert pool.checked_out() == 0
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (PyMysqlMySQLError(1040, "Too many connections"), DatabaseConnectionError),
+        (pymysql.err.InterfaceError("Socket lost"), DatabaseConnectionError),
+        (pymysql.err.OperationalError("Server lost"), OperationalError),
+    ],
+)
+def test_pymysql_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Connection errors map at config boundaries and fail over read replicas."""
+    healthy_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+
+    def fake_connect(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(_pymysql_pool, "_pymysql_connect", fake_connect)
+    config = PyMysqlConfig(connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"])
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = PyMysqlConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+        with pytest.raises(expected_mapped) as exc_info:
+            with failing_only.provide_connection():
+                pass
+        assert exc_info.value.__cause__ is driver_exc
+        failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_pymysql_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through provide_read_session without failover."""
+    hook_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    monkeypatch.setattr(_pymysql_pool, "_pymysql_connect", lambda **_kwargs: hook_conn)
+    attempted: list[str] = []
+
+    def failing_hook(_conn: Any) -> None:
+        attempted.append("called")
+        raise RuntimeError("hook boom")
+
+    config = PyMysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+            pass
+        assert attempted == ["called"]
+        hook_conn.close.assert_called_once()
+    finally:
+        config.close_pool()

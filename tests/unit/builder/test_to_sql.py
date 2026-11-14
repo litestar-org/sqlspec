@@ -366,3 +366,12 @@ def test_to_sql_show_parameters_substitutes_dialect_placeholder_style(dialect: "
     assert "@id" not in rendered
     assert "$id" not in rendered
     assert ":id" not in rendered
+
+
+def test_to_sql_show_parameters_preserves_placeholders_inside_string_literals() -> None:
+    """show_parameters does not substitute placeholder tokens that appear inside string literals."""
+    query = sql.select("*").from_("users").where("note = ':name' AND name = :name")
+    query.add_parameter("alice", "name")
+    rendered = query.to_sql(show_parameters=True)
+    assert "':name'" in rendered
+    assert "'alice'" in rendered

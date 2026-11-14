@@ -29,13 +29,6 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
     def __init__(self, config: "TeradataConfig") -> None:
         super().__init__(config)
 
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        schema, table = split_schema_and_table(table_name)
-        if schema is not None:
-            BaseSQLSpecStore._ensure_table_name(schema)
-        BaseSQLSpecStore._ensure_table_name(table)
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
@@ -72,17 +65,6 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
-    def _table_ddl(self) -> str:
-        return (
-            f"CREATE MULTISET TABLE {format_table_ref(self._table_name)} ("
-            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, data BLOB NOT NULL, "
-            "expires_at TIMESTAMP(6) WITH TIME ZONE)"
-        )
-
-    def _schema_target(self) -> SchemaTarget:
-        schema, table = split_schema_and_table(self._table_name)
-        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="vantage")
-
     def get_companion_indexes(self) -> list[CompanionIndex]:
         schema, table = split_schema_and_table(self._table_name)
         name = f"idx_{table}_expires_at"
@@ -95,12 +77,30 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
             )
         ]
 
-    def _drop_table_sql(self) -> list[str]:
-        return [f"DROP TABLE {format_table_ref(self._table_name)}"]
-
     def downgrade_drops(self) -> "list[DropStatement]":
         """Return the catalog-probed drop for the session table."""
         return [build_guarded_drop_table(self._table_name)]
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        schema, table = split_schema_and_table(table_name)
+        if schema is not None:
+            BaseSQLSpecStore._ensure_table_name(schema)
+        BaseSQLSpecStore._ensure_table_name(table)
+
+    def _table_ddl(self) -> str:
+        return (
+            f"CREATE MULTISET TABLE {format_table_ref(self._table_name)} ("
+            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, data BLOB NOT NULL, "
+            "expires_at TIMESTAMP(6) WITH TIME ZONE)"
+        )
+
+    def _schema_target(self) -> SchemaTarget:
+        schema, table = split_schema_and_table(self._table_name)
+        return SchemaTarget.from_ddl(table, self._table_ddl(), schema=schema, dialect="vantage")
+
+    def _drop_table_sql(self) -> list[str]:
+        return [f"DROP TABLE {format_table_ref(self._table_name)}"]
 
     def _create_table(self) -> None:
         schema, table = split_schema_and_table(self._table_name)
@@ -128,7 +128,7 @@ class TeradataStore(BaseSQLSpecStore["TeradataConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if renew_for is not None and expires_at is not None:
+            if self._should_renew(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     with TeradataCursor(conn) as update_cursor:

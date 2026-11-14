@@ -112,3 +112,16 @@ def test_commit_and_rollback_map_duckdb_errors_and_reset_transaction_active() ->
     with pytest.raises(SQLSpecError):
         driver.rollback()
     assert driver._transaction_active is False  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("method", ["commit", "rollback"])
+def test_idle_and_manual_begin_commit_and_rollback(duckdb_stack_session: "DuckDBDriver", method: str) -> None:
+    """Idle commit/rollback are no-ops and still end manually opened BEGIN TRANSACTION blocks."""
+    session = duckdb_stack_session
+    getattr(session, method)()
+    assert session._connection_in_transaction() is False
+
+    session.execute("BEGIN TRANSACTION")
+    session.execute("INSERT INTO stack_txn_table (id) VALUES (99)")
+    getattr(session, method)()
+    assert _table_count(session) == (1 if method == "commit" else 0)

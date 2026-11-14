@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, overload
 
 from fastapi import Request
 
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
@@ -197,6 +198,34 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         return dependency
 
+    def provide_read_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a mode-aware read session dependency for a registered configuration."""
+        return self._read_routing_dependency(key, "session")
+
+    def provide_async_read_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a read session dependency requiring an asynchronous configuration."""
+        return self._read_routing_dependency(key, "session", require_async=True)
+
+    def provide_sync_read_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a read session dependency requiring a synchronous configuration."""
+        return self._read_routing_dependency(key, "session", require_async=False)
+
+    def provide_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a mode-aware raw read connection dependency."""
+        return self._read_routing_dependency(key, "connection")
+
+    def provide_async_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a raw read connection dependency requiring an async configuration."""
+        return self._read_routing_dependency(key, "connection", require_async=True)
+
+    def provide_sync_read_connection(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a raw read connection dependency requiring a sync configuration."""
+        return self._read_routing_dependency(key, "connection", require_async=False)
+
+    def provide_routing_session(self, key: Any = None) -> "Callable[..., Any]":
+        """Build a lazy routing facade dependency without driver response schemas."""
+        return self._read_routing_dependency(key, "routing")
+
     @staticmethod
     def provide_filters(
         config: "FilterConfig", dep_defaults: "DependencyDefaults | None" = None
@@ -220,6 +249,37 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         return _provide_filters(config, dep_defaults=dep_defaults)
 
+    def _read_routing_dependency(
+        self, key: Any, kind: str, *, require_async: bool | None = None
+    ) -> "Callable[..., Any]":
+        try:
+            state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        except (KeyError, ValueError, IndexError) as error:
+            msg = f"Cannot resolve database configuration {key!r}"
+            raise ImproperConfigurationError(msg) from error
+        if require_async is not None and state.config.is_async is not require_async:
+            msg = "Dependency sync/async mode does not match the selected database configuration"
+            raise ImproperConfigurationError(msg)
+        if state.config.is_async:
+
+            async def async_dependency(request: Request) -> Any:
+                if kind == "session":
+                    return await self.get_read_session_async(request, state.config)
+                if kind == "connection":
+                    return await self.get_read_connection_async(request, state.config)
+                return await self.get_routing_session_async(request, state.config)
+
+            return async_dependency
+
+        def sync_dependency(request: Request) -> Any:
+            if kind == "session":
+                return self.get_read_session(request, state.config)
+            if kind == "connection":
+                return self.get_read_connection(request, state.config)
+            return self.get_routing_session(request, state.config)
+
+        return sync_dependency
+
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract FastAPI settings from config.extension_config.
 
@@ -238,6 +298,27 @@ class SQLSpecPlugin(_StarlettePlugin):
             "connection_key": framework_config.get("connection_key", "db_connection"),
             "pool_key": pool_key,
             "session_key": framework_config.get("session_key", "db_session"),
+            "read_session_key": framework_config.get(
+                "read_session_key",
+                "read_session"
+                if framework_config.get("session_key", "db_session") == "db_session"
+                else f"{framework_config['session_key']}_read",
+            ),
+            "read_connection_key": framework_config.get(
+                "read_connection_key",
+                "read_connection"
+                if framework_config.get("connection_key", "db_connection") == "db_connection"
+                else f"{framework_config['connection_key']}_read",
+            ),
+            "read_pool_key": framework_config.get(
+                "read_pool_key", "read_pool" if pool_key == "db_pool" else f"{pool_key}_read"
+            ),
+            "routing_session_key": framework_config.get("routing_session_key"),
+            "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
+            "routing_header": framework_config.get("routing_header"),
+            "write_pin_cookie": framework_config.get("write_pin_cookie"),
+            "routing_secret": framework_config.get("routing_secret"),
             "commit_mode": framework_config.get("commit_mode", "manual"),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),

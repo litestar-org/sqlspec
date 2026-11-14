@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from typing import Any, ClassVar, Final, TypedDict, final
 from urllib.parse import quote, unquote
 
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 
 from sqlspec.observability import get_trace_context
@@ -427,14 +428,22 @@ def _traceparent(trace_id: str, span_id: str) -> str:
 
 
 @final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _NoOpSQLCommenterTransformer:
     __slots__ = ()
 
     def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         return expression, params
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _NoOpSQLCommenterTransformer)
+
+    def __hash__(self) -> int:
+        return hash(_NoOpSQLCommenterTransformer)
+
 
 @final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _StaticSQLCommenterTransformer:
     __slots__ = ("_comment_body",)
 
@@ -446,10 +455,19 @@ class _StaticSQLCommenterTransformer:
             expression.add_comments([self._comment_body])
         return expression, params
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _StaticSQLCommenterTransformer):
+            return False
+        return self._comment_body == other._comment_body
+
+    def __hash__(self) -> int:
+        return hash(self._comment_body)
+
 
 @final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _DynamicSQLCommenterTransformer:
-    __slots__ = ("_enable_context", "_enable_correlation_id", "_enable_traceparent", "_static_attrs")
+    __slots__ = ("_attrs_key", "_enable_context", "_enable_correlation_id", "_enable_traceparent", "_static_attrs")
 
     def __init__(
         self,
@@ -460,6 +478,7 @@ class _DynamicSQLCommenterTransformer:
         enable_correlation_id: bool = False,
     ) -> None:
         self._static_attrs = dict(static_attrs)
+        self._attrs_key = tuple(sorted(self._static_attrs.items()))
         self._enable_traceparent = enable_traceparent
         self._enable_context = enable_context
         self._enable_correlation_id = enable_correlation_id
@@ -472,6 +491,19 @@ class _DynamicSQLCommenterTransformer:
             enable_correlation_id=self._enable_correlation_id,
         )
         return append_comment(expression, merged), params
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _DynamicSQLCommenterTransformer):
+            return False
+        return (
+            self._attrs_key == other._attrs_key
+            and self._enable_traceparent == other._enable_traceparent
+            and self._enable_context == other._enable_context
+            and self._enable_correlation_id == other._enable_correlation_id
+        )
+
+    def __hash__(self) -> int:
+        return hash((self._attrs_key, self._enable_traceparent, self._enable_context, self._enable_correlation_id))
 
 
 _NOOP_SQLCOMMENTER_TRANSFORMER: Final = _NoOpSQLCommenterTransformer()

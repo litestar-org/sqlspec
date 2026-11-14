@@ -783,3 +783,63 @@ def test_quote_identifier_for_dialect_uppercases_unquoted_teradata_identifiers(d
     assert _quote_identifier_for_dialect("adk_memory", dialect) == '"ADK_MEMORY"'
     assert _quote_identifier_for_dialect("mart.adk_memory", dialect) == '"MART"."ADK_MEMORY"'
     assert _quote_identifier_for_dialect('"mart"."adk_memory"', dialect) == '"mart"."adk_memory"'
+
+
+def test_adk_memory_verify_exits_nonzero_after_reporting_all_configs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sqlspec adk memory verify reports every config before exiting 1 when any table check fails."""
+    pytest.importorskip("google.adk")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "verify_fail_cfg.py").write_text(
+        """
+from contextlib import contextmanager
+from sqlspec.adapters.sqlite import SqliteConfig
+
+class _FailingDriver:
+    dialect = "sqlite"
+
+    def execute(self, sql):
+        raise RuntimeError("no such table: missing_memory")
+
+class _OkDriver:
+    dialect = "sqlite"
+
+    def execute(self, sql):
+        return None
+
+class _FailConfig(SqliteConfig):
+    @contextmanager
+    def provide_session(self, *args, **kwargs):
+        yield _FailingDriver()
+
+class _OkConfig(SqliteConfig):
+    @contextmanager
+    def provide_session(self, *args, **kwargs):
+        yield _OkDriver()
+
+def get_configs():
+    return [
+        _FailConfig(
+            bind_key="failing",
+            connection_config={"database": ":memory:"},
+            extension_config={"adk": {"memory_table": "missing_memory", "enable_memory": True}},
+        ),
+        _OkConfig(
+            bind_key="healthy",
+            connection_config={"database": ":memory:"},
+            extension_config={"adk": {"memory_table": "healthy_memory", "enable_memory": True}},
+        ),
+    ]
+""",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        add_migration_commands(), ["--config", "verify_fail_cfg.get_configs", "adk", "memory", "verify"]
+    )
+    assert result.exit_code == 1
+    cleaned = _strip_ansi(result.output)
+    assert "failing: no such table: missing_memory" in cleaned
+    assert "healthy: memory table reachable" in cleaned
+    assert "Memory table verification failed for: failing" in cleaned

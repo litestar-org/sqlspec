@@ -236,3 +236,10 @@ def test_update_set_binds_plain_string_values(value: str) -> None:
 
     assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "a" = %(a)s'
     assert statement.parameters == {"a": value}
+
+
+def test_update_set_splits_table_qualified_column_target() -> None:
+    """Qualified column names in UPDATE SET split into table and column identifiers."""
+    statement = sql.update("t", dialect="postgres").set("t.a", 42).build()
+    assert " ".join(statement.sql.split()) == 'UPDATE "t" SET "t"."a" = %(a)s'
+    assert statement.parameters == {"a": 42}

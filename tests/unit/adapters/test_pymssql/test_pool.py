@@ -6,6 +6,8 @@ from typing import Any, cast
 
 import pytest
 
+import sqlspec.adapters.pymssql.pool as pool_module
+from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor, FakePymssqlModule
 
 
@@ -312,5 +314,85 @@ def test_pymssql_pool_nested_cancelled_error_preserves_thread_connection(monkeyp
             assert connection.closed is False
 
         assert connection.closed is False
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_pymssql_pool_checkin_rolls_back_only_when_autocommit_off(
+    monkeypatch: pytest.MonkeyPatch, autocommit: bool
+) -> None:
+    """Outermost pool checkin rolls back uncommitted work only when autocommit_state is False."""
+    connection = FakeConnection()
+    connection.autocommit(autocommit)
+    monkeypatch.setattr(pool_module, "pymssql", FakePymssqlModule(connection))
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert connection.rollbacks == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()
+
+
+def test_pymssql_pool_failed_checkin_rollback_retires_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing checkin rollback closes and retires the thread-local connection and propagates on clean exit."""
+    first = FakeConnection()
+    first.autocommit(False)
+    second = FakeConnection()
+    connections = [first, second]
+
+    def fail_rollback() -> None:
+        raise OSError("tds socket broken")
+
+    monkeypatch.setattr(first, "rollback", fail_rollback)
+
+    class MultiConnectModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            self.connect_calls.append(kwargs)
+            return connections.pop(0)
+
+    monkeypatch.setattr(pool_module, "pymssql", MultiConnectModule())
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        with pytest.raises(OSError, match="tds socket broken"), pool.get_connection():
+            pass
+        assert first.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+
+        with pool.get_connection() as replacement:
+            assert cast("object", replacement) is second
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_pymssql_pool_nested_acquire_rolls_back_only_on_outermost_release(
+    monkeypatch: pytest.MonkeyPatch, autocommit: bool
+) -> None:
+    """Nested acquire/release pairs on the same thread roll back only when the outermost handle releases."""
+    connection = FakeConnection()
+    connection.autocommit(autocommit)
+    monkeypatch.setattr(pool_module, "pymssql", FakePymssqlModule(connection))
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        outer = pool.acquire()
+        inner = pool.acquire()
+        assert inner is outer
+        assert pool.checked_out() == 2
+
+        pool.release(inner)
+        assert pool.checked_out() == 1
+        assert connection.rollbacks == 0
+
+        pool.release(outer)
+        assert pool.checked_out() == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
     finally:
         pool.close()

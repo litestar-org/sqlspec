@@ -1,10 +1,11 @@
 """Unit tests for canonicalized checksum computation."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations.runner import BaseMigrationRunner, SyncMigrationRunner
 
 
 @pytest.fixture
@@ -241,7 +242,7 @@ def test_checksum_empty_file(temp_migrations_dir: Path) -> None:
     checksum = runner.calculate_checksum("")
 
     assert isinstance(checksum, str)
-    assert len(checksum) == 32
+    assert len(checksum) == 64
 
 
 def test_checksum_only_headers(temp_migrations_dir: Path) -> None:
@@ -341,3 +342,54 @@ CREATE TABLE users (id INTEGER);
     expected_checksum = runner.calculate_checksum(content_header_only_removed)
 
     assert checksum == expected_checksum
+
+
+@pytest.mark.parametrize(
+    ("digest_mode", "content_variant", "uppercase", "expected"),
+    [
+        ("sha256", "same", False, True),
+        ("sha256", "same", True, True),
+        ("sha256", "renamed", False, True),
+        ("sha256", "modified", False, False),
+        ("md5", "same", False, True),
+        ("md5", "same", True, True),
+        ("md5", "renamed", False, True),
+        ("md5", "modified", False, False),
+        ("empty", "same", False, False),
+        ("manual-stamp", "same", False, False),
+        ("non-ascii", "same", False, False),
+    ],
+)
+def test_verify_migration_checksum_supports_sha256_and_legacy_md5(
+    tmp_path: Path, digest_mode: str, content_variant: str, uppercase: bool, expected: bool
+) -> None:
+    """Verify BaseMigrationRunner.verify_migration_checksum handles SHA-256, legacy MD5, and mismatches."""
+    original_content = (
+        "-- Version: 20251011120000\n-- name: migrate-20251011120000-up\nCREATE TABLE items (id INTEGER PRIMARY KEY);\n"
+    )
+    renamed_content = "-- Version: 0001\n-- name: migrate-0001-up\nCREATE TABLE items (id INTEGER PRIMARY KEY);\n"
+    modified_content = (
+        "-- Version: 0001\n-- name: migrate-0001-up\nCREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);\n"
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    canonical_original = BaseMigrationRunner._canonicalize_migration_content(original_content)  # pyright: ignore[reportPrivateUsage]
+    if digest_mode == "sha256":
+        recorded = runner.calculate_checksum(original_content)
+        assert len(recorded) == 64
+    elif digest_mode == "md5":
+        recorded = hashlib.md5(canonical_original.encode("utf-8"), usedforsecurity=False).hexdigest()
+        assert len(recorded) == 32
+    elif digest_mode == "non-ascii":
+        recorded = "caf\xe9"
+    else:
+        recorded = "" if digest_mode == "empty" else digest_mode
+
+    if uppercase:
+        recorded = recorded.upper()
+
+    candidate_content = {"same": original_content, "renamed": renamed_content, "modified": modified_content}[
+        content_variant
+    ]
+
+    assert BaseMigrationRunner.verify_migration_checksum(candidate_content, recorded) is expected

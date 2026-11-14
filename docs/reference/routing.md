@@ -1,0 +1,81 @@
+# Routing APIs
+
+```python
+from sqlspec.config import ReadReplicaGroup
+from sqlspec.core.routing import (
+    RandomSelector,
+    ReplicaHealthBreaker,
+    ReplicaSpec,
+    RoundRobinSelector,
+)
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    RoutingScope,
+    SQLSpecRoutingMiddleware,
+    sign_write_pin,
+    verify_write_pin,
+)
+```
+
+Use [Read Replicas](../learn/recipes/read-replicas.md) for setup and [Replica Operations](../learn/recipes/read-replicas-operations.md) for freshness and failure policy. Context scopes select intent; database roles and policies still govern access and write permission.
+
+`RoutingContext.replica()` requires a reader and never falls back to the primary. Missing replica groups or exhausted readers raise `ReplicaUnavailableError`. Automatic read providers retain configured fallback. Outside an active transaction, an explicit replica scope can override a historical write pin; normal automatic routing remains pinned. A conflicting replica choice during a primary transaction raises an error.
+
+## Routing Context and ASGI Middleware
+
+::: sqlspec.utils.routing.RoutingEntry
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.utils.routing.RoutingContextPayload
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.utils.routing.RoutingScope
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.utils.routing.RoutingContext
+    options:
+      heading_level: 4
+      members: [current, get_entry, mark_write, scope, primary, replica, auto, set, reset, clear]
+
+::: sqlspec.utils.routing.SQLSpecRoutingMiddleware
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.utils.routing.sign_write_pin
+    options:
+      heading_level: 4
+
+::: sqlspec.utils.routing.verify_write_pin
+    options:
+      heading_level: 4
+
+## Replica Specifications, Circuit Breakers, and Selectors
+
+::: sqlspec.core.routing.ReplicaSpec
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.routing.ReplicaHealthBreaker
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.routing.RoundRobinSelector
+    options:
+      heading_level: 4
+      members: false
+
+::: sqlspec.core.routing.RandomSelector
+    options:
+      heading_level: 4
+      members: false

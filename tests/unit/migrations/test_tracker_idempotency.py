@@ -1,14 +1,28 @@
 """Unit tests for migration tracker behavior."""
 
+import asyncio
 import logging
+import sqlite3
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
+from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
+from sqlspec.adapters.mssql_python.core import create_mapped_exception as mssql_python_map_exception
+from sqlspec.adapters.mssql_python.core import default_statement_config as mssql_python_statement_config
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
-from sqlspec.core import StatementConfig
+from sqlspec.adapters.pymssql.core import create_mapped_exception as pymssql_map_exception
+from sqlspec.adapters.pymssql.core import default_statement_config as pymssql_statement_config
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import SQL, StatementConfig
+from sqlspec.core.result import SQLResult
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
+from sqlspec.exceptions import MigrationError, SQLSpecError
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 
@@ -595,3 +609,1116 @@ async def test_tracker_schema_output_initializes_console_on_demand(
     else:
         assert output.count("Migration tracking table schema updated successfully") == 2
         assert "adding columns: checksum" in output
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("dialect", "expects_single_insert"),
+    [("postgres", True), ("mysql", True), ("sqlite", True), ("duckdb", True), ("oracle", False), ("snowflake", False)],
+)
+async def test_tracker_sequenced_insert_vs_two_statement_path(
+    is_async: bool, dialect: str, expects_single_insert: bool
+) -> None:
+    """Stock trackers use one INSERT ... SELECT for supported dialects and two statements outside the set."""
+    recorded_sql: list[str] = []
+
+    def _run(stmt: Any) -> Any:
+        rendered = stmt.build(dialect=dialect).sql if hasattr(stmt, "build") else str(stmt)
+        recorded_sql.append(rendered)
+        result = Mock()
+        result.data = [{"next_seq": 3}]
+        result.get_data.return_value = [{"next_seq": 3}]
+        return result
+
+    async def _run_async(stmt: Any) -> Any:
+        return _run(stmt)
+
+    driver = Mock()
+    driver.dialect = dialect
+    driver.driver_features = {"autocommit": False}
+    driver.execute = _run_async if is_async else _run
+    driver.commit = AsyncMock() if is_async else Mock()
+
+    checksum = "a" * 64
+    if is_async:
+        tracker = AsyncMigrationTracker()
+        await tracker.record_migration(driver, "0003", "add items", 15, checksum)
+        await tracker.replace_with_squash(driver, "0003", ["0001", "0002"], "squash", checksum)
+    else:
+        sync_tracker = SyncMigrationTracker()
+        sync_tracker.record_migration(driver, "0003", "add items", 15, checksum)
+        sync_tracker.replace_with_squash(driver, "0003", ["0001", "0002"], "squash", checksum)
+
+    if expects_single_insert:
+        assert len(recorded_sql) == 3
+        record_sql = recorded_sql[0]
+        squash_insert_sql = recorded_sql[2]
+        assert "INSERT INTO" in record_sql
+        assert "seq_src" in record_sql
+        assert "COALESCE(MAX(" in record_sql
+        assert "INSERT INTO" in squash_insert_sql
+        assert "seq_src" in squash_insert_sql
+    else:
+        assert len(recorded_sql) == 5
+        assert "SELECT" in recorded_sql[0]
+        assert "COALESCE(MAX(" in recorded_sql[0]
+        assert "SELECT" in recorded_sql[3]
+        assert "COALESCE(MAX(" in recorded_sql[3]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_tracker_real_sqlite_sequenced_insert_increments_execution_sequence(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """Single-statement INSERT ... SELECT increments execution_sequence cleanly on SQLite."""
+    db_path = tmp_path / "seq.db"
+    checksum = "b" * 64
+    if is_async:
+        cfg_async = AiosqliteConfig(connection_config={"database": str(db_path)})
+        tracker_async = AsyncMigrationTracker()
+        try:
+            async with cfg_async.provide_session() as driver:
+                await tracker_async.ensure_tracking_table(driver)
+                await tracker_async.record_migration(driver, "0001", "first", 5, checksum)
+                await tracker_async.record_migration(driver, "0002", "second", 7, checksum)
+                rows = await tracker_async.get_applied_migrations(driver)
+            assert [row["execution_sequence"] for row in rows] == [1, 2]
+        finally:
+            await cfg_async.close_pool()
+        return
+
+    cfg_sync = SqliteConfig(connection_config={"database": str(db_path)})
+    tracker_sync = SyncMigrationTracker()
+    try:
+        with cfg_sync.provide_session() as driver:
+            tracker_sync.ensure_tracking_table(driver)
+            tracker_sync.record_migration(driver, "0001", "first", 5, checksum)
+            tracker_sync.record_migration(driver, "0002", "second", 7, checksum)
+            rows = tracker_sync.get_applied_migrations(driver)
+        assert [row["execution_sequence"] for row in rows] == [1, 2]
+    finally:
+        cfg_sync.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("dialect", "expected_enter_fragment", "expected_exit_fragment"),
+    [
+        ("postgres", "pg_advisory_lock", "pg_advisory_unlock"),
+        ("mysql", "GET_LOCK", "RELEASE_LOCK"),
+        ("tsql", "sp_getapplock", "sp_releaseapplock"),
+        ("sqlite", "BEGIN IMMEDIATE", None),
+        ("duckdb", None, None),
+    ],
+)
+async def test_tracker_acquire_lock_dialect_statements_and_release_on_error(
+    is_async: bool, dialect: str, expected_enter_fragment: str | None, expected_exit_fragment: str | None
+) -> None:
+    """acquire_lock issues dialect-appropriate lock acquire and release statements even when the body raises."""
+    executed: list[tuple[str, Any]] = []
+    lifecycle: list[str] = []
+    tx_state = {"active": False}
+
+    def _exec(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        sql_text = str(stmt)
+        executed.append((sql_text, params))
+        if sql_text == "BEGIN IMMEDIATE":
+            tx_state["active"] = True
+        if "sp_getapplock" in sql_text:
+            return SQLResult(data=[{"res": 0}])
+        return SQLResult()
+
+    async def _exec_async(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        return _exec(_self, stmt, params)
+
+    def _select_value(_self: Any, stmt: Any, params: Any = None) -> int:
+        executed.append((str(stmt), params))
+        return 1
+
+    async def _select_value_async(_self: Any, stmt: Any, params: Any = None) -> int:
+        return _select_value(_self, stmt, params)
+
+    def _commit(_self: Any) -> None:
+        tx_state["active"] = False
+        lifecycle.append("commit")
+
+    async def _commit_async(_self: Any) -> None:
+        _commit(_self)
+
+    def _rollback(_self: Any) -> None:
+        tx_state["active"] = False
+        lifecycle.append("rollback")
+
+    async def _rollback_async(_self: Any) -> None:
+        _rollback(_self)
+
+    attrs: dict[str, Any] = {
+        "dialect": dialect,
+        "execute": _exec_async if is_async else _exec,
+        "select_value": _select_value_async if is_async else _select_value,
+        "commit": _commit_async if is_async else _commit,
+        "rollback": _rollback_async if is_async else _rollback,
+        "_connection_in_transaction": lambda _self: tx_state["active"],
+    }
+    driver_cls = type(f"_Fake{dialect.title()}Driver", (), attrs)
+    driver: Any = driver_cls()
+
+    if is_async:
+        tracker_async = AsyncMigrationTracker(version_table_name="ddl_migrations")
+        async with tracker_async.acquire_lock(driver):
+            pass
+        if dialect == "sqlite":
+            assert lifecycle == ["commit"]
+        executed.clear()
+        lifecycle.clear()
+        with pytest.raises(RuntimeError, match="step failed"):
+            async with tracker_async.acquire_lock(driver):
+                raise RuntimeError("step failed")
+    else:
+        tracker_sync = SyncMigrationTracker(version_table_name="ddl_migrations")
+        with tracker_sync.acquire_lock(driver):
+            pass
+        if dialect == "sqlite":
+            assert lifecycle == ["commit"]
+        executed.clear()
+        lifecycle.clear()
+        with pytest.raises(RuntimeError, match="step failed"):
+            with tracker_sync.acquire_lock(driver):
+                raise RuntimeError("step failed")
+
+    if expected_enter_fragment is None:
+        assert executed == []
+    else:
+        assert expected_enter_fragment in executed[0][0]
+    if expected_exit_fragment is not None:
+        assert expected_exit_fragment in executed[-1][0]
+    elif dialect == "sqlite":
+        assert lifecycle == ["rollback"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_tracker_acquire_lock_skips_cockroachdb_and_raises_on_lock_timeout(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    """CockroachDB drivers emit no advisory lock statements; MySQL and SQL Server timeouts raise MigrationError."""
+    cockroach_calls: list[str] = []
+
+    if is_async:
+
+        async def _cr_exec_async(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
+            cockroach_calls.append(str(stmt))
+            return SQLResult()
+
+        monkeypatch.setattr(CockroachAsyncpgDriver, "execute", _cr_exec_async)
+        cr_driver_async = CockroachAsyncpgDriver(MagicMock())
+        async with AsyncMigrationTracker().acquire_lock(cr_driver_async):
+            pass
+    else:
+
+        def _cr_exec_sync(_self: Any, stmt: Any, *_args: Any, **_kwargs: Any) -> SQLResult:
+            cockroach_calls.append(str(stmt))
+            return SQLResult()
+
+        monkeypatch.setattr(CockroachPsycopgSyncDriver, "execute", _cr_exec_sync)
+        cr_driver_sync = CockroachPsycopgSyncDriver(MagicMock())
+        with SyncMigrationTracker().acquire_lock(cr_driver_sync):
+            pass
+    assert cockroach_calls == []
+
+    async def _mysql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> int:
+        return 0
+
+    mysql_cls = type(
+        "_TimeoutMySQLDriver",
+        (),
+        {
+            "dialect": "mysql",
+            "select_value": _mysql_timeout_async if is_async else (lambda _self, _s, _p=None: 0),
+            "execute": AsyncMock() if is_async else Mock(),
+        },
+    )
+    mysql_driver: Any = mysql_cls()
+    with pytest.raises(MigrationError, match="Failed to acquire MySQL migration lock"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(mysql_driver, timeout_seconds=1):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(mysql_driver, timeout_seconds=1):
+                pass
+
+    async def _mssql_timeout_async(_self: Any, stmt: Any, params: Any = None) -> SQLResult:
+        return SQLResult(data=[{"res": -1}])
+
+    mssql_cls = type(
+        "_TimeoutMssqlDriver",
+        (),
+        {
+            "dialect": "tsql",
+            "execute": _mssql_timeout_async if is_async else (lambda _self, _s, _p=None: SQLResult(data=[{"res": -1}])),
+        },
+    )
+    mssql_driver: Any = mssql_cls()
+    with pytest.raises(MigrationError, match="Failed to acquire SQL Server migration lock"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(mssql_driver, timeout_seconds=1):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(mssql_driver, timeout_seconds=1):
+                pass
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("is_async", "error_msg", "expected_exc"),
+    [
+        (False, "Migration lock acquisition failed", MigrationError),
+        (True, "Migration lock acquisition failed", MigrationError),
+        (False, "connection terminated unexpectedly", SQLSpecError),
+        (True, "connection terminated unexpectedly", SQLSpecError),
+    ],
+)
+async def test_mssql_acquire_lock_translates_throw_error_and_reraises_unrelated(
+    is_async: bool, error_msg: str, expected_exc: type[Exception]
+) -> None:
+    """SQL Server THROW 51000 errors become MigrationError while unrelated SQLSpecError propagates."""
+
+    def _raise_sync(_self: Any, _stmt: Any, _params: Any = None) -> SQLResult:
+        raise SQLSpecError(error_msg)
+
+    async def _raise_async(_self: Any, _stmt: Any, _params: Any = None) -> SQLResult:
+        raise SQLSpecError(error_msg)
+
+    mssql_cls = type("_ThrowMssqlDriver", (), {"dialect": "tsql", "execute": _raise_async if is_async else _raise_sync})
+    driver: Any = mssql_cls()
+
+    with pytest.raises(expected_exc):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(driver, timeout_seconds=1):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(driver, timeout_seconds=1):
+                pass
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("is_async", "unlock_raises"), [(False, False), (False, True), (True, False), (True, True)])
+async def test_postgres_acquire_lock_rolls_back_before_unlock_and_preserves_primary_error(
+    is_async: bool, unlock_raises: bool
+) -> None:
+    """PostgreSQL acquire_lock rolls back an open transaction before unlocking and preserves caller exceptions."""
+    events: list[str] = []
+    tx_state = {"active": False}
+
+    def _exec_sync(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
+        sql_text = str(stmt)
+        if "pg_advisory_lock" in sql_text:
+            tx_state["active"] = True
+            events.append("lock")
+        elif "pg_advisory_unlock" in sql_text:
+            events.append("unlock")
+            if unlock_raises:
+                raise RuntimeError("unlock socket failure")
+        return SQLResult()
+
+    async def _exec_async(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
+        return _exec_sync(_self, stmt, _params)
+
+    def _rollback_sync(_self: Any) -> None:
+        events.append("rollback")
+        tx_state["active"] = False
+
+    async def _rollback_async(_self: Any) -> None:
+        _rollback_sync(_self)
+
+    pg_cls = type(
+        "_PgUnwindDriver",
+        (),
+        {
+            "dialect": "postgres",
+            "execute": _exec_async if is_async else _exec_sync,
+            "rollback": _rollback_async if is_async else _rollback_sync,
+            "_connection_in_transaction": lambda _self: tx_state["active"],
+        },
+    )
+    driver: Any = pg_cls()
+
+    with pytest.raises(ValueError, match="migration statement error"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(driver):
+                raise ValueError("migration statement error")
+        else:
+            with SyncMigrationTracker().acquire_lock(driver):
+                raise ValueError("migration statement error")
+
+    assert events == ["lock", "rollback", "unlock"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_migration_lock_persists_across_ensure_tracking_table_and_steps(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """SQLite BEGIN IMMEDIATE stays held across ensure_tracking_table, migrations, and partial-failure savepoints."""
+    db_path = tmp_path / "locked_mig.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    probe_file = tmp_path / "probe.txt"
+
+    (migrations_dir / "0001_good.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE items_one (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    (migrations_dir / "0002_probe.py").write_text(
+        f"""import sqlite3
+from pathlib import Path
+
+def up(context=None):
+    conn = sqlite3.connect({str(db_path)!r}, timeout=0.01)
+    try:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            Path({str(probe_file)!r}).write_text("unlocked", encoding="utf-8")
+        except sqlite3.OperationalError:
+            Path({str(probe_file)!r}).write_text("locked", encoding="utf-8")
+    finally:
+        conn.close()
+    return ["CREATE TABLE items_two (id INTEGER PRIMARY KEY);"]
+""",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0003_bad.sql").write_text(
+        "-- name: migrate-0003-up\nINSERT INTO nonexistent_table VALUES (1);\n", encoding="utf-8"
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+        orig_ensure_async = cmds_async.tracker.ensure_tracking_table
+
+        async def _check_after_ensure_async(driver: Any) -> None:
+            await orig_ensure_async(driver)
+            assert driver._connection_in_transaction() is True
+            probe_conn = sqlite3.connect(str(db_path), timeout=0.01)
+            try:
+                with pytest.raises(sqlite3.OperationalError):
+                    probe_conn.execute("BEGIN IMMEDIATE")
+            finally:
+                probe_conn.close()
+
+        cmds_async.tracker.ensure_tracking_table = _check_after_ensure_async  # type: ignore[method-assign]
+        try:
+            with pytest.raises(MigrationError):
+                await cmds_async.upgrade(echo=False)
+            assert probe_file.read_text(encoding="utf-8") == "locked"
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied_rows = await verify_driver.select(
+                    "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence"
+                )
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+        orig_ensure_sync = cmds_sync.tracker.ensure_tracking_table
+
+        def _check_after_ensure_sync(driver: Any) -> None:
+            orig_ensure_sync(driver)
+            assert driver._connection_in_transaction() is True
+            probe_conn = sqlite3.connect(str(db_path), timeout=0.01)
+            try:
+                with pytest.raises(sqlite3.OperationalError):
+                    probe_conn.execute("BEGIN IMMEDIATE")
+            finally:
+                probe_conn.close()
+
+        cmds_sync.tracker.ensure_tracking_table = _check_after_ensure_sync  # type: ignore[method-assign]
+        try:
+            with pytest.raises(MigrationError):
+                cmds_sync.upgrade(echo=False)
+            assert probe_file.read_text(encoding="utf-8") == "locked"
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied_rows = verify_driver.select(
+                    "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence"
+                )
+        finally:
+            cfg_sync.close_pool()
+
+    assert {"items_one", "items_two"}.issubset(tables)
+    assert [row["version_num"] for row in applied_rows] == ["0001", "0002"]
+
+    post_conn = sqlite3.connect(str(db_path), timeout=0.5)
+    try:
+        post_conn.execute("BEGIN IMMEDIATE")
+        post_conn.rollback()
+    finally:
+        post_conn.close()
+
+
+class _SyntheticMssqlLockError(Exception):
+    number: int
+
+    def __init__(self, message: str, number: int = 51000) -> None:
+        super().__init__(message)
+        self.number = number
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("is_async", "stmt_config", "map_exception"),
+    [
+        (False, StatementConfig(dialect="tsql"), mssql_python_map_exception),
+        (False, mssql_python_statement_config, mssql_python_map_exception),
+        (False, pymssql_statement_config, pymssql_map_exception),
+        (True, StatementConfig(dialect="tsql"), mssql_python_map_exception),
+        (True, mssql_python_statement_config, mssql_python_map_exception),
+        (True, pymssql_statement_config, pymssql_map_exception),
+    ],
+    ids=["sync-tsql", "sync-mssql-python", "sync-pymssql", "async-tsql", "async-mssql-python", "async-pymssql"],
+)
+async def test_mssql_acquire_lock_compiles_with_tsql_configs_and_translates_mapped_51000_error(
+    is_async: bool, stmt_config: StatementConfig, map_exception: Any
+) -> None:
+    """SQL Server lock acquisition compiles cleanly under T-SQL configs and maps error 51000 to MigrationError."""
+    tracker = SyncMigrationTracker()
+    compiled_sql, compiled_params = SQL(
+        tracker._MSSQL_ACQUIRE_LOCK_SQL,  # pyright: ignore[reportPrivateUsage]
+        {"lock_name": "sqlspec_mig_ddl_migrations", "timeout_ms": 5000},
+        statement_config=stmt_config,
+    ).compile()
+
+    assert "sp_getapplock" in compiled_sql
+    assert "@sqlspec_res" in compiled_sql
+    if isinstance(compiled_params, dict):
+        assert compiled_params == {"lock_name": "sqlspec_mig_ddl_migrations", "timeout_ms": 5000}
+    else:
+        assert list(compiled_params) == ["sqlspec_mig_ddl_migrations", 5000]
+
+    mapped_exc = map_exception(_SyntheticMssqlLockError("Migration lock acquisition failed", number=51000))
+    assert isinstance(mapped_exc, SQLSpecError)
+    assert "Migration lock acquisition failed" in str(mapped_exc)
+
+    def _raise_sync(_self: Any, _stmt: Any, _params: Any = None) -> SQLResult:
+        raise mapped_exc
+
+    async def _raise_async(_self: Any, _stmt: Any, _params: Any = None) -> SQLResult:
+        raise mapped_exc
+
+    mssql_cls = type(
+        "_MappedThrowMssqlDriver", (), {"dialect": "tsql", "execute": _raise_async if is_async else _raise_sync}
+    )
+    driver: Any = mssql_cls()
+
+    with pytest.raises(MigrationError, match="Failed to acquire SQL Server migration lock"):
+        if is_async:
+            async with AsyncMigrationTracker().acquire_lock(driver, timeout_seconds=2):
+                pass
+        else:
+            with SyncMigrationTracker().acquire_lock(driver, timeout_seconds=2):
+                pass
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("is_async", "simulate_schema_error"),
+    [(False, False), (False, True), (True, False), (True, True)],
+    ids=["sync-schema-upgrade", "sync-schema-rollback", "async-schema-upgrade", "async-schema-rollback"],
+)
+async def test_sqlite_locked_schema_migration_and_rollback_keep_outer_write_lock(
+    tmp_path: Path, is_async: bool, simulate_schema_error: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SQLite tracker schema savepoints add missing columns or roll back errors without losing BEGIN IMMEDIATE."""
+    db_path = tmp_path / f"locked_schema_{is_async}_{simulate_schema_error}.db"
+    seed_conn = sqlite3.connect(str(db_path))
+    try:
+        seed_conn.execute(
+            """
+            CREATE TABLE ddl_migrations (
+                version_num TEXT PRIMARY KEY,
+                version_type TEXT,
+                execution_sequence INTEGER,
+                description TEXT,
+                applied_at TIMESTAMP,
+                execution_time_ms INTEGER,
+                checksum TEXT,
+                applied_by TEXT
+            )
+            """
+        )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+
+    migrations_dir = tmp_path / f"migrations_schema_{is_async}_{simulate_schema_error}"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_first.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE locked_items (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+
+    def _raise_schema_target() -> Any:
+        msg = "simulated tracking schema error"
+        raise RuntimeError(msg)
+
+    lock_checks: list[bool] = []
+
+    def _assert_write_lock_held() -> None:
+        probe_conn = sqlite3.connect(str(db_path), timeout=0.01)
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                probe_conn.execute("BEGIN IMMEDIATE")
+            lock_checks.append(True)
+        finally:
+            probe_conn.close()
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+        orig_migrate_async = cmds_async.tracker._migrate_schema_if_needed  # pyright: ignore[reportPrivateUsage]
+
+        async def _wrapped_migrate_async(driver: Any) -> None:
+            await orig_migrate_async(driver)
+            assert driver._connection_in_transaction() is True
+            _assert_write_lock_held()
+
+        monkeypatch.setattr(cmds_async.tracker, "_migrate_schema_if_needed", _wrapped_migrate_async)
+        if simulate_schema_error:
+            monkeypatch.setattr(cmds_async.tracker, "_tracking_schema_target", _raise_schema_target)
+        try:
+            await cmds_async.upgrade(echo=False)
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+        orig_migrate_sync = cmds_sync.tracker._migrate_schema_if_needed  # pyright: ignore[reportPrivateUsage]
+
+        def _wrapped_migrate_sync(driver: Any) -> None:
+            orig_migrate_sync(driver)
+            assert driver._connection_in_transaction() is True
+            _assert_write_lock_held()
+
+        monkeypatch.setattr(cmds_sync.tracker, "_migrate_schema_if_needed", _wrapped_migrate_sync)
+        if simulate_schema_error:
+            monkeypatch.setattr(cmds_sync.tracker, "_tracking_schema_target", _raise_schema_target)
+        try:
+            cmds_sync.upgrade(echo=False)
+        finally:
+            cfg_sync.close_pool()
+
+    assert lock_checks == [True]
+    inspect_conn = sqlite3.connect(str(db_path))
+    try:
+        cols = {row[1] for row in inspect_conn.execute("PRAGMA table_info(ddl_migrations)").fetchall()}
+        applied = [
+            row[0]
+            for row in inspect_conn.execute("SELECT version_num FROM ddl_migrations ORDER BY version_num").fetchall()
+        ]
+    finally:
+        inspect_conn.close()
+    assert ("replaces" in cols) is (not simulate_schema_error)
+    assert applied == ["0001"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_locked_downgrade_persists_completed_steps_on_partial_failure(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """SQLite downgrade commits completed step reverts via savepoint recovery when a later step fails."""
+    db_path = tmp_path / f"locked_downgrade_{is_async}.db"
+    migrations_dir = tmp_path / f"migrations_downgrade_{is_async}"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_one.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE step_one (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0001-down\nDROP TABLE step_one;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0002_two.sql").write_text(
+        "-- name: migrate-0002-up\nCREATE TABLE step_two (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0002-down\nDROP TABLE nonexistent_step_two_target;\n",
+        encoding="utf-8",
+    )
+    (migrations_dir / "0003_three.sql").write_text(
+        "-- name: migrate-0003-up\nCREATE TABLE step_three (id INTEGER PRIMARY KEY);\n"
+        "-- name: migrate-0003-down\nDROP TABLE step_three;\n",
+        encoding="utf-8",
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+        try:
+            await cmds_async.upgrade(echo=False)
+            with pytest.raises(MigrationError):
+                await cmds_async.downgrade("0001", echo=False)
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied_rows = await verify_driver.select(
+                    "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence"
+                )
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+        try:
+            cmds_sync.upgrade(echo=False)
+            with pytest.raises(MigrationError):
+                cmds_sync.downgrade("0001", echo=False)
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied_rows = verify_driver.select(
+                    "SELECT version_num FROM ddl_migrations ORDER BY execution_sequence"
+                )
+        finally:
+            cfg_sync.close_pool()
+
+    assert "step_two" in tables
+    assert "step_three" not in tables
+    assert [row["version_num"] for row in applied_rows] == ["0001", "0002"]
+
+    post_conn = sqlite3.connect(str(db_path), timeout=0.5)
+    try:
+        post_conn.execute("BEGIN IMMEDIATE")
+        post_conn.rollback()
+    finally:
+        post_conn.close()
+
+
+def test_tracker_lock_backend_kind_skips_instance_slots_and_preserves_unique_long_keys() -> None:
+    """Bridge drivers with slotted instance dialects stay excluded and long version table lock keys do not collide."""
+
+    class _InstanceDialectDriver:
+        __slots__ = ("dialect",)
+
+        def __init__(self, dialect: str) -> None:
+            self.dialect = dialect
+
+    assert SyncMigrationTracker._lock_backend_kind(_InstanceDialectDriver("sqlite")) == ""  # pyright: ignore[reportPrivateUsage]
+    assert SyncMigrationTracker._lock_backend_kind(MagicMock()) == ""  # pyright: ignore[reportPrivateUsage]
+
+    prefix = "tenant_organization_billing_schema.custom_ddl_migrations_"
+    tracker_a = SyncMigrationTracker(version_table_name=f"{prefix}v1")
+    tracker_b = SyncMigrationTracker(version_table_name=f"{prefix}v2")
+    name_a, id_a = tracker_a._migration_lock_key()  # pyright: ignore[reportPrivateUsage]
+    name_b, id_b = tracker_b._migration_lock_key()  # pyright: ignore[reportPrivateUsage]
+    assert len(name_a) <= 64
+    assert len(name_b) <= 64
+    assert name_a != name_b
+    assert id_a != id_b
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("is_async", "locked"), [(False, True), (False, False), (True, True), (True, False)])
+async def test_tracker_migrate_schema_cleans_up_savepoint_and_tx_on_cancellation(
+    is_async: bool, locked: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BaseException interrupts roll back and release schema savepoints before propagating."""
+    events: list[tuple[str, str | None]] = []
+
+    class _Driver:
+        def create_savepoint(self, name: str) -> None:
+            events.append(("create_sp", name))
+
+        def rollback_to_savepoint(self, name: str) -> None:
+            events.append(("rollback_sp", name))
+
+        def release_savepoint(self, name: str) -> None:
+            events.append(("release_sp", name))
+
+        def rollback(self) -> None:
+            events.append(("rollback", None))
+
+    class _AsyncDriver:
+        async def create_savepoint(self, name: str) -> None:
+            events.append(("create_sp", name))
+
+        async def rollback_to_savepoint(self, name: str) -> None:
+            events.append(("rollback_sp", name))
+
+        async def release_savepoint(self, name: str) -> None:
+            events.append(("release_sp", name))
+
+        async def rollback(self) -> None:
+            events.append(("rollback", None))
+
+    def _interrupt_sync(*_args: Any, **_kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    async def _interrupt_async(*_args: Any, **_kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+    if is_async:
+        tracker_async = AsyncMigrationTracker()
+        driver_async = _AsyncDriver()
+        if locked:
+            tracker_async._sqlite_lock_owners.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
+        monkeypatch.setattr("sqlspec.migrations.tracker.ensure_schema_async", _interrupt_async)
+        with pytest.raises(asyncio.CancelledError):
+            await tracker_async._migrate_schema_if_needed(driver_async)  # pyright: ignore[reportPrivateUsage,reportArgumentType]
+    else:
+        tracker_sync = SyncMigrationTracker()
+        driver_sync = _Driver()
+        if locked:
+            tracker_sync._sqlite_lock_owners.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
+        monkeypatch.setattr("sqlspec.migrations.tracker.ensure_schema_sync", _interrupt_sync)
+        with pytest.raises(KeyboardInterrupt):
+            tracker_sync._migrate_schema_if_needed(driver_sync)  # pyright: ignore[reportPrivateUsage,reportArgumentType]
+
+    if locked:
+        assert events == [
+            ("create_sp", "sqlspec_tracker_schema"),
+            ("rollback_sp", "sqlspec_tracker_schema"),
+            ("release_sp", "sqlspec_tracker_schema"),
+        ]
+    else:
+        assert events == [("rollback", None)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dialect", ["postgres", "mysql", "mssql", "sqlite"])
+async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellation(dialect: str) -> None:
+    """Async lock context manager uses _transaction_open when available and releases locks on CancelledError."""
+    events: list[str] = []
+    open_tx = {"active": False}
+
+    class _AsyncLockDriver:
+        dialect = ""
+
+        async def _transaction_open(self) -> bool:
+            events.append("tx_open")
+            return open_tx["active"]
+
+        def _connection_in_transaction(self) -> bool:
+            raise AssertionError("sync _connection_in_transaction should not be called when _transaction_open exists")
+
+        async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+            sql_text = str(stmt)
+            events.append(f"exec:{sql_text}")
+            if "pg_advisory_lock" in sql_text or sql_text == "BEGIN IMMEDIATE":
+                open_tx["active"] = True
+            if "sp_getapplock" in sql_text:
+                return SQLResult(data=[{"res": 0}])
+            return SQLResult()
+
+        async def select_value(self, stmt: Any, _params: Any = None) -> int:
+            events.append(f"select:{stmt}")
+            return 1
+
+        async def rollback(self) -> None:
+            events.append("rollback")
+            open_tx["active"] = False
+
+        async def commit(self) -> None:
+            events.append("commit")
+            open_tx["active"] = False
+
+    driver_cls = type(f"_Async{dialect.title()}LockDriver", (_AsyncLockDriver,), {"dialect": dialect})
+    driver: Any = driver_cls()
+    tracker = AsyncMigrationTracker(version_table_name="ddl_migrations")
+
+    with pytest.raises(asyncio.CancelledError):
+        async with tracker.acquire_lock(driver):
+            raise asyncio.CancelledError
+
+    assert tracker.holds_transaction_lock(driver) is False
+    if dialect == "postgres":
+        assert "tx_open" in events
+        assert "rollback" in events
+        assert any("pg_advisory_unlock" in ev for ev in events)
+        assert events.index("rollback") < next(i for i, ev in enumerate(events) if "pg_advisory_unlock" in ev)
+    elif dialect == "mysql":
+        assert any("RELEASE_LOCK" in ev for ev in events)
+    elif dialect == "mssql":
+        assert any("sp_releaseapplock" in ev for ev in events)
+    else:
+        assert "tx_open" in events
+        assert "rollback" in events
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, is_async: bool) -> None:
+    """Savepoint recovery commit failures chain the original step error as __cause__."""
+    step_error = RuntimeError("step failure")
+    commit_error = OSError("commit failure")
+    tx_state = {"active": False}
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(tmp_path / "chain_async.db")},
+            migration_config={"script_location": str(tmp_path / "mig_async")},
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+
+        class _AsyncCommitFailDriver:
+            dialect = "sqlite"
+
+            async def _transaction_open(self) -> bool:
+                return tx_state["active"]
+
+            def _connection_in_transaction(self) -> bool:
+                raise AssertionError("sync _connection_in_transaction should not be called")
+
+            async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                if str(stmt) == "BEGIN IMMEDIATE":
+                    tx_state["active"] = True
+                return SQLResult()
+
+            async def commit(self) -> None:
+                raise commit_error
+
+            async def rollback(self) -> None:
+                tx_state["active"] = False
+
+        driver_async: Any = _AsyncCommitFailDriver()
+        try:
+            with pytest.raises(OSError, match="commit failure") as exc_info:
+                async with cmds_async._lock_context(driver_async):  # pyright: ignore[reportPrivateUsage]
+                    cmds_async.runner._savepoint_recovered_drivers.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
+                    raise step_error
+            assert exc_info.value.__cause__ is step_error
+        finally:
+            await cfg_async.close_pool()
+        return
+
+    cfg_sync = SqliteConfig(
+        connection_config={"database": str(tmp_path / "chain_sync.db")},
+        migration_config={"script_location": str(tmp_path / "mig_sync")},
+    )
+    cmds_sync = SyncMigrationCommands(cfg_sync)
+
+    class _SyncCommitFailDriver:
+        dialect = "sqlite"
+
+        def _connection_in_transaction(self) -> bool:
+            return tx_state["active"]
+
+        def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+            if str(stmt) == "BEGIN IMMEDIATE":
+                tx_state["active"] = True
+            return SQLResult()
+
+        def commit(self) -> None:
+            raise commit_error
+
+        def rollback(self) -> None:
+            tx_state["active"] = False
+
+    driver_sync: Any = _SyncCommitFailDriver()
+    try:
+        with pytest.raises(OSError, match="commit failure") as exc_info:
+            with cmds_sync._lock_context(driver_sync):  # pyright: ignore[reportPrivateUsage]
+                cmds_sync.runner._savepoint_recovered_drivers.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
+                raise step_error
+        assert exc_info.value.__cause__ is step_error
+    finally:
+        cfg_sync.close_pool()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("backend", ["postgres", "sqlite"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(backend: str, is_async: bool) -> None:
+    """Failing transaction-state checks during error unwind must not mask the primary error or skip unlock."""
+    executed: list[str] = []
+    probe_state = {"fail": False}
+
+    if is_async:
+        async_tracker = AsyncMigrationTracker()
+
+        class _BrokenAsyncDriver:
+            dialect = backend
+
+            async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+                executed.append(str(stmt))
+                return SQLResult()
+
+            async def rollback(self) -> None:
+                raise AssertionError("rollback should not run when tx probe fails")
+
+            async def _transaction_open(self) -> bool:
+                if probe_state["fail"]:
+                    raise RuntimeError("tx probe boom")
+                return False
+
+        driver_async: Any = _BrokenAsyncDriver()
+        with pytest.raises(ValueError, match="caller boom"):
+            async with async_tracker.acquire_lock(driver_async):
+                probe_state["fail"] = True
+                raise ValueError("caller boom")
+        if backend == "postgres":
+            assert any("pg_advisory_unlock" in sql for sql in executed)
+        else:
+            assert not async_tracker.holds_transaction_lock(driver_async)
+        return
+
+    sync_tracker = SyncMigrationTracker()
+
+    class _BrokenSyncDriver:
+        dialect = backend
+
+        def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
+            executed.append(str(stmt))
+            return SQLResult()
+
+        def rollback(self) -> None:
+            raise AssertionError("rollback should not run when tx probe fails")
+
+        def _connection_in_transaction(self) -> bool:
+            if probe_state["fail"]:
+                raise RuntimeError("tx probe boom")
+            return False
+
+    driver_sync: Any = _BrokenSyncDriver()
+    with pytest.raises(ValueError, match="caller boom"):
+        with sync_tracker.acquire_lock(driver_sync):
+            probe_state["fail"] = True
+            raise ValueError("caller boom")
+    if backend == "postgres":
+        assert any("pg_advisory_unlock" in sql for sql in executed)
+    else:
+        assert not sync_tracker.holds_transaction_lock(driver_sync)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_nontransactional_failure_rolls_back_via_savepoint_and_preserves_prior_steps(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """A failing -- transactional: false migration under SQLite BEGIN IMMEDIATE must not commit partial DDL."""
+    db_path = tmp_path / f"nontx_partial_{is_async}.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_good.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE items_good (id INTEGER PRIMARY KEY);\n", encoding="utf-8"
+    )
+    (migrations_dir / "0002_nontx_bad.sql").write_text(
+        "-- transactional: false\n"
+        "-- name: migrate-0002-up\n"
+        "CREATE TABLE partial_leak (id INTEGER PRIMARY KEY);\n"
+        "THIS IS INVALID SQL;\n",
+        encoding="utf-8",
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+        try:
+            with pytest.raises(MigrationError):
+                await cmds_async.upgrade(echo=False)
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied = await verify_driver.select("SELECT version_num FROM ddl_migrations")
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+        try:
+            with pytest.raises(MigrationError):
+                cmds_sync.upgrade(echo=False)
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                applied = verify_driver.select("SELECT version_num FROM ddl_migrations")
+        finally:
+            cfg_sync.close_pool()
+
+    assert "items_good" in tables
+    assert "partial_leak" not in tables
+    assert [row["version_num"] for row in applied] == ["0001"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """When step savepoint rollback fails under SQLite outer lock, _lock_context rolls back the outer tx."""
+    db_path = tmp_path / f"unrecovered_{is_async}.db"
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "0001_nontx_bad.sql").write_text(
+        "-- transactional: false\n"
+        "-- name: migrate-0001-up\n"
+        "CREATE TABLE partial_leak (id INTEGER PRIMARY KEY);\n"
+        "THIS IS INVALID SQL;\n",
+        encoding="utf-8",
+    )
+
+    if is_async:
+        cfg_async = AiosqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_async = AsyncMigrationCommands(cfg_async)
+
+        async def _broken_savepoint_rollback_async(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
+            cmds_async.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+
+        cmds_async.runner._recover_failed_savepoint = _broken_savepoint_rollback_async  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+        try:
+            with pytest.raises(MigrationError):
+                await cmds_async.upgrade(echo=False)
+            async with cfg_async.provide_session() as verify_driver:
+                tables = {
+                    row["name"]
+                    for row in await verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+        finally:
+            await cfg_async.close_pool()
+    else:
+        cfg_sync = SqliteConfig(
+            connection_config={"database": str(db_path)}, migration_config={"script_location": str(migrations_dir)}
+        )
+        cmds_sync = SyncMigrationCommands(cfg_sync)
+
+        def _broken_savepoint_rollback_sync(_driver: Any, _savepoint: str, *, schema_active: bool) -> None:
+            cmds_sync.runner._outer_lock_unrecovered_drivers.add(id(_driver))  # pyright: ignore[reportPrivateUsage]
+
+        cmds_sync.runner._recover_failed_savepoint = _broken_savepoint_rollback_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+        try:
+            with pytest.raises(MigrationError):
+                cmds_sync.upgrade(echo=False)
+            with cfg_sync.provide_session() as verify_driver:
+                tables = {
+                    row["name"] for row in verify_driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+        finally:
+            cfg_sync.close_pool()
+
+    assert "partial_leak" not in tables

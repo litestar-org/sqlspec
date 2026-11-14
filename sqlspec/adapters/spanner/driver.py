@@ -56,7 +56,7 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
 )
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import ReadOnlyTransactionError, SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
@@ -186,6 +186,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             execute_kwargs = self._execute_kwargs()
             execute_ddl_sync(self._resolve_database(), [sql], timeout=execute_kwargs.get("timeout"))
             return self.create_execution_result(cursor, rowcount_override=0)
+        if statement.is_modifying_operation() and not supports_write(cursor):
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -221,7 +223,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             row_count = writer.execute_update(sql, params=coerced_params, param_types=param_types_map, **execute_kwargs)
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
-        raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+        raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         if not statement.returns_rows():
@@ -237,6 +239,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         )
 
     def dispatch_execute_many(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
+        if not supports_write(cursor):
+            msg = "execute_many cannot modify a read-only Snapshot"
+            raise ReadOnlyTransactionError(msg)
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
@@ -305,7 +310,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 reader = cast("_SpannerReadProtocol", cursor)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
-                raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+                raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
                 statement_kwargs = write_execute_kwargs
@@ -706,7 +711,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def write_delete(self, table: str, keyset: Any) -> None:
         """Buffer a Spanner DELETE mutation on the active transaction or batch."""
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         writer = cast("_SpannerWriteProtocol", self.connection)
         exc_handler = self.handle_database_exceptions()
         with exc_handler:
@@ -721,7 +726,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self, table: str, columns: "Sequence[str]", values: "Sequence[Sequence[Any]]", *, method_name: str
     ) -> None:
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
         column_list = list(columns)
         records = [tuple(row) for row in values]
         if not records:
@@ -857,6 +862,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             execute_kwargs = self._execute_kwargs()
             await execute_ddl_async(self._resolve_database(), [sql], timeout=execute_kwargs.get("timeout"))
             return self.create_execution_result(cursor, rowcount_override=0)
+        if statement.is_modifying_operation() and not supports_write(cursor):
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -896,7 +903,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             )
             return self.create_execution_result(cursor, rowcount_override=row_count)
 
-        raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+        raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
         if not statement.returns_rows():
@@ -912,6 +919,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         )
 
     async def dispatch_execute_many(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
+        if not supports_write(cursor):
+            msg = "execute_many cannot modify a read-only Snapshot"
+            raise ReadOnlyTransactionError(msg)
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
@@ -980,7 +990,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 reader = cast("_SpannerAsyncReadProtocol", cursor)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
-                raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+                raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerAsyncWriteProtocol", cursor)
                 statement_kwargs = write_execute_kwargs
@@ -1393,7 +1403,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     def write_delete(self, table: str, keyset: Any) -> None:
         """Buffer a Spanner DELETE mutation on the active async transaction or batch."""
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         writer = cast("_SpannerAsyncWriteProtocol", self.connection)
         try:
             writer.delete(table, keyset)
@@ -1408,7 +1418,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         self, table: str, columns: "Sequence[str]", values: "Sequence[Sequence[Any]]", *, method_name: str
     ) -> None:
         if not supports_write(self.connection):
-            raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
+            raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
         column_list = list(columns)
         records = [tuple(row) for row in values]
         if not records:

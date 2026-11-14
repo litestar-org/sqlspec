@@ -4,9 +4,13 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import psycopg
+import psycopg_pool
 import pytest
-from psycopg import AsyncCursor, Connection, Cursor
+from psycopg import AsyncCursor, Connection, Cursor, pq
+from psycopg import Error as PsycopgError
 from psycopg.abc import AdaptContext
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 
 import sqlspec.adapters.psycopg.config as psycopg_config
@@ -23,7 +27,8 @@ from sqlspec.adapters.psycopg.core import build_statement_config, default_statem
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 class _CapturedSyncPool:
@@ -1088,3 +1093,314 @@ async def test_tenant_prepare_failure_releases_native_context(
         strategy.checkin.assert_called_once()
         connection.rollback.assert_called_once()
         context.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+@pytest.mark.parametrize("explicit_threshold", (False, True))
+def test_replica_derivation_preserves_explicit_prepare_threshold(config_type: Any, explicit_threshold: bool) -> None:
+    connection: dict[str, Any] = {"conninfo": "postgresql://app:secret@writer/orders?sslmode=require"}
+    if explicit_threshold:
+        connection["prepare_threshold"] = None
+    primary = config_type(connection_config=connection, driver_features={"pooler_mode": "transaction"})
+    replica = primary.derive_pool(host="reader-a,reader-b", port="5432,5433", pooler_mode="session")
+    assert replica.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
+    assert ("prepare_threshold" in replica.connection_config) is explicit_threshold
+    assert replica.connection_config["host"] == "reader-a,reader-b"
+    assert primary.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_replica_alias_overrides_replace_primary_values(config_type: Any) -> None:
+    primary = config_type(connection_config={"conninfo": "postgresql://writer/app", "dbname": "app"})
+    replica = primary.derive_pool(url="postgresql://reader/reader_app", database="reader_app")
+    assert replica.connection_config["conninfo"] == "postgresql://reader/reader_app"
+    assert replica.connection_config["dbname"] == "reader_app"
+
+
+@pytest.mark.parametrize("async_mode", (False, True))
+@pytest.mark.parametrize("mapping_rows", (False, True))
+async def test_wal_helpers_handle_row_factories_validate_and_map_errors(async_mode: bool, mapping_rows: bool) -> None:
+    import inspect
+
+    from psycopg.errors import InvalidTextRepresentation
+
+    from sqlspec.exceptions import DataError, SQLSpecError
+
+    connection = MagicMock()
+    cursor = AsyncMock() if async_mode else MagicMock()
+    connection.cursor.return_value = cursor
+    config = PsycopgAsyncConfig() if async_mode else PsycopgSyncConfig()
+    driver_type = PsycopgAsyncDriver if async_mode else PsycopgSyncDriver
+    driver = driver_type(connection, statement_config=config.statement_config)
+
+    async def invoke(function: Any, *args: Any) -> Any:
+        result = function(*args)
+        return await result if inspect.isawaitable(result) else result
+
+    cursor.fetchone.return_value = {"lsn": "0/16B3748"} if mapping_rows else ("0/16B3748",)
+    assert await invoke(driver.current_wal_lsn) == "0/16B3748"
+    cursor.fetchone.return_value = {"coalesce": True} if mapping_rows else (True,)
+    assert await invoke(driver.has_replayed_wal_lsn, "0/16B3748") is True
+    assert cursor.execute.call_args.args[1] == ("0/16B3748",)
+    with pytest.raises(ImproperConfigurationError):
+        await invoke(driver.has_replayed_wal_lsn, " ")
+    cursor.fetchone.return_value = None
+    with pytest.raises(SQLSpecError):
+        await invoke(driver.current_wal_lsn)
+    cursor.execute.side_effect = InvalidTextRepresentation("invalid WAL location")
+    with pytest.raises(DataError):
+        await invoke(driver.has_replayed_wal_lsn, "bad-lsn")
+
+
+def test_derived_host_allows_explicit_connection_identity_overrides() -> None:
+    primary = PsycopgSyncConfig(connection_config={"conninfo": "postgresql://app:secret@writer/orders?sslmode=require"})
+    reader = primary.derive_pool(host="reader", user="reporter", password="reader-secret", database="reports")
+    assert reader.connection_config["conninfo"] == "postgresql://app:secret@writer/orders?sslmode=require"
+    assert reader.connection_config["user"] == "reporter"
+    assert reader.connection_config["password"] == "reader-secret"
+    assert reader.connection_config["dbname"] == "reports"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tx_active", "in_tx_probe"), [(True, False), (False, True)], ids=["driver-flag", "connection-probe"]
+)
+async def test_psycopg_session_context_rolls_back_active_transaction_on_clean_exit(
+    asynchronous: bool, tx_active: bool, in_tx_probe: bool
+) -> None:
+    """Session contexts roll back uncommitted driver work before releasing the connection."""
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(
+        transaction_status=pq.TransactionStatus.INTRANS if in_tx_probe else pq.TransactionStatus.IDLE
+    )
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = PsycopgAsyncSessionContext if asynchronous else PsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    if isinstance(ctx, PsycopgAsyncSessionContext):
+        async with ctx as driver:
+            driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_awaited_once()
+        release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+    else:
+        with ctx as sync_driver:
+            sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert sync_driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_called_once()
+        release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_psycopg_session_context_propagates_or_preserves_rollback_error_and_informs_pool(
+    asynchronous: bool, body_raises: bool
+) -> None:
+    """Rollback failure propagates on clean exit, preserves body exceptions, and passes error info to release."""
+    rollback_err = PsycopgError("rollback failed")
+    body_err = ValueError("body failed")
+    expected_type: type[BaseException] = ValueError if body_raises else SQLSpecError
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(transaction_status=pq.TransactionStatus.INTRANS)
+    conn.rollback = AsyncMock(side_effect=rollback_err) if asynchronous else MagicMock(side_effect=rollback_err)
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = PsycopgAsyncSessionContext if asynchronous else PsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with pytest.raises(expected_type) as caught:
+        if isinstance(ctx, PsycopgAsyncSessionContext):
+            async with ctx as driver:
+                driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+        else:
+            with ctx as sync_driver:
+                sync_driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+    if body_raises:
+        assert caught.value is body_err
+    else:
+        assert caught.value.__cause__ is rollback_err
+    assert release.call_args.args == (conn,)
+    assert release.call_args.kwargs["exc_type"] is type(caught.value)
+    assert release.call_args.kwargs["exc_val"] is caught.value
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_psycopg_session_context_enter_failure_releases_and_detaches_driver(asynchronous: bool) -> None:
+    conn = AsyncMock() if asynchronous else MagicMock()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    if asynchronous:
+
+        async def acquire_async() -> Any:
+            return conn
+
+        async def release_async(released: Any, **kwargs: Any) -> None:
+            release_events.append((released is conn, captured[0].connection is conn, kwargs.get("exc_type")))
+
+        ctx = PsycopgAsyncSessionContext(
+            acquire_connection=acquire_async,
+            release_connection=release_async,
+            statement_config=StatementConfig(dialect="postgres"),
+            driver_features={},
+            prepare_driver=fail_prepare,
+        )
+        with pytest.raises(RuntimeError, match="prepare boom"):
+            async with ctx:
+                pytest.fail("prepare failure must abort __aenter__")
+    else:
+
+        def release_sync(released: Any, **kwargs: Any) -> None:
+            release_events.append((released is conn, captured[0].connection is conn, kwargs.get("exc_type")))
+
+        ctx_sync = PsycopgSyncSessionContext(
+            acquire_connection=lambda: conn,
+            release_connection=release_sync,
+            statement_config=StatementConfig(dialect="postgres"),
+            driver_features={},
+            prepare_driver=fail_prepare,
+        )
+        with pytest.raises(RuntimeError, match="prepare boom"), ctx_sync:
+            pytest.fail("prepare failure must abort __enter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+def test_psycopg_sync_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PsycopgSyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    good_ctx = MagicMock()
+    good_ctx.__enter__.return_value = good_conn
+    good_ctx.__exit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = MagicMock()
+    bad_ctx.__enter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            if failure_stage == "pool":
+                raise psycopg.OperationalError("replica down")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", fake_pool_cls)
+    config = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
+    )
+    with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_psycopg_async_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PsycopgAsyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    good_ctx = AsyncMock()
+    good_ctx.__aenter__.return_value = good_conn
+    good_ctx.__aexit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.open = AsyncMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = AsyncMock()
+    bad_ctx.__aenter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.open = (
+        AsyncMock(side_effect=psycopg.OperationalError("replica down")) if failure_stage == "pool" else AsyncMock()
+    )
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_async_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", fake_async_pool_cls)
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_psycopg_derive_pool_pops_database_and_username_aliases(config_type: Any) -> None:
+    """Field-based derived configs drop alias keys so libpq make_conninfo accepts them."""
+    primary = config_type(connection_config={"host": "primary", "dbname": "app", "user": "u"})
+    derived = primary.derive_pool(database="ro_db", username="ro_user")
+    assert "database" not in derived.connection_config
+    assert "db" not in derived.connection_config
+    assert "username" not in derived.connection_config
+    parsed = conninfo_to_dict(make_conninfo("", **derived.connection_config))
+    assert parsed["dbname"] == "ro_db"
+    assert parsed["user"] == "ro_user"
+
+
+@pytest.mark.parametrize("config_type", (PsycopgSyncConfig, PsycopgAsyncConfig))
+def test_psycopg_derive_conninfo_replica_and_direct_dsn_clear_inherited_endpoints(config_type: Any) -> None:
+    """Explicit conninfo, string replicas, and direct_dsn clear inherited field-based primary endpoints."""
+    primary = config_type(
+        connection_config={"host": "primary", "port": 5432, "dbname": "rw", "user": "u", "password": "pw"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": "postgresql://du:dp@direct:5439/direct_db"},
+        replicas=["postgresql://ro:ropw@replica:6432/ro_db"],
+    )
+    derived = primary.derive_pool(conninfo="postgresql://ro:ropw@replica:6432/ro_db")
+    replica = primary.replica_groups["default"].configs[0]
+    direct = primary.derive_direct_config()
+
+    for cfg in (derived, replica):
+        parsed = conninfo_to_dict(
+            make_conninfo(
+                cfg.connection_config["conninfo"], **{k: v for k, v in cfg.connection_config.items() if k != "conninfo"}
+            )
+        )
+        assert parsed["host"] == "replica"
+        assert parsed["port"] == "6432"
+        assert parsed["dbname"] == "ro_db"
+        assert parsed["user"] == "ro"
+
+    parsed_direct = conninfo_to_dict(
+        make_conninfo(
+            direct.connection_config["conninfo"],
+            **{k: v for k, v in direct.connection_config.items() if k != "conninfo"},
+        )
+    )
+    assert parsed_direct["host"] == "direct"
+    assert parsed_direct["port"] == "5439"
+    assert parsed_direct["dbname"] == "direct_db"
+    assert parsed_direct["user"] == "du"

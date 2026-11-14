@@ -1697,3 +1697,134 @@ def test_snowflake_adbc_rejects_tenant_strategies(strategy: object) -> None:
         AdbcConfig(
             connection_config={"driver": "snowflake", "account": "acct"}, driver_features={"tenant_strategy": strategy}
         )
+
+
+@pytest.mark.parametrize("alias", ("uri", "dsn", "url", "connection_string"))
+def test_replica_derivation_uri_aliases_and_connection_hook(alias: str) -> None:
+    def hook(connection: Any) -> None:
+        return None
+
+    primary = AdbcConfig(
+        connection_config={"uri": "postgresql://writer/app"}, driver_features={"on_connection_create": hook}
+    )
+    replica = primary.derive_pool(connection_config_overrides={alias: "postgresql://reader/app"}, bind_key="reader")
+    assert replica.connection_config["uri"] == "postgresql://reader/app"
+    assert replica.bind_key == "reader"
+    assert replica._user_connection_hook is hook
+    assert replica.explicit_statement_dialect is None
+    assert primary.connection_config["uri"] == "postgresql://writer/app"
+
+
+@pytest.mark.parametrize(
+    ("connection", "overrides", "expected"),
+    (
+        (
+            {
+                "driver_name": "adbc_driver_snowflake.dbapi.connect",
+                "account": "acct",
+                "warehouse": "WRITER",
+                "role": "WRITER",
+                "query_tag": "etl",
+            },
+            {"warehouse": "READER", "role": "ANALYST", "query_tag": "bi"},
+            {"adbc.snowflake.sql.warehouse": "READER", "adbc.snowflake.sql.role": "ANALYST", "QUERY_TAG": "bi"},
+        ),
+        (
+            {
+                "driver_name": "adbc_driver_flightsql.dbapi.connect",
+                "uri": "grpc+tls://writer:31337",
+                "username": "writer",
+            },
+            {"uri": "grpc+tls://reader:31337", "username": "reader"},
+            {"uri": "grpc+tls://reader:31337", "username": "reader"},
+        ),
+        (
+            {"driver_name": "/opt/libadbc_pg.so", "uri": "postgresql://writer/app", "username": "writer"},
+            {"uri": "postgresql://reader/app", "username": "reader"},
+            {"uri": "postgresql://reader/app", "username": "reader"},
+        ),
+    ),
+)
+def test_replica_derivation_overrides_inherited_lifted_database_options(
+    connection: dict[str, Any], overrides: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    primary = AdbcConfig(
+        connection_config={**build_connection_config(connection), "driver_name": connection["driver_name"]}
+    )
+    original = dict(primary.connection_config["db_kwargs"])
+    replica = primary.derive_pool(**overrides)
+    normalized = build_connection_config(replica.connection_config)
+    effective = {**normalized, **normalized.get("db_kwargs", {})}
+    assert expected.items() <= effective.items()
+    assert primary.connection_config["db_kwargs"] == original
+
+
+def test_replica_derivation_preserves_new_explicit_database_option_precedence() -> None:
+    primary = AdbcConfig(
+        connection_config={
+            "driver_name": "adbc_driver_flightsql.dbapi.connect",
+            **build_connection_config({
+                "driver_name": "adbc_driver_flightsql.dbapi.connect",
+                "uri": "grpc://writer:31337",
+                "username": "writer",
+            }),
+        }
+    )
+    replica = primary.derive_pool(username="shortcut", db_kwargs={"username": "explicit", "custom": "preserved"})
+    assert replica.connection_config["db_kwargs"]["username"] == "explicit"
+    assert replica.connection_config["db_kwargs"]["custom"] == "preserved"
+    assert primary.connection_config["db_kwargs"]["username"] == "writer"
+
+
+def test_replica_uri_shorthand_derives_independent_adbc_configs() -> None:
+    primary = AdbcConfig(
+        connection_config={"uri": "postgresql://writer/app"},
+        replicas=["postgresql://reader-a/app", "postgresql://reader-b/app"],
+    )
+    readers = primary.replica_groups["default"].configs
+    assert [reader.connection_config["uri"] for reader in readers] == [
+        "postgresql://reader-a/app",
+        "postgresql://reader-b/app",
+    ]
+    assert all(reader.is_replica for reader in readers)
+    with pytest.raises(ImproperConfigurationError):
+        AdbcConfig(connection_config={"uri": "postgresql://writer/app"}, replicas=True)
+
+
+def test_replica_derivation_re_resolves_implicit_dialect() -> None:
+    primary = AdbcConfig(connection_config={"uri": "sqlite://:memory:"})
+    replica = primary.derive_pool(uri="postgresql://reader/app")
+    assert replica.explicit_statement_dialect is None
+    assert replica.statement_config.dialect == "postgres"
+    assert primary.statement_config.dialect == "sqlite"
+
+
+def test_db2_cli_dsn_supports_braced_passwords_and_encodes_database_path() -> None:
+    """Braced Db2 CLI passwords preserve semicolons, equals, and doubled braces while encoding database path."""
+    resolved = build_connection_config({
+        "dsn": "DATABASE=tenant/prod?x=1;HOSTNAME=db.internal;PORT=50000;UID=db2inst1;PWD={p;a=s}}s};"
+    })
+    assert resolved == {
+        "uri": "db2://db.internal:50000/tenant%2Fprod%3Fx%3D1",
+        "username": "db2inst1",
+        "password": "p;a=s}s",
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PWD={unclosed;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=abc;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=70000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=evil.host/path?param=1;PORT=50000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;\nUID=x;"},
+        {"driver_name": "flightsql", "headers": {"Bad Header": "1"}},
+        {"driver_name": "flightsql", "headers": {"X-Trace": "val\r\nInjected: 1"}},
+        {"driver_name": "flightsql", "authorization_header": "Bearer tok\r\nX-Evil: 1"},
+    ],
+)
+def test_adbc_db2_and_flightsql_reject_malformed_dsn_ports_hosts_and_headers(bad_config: dict[str, Any]) -> None:
+    """Malformed Db2 CLI DSN braces, ports, hosts, or FlightSQL RPC headers raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_config)

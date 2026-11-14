@@ -11,15 +11,20 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
 from sqlspec.adapters.psqlpy._typing import (
+    LoadBalanceHosts,
+    PsqlpyBaseConnectionError,
+    PsqlpyBaseConnectionPoolError,
     PsqlpyConnectionExecuteError,
     PsqlpyDataError,
     PsqlpyIntegrityError,
     PsqlpyOperationalError,
+    TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
@@ -49,6 +54,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -189,25 +195,42 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     config = {key: value for key, value in connection_config.items() if value is not None}
-    dsn = (
-        config.pop("dsn", None)
-        or config.pop("conninfo", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    dsn = _pop_first_alias(config, ("dsn", "conninfo", "url", "connection_string"))
     if dsn is not None:
         config["dsn"] = dsn
-    db_name = (
-        config.pop("db_name", None)
-        or config.pop("database", None)
-        or config.pop("dbname", None)
-        or config.pop("db", None)
-    )
+    db_name = _pop_first_alias(config, ("db_name", "database", "dbname", "db"))
     if db_name is not None:
         config["db_name"] = db_name
-    username = config.pop("username", None) or config.pop("user", None)
+    username = _pop_first_alias(config, ("username", "user"))
     if username is not None:
         config["username"] = username
+    enum_fields = (
+        (
+            "target_session_attrs",
+            TargetSessionAttrs,
+            {
+                "any": TargetSessionAttrs.Any,
+                "read-write": TargetSessionAttrs.ReadWrite,
+                "primary": TargetSessionAttrs.ReadWrite,
+                "read-only": TargetSessionAttrs.ReadOnly,
+                "standby": TargetSessionAttrs.ReadOnly,
+                "prefer-standby": TargetSessionAttrs.ReadOnly,
+            },
+        ),
+        (
+            "load_balance_hosts",
+            LoadBalanceHosts,
+            {"disable": LoadBalanceHosts.Disable, "random": LoadBalanceHosts.Random},
+        ),
+    )
+    for key, enum_type, choices in enum_fields:
+        value = config.get(key)
+        if value is None or isinstance(value, enum_type):
+            continue
+        if not isinstance(value, str) or value.lower() not in choices:
+            msg = f"Invalid {key}: {value!r}"
+            raise ImproperConfigurationError(msg)
+        config[key] = choices[value.lower()]
     if "auth_token_provider" in config and config["auth_token_provider"] is None:
         config.pop("auth_token_provider", None)
     return config
@@ -275,6 +298,7 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     return dict_rows, list(dict_rows[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PsqlpyStreamSource:
     """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
 
@@ -405,7 +429,7 @@ def coerce_json_columns(
     for record in records:
         row = list(record)
         for index in indexes:
-            row[index] = _coerce_json_text_for_execute_many(row[index], deserializer=deserializer)
+            row[index] = _decode_arrow_json_column_value(row[index], deserializer=deserializer)
         coerced.append(tuple(row))
     return coerced
 
@@ -518,6 +542,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     """
     _ = logger
     error_msg = str(error).lower()
+    if getattr(error, "sqlstate", None) == "25006" or any(
+        value in error_msg for value in ("25006", "read-only transaction", "read-only sql transaction")
+    ):
+        return _create_postgres_error(error, ReadOnlyTransactionError, "read-only transaction")
 
     if isinstance(error, PsqlpyDataError):
         return _create_postgres_error(error, DataError, "data error")
@@ -582,8 +610,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
-    if isinstance(error, (PsqlpyConnectionExecuteError,)):
-        return _create_postgres_error(error, DatabaseConnectionError, "connection execute error")
+    if isinstance(error, (PsqlpyBaseConnectionError, PsqlpyBaseConnectionPoolError, PsqlpyConnectionExecuteError)):
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
     if "connection" in error_msg:
         if "timeout" in error_msg or "timed out" in error_msg:
@@ -644,20 +674,11 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
                 return jsonb_type(value)
             if isinstance(value, (list, tuple)):
                 return jsonb_type(list(value))
-            if isinstance(value, str):
-                stripped = value.strip()
-                if stripped.startswith(("{", "[")):
-                    with contextlib.suppress(Exception):
-                        parsed = from_json(value)
-                        if isinstance(parsed, dict):
-                            return jsonb_type(parsed)
-                        if isinstance(parsed, (list, tuple)):
-                            return jsonb_type(list(parsed))
     if isinstance(value, tuple):
         return list(value)
     if jsonb_type is not None and isinstance(value, jsonb_type):
         return value
-    if isinstance(value, (dict, list, str)):
+    if isinstance(value, (dict, list)):
         return value
     try:
         serialized_value = serializer(value)
@@ -794,8 +815,8 @@ def _dml_count_query(sql: str) -> str | None:
         expression.set("with_", None)
 
     expression = expression.returning("1", dialect="postgres", copy=False)
-    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
-    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN, copy=False)
+    count_query = exp.select(count_expression, copy=False).from_(cte_alias, copy=False)
     if existing_with is not None:
         count_query.set("with_", existing_with)
     count_query.with_(cte_alias, as_=expression, copy=False)
@@ -857,7 +878,8 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+def _decode_arrow_json_column_value(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+    """Decode Arrow UTF-8 JSON document cells into dict/list values for psqlpy binary COPY."""
     if not isinstance(value, str):
         return value
     stripped = value.lstrip()
@@ -868,6 +890,16 @@ def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[s
     except Exception:
         return value
     return decoded if isinstance(decoded, (dict, list, tuple)) else value
+
+
+def _pop_first_alias(config: "dict[str, Any]", aliases: "tuple[str, ...]") -> Any:
+    """Pop every alias key from config and return the first non-None value."""
+    found = None
+    for alias in aliases:
+        value = config.pop(alias, None)
+        if found is None and value is not None:
+            found = value
+    return found
 
 
 driver_profile = build_profile()

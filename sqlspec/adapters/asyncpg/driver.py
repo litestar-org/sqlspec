@@ -347,6 +347,36 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         timeout = self._timeout_value(statement.statement_config)
         return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size, timeout))
 
+    async def current_wal_lsn(self) -> str:
+        """Return the primary server's current write-ahead-log location."""
+        value = None
+        handler = self.handle_database_exceptions()
+        async with handler:
+            value = await self.connection.fetchval(
+                "SELECT pg_current_wal_lsn()::text", timeout=self._timeout_value(self.statement_config)
+            )
+        self._check_pending_exception(handler)
+        if value is None:
+            msg = "PostgreSQL returned no current WAL location"
+            raise SQLSpecError(msg)
+        return str(value)
+
+    async def has_replayed_wal_lsn(self, lsn: str) -> bool:
+        """Check whether this server has replayed a bound WAL location."""
+        if not isinstance(lsn, str) or not lsn.strip():
+            msg = "WAL location must be a nonempty string"
+            raise ImproperConfigurationError(msg)
+        value = None
+        handler = self.handle_database_exceptions()
+        async with handler:
+            value = await self.connection.fetchval(
+                "SELECT COALESCE(pg_last_wal_replay_lsn() >= $1::text::pg_lsn, NOT pg_is_in_recovery())",
+                lsn,
+                timeout=self._timeout_value(self.statement_config),
+            )
+        self._check_pending_exception(handler)
+        return bool(value)
+
     def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()

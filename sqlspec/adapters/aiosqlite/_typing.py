@@ -101,15 +101,27 @@ class AiosqliteSessionContext:
         from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
 
         self._connection = await self._acquire_connection()
-        self._driver = AiosqliteDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = AiosqliteDriver(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        try:
+            if self._connection is not None:
+                await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
+        finally:
+            self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None

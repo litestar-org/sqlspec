@@ -46,7 +46,7 @@ from sqlspec.core import (
 from sqlspec.core.parameters import _alignment as _alignment_module
 from sqlspec.core.parameters import _converter as _converter_module
 from sqlspec.core.parameters import _processor as _processor_module
-from sqlspec.core.parameters import _types
+from sqlspec.core.parameters import _types, unescape_qmark_operator
 from sqlspec.core.parameters import _validator as _validator_module
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.serializers import from_json, to_json
@@ -3349,11 +3349,187 @@ def test_snowflake_concatenation_between_qmarks_extracts_both_parameters() -> No
 
 
 def test_non_snowflake_dialects_share_parameter_cache_entries() -> None:
-    """Dialects without distinct lexing reuse one cached extraction."""
+    """Dialects sharing a lexical grammar reuse one cached extraction."""
     validator = ParameterValidator()
 
     validator.extract_parameters("SELECT ?", dialect="postgres")
     validator.extract_parameters("SELECT ?", dialect="sqlite")
-    validator.extract_parameters("SELECT ?")
+    validator.extract_parameters("SELECT ?", dialect="oracle")
 
     assert validator.cache_stats()["size"] == 1
+
+    validator.extract_parameters("SELECT ?")
+    validator.extract_parameters("SELECT ?", dialect="redshift")
+
+    assert validator.cache_stats()["size"] == 2
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect", "expected"),
+    [
+        ("SELECT 'C:\\', :x, 'y'", "postgres", [":x"]),
+        ("SELECT 'C:\\', :x, 'y'", "sqlite", [":x"]),
+        ("SELECT 'C:\\', :x, 'y'", "tsql", [":x"]),
+        ("SELECT 'a\\' :skipped', :x", "mysql", [":x"]),
+        ("SELECT 'a\\' :skipped', :x", None, [":x"]),
+        ("SELECT E'it\\'s :skipped', :x", "postgres", [":x"]),
+        ("SELECT q'[it's :skipped]', nq'{:skipped}', Q'!a'b :skipped!', :x FROM dual", "oracle", [":x"]),
+        ("SELECT 1 # :skipped\n, :x", "mysql", [":x"]),
+        ("SELECT 1 # :skipped\n, :x", "mariadb", [":x"]),
+        ("SELECT data #> '{a}', :x", "postgres", [":x"]),
+        ("SELECT `a :skipped`, :x", "bigquery", [":x"]),
+        ("SELECT ARRAY[:a, :b]", "postgres", [":a", ":b"]),
+        ("SELECT $$ :skipped $$, $fn$ :skipped $fn$, :x", "postgres", [":x"]),
+        ("SELECT $1 + $2", "postgres", ["$1", "$2"]),
+        ("SELECT v$$session, :x", "oracle", [":x"]),
+        ("SELECT :x /* :skipped", "postgres", [":x"]),
+        ("SELECT :x, $body$ :skipped", "postgres", [":x"]),
+    ],
+)
+def test_extract_parameters_honors_dialect_lexical_rules(
+    sql: str, dialect: "str | None", expected: "list[str]"
+) -> None:
+    """Strings, comments, and quoted identifiers follow each dialect's lexical grammar."""
+    parameters = ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect=dialect)
+
+    assert [parameter.placeholder_text for parameter in parameters] == expected
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "mysql", "snowflake"])
+def test_unescape_qmark_operator_shifts_positions_past_each_escape(dialect: "str | None") -> None:
+    """Parameter positions shift by the number of escapes that precede them."""
+    sql = "SELECT a ?? 'k', :p1, b ?? 'k', :p2 FROM t WHERE c ?? 'k' AND d = :p3"
+    infos = ParameterValidator(cache_max_size=0).extract_parameters(sql, dialect=dialect)
+    names = [info.placeholder_text for info in infos]
+
+    rewritten, shifted = unescape_qmark_operator(sql, infos, dialect=dialect)
+
+    assert "??" not in rewritten
+    assert [rewritten[info.position : info.position + len(info.placeholder_text)] for info in shifted] == names
+
+
+@pytest.mark.parametrize(
+    ("sql_template", "value", "expected"),
+    [
+        ("SELECT 0-:t", -1, "SELECT 0- -1"),
+        ("SELECT 0-:t", -1.5, "SELECT 0- -1.5"),
+        ("SELECT 0-:t", Decimal(-2), "SELECT 0- -2"),
+        ("SELECT 0-:t", -0.0, "SELECT 0- -0.0"),
+        ("SELECT 0-:t", 3, "SELECT 0-3"),
+        ("SELECT 0-:t", True, "SELECT 0-TRUE"),
+        ("PRAGMA cache_size = :t", -2000, "PRAGMA cache_size = -2000"),
+        ("ALTER SEQUENCE s INCREMENT BY :t", -1, "ALTER SEQUENCE s INCREMENT BY -1"),
+    ],
+)
+def test_static_literal_separates_negative_numbers_after_minus(sql_template: str, value: object, expected: str) -> None:
+    """A negative literal after a minus operator gets a separating space without parenthesizing standalone values."""
+    sql, _ = ParameterConverter().convert_placeholder_style(sql_template, {"t": value}, ParameterStyle.STATIC)
+
+    assert sql == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("mysql", "'a\\\\''b'"),
+        ("mariadb", "'a\\\\''b'"),
+        ("postgres", "'a\\''b'"),
+        ("postgresql", "'a\\''b'"),
+        ("cockroachdb", "'a\\''b'"),
+        ("mssql", "'a\\''b'"),
+        ("sybase", "'a\\''b'"),
+        ("db2", "'a\\''b'"),
+        ("vantage", "'a\\''b'"),
+        ("sqlite", "'a\\''b'"),
+    ],
+)
+def test_static_literal_string_escaping_by_dialect(dialect: str, expected: str) -> None:
+    """String literals double backslashes only where the engine treats them as escapes."""
+    assert ParameterConverter._format_literal("a\\'b", dialect) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("mariadb", "X'0102'"),
+        ("postgresql", "decode('0102', 'hex')"),
+        ("cockroachdb", "decode('0102', 'hex')"),
+        ("mssql", "0x0102"),
+        ("sqlanywhere", "0x0102"),
+        ("db2", "BX'0102'"),
+        ("teradata", "'0102'XB"),
+        ("vantage", "'0102'XB"),
+    ],
+)
+def test_static_literal_binary_dialect_aliases(dialect: str, expected: str) -> None:
+    """Dialect aliases resolve to their engine's binary literal form."""
+    assert ParameterConverter._format_literal(b"\x01\x02", dialect) == expected
+
+
+def test_static_literal_rejects_nul_characters() -> None:
+    with pytest.raises(SQLSpecError, match="NUL"):
+        ParameterConverter._format_literal("a\x00b", "postgres")
+    with pytest.raises(SQLSpecError, match="NUL"):
+        ParameterConverter._format_literal("a\x00b", None)
+    assert ParameterConverter._format_literal("a\x00b", "mysql") == "'a\\0b'"
+
+
+@pytest.mark.parametrize(
+    ("adapter", "sql", "params", "expected"),
+    [
+        ("psycopg", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("pymssql", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        ("sybase", "SELECT 'C:\\' AS p, %s AS v, 'x' AS q", ("a",), "SELECT 'C:\\' AS p, %s AS v, 'x' AS q"),
+        (
+            "pymysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "aiomysql",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+        (
+            "asyncmy",
+            "SELECT `50%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+            ("a", "b"),
+            "SELECT `50%%s` FROM t WHERE x = %s # don't care\n AND y = %s",
+        ),
+    ],
+)
+def test_adapter_escape_literal_percent_uses_adapter_dialect(
+    adapter: str, sql: str, params: "tuple[str, ...]", expected: str
+) -> None:
+    """Adapter percent-escaping helpers scan with the same dialect grammar as the parameter processor."""
+    import importlib
+
+    module = importlib.import_module(f"sqlspec.adapters.{adapter}.core")
+    escaped = module.escape_literal_percent(sql, params, ParameterValidator())
+    assert escaped == expected
+
+
+def test_static_literal_requires_dialect_for_backslashes() -> None:
+    """Backslash handling is engine-specific, so it needs a dialect."""
+    assert ParameterConverter._format_literal("it's", None) == "'it''s'"
+    with pytest.raises(SQLSpecError, match="backslash"):
+        ParameterConverter._format_literal("a\\b", None)
+
+
+def test_static_literal_rejects_unknown_string_dialect() -> None:
+    with pytest.raises(SQLSpecError, match="Cannot embed a string value"):
+        ParameterConverter._format_literal("a", "not_a_dialect")
+
+
+def test_type_coercion_dispatcher_cache_is_bounded() -> None:
+    """Global type coercion dispatcher cache stays bounded by _FALLBACK_CACHE_MAX_SIZE."""
+    _processor_module._TYPE_COERCION_DISPATCHERS.clear()
+    _processor_module._TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+    _ = [
+        _processor_module.type_coercion_dispatcher(((int, lambda value, idx=i: idx),))
+        for i in range(_processor_module._FALLBACK_CACHE_MAX_SIZE + 50)
+    ]
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
+    assert len(_processor_module._TYPE_COERCION_DISPATCHERS_BY_ID) <= _processor_module._FALLBACK_CACHE_MAX_SIZE

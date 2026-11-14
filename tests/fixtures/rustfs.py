@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from pytest_databases._s3 import create_s3_bucket
+from pytest_databases import create_s3_bucket
 
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
@@ -22,7 +22,7 @@ __all__ = (
 def ensure_s3_bucket(
     endpoint_url: str, bucket_name: str, *, access_key: str, secret_key: str, region: str = "us-east-1"
 ) -> str:
-    """Create an S3 bucket idempotently via ``pytest_databases._s3.create_s3_bucket``."""
+    """Create an S3 bucket idempotently via ``pytest_databases.create_s3_bucket``."""
     create_s3_bucket(endpoint_url, bucket_name, access_key=access_key, secret_key=secret_key, region=region)
     return bucket_name
 

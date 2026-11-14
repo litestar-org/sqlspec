@@ -26,12 +26,14 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
+    DatabaseConnectionError,
     DataError,
     IntegrityError,
     OperationalError,
     PermissionDeniedError,
     SQLSpecError,
 )
+from sqlspec.utils.serializers import to_json
 
 
 @pytest.mark.parametrize(
@@ -407,3 +409,89 @@ async def test_psqlpy_dispatch_execute_strips_sqlcommenter_before_dml_count_cach
     assert "1111111111111111" in fetched_queries[0]
     assert "2222222222222222" in fetched_queries[1]
     assert "1111111111111111" not in fetched_queries[1]
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from psqlpy.exceptions import DatabaseError
+
+    from sqlspec.adapters.psqlpy.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = DatabaseError("SQLSTATE 25006: cannot execute INSERT in a read-only transaction")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()
+
+
+@pytest.mark.parametrize("cast_type", ["JSON", "JSONB"])
+@pytest.mark.parametrize("scalar", ["", "123", "null", "true", '{"a": 1}', "[1, 2]", "console"])
+def test_psqlpy_json_parameter_serializes_string_scalars_and_uses_custom_serializer(
+    cast_type: str, scalar: str
+) -> None:
+    """Plain Python strings bound to JSON/JSONB casts serialize via the configured JSON serializer."""
+    seen: list[object] = []
+
+    def custom_serializer(val: object) -> str:
+        seen.append(val)
+        return to_json(val)
+
+    stmt_config = build_statement_config(json_serializer=custom_serializer)
+    prepared = prepare_parameters_with_casts([scalar], {1: cast_type}, stmt_config)
+    assert prepared == [to_json(scalar)]
+    assert seen == [scalar]
+
+
+def test_psqlpy_driver_prepare_driver_parameters_is_many_serializes_string_scalars() -> None:
+    """execute_many parameter preparation serializes string scalars for JSON/JSONB casts while coerce_json_columns decodes Arrow JSON."""
+    stmt_config = build_statement_config()
+    driver = PsqlpyDriver(connection=cast("Any", SimpleNamespace()), statement_config=stmt_config)
+    stmt = driver.prepare_statement(
+        "INSERT INTO events (payload) VALUES ($1::jsonb)",
+        [("123",), ('{"a": 1}',)],
+        statement_config=stmt_config,
+        kwargs={"is_many": True},
+    )
+    stmt.compile()
+
+    prepared = driver.prepare_driver_parameters(
+        [("123",), ('{"a": 1}',)], stmt_config, is_many=True, prepared_statement=stmt
+    )
+    assert prepared == [(to_json("123"),), (to_json('{"a": 1}'),)]
+    assert psqlpy_core.coerce_json_columns([('{"a": 1}',), ("123",)], ["payload"], {"payload"}) == [
+        ({"a": 1},),
+        ("123",),
+    ]
+
+
+def test_psqlpy_json_parameter_preserves_none_and_structured_containers() -> None:
+    """None remains None and dict/list containers bind natively for JSON/JSONB casts."""
+    stmt_config = build_statement_config()
+    prepared_none = prepare_parameters_with_casts([None], {1: "JSONB"}, stmt_config)
+    assert prepared_none == [None]
+
+    prepared_json = prepare_parameters_with_casts([{"a": 1}, (1, 2)], {1: "JSON", 2: "JSON"}, stmt_config)
+    assert prepared_json == [{"a": 1}, [1, 2]]
+
+    prepared_jsonb = prepare_parameters_with_casts([{"a": 1}, [1, 2]], {1: "JSONB", 2: "JSONB"}, stmt_config)
+    assert len(prepared_jsonb) == 2
+    assert type(prepared_jsonb[0]).__name__ == "JSONB"
+    assert type(prepared_jsonb[1]).__name__ == "JSONB"
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_cls"),
+    [
+        (lambda: psqlpy_exceptions.ConnectionPoolBuildError("build failed"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionPoolExecuteError("pool exhausted"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionClosedError("socket closed"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionPoolBuildError("connection timeout"), ConnectionTimeoutError),
+    ],
+)
+def test_create_mapped_exception_maps_psqlpy_connection_and_pool_base_errors(
+    exc_factory: Any, expected_cls: type[Exception]
+) -> None:
+    """Connection and pool base errors map cleanly even when the message omits generic keywords."""
+    mapped = psqlpy_core.create_mapped_exception(exc_factory())
+    assert type(mapped) is expected_cls

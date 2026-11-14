@@ -95,6 +95,7 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
     | Key | Type | Default | Description |
     | --- | --- | --- | --- |
     | `connection_string` | `str` | - | Full ODBC/TDS semicolon-delimited connection string passed to `mssql_python.connect`. |
+    | `host` | `str` | - | Alias for the SQL Server endpoint. |
     | `server` | `str` | - | SQL Server hostname, `host,port`, or `host\instance` target. |
     | `address` | `str` | - | ODBC `Address` alias for `server`. |
     | `addr` | `str` | - | ODBC `Addr` alias for `server`. |
@@ -175,6 +176,8 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
     | `host` | `str` | - | Alias for `server` accepted by `pymssql.connect`. |
     | `user` | `str` | - | SQL Server or Windows domain login (`DOMAIN\user`). |
     | `password` | `str` | - | Password for `user`. |
+    | `db` | `str` | - | Alias for the target database. |
+    | `username` | `str` | - | Alias for the authentication user. |
     | `database` | `str` | - | Initial SQL Server database selected on connect. |
     | `port` | `int or str` | `1433` | SQL Server TCP port (defaults to `1433`). |
     | `timeout` | `PymssqlTimeout` | - | Query response timeout in seconds (`0` means wait indefinitely). |
@@ -226,6 +229,12 @@ SQLSpec provides two synchronous Microsoft SQL Server and Azure SQL adapters—`
 - **MERGE Upserts**: Build atomic SQL Server upserts with `sql.merge(dialect="tsql").into(...)` (`WHEN MATCHED THEN UPDATE ... WHEN NOT MATCHED THEN INSERT ...`).
 - **Streaming Arrow BulkCopy on mssql-python**: `session.load_from_arrow(table, source)` streams `pyarrow.Table`, `RecordBatch`, or `RecordBatchReader` batches directly through `mssql_python`'s native TDS `bulkcopy` engine without materializing intermediate Python dicts.
 - **T-SQL Pagination Requires ORDER BY**: SQL Server's `OFFSET ... ROWS FETCH NEXT ... ROWS ONLY` syntax requires an explicit `ORDER BY` clause. Always attach `.order_by(...)` or `OrderByFilter` when using `LimitOffsetFilter` on `tsql`.
+
+## Always On Availability Group Read Replicas
+
+`MssqlPythonConfig(replicas=True)` derives a reader with `application_intent="ReadOnly"` and `multi_subnet_failover=True`. `PymssqlConfig(replicas=True)` uses native `read_only=True`. Both need a nonempty `database`. Set up a readable secondary and routing rules on the listener and server first.
+
+Pass explicit reader configs or endpoint overrides when one listener is not enough. Derived readers keep tenant hooks and native pool ownership. SQL Server errors `3906`, `3908`, and `978` map to `ReadOnlyTransactionError`; `976` maps to `ReplicaUnavailableError`. See [Read Replicas](../learn/recipes/read-replicas.md).
 
 ## See Also
 

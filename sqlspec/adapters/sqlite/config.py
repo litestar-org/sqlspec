@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
 from sqlspec.adapters.sqlite._typing import (
     SqliteConnection,
@@ -10,17 +10,21 @@ from sqlspec.adapters.sqlite._typing import (
     SqliteCursor,
     SqliteSessionContext,
 )
+from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import (
     apply_driver_features,
     build_connection_config,
+    build_readonly_sqlite_uri,
+    create_mapped_exception,
     default_statement_config,
+    is_read_only_sqlite_config,
     render_pragmas,
     require_python_version,
 )
 from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
-from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
+from sqlspec.config import ExtensionConfigs, MigrationConfig, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
@@ -65,6 +69,8 @@ class SqliteConnectionParams(TypedDict):
     """Custom ``sqlite3.Connection`` subclass passed to ``sqlite3.connect``."""
     cached_statements: NotRequired[int]
     """Number of compiled SQLite VM statements cached per connection by ``sqlite3``."""
+    query_only: NotRequired[bool]
+    """Enforce read-only queries on every physical connection."""
     uri: NotRequired[bool]
     """Interpret ``database`` as a SQLite ``file:`` URI supporting query parameters."""
     autocommit: NotRequired[SQLiteAutocommitMode]
@@ -191,9 +197,23 @@ class SqliteConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> SqliteConnection:
+        try:
+            return cast("SqliteConnection", super().__enter__())
+        except sqlite3.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
+
 
 class _SqliteSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> SqliteConnection:
+        try:
+            return cast("SqliteConnection", super().acquire_connection())
+        except sqlite3.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
 
 class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, SqliteDriver]):
@@ -241,6 +261,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
+        self._serialize_writes = False
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
         database = (
             config_dict.pop("database", None)
@@ -267,6 +288,12 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
+        if is_read_only_sqlite_config(config_dict):
+            mode = features_dict.get("default_transaction_mode")
+            if mode is not None and str(mode).upper() != "DEFERRED":
+                msg = "Read-only SQLite connections require DEFERRED transaction mode"
+                raise ImproperConfigurationError(msg)
+            features_dict["default_transaction_mode"] = "DEFERRED"
         self._user_connection_hook: Callable[[SqliteConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
@@ -285,6 +312,40 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         )
         if self._user_connection_hook is not None:
             self.driver_features["on_connection_create"] = self._user_connection_hook
+
+    def derive_pool(
+        self,
+        *,
+        connection_config_overrides: Mapping[str, Any] | None = None,
+        driver_features_overrides: Mapping[str, Any] | None = None,
+        statement_config: "StatementConfig | None" = None,
+        migration_config: dict[str, Any] | MigrationConfig | None = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: "ObservabilityConfig | None" = None,
+        bind_key: str | None = None,
+        is_replica: bool = False,
+        **overrides: Any,
+    ) -> Self:
+        """Clone an independent pool, defaulting read-only clones to deferred transactions."""
+        connection = {**self.connection_config, **(connection_config_overrides or {}), **overrides}
+        features = dict(driver_features_overrides or {})
+        if (
+            is_read_only_sqlite_config(connection)
+            and "default_transaction_mode" not in features
+            and "default_transaction_mode" not in overrides
+        ):
+            features["default_transaction_mode"] = "DEFERRED"
+        return super().derive_pool(
+            connection_config_overrides=connection_config_overrides,
+            driver_features_overrides=features,
+            statement_config=statement_config,
+            migration_config=migration_config,
+            extension_config=extension_config,
+            observability_config=observability_config,
+            bind_key=bind_key,
+            is_replica=is_replica,
+            **overrides,
+        )
 
     def create_connection(self) -> SqliteConnection:
         """Open a standalone connection owned by the caller.
@@ -325,6 +386,16 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         })
         return namespace
 
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if spec_input is True:
+            self._serialize_writes = True
+            database = build_readonly_sqlite_uri(str(self.connection_config.get("database", "")))
+            return {
+                "connection_config_overrides": {"database": database, "uri": True, "query_only": True},
+                "driver_features_overrides": {"default_transaction_mode": "DEFERRED"},
+            }
+        return super()._build_replica_spec_overrides(spec_input)
+
     def _create_pool(self) -> SqliteConnectionPool:
         """Create connection pool from configuration."""
         config_dict = build_connection_config(self.connection_config)
@@ -350,6 +421,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             connection_parameters=config_dict,
             on_connection_create=self._user_connection_hook,
             runtime_setup=self._runtime_setup,
+            is_read_only=is_read_only_sqlite_config(self.connection_config),
+            serialize_writes=self._serialize_writes,
             **pool_kwargs,
         )
 

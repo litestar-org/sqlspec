@@ -4,13 +4,14 @@ import ast
 import contextlib
 import copy
 import hashlib
+import hmac
 import inspect
 import logging
 import re
 import time
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from sqlspec.core import SQL
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
@@ -32,18 +33,25 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.migrations.base import ExtensionReconcilerDescriptor, LoadedMigrationMetadata
     from sqlspec.observability import ObservabilityRuntime
 
-__all__ = ("AsyncMigrationRunner", "SyncMigrationRunner", "create_migration_runner", "extract_replaces_versions")
+__all__ = (
+    "AsyncMigrationRunner",
+    "BaseMigrationRunner",
+    "SyncMigrationRunner",
+    "create_migration_runner",
+    "extract_replaces_versions",
+)
 
 logger = get_logger("sqlspec.migrations.runner")
 
 _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_MD5_HEX_LENGTH: Final[int] = 32
 
 
 class BaseMigrationRunner:
@@ -84,9 +92,34 @@ class BaseMigrationRunner:
         self._listing_cache: list[tuple[str, Path]] | None = None
         self._listing_signatures: dict[str, tuple[int, int]] = {}
         self._metadata_cache: dict[str, _CachedMigrationMetadata] = {}
+        self._outer_locked_drivers: set[int] = set()
+        self._savepoint_recovered_drivers: set[int] = set()
+        self._outer_lock_unrecovered_drivers: set[int] = set()
         self.description_hints = description_hints or TemplateDescriptionHints()
         self.summary_only = summary_only
         self.use_logger = use_logger
+
+    @staticmethod
+    def verify_migration_checksum(content: str, recorded_checksum: str) -> bool:
+        """Verify migration content against a stored SHA-256 or legacy MD5 checksum.
+
+        Args:
+            content: The migration file content.
+            recorded_checksum: Hex digest recorded in the migration tracking table.
+
+        Returns:
+            True when the canonicalized content digest matches ``recorded_checksum``.
+        """
+        if not recorded_checksum or not recorded_checksum.isascii():
+            return False
+        canonical_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
+        if len(recorded_checksum) == _MD5_HEX_LENGTH and all(
+            ch in "0123456789abcdefABCDEF" for ch in recorded_checksum
+        ):
+            expected = hashlib.md5(canonical_bytes, usedforsecurity=False).hexdigest()
+        else:
+            expected = hashlib.sha256(canonical_bytes).hexdigest()
+        return hmac.compare_digest(expected.encode("ascii"), recorded_checksum.lower().encode("ascii"))
 
     def set_summary_only(self, value: bool) -> None:
         """Set summary-only logging behavior for migration runner."""
@@ -105,6 +138,38 @@ class BaseMigrationRunner:
         if self.context is not None:
             self.context.driver = driver
 
+    @contextlib.contextmanager
+    def outer_lock(self, driver: Any) -> "Iterator[None]":
+        """Isolate transactional migration steps in savepoints when an outer transaction lock is held.
+
+        Yields:
+            Control to the caller while outer-lock savepoints isolate transactional steps.
+        """
+        driver_id = id(driver)
+        self._outer_locked_drivers.add(driver_id)
+        self._savepoint_recovered_drivers.discard(driver_id)
+        self._outer_lock_unrecovered_drivers.discard(driver_id)
+        try:
+            yield
+        finally:
+            self._outer_locked_drivers.discard(driver_id)
+
+    def consume_savepoint_recovery(self, driver: Any) -> bool:
+        """Return and clear whether ``driver`` just unwound via a clean step savepoint rollback."""
+        driver_id = id(driver)
+        if driver_id in self._savepoint_recovered_drivers:
+            self._savepoint_recovered_drivers.discard(driver_id)
+            return True
+        return False
+
+    def consume_unrecovered_outer_lock_failure(self, driver: Any) -> bool:
+        """Return and clear whether ``driver`` failed under an outer lock without savepoint recovery."""
+        driver_id = id(driver)
+        if driver_id in self._outer_lock_unrecovered_drivers:
+            self._outer_lock_unrecovered_drivers.discard(driver_id)
+            return True
+        return False
+
     def clear_caches(self) -> None:
         """Clear the SQL loader caches and the migration metadata cache.
 
@@ -117,7 +182,7 @@ class BaseMigrationRunner:
         self._metadata_cache.clear()
 
     def calculate_checksum(self, content: str) -> str:
-        """Calculate MD5 checksum of migration content.
+        """Calculate SHA-256 checksum of migration content.
 
         Canonicalizes content by excluding query name headers and version comment
         lines that change during the fix command. This ensures checksums remain
@@ -127,16 +192,10 @@ class BaseMigrationRunner:
             content: The migration file content.
 
         Returns:
-            MD5 checksum hex string.
+            SHA-256 checksum hex string.
         """
-        canonical_content = re.sub(
-            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
-            "",
-            content,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
-
-        return hashlib.md5(canonical_content.encode(), usedforsecurity=False).hexdigest()
+        canonical_content = self._canonicalize_migration_content(content)
+        return hashlib.sha256(canonical_content.encode("utf-8")).hexdigest()
 
     @abstractmethod
     def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
@@ -178,6 +237,16 @@ class BaseMigrationRunner:
 
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))
+
+    @staticmethod
+    def _canonicalize_migration_content(content: str) -> str:
+        """Strip version-dependent headers before computing or checking a digest."""
+        return re.sub(
+            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
+            "",
+            content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
 
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""
@@ -561,6 +630,54 @@ class BaseMigrationRunner:
         return False
 
     @staticmethod
+    async def _has_active_implicit_transaction_async(driver: "SyncDriverAdapterBase | AsyncDriverAdapterBase") -> bool:
+        """Return True when an async non-transactional driver currently holds an open implicit transaction."""
+        driver_dict = getattr(driver, "__dict__", {})
+        driver_type = type(driver)
+        if "_transaction_open" in driver_dict or hasattr(driver_type, "_transaction_open"):
+            open_fn = getattr(driver, "_transaction_open", None)
+            if callable(open_fn):
+                try:
+                    open_res: Any = open_fn()
+                    if inspect.isawaitable(open_res):
+                        open_res = await open_res
+                except (NotImplementedError, AttributeError):
+                    open_res = False
+                if open_res is True:
+                    return True
+        has_explicit_hook = "_connection_in_transaction" in driver_dict or hasattr(
+            driver_type, "_connection_in_transaction"
+        )
+        has_implicit_hook = "_has_implicit_transaction" in driver_dict or hasattr(
+            driver_type, "_has_implicit_transaction"
+        )
+        if not isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)) and not (
+            has_explicit_hook or has_implicit_hook
+        ):
+            return False
+        if has_explicit_hook or isinstance(driver, (SyncDriverAdapterBase, AsyncDriverAdapterBase)):
+            try:
+                in_tx: Any = driver._connection_in_transaction()
+                if inspect.isawaitable(in_tx):
+                    in_tx = await in_tx
+            except (NotImplementedError, AttributeError):
+                in_tx = False
+            if in_tx is True:
+                return True
+        if has_implicit_hook:
+            implicit_fn = getattr(driver, "_has_implicit_transaction", None)
+            if not callable(implicit_fn):
+                return False
+            try:
+                implicit_tx: Any = implicit_fn()
+                if inspect.isawaitable(implicit_tx):
+                    implicit_tx = await implicit_tx
+            except (NotImplementedError, AttributeError):
+                return False
+            return implicit_tx is True
+        return False
+
+    @staticmethod
     def _validate_reconciler_return_value(descriptor: "ExtensionReconcilerDescriptor", result: Any) -> None:
         """Validate that a reconcile(context) callback returned None."""
         if result is not None:
@@ -903,122 +1020,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
-    def _commit_nontransactional_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
-        """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
-        if self._has_active_implicit_transaction(driver):
-            driver.commit()
-
-    def _invoke_reconciler(
-        self,
-        driver: "SyncDriverAdapterBase",
-        descriptor: "ExtensionReconcilerDescriptor",
-        *,
-        direction: Literal["up", "down"] = "up",
-    ) -> None:
-        """Load and execute a synchronous reconcile(context) or downgrade(context) callback."""
-        context = self._build_reconciler_context(driver, descriptor)
-        if direction == "down":
-            reconcile_fn = load_reconcile_downgrade_callable(
-                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-            )
-            if reconcile_fn is None:
-                return
-        else:
-            reconcile_fn = load_reconcile_callable(
-                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-            )
-        result: Any = reconcile_fn(context)
-        if inspect.isawaitable(result):
-            if inspect.iscoroutine(result):
-                result.close()
-            msg = (
-                f"Extension reconciler '{descriptor.name}' ({descriptor.module_path}) "
-                "returned an awaitable in synchronous execution"
-            )
-            raise MigrationError(msg)
-        self._validate_reconciler_return_value(descriptor, result)
-
-    def _execute_reconciler_step(
-        self,
-        driver: "SyncDriverAdapterBase",
-        descriptor: "ExtensionReconcilerDescriptor",
-        *,
-        direction: Literal["up", "down"],
-    ) -> int:
-        """Execute an extension reconcile or downgrade callback synchronously."""
-        self.set_driver(driver)
-        suffix = "reconcile" if direction == "up" else "reconcile_down"
-        reconcile_meta = cast(
-            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
-        )
-        default_schema = self._resolve_migration_schema(reconcile_meta)
-        use_transaction = self._resolve_use_transaction(reconcile_meta, None)
-        span = self._begin_migration_span(driver, reconcile_meta, "reconcile", "migration.reconcile", use_transaction)
-        start_time = time.perf_counter()
-        execution_time = 0
-
-        if use_transaction:
-            try:
-                driver.begin()
-            except Exception as exc:
-                self._finish_migration_span_error(
-                    span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
-                )
-                raise
-            try:
-                if default_schema:
-                    driver.set_migration_session_schema(default_schema)
-                self._invoke_reconciler(driver, descriptor, direction=direction)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                driver.commit()
-            except BaseException as exc:
-                self._recover_failed_migration(driver, in_transaction=True, schema_active=bool(default_schema))
-                if isinstance(exc, Exception):
-                    wrapped = self._wrap_reconciler_error(descriptor, exc)
-                    self._finish_migration_span_error(
-                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
-                    )
-                    raise wrapped
-                raise
-        else:
-            try:
-                if default_schema:
-                    driver.set_migration_non_transactional_schema(default_schema)
-                self._invoke_reconciler(driver, descriptor, direction=direction)
-                self._commit_nontransactional_if_needed(driver)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-            except BaseException as exc:
-                self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
-                if not default_schema:
-                    in_implicit_tx = False
-                    with contextlib.suppress(Exception):
-                        in_implicit_tx = self._has_active_implicit_transaction(driver)
-                    if in_implicit_tx:
-                        self._attempt_recovery(driver.rollback, "rollback")
-                if isinstance(exc, Exception):
-                    wrapped = self._wrap_reconciler_error(descriptor, exc)
-                    self._finish_migration_span_error(
-                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
-                    )
-                    raise wrapped
-                raise
-
-        try:
-            if default_schema:
-                driver.reset_migration_session_schema()
-                if not use_transaction:
-                    self._commit_nontransactional_if_needed(driver)
-        except Exception as exc:
-            self._finish_migration_span_error(
-                span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
-            )
-            raise
-
-        self._finish_migration_span_success(
-            span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
-        )
-        return execution_time
-
     def execute_reconciliation(
         self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
     ) -> int:
@@ -1097,6 +1098,139 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         return all_queries
 
+    def _commit_nontransactional_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
+        """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
+        if id(driver) in self._outer_locked_drivers:
+            return
+        if self._has_active_implicit_transaction(driver):
+            driver.commit()
+
+    def _invoke_reconciler(
+        self,
+        driver: "SyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"] = "up",
+    ) -> None:
+        """Load and execute a synchronous reconcile(context) or downgrade(context) callback."""
+        context = self._build_reconciler_context(driver, descriptor)
+        if direction == "down":
+            reconcile_fn = load_reconcile_downgrade_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+            if reconcile_fn is None:
+                return
+        else:
+            reconcile_fn = load_reconcile_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+        result: Any = reconcile_fn(context)
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            msg = (
+                f"Extension reconciler '{descriptor.name}' ({descriptor.module_path}) "
+                "returned an awaitable in synchronous execution"
+            )
+            raise MigrationError(msg)
+        self._validate_reconciler_return_value(descriptor, result)
+
+    def _execute_reconciler_step(
+        self,
+        driver: "SyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"],
+    ) -> int:
+        """Execute an extension reconcile or downgrade callback synchronously."""
+        self.set_driver(driver)
+        suffix = "reconcile" if direction == "up" else "reconcile_down"
+        reconcile_meta = cast(
+            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
+        )
+        default_schema = self._resolve_migration_schema(reconcile_meta)
+        use_transaction = self._resolve_use_transaction(reconcile_meta, None)
+        span = self._begin_migration_span(driver, reconcile_meta, "reconcile", "migration.reconcile", use_transaction)
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
+            step_savepoint = "sqlspec_reconcile_step"
+            try:
+                if uses_outer_lock:
+                    self._savepoint_recovered_drivers.discard(id(driver))
+                    self._outer_lock_unrecovered_drivers.discard(id(driver))
+                    driver.create_savepoint(step_savepoint)
+                else:
+                    driver.begin()
+            except Exception as exc:
+                if uses_outer_lock:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                self._finish_migration_span_error(
+                    span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
+                )
+                raise
+            step_error: BaseException | None = None
+            try:
+                if default_schema:
+                    if use_transaction:
+                        driver.set_migration_session_schema(default_schema)
+                    else:
+                        driver.set_migration_non_transactional_schema(default_schema)
+                self._invoke_reconciler(driver, descriptor, direction=direction)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if uses_outer_lock:
+                    driver.release_savepoint(step_savepoint)
+                else:
+                    driver.commit()
+            except BaseException as exc:
+                step_error = exc
+            if step_error is not None:
+                if uses_outer_lock:
+                    self._recover_failed_savepoint(driver, step_savepoint, schema_active=bool(default_schema))
+                else:
+                    self._recover_failed_migration(driver, in_transaction=True, schema_active=bool(default_schema))
+                if isinstance(step_error, Exception):
+                    wrapped = self._wrap_reconciler_error(descriptor, step_error)
+                    self._finish_migration_span_error(
+                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
+                    )
+                    raise wrapped
+                raise step_error
+        else:
+            try:
+                if default_schema:
+                    driver.set_migration_non_transactional_schema(default_schema)
+                self._invoke_reconciler(driver, descriptor, direction=direction)
+                self._commit_nontransactional_if_needed(driver)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+            except BaseException as exc:
+                self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
+                if isinstance(exc, Exception):
+                    wrapped = self._wrap_reconciler_error(descriptor, exc)
+                    self._finish_migration_span_error(
+                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
+                    )
+                    raise wrapped
+                raise
+
+        try:
+            if default_schema:
+                driver.reset_migration_session_schema()
+                if not use_transaction:
+                    self._commit_nontransactional_if_needed(driver)
+        except Exception as exc:
+            self._finish_migration_span_error(
+                span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
+            )
+            raise
+
+        self._finish_migration_span_success(
+            span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
+        )
+        return execution_time
+
     def _execute_migration_sql(
         self,
         driver: "SyncDriverAdapterBase",
@@ -1112,12 +1246,28 @@ class SyncMigrationRunner(BaseMigrationRunner):
         if directive_schema is not None and not driver.has_schema(directive_schema):
             msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
-        if use_transaction:
-            driver.begin()
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
+            step_savepoint = "sqlspec_migration_step"
+            if uses_outer_lock:
+                self._savepoint_recovered_drivers.discard(id(driver))
+                self._outer_lock_unrecovered_drivers.discard(id(driver))
+                try:
+                    driver.create_savepoint(step_savepoint)
+                except BaseException:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                    raise
+            else:
+                driver.begin()
             schema_reset = False
+            execution_time = 0
+            step_error: BaseException | None = None
             try:
                 if default_schema:
-                    driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        driver.set_migration_session_schema(default_schema)
+                    else:
+                        driver.set_migration_non_transactional_schema(default_schema)
                 for sql_statement in sql_list:
                     if sql_statement.strip():
                         driver.execute_script(sql_statement)
@@ -1127,12 +1277,22 @@ class SyncMigrationRunner(BaseMigrationRunner):
                         driver.reset_migration_session_schema()
                         schema_reset = True
                     on_success(execution_time)
-                driver.commit()
-            except BaseException:
-                self._recover_failed_migration(
-                    driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
-                )
-                raise
+                if uses_outer_lock:
+                    driver.release_savepoint(step_savepoint)
+                else:
+                    driver.commit()
+            except BaseException as exc:
+                step_error = exc
+            if step_error is not None:
+                if uses_outer_lock:
+                    self._recover_failed_savepoint(
+                        driver, step_savepoint, schema_active=bool(default_schema) and not schema_reset
+                    )
+                else:
+                    self._recover_failed_migration(
+                        driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
+                    )
+                raise step_error
             if default_schema and not schema_reset:
                 driver.reset_migration_session_schema()
             return execution_time
@@ -1159,6 +1319,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
             driver.reset_migration_session_schema()
         return execution_time
 
+    def _recover_failed_savepoint(
+        self, driver: "SyncDriverAdapterBase", savepoint: str, *, schema_active: bool
+    ) -> None:
+        """Roll back a failed step savepoint while preserving the outer transaction lock."""
+        rolled_back = self._attempt_recovery(lambda: driver.rollback_to_savepoint(savepoint), "rollback_savepoint")
+        released = self._attempt_recovery(lambda: driver.release_savepoint(savepoint), "release_savepoint")
+        if schema_active:
+            self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+        if rolled_back and released:
+            self._savepoint_recovered_drivers.add(id(driver))
+        else:
+            self._outer_lock_unrecovered_drivers.add(id(driver))
+
     def _recover_failed_migration(
         self, driver: "SyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
     ) -> None:
@@ -1169,11 +1342,19 @@ class SyncMigrationRunner(BaseMigrationRunner):
             in_transaction: Whether the runner began a transaction for this migration.
             schema_active: Whether a session schema reset is still outstanding.
         """
-        if in_transaction:
+        in_implicit_tx = False
+        if not in_transaction and id(driver) not in self._outer_locked_drivers:
+            with contextlib.suppress(Exception):
+                in_implicit_tx = self._has_active_implicit_transaction(driver)
+        if in_transaction or in_implicit_tx:
             self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:
             return
-        if self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+        if (
+            self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+            or in_transaction
+            or in_implicit_tx
+        ):
             return
         self._attempt_recovery(driver.rollback, "rollback")
         self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
@@ -1361,116 +1542,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
-    async def _commit_nontransactional_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
-        if self._has_active_implicit_transaction(driver):
-            await driver.commit()
-
-    async def _invoke_reconciler(
-        self,
-        driver: "AsyncDriverAdapterBase",
-        descriptor: "ExtensionReconcilerDescriptor",
-        *,
-        direction: Literal["up", "down"] = "up",
-    ) -> None:
-        """Load and execute a sync or async reconcile(context) or downgrade(context) callback."""
-        context = self._build_reconciler_context(driver, descriptor)
-        if direction == "down":
-            reconcile_fn = load_reconcile_downgrade_callable(
-                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-            )
-            if reconcile_fn is None:
-                return
-        else:
-            reconcile_fn = load_reconcile_callable(
-                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
-            )
-        result: Any = reconcile_fn(context)
-        if inspect.isawaitable(result):
-            result = await result
-        self._validate_reconciler_return_value(descriptor, result)
-
-    async def _execute_reconciler_step(
-        self,
-        driver: "AsyncDriverAdapterBase",
-        descriptor: "ExtensionReconcilerDescriptor",
-        *,
-        direction: Literal["up", "down"],
-    ) -> int:
-        """Execute an extension reconcile or downgrade callback asynchronously."""
-        self.set_driver(driver)
-        suffix = "reconcile" if direction == "up" else "reconcile_down"
-        reconcile_meta = cast(
-            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
-        )
-        default_schema = self._resolve_migration_schema(reconcile_meta)
-        use_transaction = self._resolve_use_transaction(reconcile_meta, None)
-        span = self._begin_migration_span(driver, reconcile_meta, "reconcile", "migration.reconcile", use_transaction)
-        start_time = time.perf_counter()
-        execution_time = 0
-
-        if use_transaction:
-            try:
-                await driver.begin()
-            except Exception as exc:
-                self._finish_migration_span_error(
-                    span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
-                )
-                raise
-            try:
-                if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
-                await self._invoke_reconciler(driver, descriptor, direction=direction)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-                await driver.commit()
-            except BaseException as exc:
-                await self._recover_failed_migration(driver, in_transaction=True, schema_active=bool(default_schema))
-                if isinstance(exc, Exception):
-                    wrapped = self._wrap_reconciler_error(descriptor, exc)
-                    self._finish_migration_span_error(
-                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
-                    )
-                    raise wrapped
-                raise
-        else:
-            try:
-                if default_schema:
-                    await driver.set_migration_non_transactional_schema(default_schema)
-                await self._invoke_reconciler(driver, descriptor, direction=direction)
-                await self._commit_nontransactional_if_needed(driver)
-                execution_time = int((time.perf_counter() - start_time) * 1000)
-            except BaseException as exc:
-                await self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
-                if not default_schema:
-                    in_implicit_tx = False
-                    with contextlib.suppress(Exception):
-                        in_implicit_tx = self._has_active_implicit_transaction(driver)
-                    if in_implicit_tx:
-                        await self._attempt_recovery(driver.rollback, "rollback")
-                if isinstance(exc, Exception):
-                    wrapped = self._wrap_reconciler_error(descriptor, exc)
-                    self._finish_migration_span_error(
-                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
-                    )
-                    raise wrapped
-                raise
-
-        try:
-            if default_schema:
-                await driver.reset_migration_session_schema()
-                if not use_transaction:
-                    await self._commit_nontransactional_if_needed(driver)
-        except Exception as exc:
-            self._finish_migration_span_error(
-                span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
-            )
-            raise
-
-        self._finish_migration_span_success(
-            span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
-        )
-        return execution_time
-
     async def execute_reconciliation(
         self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
     ) -> int:
@@ -1549,6 +1620,135 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         return all_queries
 
+    async def _commit_nontransactional_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
+        if id(driver) in self._outer_locked_drivers:
+            return
+        if await self._has_active_implicit_transaction_async(driver):
+            await driver.commit()
+
+    async def _invoke_reconciler(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"] = "up",
+    ) -> None:
+        """Load and execute a sync or async reconcile(context) or downgrade(context) callback."""
+        context = self._build_reconciler_context(driver, descriptor)
+        if direction == "down":
+            reconcile_fn = load_reconcile_downgrade_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+            if reconcile_fn is None:
+                return
+        else:
+            reconcile_fn = load_reconcile_callable(
+                descriptor.module_path, extension_name=descriptor.name, project_root=self.project_root
+            )
+        result: Any = reconcile_fn(context)
+        if inspect.isawaitable(result):
+            result = await result
+        self._validate_reconciler_return_value(descriptor, result)
+
+    async def _execute_reconciler_step(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        descriptor: "ExtensionReconcilerDescriptor",
+        *,
+        direction: Literal["up", "down"],
+    ) -> int:
+        """Execute an extension reconcile or downgrade callback asynchronously."""
+        self.set_driver(driver)
+        suffix = "reconcile" if direction == "up" else "reconcile_down"
+        reconcile_meta = cast(
+            "LoadedMigrationMetadata", {"version": f"ext_{descriptor.name}_{suffix}", "transactional": None}
+        )
+        default_schema = self._resolve_migration_schema(reconcile_meta)
+        use_transaction = self._resolve_use_transaction(reconcile_meta, None)
+        span = self._begin_migration_span(driver, reconcile_meta, "reconcile", "migration.reconcile", use_transaction)
+        start_time = time.perf_counter()
+        execution_time = 0
+
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
+            step_savepoint = "sqlspec_reconcile_step"
+            try:
+                if uses_outer_lock:
+                    self._savepoint_recovered_drivers.discard(id(driver))
+                    self._outer_lock_unrecovered_drivers.discard(id(driver))
+                    await driver.create_savepoint(step_savepoint)
+                else:
+                    await driver.begin()
+            except Exception as exc:
+                if uses_outer_lock:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                self._finish_migration_span_error(
+                    span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
+                )
+                raise
+            step_error: BaseException | None = None
+            try:
+                if default_schema:
+                    if use_transaction:
+                        await driver.set_migration_session_schema(default_schema)
+                    else:
+                        await driver.set_migration_non_transactional_schema(default_schema)
+                await self._invoke_reconciler(driver, descriptor, direction=direction)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if uses_outer_lock:
+                    await driver.release_savepoint(step_savepoint)
+                else:
+                    await driver.commit()
+            except BaseException as exc:
+                step_error = exc
+            if step_error is not None:
+                if uses_outer_lock:
+                    await self._recover_failed_savepoint(driver, step_savepoint, schema_active=bool(default_schema))
+                else:
+                    await self._recover_failed_migration(
+                        driver, in_transaction=True, schema_active=bool(default_schema)
+                    )
+                if isinstance(step_error, Exception):
+                    wrapped = self._wrap_reconciler_error(descriptor, step_error)
+                    self._finish_migration_span_error(
+                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
+                    )
+                    raise wrapped
+                raise step_error
+        else:
+            try:
+                if default_schema:
+                    await driver.set_migration_non_transactional_schema(default_schema)
+                await self._invoke_reconciler(driver, descriptor, direction=direction)
+                await self._commit_nontransactional_if_needed(driver)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+            except BaseException as exc:
+                await self._recover_failed_migration(driver, in_transaction=False, schema_active=bool(default_schema))
+                if isinstance(exc, Exception):
+                    wrapped = self._wrap_reconciler_error(descriptor, exc)
+                    self._finish_migration_span_error(
+                        span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, wrapped
+                    )
+                    raise wrapped
+                raise
+
+        try:
+            if default_schema:
+                await driver.reset_migration_session_schema()
+                if not use_transaction:
+                    await self._commit_nontransactional_if_needed(driver)
+        except Exception as exc:
+            self._finish_migration_span_error(
+                span, driver, reconcile_meta, "reconcile", "migration.reconcile", start_time, exc
+            )
+            raise
+
+        self._finish_migration_span_success(
+            span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
+        )
+        return execution_time
+
     async def _execute_migration_sql(
         self,
         driver: "AsyncDriverAdapterBase",
@@ -1564,12 +1764,28 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         if directive_schema is not None and not await driver.has_schema(directive_schema):
             msg = f"Migration schema '{directive_schema}' does not exist"
             raise MigrationError(msg)
-        if use_transaction:
-            await driver.begin()
+        uses_outer_lock = id(driver) in self._outer_locked_drivers
+        if use_transaction or uses_outer_lock:
+            step_savepoint = "sqlspec_migration_step"
+            if uses_outer_lock:
+                self._savepoint_recovered_drivers.discard(id(driver))
+                self._outer_lock_unrecovered_drivers.discard(id(driver))
+                try:
+                    await driver.create_savepoint(step_savepoint)
+                except BaseException:
+                    self._outer_lock_unrecovered_drivers.add(id(driver))
+                    raise
+            else:
+                await driver.begin()
             schema_reset = False
+            execution_time = 0
+            step_error: BaseException | None = None
             try:
                 if default_schema:
-                    await driver.set_migration_session_schema(default_schema)
+                    if use_transaction:
+                        await driver.set_migration_session_schema(default_schema)
+                    else:
+                        await driver.set_migration_non_transactional_schema(default_schema)
                 for sql_statement in sql_list:
                     if sql_statement.strip():
                         await driver.execute_script(sql_statement)
@@ -1579,12 +1795,22 @@ class AsyncMigrationRunner(BaseMigrationRunner):
                         await driver.reset_migration_session_schema()
                         schema_reset = True
                     await on_success(execution_time)
-                await driver.commit()
-            except BaseException:
-                await self._recover_failed_migration(
-                    driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
-                )
-                raise
+                if uses_outer_lock:
+                    await driver.release_savepoint(step_savepoint)
+                else:
+                    await driver.commit()
+            except BaseException as exc:
+                step_error = exc
+            if step_error is not None:
+                if uses_outer_lock:
+                    await self._recover_failed_savepoint(
+                        driver, step_savepoint, schema_active=bool(default_schema) and not schema_reset
+                    )
+                else:
+                    await self._recover_failed_migration(
+                        driver, in_transaction=True, schema_active=bool(default_schema) and not schema_reset
+                    )
+                raise step_error
             if default_schema and not schema_reset:
                 await driver.reset_migration_session_schema()
             return execution_time
@@ -1611,6 +1837,21 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             await driver.reset_migration_session_schema()
         return execution_time
 
+    async def _recover_failed_savepoint(
+        self, driver: "AsyncDriverAdapterBase", savepoint: str, *, schema_active: bool
+    ) -> None:
+        """Roll back a failed async step savepoint while preserving the outer transaction lock."""
+        rolled_back = await self._attempt_recovery(
+            lambda: driver.rollback_to_savepoint(savepoint), "rollback_savepoint"
+        )
+        released = await self._attempt_recovery(lambda: driver.release_savepoint(savepoint), "release_savepoint")
+        if schema_active:
+            await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+        if rolled_back and released:
+            self._savepoint_recovered_drivers.add(id(driver))
+        else:
+            self._outer_lock_unrecovered_drivers.add(id(driver))
+
     async def _recover_failed_migration(
         self, driver: "AsyncDriverAdapterBase", *, in_transaction: bool, schema_active: bool
     ) -> None:
@@ -1621,11 +1862,19 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             in_transaction: Whether the runner began a transaction for this migration.
             schema_active: Whether a session schema reset is still outstanding.
         """
-        if in_transaction:
+        in_implicit_tx = False
+        if not in_transaction and id(driver) not in self._outer_locked_drivers:
+            with contextlib.suppress(Exception):
+                in_implicit_tx = await self._has_active_implicit_transaction_async(driver)
+        if in_transaction or in_implicit_tx:
             await self._attempt_recovery(driver.rollback, "rollback")
         if not schema_active:
             return
-        if await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema") or in_transaction:
+        if (
+            await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")
+            or in_transaction
+            or in_implicit_tx
+        ):
             return
         await self._attempt_recovery(driver.rollback, "rollback")
         await self._attempt_recovery(driver.reset_migration_session_schema, "reset_schema")

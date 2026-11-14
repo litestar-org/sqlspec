@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -50,6 +51,7 @@ from sqlspec.exceptions import (
     OperationalError,
     OperationCancelledError,
     PermissionDeniedError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -66,7 +68,7 @@ from sqlspec.utils.type_guards import has_rowcount
 from sqlspec.utils.uuids import uuid4, uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlspec.storage import StorageDestination, SyncStoragePipeline
 
@@ -92,6 +94,7 @@ __all__ = (
     "read_duckdb_profile_json",
     "resolve_duckdb_memory_limit",
     "resolve_rowcount",
+    "validate_duckdb_replica_config",
     "validate_duckdb_temp_directory",
 )
 
@@ -546,6 +549,21 @@ _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], st
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
 
 
+def validate_duckdb_replica_config(primary_config: Mapping[str, Any], replica_config: Mapping[str, Any]) -> None:
+    """Reject in-memory replicas and incompatible access to the writer's local file."""
+    target = str(replica_config.get("database", ""))
+    if not target or target.startswith(":memory:") or target == "memory":
+        msg = "DuckDB replicas require a persistent snapshot or remote database"
+        raise ImproperConfigurationError(msg)
+    primary = str(primary_config.get("database", ""))
+    remote = ("md:", "motherduck:", "s3://", "gcs://", "http://", "https://")
+    if target.startswith(remote) or primary.startswith(remote) or primary_config.get("read_only", False):
+        return
+    if Path(target).expanduser().resolve() == Path(primary).expanduser().resolve():
+        msg = "A DuckDB read replica cannot open the read-write primary file; use a separate snapshot"
+        raise ImproperConfigurationError(msg)
+
+
 def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
     """Map DuckDB exceptions to SQLSpec exceptions.
 
@@ -569,6 +587,10 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     """
     del logger
     exc_type = type(error)
+    if isinstance(error, (DuckDBInvalidInputException, DuckDBCatalogException)) and (
+        "read-only" in str(error).lower() or "read only" in str(error).lower()
+    ):
+        return _create_duckdb_error(error, ReadOnlyTransactionError, "read-only database")
     if isinstance(error, DuckDBConstraintException):
         return _classify_duckdb_constraint(error)
     if isinstance(error, DuckDBTransactionException):

@@ -1484,3 +1484,26 @@ def test_null_parameters_compile_as_sql_literals(dialect: str) -> None:
 
     assert "NULL" in compiled_sql.upper()
     assert list(parameters) == ["x"]
+
+
+def test_read_only_transaction_maps_native_error_with_cause() -> None:
+    from adbc_driver_manager import OperationalError
+
+    from sqlspec.adapters.adbc.core import create_mapped_exception
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    error = OperationalError("cannot write", status_code=AdbcStatusCode.INVALID_STATE, sqlstate="25006")
+
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ReadOnlyTransactionError)
+    assert mapped.__cause__ is error
+    assert "read-only transaction" in str(mapped).lower()
+
+
+@pytest.mark.parametrize(
+    "bad_host", ["", "td.corp/extra", "td.corp?x=1", "td.corp#frag", "user@td.corp", "td corp", "[::1"]
+)
+def test_teradata_rejects_invalid_discrete_host(bad_host: str) -> None:
+    """Discrete Teradata host values containing URI delimiters or whitespace raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError, match="Teradata host"):
+        build_connection_config({"driver": "teradata", "host": bad_host})

@@ -11,23 +11,34 @@ These tests pin SQLSpecPlugin to the in-place mutation contract.
 """
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from litestar import Litestar
 from litestar.config.app import AppConfig
+from litestar.constants import HTTP_RESPONSE_START
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import InitPluginProtocol
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
+from sqlspec.extensions.litestar.handlers import autocommit_handler_maker, build_request_session
 from sqlspec.extensions.litestar.plugin import (
     ConnectionCleanupMiddleware,
     CorrelationMiddleware,
     SQLCommenterMiddleware,
     SQLSpecPlugin,
+    _ConnectionCleanupTarget,
 )
+from sqlspec.observability import ObservabilityConfig
+
+if TYPE_CHECKING:
+    from sqlspec.config import LifecycleConfig
 
 
 def _build_sqlspec_plugin() -> SQLSpecPlugin:
@@ -255,3 +266,88 @@ def _correlation_skip_levels(caplog: pytest.LogCaptureFixture) -> "list[int]":
         for record in caplog.records
         if getattr(record, "extra_fields", {}).get("stage") == "correlation_middleware_skipped"
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("scenario", "expected_op"),
+    [("completed_stream", "commit"), ("raised_exception", "rollback"), ("incomplete_stream", "rollback")],
+)
+async def test_connection_cleanup_middleware_owns_deferred_streaming_sessions(scenario: str, expected_op: str) -> None:
+    """ConnectionCleanupMiddleware commits completed deferred streams, rolls back failed or incomplete ones, emits session end, and detaches."""
+    ended: list[Any] = []
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/db"},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_end": [lambda ctx: ended.append(ctx["session"])]})
+        ),
+    )
+    conn = AsyncMock()
+    conn.is_in_transaction = MagicMock(return_value=True)
+    tx = AsyncMock()
+    exited: list[tuple[Any, ...]] = []
+
+    class _StreamCM:
+        async def __aenter__(self) -> Any:
+            return conn
+
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+            exited.append((exc_type, exc_val, exc_tb))
+            return False
+
+    session = build_request_session(config, conn, "autocommit")
+
+    before_send = autocommit_handler_maker("db_connection", session_scope_key="db_session_instance")
+    target = _ConnectionCleanupTarget(
+        connection_key="db_connection",
+        session_key="db_session",
+        commit_mode="autocommit",
+        extra_commit_statuses=frozenset(),
+        extra_rollback_statuses=frozenset(),
+    )
+
+    async def app(scope: Any, _receive: Any, send: Any) -> None:
+        set_sqlspec_scope_state(scope, "db_connection", conn)
+        set_sqlspec_scope_state(scope, "db_connection_ctx", _StreamCM())
+        set_sqlspec_scope_state(scope, "db_session_instance", session)
+
+        start_msg: Any = {"type": HTTP_RESPONSE_START, "status": 200, "headers": []}
+        await send(start_msg)
+        await before_send(start_msg, scope)
+        session._transaction = tx
+
+        chunk_msg: Any = {"type": "http.response.body", "body": b"chunk-1", "more_body": True}
+        await send(chunk_msg)
+        await before_send(chunk_msg, scope)
+        assert get_sqlspec_scope_state(scope, "db_connection_stream_deferred") is True
+        assert session.connection is conn
+
+        if scenario == "raised_exception":
+            raise RuntimeError("mid-stream crash")
+        if scenario == "completed_stream":
+            end_msg: Any = {"type": "http.response.body", "body": b"", "more_body": False}
+            await send(end_msg)
+            await before_send(end_msg, scope)
+            assert session.connection is conn
+
+    middleware = ConnectionCleanupMiddleware(app, targets=(target,))
+    scope: Any = {"type": "http", "state": {}}
+    if scenario == "raised_exception":
+        with pytest.raises(RuntimeError, match="mid-stream crash"):
+            await middleware(scope, AsyncMock(), AsyncMock())
+    else:
+        await middleware(scope, AsyncMock(), AsyncMock())
+
+    if expected_op == "commit":
+        tx.commit.assert_awaited_once()
+        tx.rollback.assert_not_awaited()
+    else:
+        tx.rollback.assert_awaited_once()
+        tx.commit.assert_not_awaited()
+    assert ended == [session]
+    assert len(exited) == 1
+    assert get_sqlspec_scope_state(scope, "db_connection") is None
+    assert get_sqlspec_scope_state(scope, "db_session_instance") is None
+    assert get_sqlspec_scope_state(scope, "db_connection_stream_deferred") is None
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = session.connection.cursor

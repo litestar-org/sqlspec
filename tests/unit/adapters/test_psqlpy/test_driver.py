@@ -232,3 +232,26 @@ def test_psqlpy_driver_class_cached_in_resolve() -> None:
     cls2 = _resolve_psqlpy_driver()
     assert cls1 is cls2
     assert cls1 is PsqlpyDriver
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("method", ["commit", "rollback"])
+@pytest.mark.parametrize(
+    ("tx_active", "conn_in_tx", "expected_calls"),
+    [(False, False, 0), (True, False, 1), (False, True, 1)],
+    ids=["idle", "driver-active", "conn-in-transaction"],
+)
+async def test_psqlpy_driver_commit_and_rollback_guard_on_open_transaction(
+    method: str, tx_active: bool, conn_in_tx: bool, expected_calls: int
+) -> None:
+    """PsqlpyDriver.commit() and rollback() emit SQL only when a transaction is open."""
+    conn = SimpleNamespace(execute=AsyncMock(), in_transaction=AsyncMock(return_value=conn_in_tx))
+    driver = PsqlpyDriver(connection=cast("Any", conn), statement_config=build_statement_config())
+    driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+
+    await getattr(driver, method)()
+
+    assert conn.execute.await_count == expected_calls
+    if expected_calls:
+        conn.execute.assert_awaited_once_with(method.upper())
+    assert driver._transaction_active is False  # pyright: ignore[reportPrivateUsage]

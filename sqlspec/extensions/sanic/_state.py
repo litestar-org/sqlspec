@@ -6,6 +6,7 @@ from typing import Any, Final, Literal
 
 from sqlspec.config import DatabaseConfigProtocol
 from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.utils.routing import validate_routing_middleware_settings
 
 __all__ = ("CommitMode", "SanicConfigState")
 
@@ -47,9 +48,28 @@ class SanicConfigState:
     auto_trace_headers: bool = True
     enable_sqlcommenter_middleware: bool = True
     sqlcommenter_framework: str = "sanic"
+    read_session_key: str = "read_session"
+    read_connection_key: str = "read_connection"
+    read_pool_key: str = "read_pool"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = True
+    routing_header: str | None = None
+    write_pin_cookie: str | None = None
+    routing_secret: str | bytes | None = None
 
     def __post_init__(self) -> None:
         """Validate transaction status overrides and tenant extractor callability."""
+        enable_routing, normalized_header, normalized_cookie, normalized_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=self.enable_routing_middleware,
+            routing_header=self.routing_header,
+            write_pin_cookie=self.write_pin_cookie,
+            routing_secret=self.routing_secret,
+        )
+        self.enable_routing_middleware = enable_routing
+        self.routing_header = normalized_header
+        self.write_pin_cookie = normalized_cookie
+        self.routing_secret = normalized_secret
         bind_key = getattr(self.config, "bind_key", None)
         keys = [tenant_receipt_key(self.session_key), tenant_receipt_key(self.connection_key)]
         if isinstance(bind_key, str) and bind_key:

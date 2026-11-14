@@ -1,11 +1,14 @@
 """DuckDB connection pool with thread-local connections."""
 
 import logging
+import math
 import re
 import threading
 import time
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast, final
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
@@ -13,6 +16,7 @@ from sqlspec.adapters.duckdb.core import (
     cleanup_duckdb_profile_path,
     configure_duckdb_statement_profiling,
     create_duckdb_profile_path,
+    create_mapped_exception,
 )
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -61,6 +65,7 @@ _SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
 
 
 @final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DuckDBConnectionPool:
     """Thread-local connection manager for DuckDB.
 
@@ -552,7 +557,12 @@ def _open_duckdb_connection(
                 connect_parameters["config"] = config_dict
             else:
                 connect_parameters.pop("config", None)
-            connection = duckdb.connect(**connect_parameters)
+            try:
+                connection = duckdb.connect(**connect_parameters)
+            except duckdb.Error as retry_exc:
+                raise create_mapped_exception(retry_exc) from retry_exc
+        elif isinstance(exc, duckdb.Error):
+            raise create_mapped_exception(exc) from exc
         else:
             raise
     return connection, deferred_parquet_metadata_cache
@@ -701,7 +711,12 @@ def _format_secret_key(key: Any) -> str:
 def _format_secret_literal(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (int, float)):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            msg = "DuckDB secret float option must be finite."
+            raise ValueError(msg)
+        return str(value)
+    if isinstance(value, int):
         return str(value)
     escaped = str(value).replace("'", "''")
     return f"'{escaped}'"

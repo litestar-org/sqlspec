@@ -30,6 +30,7 @@ from sqlspec.config import (
 )
 from sqlspec.core import CorrelationExtractor, OffsetPagination
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
 from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.litestar._utils import (
@@ -41,14 +42,23 @@ from sqlspec.extensions.litestar.cli import database_group
 from sqlspec.extensions.litestar.handlers import (
     _REQUEST_EXCEPTION_KEY,
     _capture_connection_tenant,
-    _exit_connection_context,
+    _capture_connection_tenant_sync,
+    _finalize_request_session,
+    _open_request_resource_async,
+    _open_request_resource_sync,
+    _release_request_session,
     autocommit_handler_maker,
+    build_request_session,
     connection_provider_maker,
     has_tenant_strategy,
     lifespan_handler_maker,
     manual_handler_maker,
     pool_provider_maker,
+    read_connection_provider_maker,
+    read_pool_provider_maker,
+    read_session_provider_maker,
     record_request_exception,
+    routing_session_provider_maker,
     session_provider_maker,
     tenant_payload_key,
 )
@@ -61,8 +71,15 @@ from sqlspec.extensions.litestar.tenant import (
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    apply_request_routing_hints,
+    extract_asgi_routing_headers,
+    validate_routing_middleware_settings,
+)
 from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hook
-from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantRequestBinding
 
 if TYPE_CHECKING:
@@ -139,13 +156,13 @@ _LITESTAR_NUMPY_ARRAY_TYPE: type[Any] | None = None
 
 
 def not_found_error_handler(request: "Request[Any, Any, Any]", exc: NotFoundError) -> "Response[Any]":
-    """Return a 404 response whose detail is the :class:`~sqlspec.exceptions.NotFoundError` message.
+    """Return a 404 response with the static detail ``"Not Found"``.
 
     A handler for status 404 or for the HTTP exception type renders it, otherwise Litestar's
     default exception response. Handlers for :class:`~sqlspec.exceptions.NotFoundError` or a
     subclass take precedence; handlers for its base classes or status 500 do not.
     """
-    http_exc = NotFoundException(detail=str(exc) or "Not Found")
+    http_exc = NotFoundException(detail="Not Found")
     http_exc.__cause__ = exc
     return _render_http_exception(request, http_exc, _resolve_exception_handlers(request))
 
@@ -174,21 +191,20 @@ def integrity_error_handler(request: "Request[Any, Any, Any]", exc: IntegrityErr
 class CorrelationMiddleware:
     """ASGI middleware that binds a correlation ID to each HTTP request.
 
-    The first non-empty value among ``headers``, checked in order, becomes the
-    correlation ID after surrounding whitespace is trimmed and the value is
-    truncated to 128 characters; when no header has a value, or the trimmed
-    value is empty, a new ID is generated. The ID is set on
-    :class:`~sqlspec.utils.correlation.CorrelationContext` and in the request scope
-    for the duration of the request, then the previous ID is restored. Non-HTTP
-    scopes, and instances created with an empty ``headers`` tuple, pass through
-    unchanged.
+    Only headers matching the configured ``headers`` allowlist are decoded from
+    the ASGI header list (using ``latin-1`` over precomputed lowercase ``bytes``
+    names). Checked in priority order, the first header whose bounded, single-line
+    ASCII trace value passes validation becomes the correlation ID; invalid values
+    fall through to subsequent headers, or to a newly generated ID when none
+    qualify. Non-HTTP scopes, and instances created with an empty ``headers``
+    tuple, pass through unchanged.
 
     Args:
         app: The downstream ASGI application.
         headers: Request header names to check, in priority order.
     """
 
-    __slots__ = ("_app", "_extractor", "_headers")
+    __slots__ = ("_app", "_extractor", "_header_bytes", "_headers")
 
     def __init__(self, app: "ASGIApp", *, headers: tuple[str, ...]) -> None:
         self._app = app
@@ -202,6 +218,11 @@ class CorrelationMiddleware:
             if headers
             else None
         )
+        self._header_bytes: frozenset[bytes] = (
+            frozenset(header.lower().encode("latin-1") for header in self._extractor.headers)
+            if self._extractor is not None
+            else frozenset()
+        )
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         scope_type = scope.get("type")
@@ -210,8 +231,12 @@ class CorrelationMiddleware:
             return
 
         raw_headers = scope.get("headers") or []
-        header_dict = {name.decode().lower(): value.decode() for name, value in raw_headers}
-        header_value = self._extractor.extract(lambda header: header_dict.get(header))
+        matched_headers: dict[str, str] = {}
+        for raw_name, raw_value in raw_headers:
+            lowered = raw_name.lower()
+            if lowered in self._header_bytes:
+                matched_headers.setdefault(lowered.decode("latin-1"), raw_value.decode("latin-1"))
+        header_value = self._extractor.extract(matched_headers.get)
 
         previous_correlation_id = CorrelationContext.get()
         CorrelationContext.set(header_value)
@@ -301,18 +326,49 @@ class ConnectionCleanupMiddleware:
         self._targets = targets
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
-        if scope.get("type") != ScopeType.HTTP or not self._targets:
+        if scope.get("type") not in {ScopeType.HTTP, ScopeType.WEBSOCKET} or not self._targets:
+            await self._app(scope, receive, send)
+            return
+        routing_targets = [target for target in self._targets if target.enable_routing_middleware]
+        if not routing_targets:
+            await self._run_request(scope, receive, send)
+            return
+        payload = RoutingContext.current() or RoutingContextPayload()
+        for target in routing_targets:
+            if target.default_routing_mode == "primary" and payload.get(target.bind_key) is None:
+                payload = payload.with_entry(target.bind_key, RoutingEntry("primary"))
+            cookie_header, routing_header_value = extract_asgi_routing_headers(
+                scope, target.routing_header_bytes, include_cookies=target.write_pin_cookie is not None
+            )
+            payload = apply_request_routing_hints(
+                payload,
+                bind_key=target.bind_key,
+                routing_header_value=routing_header_value,
+                cookie_header=cookie_header,
+                write_pin_cookie=target.write_pin_cookie,
+                routing_secret=target.routing_secret,
+            )
+        async with RoutingContext.scope(payload):
+            await self._run_request(scope, receive, send)
+
+    async def _run_request(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if not self._targets:
             await self._app(scope, receive, send)
             return
 
         response_started = False
+        response_complete = False
         response_status: int | None = None
 
         async def send_wrapper(message: "Message") -> None:
-            nonlocal response_started, response_status
+            nonlocal response_complete, response_started, response_status
             if message["type"] == HTTP_RESPONSE_START:
                 response_started = True
                 response_status = message["status"]
+            elif str(message["type"]) == "http.response.pathsend" or (
+                message["type"] == "http.response.body" and not message.get("more_body", False)
+            ):
+                response_complete = True
             await send(message)
 
         caught_exc: BaseException | None = None
@@ -325,21 +381,31 @@ class ConnectionCleanupMiddleware:
             started = response_started or bool(ScopeState.from_scope(scope).response_started)
             try:
                 await self._cleanup_scope(
-                    scope, caught_exc=caught_exc, response_started=started, response_status=response_status
+                    scope,
+                    caught_exc=caught_exc,
+                    response_started=started,
+                    response_complete=response_complete,
+                    response_status=response_status,
                 )
             except Exception:
                 if caught_exc is None or isinstance(caught_exc, Exception):
                     raise
 
     async def _cleanup_scope(
-        self, scope: "Scope", *, caught_exc: BaseException | None, response_started: bool, response_status: int | None
+        self,
+        scope: "Scope",
+        *,
+        caught_exc: BaseException | None,
+        response_started: bool,
+        response_complete: bool,
+        response_status: int | None,
     ) -> None:
         recorded_exc = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
         if caught_exc is not None:
             effective_exc: BaseException | None = caught_exc
         elif recorded_exc is not None:
             effective_exc = recorded_exc
-        elif not response_started:
+        elif not response_started or not response_complete:
             effective_exc = asyncio.CancelledError()
         else:
             effective_exc = None
@@ -348,58 +414,60 @@ class ConnectionCleanupMiddleware:
         for target in self._targets:
             try:
                 ctx_scope_key = f"{target.connection_key}_ctx"
-                provider_owned_key = f"{target.connection_key}_provider_owned"
                 session_scope_key = f"{target.session_key}_instance"
+                deferred_scope_key = f"{target.session_key}_deferred"
+                stream_deferred_scope_key = f"{target.connection_key}_stream_deferred"
+                lock_scope_key = f"{target.connection_key}_lock"
                 connection = get_sqlspec_scope_state(scope, target.connection_key)
-                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key)
 
                 if connection is None and connection_cm is None:
                     delete_sqlspec_scope_state(scope, session_scope_key)
+                    _detach_and_delete_scope_state(scope, deferred_scope_key)
+                    delete_sqlspec_scope_state(scope, lock_scope_key)
+                    _detach_and_delete_scope_state(scope, stream_deferred_scope_key)
                     continue
 
                 if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
                     set_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY, effective_exc)
 
+                session = get_sqlspec_scope_state(scope, session_scope_key)
+                transaction_target = (
+                    session
+                    if session is not None
+                    else get_sqlspec_scope_state(scope, f"{target.connection_key}_session")
+                )
                 exc_override: BaseException | None = None
                 try:
-                    if connection is not None and target.commit_mode != "manual":
+                    if (
+                        connection is not None
+                        and target.commit_mode != "manual"
+                        and getattr(transaction_target or connection, "pinned_to_primary", True)
+                    ):
+                        commit_range = range(200, 400 if target.commit_mode == "autocommit_include_redirect" else 300)
+                        should_commit = (
+                            effective_exc is None
+                            and response_status is not None
+                            and (response_status in commit_range or response_status in target.extra_commit_statuses)
+                            and response_status not in target.extra_rollback_statuses
+                        )
                         if effective_exc is not None:
                             with suppress(Exception):
-                                await ensure_async_(connection.rollback)()
+                                await _finalize_request_session(transaction_target, connection, commit=False)
                         else:
-                            commit_range = range(
-                                200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
-                            )
-                            should_commit = (
-                                response_status is not None
-                                and (response_status in commit_range or response_status in target.extra_commit_statuses)
-                                and response_status not in target.extra_rollback_statuses
-                            )
-                            if should_commit:
-                                try:
-                                    await ensure_async_(connection.commit)()
-                                except BaseException:
-                                    with suppress(Exception):
-                                        await ensure_async_(connection.rollback)()
-                                    raise
-                            else:
-                                await ensure_async_(connection.rollback)()
+                            await _finalize_request_session(transaction_target, connection, commit=should_commit)
                 except BaseException as finalization_exc:
                     exc_override = finalization_exc
                     raise
                 finally:
                     try:
-                        await _exit_connection_context(
-                            connection_cm,
-                            connection,
-                            scope,
-                            exc_override=exc_override,
-                            connection_key=target.connection_key,
+                        await _release_request_session(
+                            scope, target.connection_key, session_scope_key, connection, exc_override=exc_override
                         )
                     finally:
-                        delete_sqlspec_scope_state(scope, target.connection_key)
-                        delete_sqlspec_scope_state(scope, provider_owned_key)
-                        delete_sqlspec_scope_state(scope, session_scope_key)
+                        _detach_and_delete_scope_state(scope, deferred_scope_key)
+                        _detach_and_delete_scope_state(scope, stream_deferred_scope_key)
+                        delete_sqlspec_scope_state(scope, lock_scope_key)
             except BaseException as exc:
                 primary_exc = _select_teardown_exception(primary_exc, exc)
 
@@ -425,6 +493,15 @@ class PluginConfigState:
     disable_di: bool
     manage_lifespan: bool
     tenant_settings: TenantResolutionSettings = field(default_factory=TenantResolutionSettings)
+    read_connection_key: str = "read_connection"
+    read_pool_key: str = "read_pool"
+    read_session_key: str = "read_session"
+    routing_session_key: str | None = None
+    default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = True
+    routing_header: str | None = None
+    write_pin_cookie: str | None = None
+    routing_secret: bytes | None = None
     connection_provider: "Callable[[State, Scope], AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
     pool_provider: "Callable[[State, Scope], Any] | None" = field(default=None, init=False)
     session_provider: "Callable[..., AsyncGenerator[Any, None]] | None" = field(default=None, init=False)
@@ -560,7 +637,28 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.connection_key: Provide(state.connection_provider),
                     state.pool_key: Provide(state.pool_provider),
                     state.session_key: Provide(state.session_provider),
+                    state.read_connection_key: Provide(
+                        read_connection_provider_maker(
+                            state.config, state.pool_key, state.read_pool_key, state.read_connection_key
+                        )
+                    ),
+                    state.read_pool_key: Provide(
+                        read_pool_provider_maker(state.config, state.pool_key, state.read_pool_key)
+                    ),
+                    state.read_session_key: Provide(
+                        read_session_provider_maker(
+                            state.config,
+                            state.pool_key,
+                            state.read_pool_key,
+                            state.read_connection_key,
+                            state.read_session_key,
+                        )
+                    ),
                 })
+                if state.routing_session_key is not None:
+                    app_config.dependencies[state.routing_session_key] = Provide(
+                        routing_session_provider_maker(state.config, state.pool_key, state.routing_session_key)
+                    )
 
         if self._plugin_configs:
             if app_config.after_exception is None:
@@ -621,10 +719,29 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                 connection_key=state.connection_key,
                 session_key=state.session_key,
                 commit_mode=state.commit_mode,
+                bind_key=state.config.bind_key,
+                default_routing_mode=state.default_routing_mode,
+                enable_routing_middleware=state.enable_routing_middleware,
+                routing_header_bytes=state.routing_header.lower().encode("ascii")
+                if state.routing_header is not None
+                else None,
+                write_pin_cookie=state.write_pin_cookie,
+                routing_secret=state.routing_secret,
                 extra_commit_statuses=frozenset(state.extra_commit_statuses or ()),
                 extra_rollback_statuses=frozenset(state.extra_rollback_statuses or ()),
             )
             for state in self._plugin_configs
+        ) + tuple(
+            _ConnectionCleanupTarget(
+                connection_key=key,
+                session_key=key,
+                commit_mode=mode,
+                extra_commit_statuses=frozenset(state.extra_commit_statuses or ()),
+                extra_rollback_statuses=frozenset(state.extra_rollback_statuses or ()),
+            )
+            for state in self._plugin_configs
+            for key, mode in _resource_cleanup_modes(state)
+            if key is not None
         )
         if cleanup_targets:
             existing_cleanup = _find_cleanup_middleware(app_config.middleware)
@@ -682,7 +799,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             The annotation for the configuration.
         """
-        state = self._get_plugin_state(key)
+        state = self._get_plugin_state(cast("Any", key))
         if state.annotation is None:
             self._raise_plugin_not_registered()
         return cast("type[AnyDatabaseConfig]", state.annotation)
@@ -741,22 +858,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
-    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
-        """Return the resolution inputs of every tenant-enabled configuration."""
-        return tuple(
-            _TenantResolutionTarget(
-                config=state.config,
-                settings=state.tenant_settings,
-                receipt_state_keys=tuple(
-                    receipt_state_key(key)
-                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
-                    if isinstance(key, str) and key
-                ),
-            )
-            for state in self._plugin_configs
-            if has_tenant_strategy(state.config)
-        )
-
     def resolve_tenant_settings(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig] | None" = None
     ) -> TenantResolutionSettings:
@@ -799,6 +900,78 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             return self._plugin_configs[0].tenant_settings
         return TenantResolutionSettings()
 
+    def get_read_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read session view."""
+        selected, state, scope = self._read_request_parts(request, key)
+        return self._request_resource(selected.config, state, scope, "session")
+
+    def provide_request_read_session(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the request-owned read session without eager async checkout."""
+        return self._request_resource(key, state, scope, "session")
+
+    def provide_request_read_session_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the synchronous request read session view."""
+        return self._request_resource(key, state, scope, "session")
+
+    async def provide_request_read_session_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Open and return the request-owned read session."""
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        resource_key = selected.read_session_key
+        if resource_key is None or scope is None:
+            msg = "A request scope and configured resource key are required"
+            raise ImproperConfigurationError(msg)
+        return await _open_request_resource_async(selected.config, scope, resource_key, "session")
+
+    def get_read_connection(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read connection view."""
+        selected, state, scope = self._read_request_parts(request, key)
+        return self._request_resource(selected.config, state, scope, "connection")
+
+    def provide_request_read_connection(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the request-owned read connection without eager async checkout."""
+        return self._request_resource(key, state, scope, "connection")
+
+    def provide_request_read_connection_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the synchronous request read connection view."""
+        return self._request_resource(key, state, scope, "connection")
+
+    async def provide_request_read_connection_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Open and return the request-owned read connection."""
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        resource_key = selected.read_connection_key
+        if resource_key is None or scope is None:
+            msg = "A request scope and configured resource key are required"
+            raise ImproperConfigurationError(msg)
+        return await _open_request_resource_async(selected.config, scope, resource_key, "connection")
+
+    def get_routing_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy routing session view."""
+        selected, state, scope = self._read_request_parts(request, key)
+        return self._request_resource(selected.config, state, scope, "routing")
+
+    def provide_request_routing_session(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the request-owned routing session without eager async checkout."""
+        return self._request_resource(key, state, scope, "routing")
+
+    def provide_request_routing_session_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Return the synchronous request routing session view."""
+        return self._request_resource(key, state, scope, "routing")
+
+    async def provide_request_routing_session_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
+        """Open and return the request-owned routing session."""
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        resource_key = selected.routing_session_key
+        if resource_key is None or scope is None:
+            msg = "A request scope and configured resource key are required"
+            raise ImproperConfigurationError(msg)
+        return await _open_request_resource_async(selected.config, scope, resource_key, "routing")
+
     @overload
     def provide_request_session(
         self,
@@ -836,7 +1009,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             A driver session instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         deferred_key = f"{plugin_state.session_key}_deferred"
         deferred = get_sqlspec_scope_state(scope, deferred_key)
         if deferred is not None:
@@ -887,7 +1060,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             A sync driver session instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         if plugin_state.config.is_async:
             return self.provide_request_session(plugin_state.session_key, state, scope)
         connection = self._ensure_connection_sync(plugin_state, state, scope)
@@ -932,9 +1105,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             An async driver session instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         connection = await self._ensure_connection_async(plugin_state, state, scope)
-        return cast("AsyncDriverAdapterBase", self._create_session(plugin_state, connection, scope))
+        return cast("AsyncDriverAdapterBase", await self._create_session_async(plugin_state, connection, scope))
 
     @overload
     def provide_request_connection(
@@ -972,7 +1145,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             A database connection instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
         if connection is None:
             if plugin_state.config.is_async:
@@ -1020,7 +1193,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             A database connection instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         if plugin_state.config.is_async:
             return self.provide_request_connection(plugin_state.connection_key, state, scope)
         return self._ensure_connection_sync(plugin_state, state, scope)
@@ -1062,8 +1235,75 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         Returns:
             A database connection instance for the specified database configuration.
         """
-        plugin_state = self._get_plugin_state(key)
+        plugin_state = self._get_plugin_state(cast("Any", key))
         return await self._ensure_connection_async(plugin_state, state, scope)
+
+    def _tenant_targets(self) -> "tuple[_TenantResolutionTarget, ...]":
+        """Return the resolution inputs of every tenant-enabled configuration."""
+        return tuple(
+            _TenantResolutionTarget(
+                config=state.config,
+                settings=state.tenant_settings,
+                receipt_state_keys=tuple(
+                    receipt_state_key(key)
+                    for key in (state.session_key, state.connection_key, getattr(state.config, "bind_key", None))
+                    if isinstance(key, str) and key
+                ),
+            )
+            for state in self._plugin_configs
+            if has_tenant_strategy(state.config)
+        )
+
+    def _read_request_parts(self, request: Any, key: Any = None) -> tuple[PluginConfigState, Any, Any]:
+        scope = request if isinstance(request, dict) else request.scope
+        app = scope.get("app")
+        state = app.state if app is not None else None
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        return selected, state, scope
+
+    def _request_resource(self, key: Any, state: Any, scope: Any, kind: str) -> Any:
+        selected = self._plugin_configs[0] if key is None else self._registry_state(key)
+        if selected is None:
+            selected = self._get_plugin_state(cast("Any", key))
+        if scope is None:
+            msg = "A request scope is required"
+            raise ImproperConfigurationError(msg)
+        resource_key = (
+            selected.read_session_key
+            if kind == "session"
+            else selected.read_connection_key
+            if kind == "connection"
+            else selected.routing_session_key
+        )
+        if resource_key is None:
+            msg = "routing_session_key must be configured to use request routing sessions"
+            raise ImproperConfigurationError(msg)
+        current = get_sqlspec_scope_state(scope, resource_key)
+        if current is not None:
+            return current
+        if selected.config.is_async:
+            if kind == "connection":
+                raise_async_connection_required("await plugin.provide_request_read_connection_async(key, state, scope)")
+            deferred_key = f"{resource_key}_deferred"
+            deferred = get_sqlspec_scope_state(scope, deferred_key)
+            if deferred is None:
+                accessor = (
+                    "await plugin.provide_request_routing_session_async(key, state, scope)"
+                    if kind == "routing"
+                    else "await plugin.provide_request_read_session_async(key, state, scope)"
+                )
+                deferred = DeferredAsyncSession(
+                    selected.config,
+                    lambda: _open_request_resource_async(selected.config, scope, resource_key, kind),
+                    lambda: get_sqlspec_scope_state(scope, resource_key),
+                    accessor,
+                    target_type=AsyncRoutingSession if kind == "routing" else None,
+                )
+                set_sqlspec_scope_state(scope, deferred_key, deferred)
+            return deferred
+        return _open_request_resource_sync(selected.config, scope, resource_key, kind)
 
     def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
         """Extract Litestar settings from config.extension_config."""
@@ -1083,11 +1323,34 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
         disable_di = litestar_config.get("disable_di", False)
 
+        enable_routing, routing_header, write_pin_cookie, routing_secret = validate_routing_middleware_settings(
+            enable_routing_middleware=litestar_config.get("enable_routing_middleware", True),
+            routing_header=litestar_config.get("routing_header"),
+            write_pin_cookie=litestar_config.get("write_pin_cookie"),
+            routing_secret=litestar_config.get("routing_secret"),
+        )
+
         return {
             "tenant_settings": TenantResolutionSettings.from_extension_config(litestar_config),
             "connection_key": connection_key,
             "pool_key": pool_key,
             "session_key": session_key,
+            "read_connection_key": litestar_config.get(
+                "read_connection_key",
+                "read_connection" if connection_key == DEFAULT_CONNECTION_KEY else f"{connection_key}_read",
+            ),
+            "read_pool_key": litestar_config.get(
+                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            ),
+            "read_session_key": litestar_config.get(
+                "read_session_key", "read_session" if session_key == DEFAULT_SESSION_KEY else f"{session_key}_read"
+            ),
+            "routing_session_key": litestar_config.get("routing_session_key"),
+            "default_routing_mode": litestar_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": enable_routing,
+            "routing_header": routing_header,
+            "write_pin_cookie": write_pin_cookie,
+            "routing_secret": routing_secret,
             "commit_mode": commit_mode,
             "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
@@ -1117,11 +1380,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             disable_di=settings["disable_di"],
             manage_lifespan=settings["manage_lifespan"],
             tenant_settings=settings["tenant_settings"],
+            read_connection_key=settings["read_connection_key"],
+            read_pool_key=settings["read_pool_key"],
+            read_session_key=settings["read_session_key"],
+            routing_session_key=settings["routing_session_key"],
+            default_routing_mode=settings["default_routing_mode"],
+            enable_routing_middleware=settings["enable_routing_middleware"],
+            routing_header=settings["routing_header"],
+            write_pin_cookie=settings["write_pin_cookie"],
+            routing_secret=settings["routing_secret"],
         )
         state.correlation_headers = tuple(settings["correlation_headers"])
 
         if state.manage_lifespan:
-            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key)
+            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key, read_pool_key=state.read_pool_key)
         if not state.disable_di:
             self._setup_di_handlers(state)
         return state
@@ -1130,19 +1402,26 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """Build the dependency providers and before-send handler for the plugin state."""
         connection_key = state.connection_key
         pool_key = state.pool_key
+        session_scope_key = f"{state.session_key}_instance"
         commit_mode = state.commit_mode
         config = state.config
 
         state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
         state.pool_provider = pool_provider_maker(config, pool_key)
-        state.session_provider = session_provider_maker(config, connection_key)
+        state.session_provider = session_provider_maker(
+            config, connection_key, session_scope_key=session_scope_key, commit_mode=commit_mode
+        )
 
         if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key)
+            state.before_send_handler = manual_handler_maker(connection_key, session_scope_key=session_scope_key)
         else:
             commit_on_redirect = commit_mode == "autocommit_include_redirect"
             state.before_send_handler = autocommit_handler_maker(
-                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+                connection_key,
+                commit_on_redirect,
+                state.extra_commit_statuses,
+                state.extra_rollback_statuses,
+                session_scope_key=session_scope_key,
             )
 
     def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
@@ -1155,7 +1434,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         if pool is None:
             self._raise_missing_connection(plugin_state.connection_key)
 
-        payload = TenantContext.require(plugin_state.config) if has_tenant_strategy(plugin_state.config) else None
+        payload = _capture_connection_tenant_sync(plugin_state.config, scope, plugin_state.connection_key)
         payload_key = tenant_payload_key(plugin_state.connection_key)
         set_sqlspec_scope_state(scope, payload_key, payload)
         try:
@@ -1205,23 +1484,42 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "await plugin.provide_request_session_async(key, state, scope)",
         )
 
+    def _resolve_or_build_session(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "tuple[SyncDriverAdapterBase | AsyncDriverAdapterBase, bool]":
+        """Return the cached request session for this connection or build and cache a fresh one."""
+        session_scope_key = f"{plugin_state.session_key}_instance"
+        session = get_sqlspec_scope_state(scope, session_scope_key)
+        if session is not None and getattr(session, "connection", None) is connection:
+            set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
+            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), False
+
+        session = build_request_session(plugin_state.config, connection, plugin_state.commit_mode)
+        set_sqlspec_scope_state(scope, session_scope_key, session)
+        set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
+        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), True
+
     def _create_session(
         self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
         """Create a session from a connection and store it in scope."""
-        session_scope_key = f"{plugin_state.session_key}_instance"
+        session, created = self._resolve_or_build_session(plugin_state, connection, scope)
+        if created:
+            runtime = session.observability
+            if not runtime.is_idle:
+                runtime.emit_session_start_sync(session)
+        return session
 
-        session = get_sqlspec_scope_state(scope, session_scope_key)
-        if session is not None and getattr(session, "connection", None) is connection:
-            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
-
-        session = plugin_state.config.driver_type(
-            connection=connection,
-            statement_config=plugin_state.config.statement_config,
-            driver_features=plugin_state.config.driver_features,
-        )
-        set_sqlspec_scope_state(scope, session_scope_key, session)
-        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+    async def _create_session_async(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
+        """Create a session from a connection, await async start hooks, and store it in scope."""
+        session, created = self._resolve_or_build_session(plugin_state, connection, scope)
+        if created:
+            runtime = session.observability
+            if not runtime.is_idle:
+                await runtime.emit_session_start_async(session)
+        return session
 
     def _registry_state(self, name: Any) -> "PluginConfigState | None":
         """Resolve plugin state from registry identity, independent of Litestar registration.
@@ -1266,7 +1564,17 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             The matching plugin state.
         """
         if isinstance(name, str) and any(
-            name in {state.connection_key, state.pool_key, state.session_key} for state in self._plugin_configs
+            name
+            in {
+                state.connection_key,
+                state.pool_key,
+                state.session_key,
+                state.read_connection_key,
+                state.read_pool_key,
+                state.read_session_key,
+                state.routing_session_key,
+            }
+            for state in self._plugin_configs
         ):
             if any(state.annotation is None for state in self._plugin_configs):
                 self._raise_plugin_not_registered()
@@ -1281,7 +1589,15 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """Get plugin state for a configuration by Litestar dependency key, instance, or annotation."""
         if isinstance(key, str):
             for state in self._plugin_configs:
-                if key in {state.connection_key, state.pool_key, state.session_key}:
+                if key in {
+                    state.connection_key,
+                    state.pool_key,
+                    state.session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.read_session_key,
+                    state.routing_session_key,
+                }:
                     return state
 
         for state in self._plugin_configs:
@@ -1305,14 +1621,23 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
 
     def _ensure_dependency_keys(self) -> None:
         """Validate that connection and pool keys are unique across configurations."""
-        connection_keys = [state.connection_key for state in self._plugin_configs]
-        pool_keys = [state.pool_key for state in self._plugin_configs]
-
-        if len(set(connection_keys)) != len(connection_keys):
-            self._raise_duplicate_connection_keys()
-
-        if len(set(pool_keys)) != len(pool_keys):
-            self._raise_duplicate_pool_keys()
+        seen: set[str] = set()
+        for state in self._plugin_configs:
+            for key in (
+                state.connection_key,
+                state.pool_key,
+                state.session_key,
+                state.read_connection_key,
+                state.read_pool_key,
+                state.read_session_key,
+                state.routing_session_key,
+            ):
+                if key is None:
+                    continue
+                if key in seen:
+                    msg = f"Database dependency key {key!r} must be unique across connection_key, pool_key, session_key, read and routing keys"
+                    raise ImproperConfigurationError(msg)
+                seen.add(key)
 
     def _raise_missing_connection(self, connection_key: str) -> NoReturn:
         """Raise error when connection is not found in scope."""
@@ -1418,6 +1743,12 @@ class _ConnectionCleanupTarget:
     commit_mode: CommitMode
     extra_commit_statuses: frozenset[int]
     extra_rollback_statuses: frozenset[int]
+    bind_key: str | None = None
+    default_routing_mode: str = "auto"
+    enable_routing_middleware: bool = False
+    routing_header_bytes: bytes | None = None
+    write_pin_cookie: str | None = None
+    routing_secret: bytes | None = None
 
 
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
@@ -1466,6 +1797,14 @@ class _NumpySignatureNamespace:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._numpy, name)
+
+
+def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None, CommitMode], ...]:
+    return (
+        (state.read_connection_key, "manual"),
+        (state.read_session_key, "manual"),
+        (state.routing_session_key, state.commit_mode),
+    )
 
 
 def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
@@ -1607,3 +1946,12 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
     if uuid_utils_uuid is not None:
         decoders.append((lambda t: t is uuid_utils_uuid, lambda t, v: t(str(v))))
     return decoders
+
+
+def _detach_and_delete_scope_state(scope: "Scope", key: str) -> None:
+    """Pop one scope entry and detach it if it is a deferred or active session."""
+    value = get_sqlspec_scope_state(scope, key, pop=True)
+    if value is not None:
+        detach = getattr(value, "_detach_connection", None)
+        if detach is not None:
+            detach()

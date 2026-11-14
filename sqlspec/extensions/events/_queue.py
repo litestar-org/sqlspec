@@ -1,6 +1,7 @@
 """Table-backed queue implementation for EventChannel."""
 
 import asyncio
+import math
 import threading
 import time
 from contextlib import suppress
@@ -9,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_queue_table_name
@@ -34,6 +36,7 @@ logger = get_logger("sqlspec.events.queue")
 _PENDING_STATUS = "pending"
 _LEASED_STATUS = "leased"
 _ACKED_STATUS = "acked"
+_FAILED_STATUS = "failed"
 _DEFAULT_TABLE = "sqlspec_event_queue"
 _MAX_EMPTY_POLL_CHANNELS = 1_024
 
@@ -51,13 +54,17 @@ class _BaseTableEventQueue:
         "_dialect",
         "_empty_poll_delays",
         "_empty_poll_lock",
+        "_fail_statement",
         "_insert_statement",
         "_lease_seconds",
+        "_max_attempts",
         "_max_claim_attempts",
         "_nack_statement",
         "_retention_seconds",
+        "_retry_backoff_seconds",
         "_runtime",
         "_select_by_id_statement",
+        "_select_claimable_by_id_statement",
         "_select_for_update",
         "_select_statement",
         "_statement_config",
@@ -76,7 +83,19 @@ class _BaseTableEventQueue:
         skip_locked: bool | None = None,
         cleanup_on_ack: bool = True,
         use_run_in_transaction: bool = False,
+        max_attempts: int = 5,
+        retry_backoff_seconds: float = 1.0,
     ) -> None:
+        if isinstance(max_attempts, bool) or max_attempts < 1:
+            msg = "max_attempts must be at least 1"
+            raise ImproperConfigurationError(msg)
+        if (
+            isinstance(retry_backoff_seconds, bool)
+            or not math.isfinite(retry_backoff_seconds)
+            or retry_backoff_seconds < 0
+        ):
+            msg = "retry_backoff_seconds must be a finite non-negative number"
+            raise ImproperConfigurationError(msg)
         self._config = config
         self._statement_config = config.statement_config
         self._runtime = config.get_observability_runtime()
@@ -86,6 +105,8 @@ class _BaseTableEventQueue:
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
         self._lease_seconds = 30 if lease_seconds is None else lease_seconds
         self._retention_seconds = 86_400 if retention_seconds is None else retention_seconds
+        self._max_attempts = int(max_attempts)
+        self._retry_backoff_seconds = float(retry_backoff_seconds)
         self._max_claim_attempts = 5
         self._select_for_update = bool(select_for_update)
         self._cleanup_on_ack = bool(cleanup_on_ack)
@@ -93,9 +114,11 @@ class _BaseTableEventQueue:
         self._insert_statement = self._insert_sql()
         self._select_statement = self._select_sql(self._select_for_update, bool(skip_locked))
         self._select_by_id_statement = self._select_by_id_sql()
+        self._select_claimable_by_id_statement = self._select_claimable_by_id_sql()
         self._claim_statement = self._claim_sql()
         self._ack_statement = self._ack_sql()
         self._nack_statement = self._nack_sql()
+        self._fail_statement = self._fail_sql()
         self._acked_cleanup_statement = self._cleanup_sql()
         self._delete_by_id_statement = self._delete_by_id_sql()
 
@@ -119,7 +142,14 @@ class _BaseTableEventQueue:
     def _select_sql(self, select_for_update: bool, skip_locked: bool) -> str:
         top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
-        base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
+        base = (
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, "
+            f"lease_expires_at, created_at FROM {self._table_name} "
+            "WHERE channel = :channel AND available_at <= :available_cutoff "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) "
+            "AND attempts < :max_attempts ORDER BY created_at ASC, event_id ASC"
+        )
         locking_clause = lock_clause(
             select_for_update=select_for_update, skip_locked=skip_locked, dialect=self._dialect
         )
@@ -129,6 +159,19 @@ class _BaseTableEventQueue:
         top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = self._row_limit_clause()
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE event_id = :event_id"
+        return base + limit_clause
+
+    def _select_claimable_by_id_sql(self) -> str:
+        top_clause = select_limit_prefix(self._dialect, 1)
+        limit_clause = self._row_limit_clause()
+        base = (
+            f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, "
+            f"lease_expires_at, created_at FROM {self._table_name} "
+            "WHERE event_id = :event_id AND channel = :channel AND available_at <= :available_cutoff "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) "
+            "AND attempts < :max_attempts"
+        )
         return base + limit_clause
 
     def _row_limit_clause(self) -> str:
@@ -155,13 +198,28 @@ class _BaseTableEventQueue:
             self._empty_poll_delays.pop(channel, None)
 
     def _claim_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
+        return (
+            f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, "
+            "attempts = attempts + 1 WHERE event_id = :event_id "
+            "AND (status = :pending_status OR (status = :leased_status "
+            "AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff))) "
+            "AND channel = :channel AND available_at <= :available_cutoff AND attempts < :max_attempts"
+        )
 
     def _ack_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
 
     def _nack_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL WHERE event_id = :event_id"
+        return (
+            f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL, "
+            "available_at = :available_at WHERE event_id = :event_id AND status = :leased_status"
+        )
+
+    def _fail_sql(self) -> str:
+        return (
+            f"UPDATE {self._table_name} SET status = :failed_status, lease_expires_at = NULL "
+            "WHERE event_id = :event_id AND status = :leased_status"
+        )
 
     def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
@@ -169,18 +227,17 @@ class _BaseTableEventQueue:
     def _delete_by_id_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE event_id = :event_id"
 
-    @staticmethod
-    def _candidate_parameters(channel: str, current_time: "datetime") -> "dict[str, Any]":
+    def _candidate_parameters(self, channel: str, current_time: "datetime") -> "dict[str, Any]":
         return {
             "channel": channel,
             "available_cutoff": current_time,
             "pending_status": _PENDING_STATUS,
             "leased_status": _LEASED_STATUS,
             "lease_cutoff": current_time,
+            "max_attempts": self._max_attempts,
         }
 
-    @staticmethod
-    def _claim_parameters(row: "dict[str, Any]", now: "datetime", leased_until: "datetime") -> "dict[str, Any]":
+    def _claim_parameters(self, row: "dict[str, Any]", now: "datetime", leased_until: "datetime") -> "dict[str, Any]":
         return {
             "claimed_status": _LEASED_STATUS,
             "lease_expires_at": leased_until,
@@ -188,6 +245,9 @@ class _BaseTableEventQueue:
             "pending_status": _PENDING_STATUS,
             "leased_status": _LEASED_STATUS,
             "lease_reentry_cutoff": now,
+            "channel": row["channel"],
+            "available_cutoff": now,
+            "max_attempts": self._max_attempts,
         }
 
     @staticmethod
@@ -365,8 +425,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 return self._hydrate_event(row, leased_until, increment_attempts=True)
         return None
 
-    def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
-        row = self._fetch_by_event_id(event_id)
+    def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
+        now = self._utcnow()
+        row = self._fetch_claimable_by_event_id(event_id, channel, now)
         if row is None:
             return None
         now = self._utcnow()
@@ -392,7 +453,28 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         self._runtime.increment_metric("events.ack")
 
     def nack(self, event_id: str) -> None:
-        self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
+        row = self._fetch_by_event_id(event_id)
+        if row is None:
+            self._runtime.increment_metric("events.nack")
+            return
+        attempts = int(row["attempts"])
+        if attempts >= self._max_attempts:
+            self._execute(
+                self._fail_statement,
+                {"failed_status": _FAILED_STATUS, "event_id": event_id, "leased_status": _LEASED_STATUS},
+            )
+        else:
+            now = self._utcnow()
+            delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
+            self._execute(
+                self._nack_statement,
+                {
+                    "pending": _PENDING_STATUS,
+                    "available_at": now + timedelta(seconds=delay),
+                    "event_id": event_id,
+                    "leased_status": _LEASED_STATUS,
+                },
+            )
         self._runtime.increment_metric("events.nack")
 
     def shutdown(self) -> None:
@@ -425,6 +507,17 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         ) as driver:
             row = driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
+            )
+            return self._normalize_queue_row(row)
+
+    def _fetch_claimable_by_event_id(self, event_id: str, channel: str, now: "datetime") -> "dict[str, Any] | None":
+        parameters = self._candidate_parameters(channel, now)
+        parameters["event_id"] = event_id
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
+        ) as driver:
+            row = driver.select_one_or_none(
+                SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config)
             )
             return self._normalize_queue_row(row)
 
@@ -609,8 +702,9 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 return self._hydrate_event(row, leased_until, increment_attempts=True)
         return None
 
-    async def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
-        row = await self._fetch_by_event_id(event_id)
+    async def dequeue_by_event_id(self, event_id: str, channel: str) -> "EventMessage | None":
+        now = self._utcnow()
+        row = await self._fetch_claimable_by_event_id(event_id, channel, now)
         if row is None:
             return None
         now = self._utcnow()
@@ -636,7 +730,28 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         self._runtime.increment_metric("events.ack")
 
     async def nack(self, event_id: str) -> None:
-        await self._execute(self._nack_statement, {"pending": _PENDING_STATUS, "event_id": event_id})
+        row = await self._fetch_by_event_id(event_id)
+        if row is None:
+            self._runtime.increment_metric("events.nack")
+            return
+        attempts = int(row["attempts"])
+        if attempts >= self._max_attempts:
+            await self._execute(
+                self._fail_statement,
+                {"failed_status": _FAILED_STATUS, "event_id": event_id, "leased_status": _LEASED_STATUS},
+            )
+        else:
+            now = self._utcnow()
+            delay = self._retry_backoff_seconds * (2 ** max(0, attempts - 1))
+            await self._execute(
+                self._nack_statement,
+                {
+                    "pending": _PENDING_STATUS,
+                    "available_at": now + timedelta(seconds=delay),
+                    "event_id": event_id,
+                    "leased_status": _LEASED_STATUS,
+                },
+            )
         self._runtime.increment_metric("events.nack")
 
     async def shutdown(self) -> None:
@@ -669,6 +784,19 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         ) as driver:
             row = await driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
+            )
+            return self._normalize_queue_row(row)
+
+    async def _fetch_claimable_by_event_id(
+        self, event_id: str, channel: str, now: "datetime"
+    ) -> "dict[str, Any] | None":
+        parameters = self._candidate_parameters(channel, now)
+        parameters["event_id"] = event_id
+        async with cast(
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
+        ) as driver:
+            row = await driver.select_one_or_none(
+                SQL(self._select_claimable_by_id_statement, parameters, statement_config=self._statement_config)
             )
             return self._normalize_queue_row(row)
 
@@ -796,6 +924,8 @@ def build_queue_backend(
         "use_run_in_transaction": _resolve_bool_setting(
             settings, "use_run_in_transaction", runtime_hints.use_run_in_transaction
         ),
+        "max_attempts": _resolve_int_setting(settings, "max_attempts", 5),
+        "retry_backoff_seconds": _resolve_float_setting(settings, "retry_backoff_seconds", 1.0),
     }
     if config.is_async:
         return AsyncTableEventQueue(config, **kwargs)
@@ -825,3 +955,12 @@ def _resolve_int_setting(settings: "dict[str, Any]", key: str, default: int) -> 
     if value is None:
         return int(default)
     return int(value)
+
+
+def _resolve_float_setting(settings: "dict[str, Any]", key: str, default: float) -> float:
+    if key not in settings:
+        return float(default)
+    value = settings.get(key)
+    if value is None:
+        return float(default)
+    return float(value)

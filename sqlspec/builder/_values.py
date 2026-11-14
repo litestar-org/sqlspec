@@ -42,8 +42,10 @@ class Values(QueryBuilder):
             **kwargs: Additional QueryBuilder options.
         """
         self._init_query_builder(kwargs)
+        if alias is not None:
+            _validate_values_alias(alias)
         self._alias: str | None = alias
-        self._columns: list[str] | None = list(columns) if columns is not None else None
+        self._columns: list[str] | None = _validate_columns(columns) if columns is not None else None
         self._rows: list[list[Any]] = []
         self._initialize_expression()
 
@@ -77,6 +79,7 @@ class Values(QueryBuilder):
         Returns:
             Self for method chaining.
         """
+        _validate_values_alias(alias)
         self._alias = alias
         if self._rows:
             self._rebuild_expression()
@@ -94,10 +97,11 @@ class Values(QueryBuilder):
         Raises:
             SQLBuilderError: If column count does not match row width.
         """
-        if self._rows and len(columns) != len(self._rows[0]):
-            msg = f"Column count ({len(columns)}) does not match row width ({len(self._rows[0])})."
+        validated_columns = _validate_columns(columns)
+        if self._rows and len(validated_columns) != len(self._rows[0]):
+            msg = f"Column count ({len(validated_columns)}) does not match row width ({len(self._rows[0])})."
             raise SQLBuilderError(msg)
-        self._columns = list(columns)
+        self._columns = validated_columns
         if self._rows:
             self._rebuild_expression()
         return self
@@ -122,7 +126,10 @@ class Values(QueryBuilder):
         first_row = rows[0]
         if isinstance(first_row, Mapping):
             if columns is None:
-                columns = list(first_row.keys())
+                if not first_row:
+                    msg = "VALUES clause rows must contain at least one column."
+                    raise SQLBuilderError(msg)
+                columns = _validate_columns(list(first_row.keys()))
             if not columns:
                 msg = "VALUES clause rows must contain at least one column."
                 raise SQLBuilderError(msg)
@@ -132,6 +139,10 @@ class Values(QueryBuilder):
                 if not isinstance(r, Mapping):
                     msg = f"Row {idx} is not a mapping like the initial row."
                     raise SQLBuilderError(msg)
+                for key in r:
+                    if not isinstance(key, str) or not key.strip() or "\x00" in key:
+                        msg = f"Invalid column key {key!r} in VALUES clause."
+                        raise SQLBuilderError(msg)
                 if set(r.keys()) != expected_keys:
                     msg = "All rows in VALUES clause must have the same keys as the initial row."
                     raise SQLBuilderError(msg)
@@ -203,9 +214,11 @@ class Values(QueryBuilder):
         values_expr = exp.Values(expressions=tuple_expressions)
         if self._alias:
             if self._columns:
-                self._expression = exp.alias_(values_expr, alias=self._alias, table=self._columns)
+                self._expression = exp.alias_(
+                    values_expr, alias=self._alias, table=[exp.to_identifier(c) for c in self._columns], copy=False
+                )
             else:
-                self._expression = exp.alias_(values_expr, alias=self._alias)
+                self._expression = exp.alias_(values_expr, alias=self._alias, copy=False)
         else:
             self._expression = values_expr
 
@@ -228,7 +241,29 @@ class Values(QueryBuilder):
         with_clause = expression.args.pop("with_", None)
         if with_clause is not None:
             if not expression.args.get("alias"):
-                expression = exp.alias_(expression, "_values", table=self._columns or True)
-            expression = exp.select("*").from_(expression)
+                expression = exp.alias_(expression, "_values", table=self._columns or True, copy=False)
+            expression = exp.select("*", copy=False).from_(expression, copy=False)
             expression.set("with_", with_clause)
         return expression
+
+
+def _validate_values_alias(alias: Any) -> str:
+    """Validate that a VALUES table alias is a non-empty string without NUL bytes."""
+    if not isinstance(alias, str) or not alias.strip() or "\x00" in alias:
+        msg = f"Invalid alias {alias!r}: expected a non-empty identifier."
+        raise SQLBuilderError(msg)
+    return alias
+
+
+def _validate_columns(columns: Sequence[Any]) -> list[str]:
+    """Validate VALUES column names are unique, non-empty strings without NUL bytes."""
+    validated: list[str] = []
+    for col in columns:
+        if not isinstance(col, str) or not col.strip() or "\x00" in col:
+            msg = f"Invalid column name {col!r} in VALUES clause."
+            raise SQLBuilderError(msg)
+        validated.append(col)
+    if len(set(validated)) != len(validated):
+        msg = "VALUES clause column names must be unique."
+        raise SQLBuilderError(msg)
+    return validated

@@ -99,6 +99,46 @@ For Oracle, `"default"`, `"identifier"`, and `True` select the client-identifier
 
 For mssql-python, `"rls"` and `"session_context"` default `pool_enabled` to `False` automatically when omitted from `connection_config` (rejecting explicit `pool_enabled=True`). Because `mssql-python` sets pooling process-wide before the first connection, set `connection_config={"pool_enabled": False, ...}` on any non-tenant administrative `MssqlPythonConfig` created in the same process. Owned keys use mutable values (`@read_only=0`) so checkin can restore them. See the [mssql-python reference](../../reference/adapters/mssql-python.md) and [pymssql reference](../../reference/adapters/pymssql.md).
 
+## Oracle Client Context and Security
+
+Use `OracleSyncClientContextStrategy` or `OracleAsyncClientContextStrategy` to bind a tenant to `CLIENTCONTEXT`. The SDK sends this state with the next request, with no extra setup query. List each allowed tenant key in `variable_keys`. Unknown keys fail checkout.
+
+```python
+from sqlspec.adapters.oracledb import (
+    OracleAsyncClientContextStrategy,
+    OracleAsyncConfig,
+)
+from sqlspec.utils.tenant import TenantContextPayload
+
+config = OracleAsyncConfig(
+    connection_config={
+        "dsn": "localhost:1521/FREEPDB1",
+        "user": "app",
+        "password": "secret",
+    },
+    driver_features={
+        "tenant_strategy": OracleAsyncClientContextStrategy(
+            variable_keys=("region",)
+        )
+    },
+)
+payload = TenantContextPayload("acme", variables={"region": "west"})
+```
+
+Pass `payload` to `config.provide_session(tenant=payload)`. The [runnable example](https://github.com/litestar-org/sqlspec/blob/main/docs/examples/databases/oracledb/zero_rtt_tenancy.py) reads both values back from `SYS_CONTEXT`. A database policy must check this state to enforce tenant access.
+
+??? example "Complete client-context example"
+
+    ```python
+    --8<-- "docs/examples/databases/oracledb/zero_rtt_tenancy.py:example"
+    ```
+
+Use `OracleSyncEndUserSecurityStrategy` or `OracleAsyncEndUserSecurityStrategy` for Deep Data Security on a supported Oracle 26ai Thin TCPS server. These bind a database access token, user identity, data roles, and declared fields. The token can be a value or a refresh callable. Token providers read the captured `end_user_token` tenant field. Trusted identities can use the tenant ID with an optional `end_user_key`. Each socket owns its security state. Checkin clears it. The SDK plugin's thread-local state is never used for request secrets.
+
+Shard routing reads the captured payload before checkout. Choose one of `use_tenant_id_as_sharding_key=True`, `sharding_key_variable`, or `shard_resolver`. A resolver returns primary and super-shard key sequences. Direct client routing needs Thick mode. Thin mode uses a suitable routing endpoint. Tenant and stateful session hooks reject `pool_boundary="statement"` because a lease needs its state to last across queries.
+
+The identifier and VPD strategies still verify the server state. Supported async Thin paths can batch setup and `SYS_CONTEXT` checks into one native pipeline. Finishing the transaction and release remain separate steps. Client-context and security strategies clear native state at checkin. If a clear, reset, or release fails, `pool.drop()` evicts the socket. The next tenant must never receive it.
+
 ## Verify a Deployment
 
 Test with a non-owner app role and a real policy. Check reads and writes for two tenants on a size-one pool. Then inject body errors, cancellation, and reset failure; the next tenant must see only its own rows. Confirm that failed cleanup replaces the physical connection.

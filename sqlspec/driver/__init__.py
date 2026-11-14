@@ -23,6 +23,7 @@ from sqlspec.driver._common import (
     validate_savepoint_name,
 )
 from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
+from sqlspec.driver._routing import AsyncRoutingSession, SyncRoutingSession
 from sqlspec.driver._sql_helpers import convert_to_dialect
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream, rows_to_dicts
 from sqlspec.driver._sync import (
@@ -39,6 +40,7 @@ __all__ = (
     "AsyncExceptionHandler",
     "AsyncPoolConnectionContext",
     "AsyncPoolSessionFactory",
+    "AsyncRoutingSession",
     "AsyncRowStream",
     "AsyncTenantLease",
     "BaseAsyncExceptionHandler",
@@ -55,6 +57,7 @@ __all__ = (
     "SyncExceptionHandler",
     "SyncPoolConnectionContext",
     "SyncPoolSessionFactory",
+    "SyncRoutingSession",
     "SyncRowStream",
     "SyncTenantLease",
     "convert_to_dialect",

@@ -31,6 +31,7 @@ from sqlspec.exceptions import (
     OperationCancelledError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SerializationConflictError,
     SQLParsingError,
     SQLSpecError,
@@ -655,6 +656,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, sqlstate_code, termination_class, description)
         if sqlstate_code == "55P03":
             return _create_postgres_error(error, sqlstate_code, QueryTimeoutError, description)
+        if sqlstate_code == "25006":
+            return _create_postgres_error(error, sqlstate_code, ReadOnlyTransactionError, "read-only transaction")
         if sqlstate_code.startswith("25"):
             return _create_postgres_error(error, sqlstate_code, TransactionError, description)
         return _create_postgres_error(error, sqlstate_code, error_class, description)
@@ -667,6 +670,8 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, error_code, termination_class, "query terminated")
         if error_code == "55P03":
             return _create_postgres_error(error, error_code, QueryTimeoutError, "lock timeout")
+        if error_code == "25006":
+            return _create_postgres_error(error, error_code, ReadOnlyTransactionError, "read-only transaction")
         if error_code.startswith("25"):
             return _create_postgres_error(error, error_code, TransactionError, "invalid transaction state")
         exc_class = map_sqlstate_to_exception(error_code)
@@ -680,7 +685,7 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     """Escape literal percent characters before driver-side interpolation."""
     if not parameters or "%" not in sql:
         return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
+    keep = {info.position for info in validator.extract_parameters(sql, dialect="postgres")}
     segments: list[str] = []
     index = 0
     while index < len(sql):
@@ -702,6 +707,7 @@ def _register_exception_mappings() -> None:
         _EXCEPTION_MAPPING[pool_timeout] = ("", ConnectionTimeoutError, "connection pool timeout")
 
     _EXCEPTION_MAPPING.update({
+        pg_errors.ReadOnlySqlTransaction: ("25006", ReadOnlyTransactionError, "read-only transaction"),
         pg_errors.LockNotAvailable: ("55P03", QueryTimeoutError, "lock not available"),
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),

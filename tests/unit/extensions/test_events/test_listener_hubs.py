@@ -5,7 +5,9 @@
 import asyncio
 import threading
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -409,7 +411,7 @@ class _QueueFallback:
         self.dequeue_calls.append((channel, poll_interval))
         return self.event
 
-    async def dequeue_by_event_id(self, _event_id: str) -> None:
+    async def dequeue_by_event_id(self, _event_id: str, _channel: str) -> None:
         return None
 
     def _reset_empty_poll_delay(self, channel: str) -> None:
@@ -452,7 +454,7 @@ class _SyncQueueFallback:
         self.dequeue_calls.append((channel, poll_interval))
         return self.event
 
-    def dequeue_by_event_id(self, _event_id: str) -> None:
+    def dequeue_by_event_id(self, _event_id: str, _channel: str) -> None:
         return None
 
     def _reset_empty_poll_delay(self, channel: str) -> None:
@@ -463,6 +465,7 @@ class _Options:
     def __init__(self) -> None:
         self.wait = -1
         self.visibility: int | None = None
+        self.correlation: str | None = None
 
 
 class _Queue:
@@ -930,9 +933,10 @@ def test_sync_native_notify_timeout_records_empty_wait() -> None:
 def test_oracle_aq_options_round_subsecond_wait_up_to_one_second() -> None:
     queue = _Queue()
 
-    oracle_hub._apply_deq_options(queue, None, None, 0.5)
+    oracle_hub._apply_deq_options(queue, None, None, 0.5, "alerts")
 
     assert queue.deqoptions.wait == 1
+    assert queue.deqoptions.correlation == "alerts"
 
 
 def test_psycopg_sync_shutdown_submits_stop_before_setting_stop_flag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1063,7 +1067,7 @@ async def test_listener_hub_routes_over_direct_dsn() -> None:
     await asyncpg_hub.subscribe("alerts")
     assert pooled_asyncpg_cfg.connection_enters == 0
     assert direct_asyncpg_cfg.connection_enters == 1
-    assert direct_asyncpg_conn.executed == ["LISTEN alerts"]
+    assert direct_asyncpg_conn.executed == ['LISTEN "alerts"']
     await asyncpg_hub.shutdown()
 
     pooled_psycopg_async_conn = _PsycopgAsyncConnection()
@@ -1111,3 +1115,103 @@ async def test_listener_hub_routes_over_direct_dsn() -> None:
     assert pooled_psqlpy_cfg.pool.listener_calls == 0
     assert direct_psqlpy_cfg.pool.listener_calls == 1
     await psqlpy_hub.shutdown()
+
+
+@pytest.mark.parametrize("channel", ["orders", "OrderEvents"])
+@pytest.mark.parametrize(
+    ("operation", "expected_statement"),
+    [
+        ("subscribe", 'LISTEN "{channel}"'),
+        ("reconnect", 'LISTEN "{channel}"'),
+        ("unsubscribe", 'UNLISTEN "{channel}"'),
+        ("shutdown", 'UNLISTEN "{channel}"'),
+    ],
+)
+async def test_asyncpg_listener_hub_quotes_channel_identifiers(
+    channel: str, operation: str, expected_statement: str
+) -> None:
+    """AsyncpgListenerHub quotes channel identifiers across subscribe, reconnect, unsubscribe, and shutdown."""
+    first = _AsyncpgConnection()
+    replacement = _AsyncpgConnection()
+    config = _AsyncpgConfig(first, replacement)
+    hub = AsyncpgListenerHub(config)  # type: ignore[arg-type]
+
+    await hub.subscribe(channel)
+    if operation == "subscribe":
+        assert first.executed == [expected_statement.format(channel=channel)]
+        await hub.shutdown()
+        return
+    if operation == "reconnect":
+        first.closed = True
+        assert await hub.dequeue(channel, 0.01) is None
+        assert replacement.executed == [expected_statement.format(channel=channel)]
+        await hub.shutdown()
+        return
+    if operation == "unsubscribe":
+        first.executed.clear()
+        await hub.unsubscribe(channel)
+        assert first.executed == [expected_statement.format(channel=channel)]
+        await hub.shutdown()
+        return
+    first.executed.clear()
+    await hub.shutdown()
+    assert first.executed == [expected_statement.format(channel=channel)]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_oracle_aq_hubs_set_deqoptions_correlation_to_normalized_channel(is_async: bool) -> None:
+    """OracleSyncAQHub and OracleAsyncAQHub set queue.deqoptions.correlation to the normalized channel."""
+    queue_handle = _Queue()
+    if is_async:
+
+        async def _async_deqone() -> Any:
+            return SimpleNamespace(payload={"channel": "OrderEvents", "payload": {"id": 1}})
+
+        queue_handle.deqone = _async_deqone  # type: ignore[attr-defined]
+
+        @asynccontextmanager
+        async def _provide_async_session():
+            async def _commit() -> None:
+                return None
+
+            async def _rollback() -> None:
+                return None
+
+            conn = SimpleNamespace(queue=lambda _name, payload_type="JSON": queue_handle)
+            yield SimpleNamespace(connection=conn, commit=_commit, rollback=_rollback)
+
+        async_cfg = SimpleNamespace(
+            provide_session=_provide_async_session, get_observability_runtime=lambda: _StubRuntime()
+        )
+        async_hub = oracle_hub.OracleAsyncAQHub(
+            async_cfg,  # type: ignore[arg-type]
+            queue_name_template="SHARED_AQ_QUEUE",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+        )
+        payload = await async_hub.dequeue("OrderEvents", 0.5)
+        await async_hub.shutdown()
+    else:
+        queue_handle.deqone = lambda: SimpleNamespace(payload={"channel": "OrderEvents", "payload": {"id": 1}})  # type: ignore[attr-defined]
+
+        @contextmanager
+        def _provide_sync_session():
+            conn = SimpleNamespace(queue=lambda _name, payload_type="JSON": queue_handle)
+            yield SimpleNamespace(connection=conn, commit=lambda: None, rollback=lambda: None)
+
+        sync_cfg = SimpleNamespace(
+            provide_session=_provide_sync_session, get_observability_runtime=lambda: _StubRuntime()
+        )
+        sync_hub = oracle_hub.OracleSyncAQHub(
+            sync_cfg,  # type: ignore[arg-type]
+            queue_name_template="SHARED_AQ_QUEUE",
+            visibility=None,
+            default_visibility=None,
+            wait_ceiling=5,
+        )
+        payload = sync_hub.dequeue("OrderEvents", 0.5)
+        sync_hub.shutdown()
+
+    assert payload == {"channel": "OrderEvents", "payload": {"id": 1}}
+    assert queue_handle.deqoptions.correlation == "OrderEvents"

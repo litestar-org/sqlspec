@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,8 +13,13 @@ from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+from sqlspec.base import SQLSpec
+from sqlspec.config import LifecycleConfig
+from sqlspec.core import OperationType
+from sqlspec.driver._common import _DETACHED_CONNECTION, operation_requires_transaction
 from sqlspec.driver._sync import SyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 
@@ -461,3 +467,195 @@ def test_failed_duckdb_session_discards_a_file_connection(tmp_path: Path) -> Non
             assert session.execute("SELECT id FROM items").get_data() == []
     finally:
         config.close_pool()
+
+
+def test_detached_connection_sentinel_semantics() -> None:
+    assert bool(_DETACHED_CONNECTION) is False
+    assert repr(_DETACHED_CONNECTION) == "<DetachedConnection>"
+    with pytest.raises(AttributeError):
+        _ = _DETACHED_CONNECTION.__deepcopy__
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = _DETACHED_CONNECTION.cursor
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        hasattr(_DETACHED_CONNECTION, "cursor")
+
+
+@pytest.mark.parametrize(
+    ("op_type", "modifies_rows", "expected"),
+    [
+        ("SELECT", False, False),
+        ("SELECT", True, True),
+        ("PRAGMA", False, False),
+        ("PRAGMA", True, True),
+        ("COPY_TO", False, False),
+        ("COPY_TO", True, True),
+        ("INSERT", False, True),
+        ("UPDATE", False, True),
+        ("DELETE", False, True),
+        ("MERGE", False, True),
+        ("COPY", False, True),
+        ("COPY_FROM", False, True),
+        ("EXECUTE", False, True),
+        ("SCRIPT", False, True),
+        ("DDL", False, True),
+        ("COMMAND", False, True),
+    ],
+)
+def test_operation_requires_transaction_classification(
+    op_type: OperationType, modifies_rows: bool, expected: bool
+) -> None:
+    assert operation_requires_transaction(op_type, modifies_rows) is expected
+
+
+@pytest.mark.parametrize("tx_method", ["begin", "commit", "rollback"])
+def test_sync_detached_driver_rejects_operations_and_keeps_cache_disabled(
+    sync_config: SqliteConfig, tx_method: str
+) -> None:
+    with sync_config.provide_session() as session:
+        session._detach_connection()  # pyright: ignore[reportPrivateUsage]
+        assert session.connection is _DETACHED_CONNECTION
+        session.attach_observability(ObservabilityRuntime())
+        assert session._stmt_cache_enabled is False  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+        with pytest.raises(SQLSpecError):
+            getattr(session, tx_method)()
+
+
+@pytest.mark.parametrize("tx_method", ["begin", "commit", "rollback"])
+async def test_async_detached_driver_rejects_operations_and_keeps_cache_disabled(
+    async_config: AiosqliteConfig, tx_method: str
+) -> None:
+    async with async_config.provide_session() as session:
+        session._detach_connection()  # pyright: ignore[reportPrivateUsage]
+        assert session.connection is _DETACHED_CONNECTION
+        session.attach_observability(ObservabilityRuntime())
+        assert session._stmt_cache_enabled is False  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await session.execute("SELECT 1")
+        with pytest.raises(SQLSpecError):
+            await getattr(session, tx_method)()
+
+
+def test_sqlspec_runtime_sync_provide_session_detaches_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
+    destroyed: list[dict[str, Any]] = []
+    lifecycle: LifecycleConfig = {"on_connection_destroy": [destroyed.append]}
+    spec = SQLSpec(observability_config=ObservabilityConfig(lifecycle=lifecycle))
+    cfg = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "rt_sync.sqlite")}))
+    try:
+        with spec.provide_session(cfg) as session:
+            live_conn = session.connection
+            assert live_conn is not _DETACHED_CONNECTION
+        assert session.connection is _DETACHED_CONNECTION
+        assert len(destroyed) == 1
+        assert destroyed[0]["connection"] is live_conn
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+    finally:
+        cfg.close_pool()
+
+
+async def test_sqlspec_runtime_async_provide_session_detaches_and_emits_raw_connection_destroy(tmp_path: Path) -> None:
+    destroyed: list[dict[str, Any]] = []
+    lifecycle: LifecycleConfig = {"on_connection_destroy": [destroyed.append]}
+    spec = SQLSpec(observability_config=ObservabilityConfig(lifecycle=lifecycle))
+    cfg = spec.add_config(AiosqliteConfig(connection_config={"database": str(tmp_path / "rt_async.sqlite")}))
+    try:
+        async with spec.provide_session(cfg) as session:
+            live_conn = session.connection
+            assert live_conn is not _DETACHED_CONNECTION
+        assert session.connection is _DETACHED_CONNECTION
+        assert len(destroyed) == 1
+        assert destroyed[0]["connection"] is live_conn
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await session.execute("SELECT 1")
+    finally:
+        await cfg.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("sql_text", "expects_begin"),
+    [
+        ("SELECT 1", False),
+        ("PRAGMA user_version", False),
+        ("INSERT INTO items (id) VALUES (10)", True),
+        ("INSERT INTO items (id) VALUES (11) RETURNING id", True),
+        ("UPDATE items SET id = 12 WHERE id = 10", True),
+        ("DELETE FROM items WHERE id = 12", True),
+    ],
+)
+def test_sync_auto_begin_on_write_starts_transaction_lazily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql_text: str, expects_begin: bool
+) -> None:
+    cfg = SqliteConfig(connection_config={"database": str(tmp_path / "lazy_sync.sqlite"), "autocommit": True})
+    try:
+        with cfg.provide_session() as setup:
+            setup.execute_script("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        begins = 0
+        with cfg.provide_session() as session:
+            driver_cls = type(session)
+            orig_begin = driver_cls.begin
+
+            def tracked_begin(driver: Any) -> None:
+                nonlocal begins
+                if driver is session:
+                    begins += 1
+                orig_begin(driver)
+
+            monkeypatch.setattr(driver_cls, "begin", tracked_begin)
+            session._stmt_cache_enabled = False  # pyright: ignore[reportPrivateUsage]
+            session._auto_begin_on_write = True  # pyright: ignore[reportPrivateUsage]
+            session.execute(sql_text)
+            if expects_begin:
+                assert begins == 1
+                session.execute("INSERT INTO items (id) VALUES (99)")
+                assert begins == 1
+                session.rollback()
+            else:
+                assert begins == 0
+    finally:
+        cfg.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("sql_text", "expects_begin"),
+    [
+        ("SELECT 1", False),
+        ("PRAGMA user_version", False),
+        ("INSERT INTO items (id) VALUES (10)", True),
+        ("INSERT INTO items (id) VALUES (11) RETURNING id", True),
+        ("UPDATE items SET id = 12 WHERE id = 10", True),
+        ("DELETE FROM items WHERE id = 12", True),
+    ],
+)
+async def test_async_auto_begin_on_write_starts_transaction_lazily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql_text: str, expects_begin: bool
+) -> None:
+    cfg = AiosqliteConfig(connection_config={"database": str(tmp_path / "lazy_async.sqlite"), "autocommit": True})
+    try:
+        async with cfg.provide_session() as setup:
+            await setup.execute_script("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        begins = 0
+        async with cfg.provide_session() as session:
+            driver_cls = type(session)
+            orig_begin = driver_cls.begin
+
+            async def tracked_begin(driver: Any) -> None:
+                nonlocal begins
+                if driver is session:
+                    begins += 1
+                await orig_begin(driver)
+
+            monkeypatch.setattr(driver_cls, "begin", tracked_begin)
+            session._stmt_cache_enabled = False  # pyright: ignore[reportPrivateUsage]
+            session._auto_begin_on_write = True  # pyright: ignore[reportPrivateUsage]
+            await session.execute(sql_text)
+            if expects_begin:
+                assert begins == 1
+                await session.execute("INSERT INTO items (id) VALUES (99)")
+                assert begins == 1
+                await session.rollback()
+            else:
+                assert begins == 0
+    finally:
+        await cfg.close_pool()

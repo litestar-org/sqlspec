@@ -5,6 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,22 +13,28 @@ pytest.importorskip("starlette")
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError, TenantContextError
 from sqlspec.extensions.starlette import SQLSpecPlugin, set_request_tenant
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
+from sqlspec.extensions.starlette._utils import get_or_create_driver_session, get_state_value, set_state_value
 from sqlspec.extensions.starlette.extension import DEFAULT_SESSION_KEY
 from sqlspec.extensions.starlette.middleware import (
     SQLSpecAutocommitMiddleware,
     SQLSpecManualMiddleware,
+    _finalize_request_transaction,
+    _response_owner_key,
+    _ResponseCompletion,
     acquire_pending_connection_async,
 )
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.tenant import TenantContext
 from tests.unit.extensions._tenant_configs import AsyncRecordingStrategy, TenantAiosqliteConfig
 
@@ -36,7 +43,7 @@ if TYPE_CHECKING:
 
     from starlette.types import Message
 
-    from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.config import DatabaseConfigProtocol, LifecycleConfig
     from sqlspec.extensions.starlette._state import CommitMode
 
 
@@ -398,6 +405,9 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
             gate.set()
             if failure is None:
                 await asyncio.wait_for(task, timeout=3)
+            elif failure == "send":
+                with pytest.raises(ClientDisconnect):
+                    await asyncio.wait_for(task, timeout=3)
             else:
                 with pytest.raises((ValueError, OSError), match=f"{failure} failure"):
                     await asyncio.wait_for(task, timeout=3)
@@ -443,7 +453,7 @@ async def test_tenant_incomplete_downstream_response_rolls_back() -> None:
     middleware = SQLSpecAutocommitMiddleware(app=app, config_state=state)
     scope = {"type": "http", "app": SimpleNamespace(state=SimpleNamespace(db_pool=object()))}
     await middleware(scope, receive, send)
-    assert messages[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert messages[-1] == {"type": "http.response.body", "body": b"partial", "more_body": True}
     assert connection.rolled_back is True
     assert connection.committed is False
 
@@ -516,8 +526,25 @@ def test_starlette_deferred_tenant_session_async_and_multi_config() -> None:
     events: list[str] = []
 
     class _SessionDriver:
-        def __init__(self, connection: Any, **_kwargs: Any) -> None:
-            self.connection = connection
+        _cache_holder = None
+
+        def __init__(self, connection: Any, statement_config: Any = None, driver_features: Any = None) -> None:
+            self.connection: Any = connection
+            self.statement_config = statement_config
+            self.driver_features = driver_features or {}
+            self.observability = SimpleNamespace(is_idle=True)
+
+        def attach_observability(self, observability: Any) -> None:
+            self.observability = observability
+
+        async def commit(self) -> None:
+            await self.connection.commit()
+
+        async def rollback(self) -> None:
+            await self.connection.rollback()
+
+        def _detach_connection(self) -> None:
+            self.connection = None
 
     class _DeferredTenantConfig(AiosqliteConfig):
         driver_type: ClassVar[type[Any]] = _SessionDriver
@@ -682,3 +709,177 @@ def test_request_connection_is_checked_out_on_first_access_only(framework: str, 
         assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
     finally:
         reader.close()
+
+
+def test_starlette_session_lifecycle_events_detachment_and_response_completion() -> None:
+    """Starlette builds sessions via _prepare_driver, emits start/end, uses slotted _ResponseCompletion, keeps StreamingResponse connected, and detaches."""
+    lifecycle_events: list[tuple[str, Any]] = []
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast(
+                "LifecycleConfig",
+                {
+                    "on_session_start": [lambda ctx: lifecycle_events.append(("start", ctx["session"]))],
+                    "on_session_end": [lambda ctx: lifecycle_events.append(("end", ctx["session"]))],
+                },
+            )
+        ),
+    )
+    prepare_calls: list[Any] = []
+    original_prepare = config._prepare_driver
+
+    def _tracking_prepare(driver: Any) -> Any:
+        prepare_calls.append(driver)
+        return original_prepare(driver)
+
+    config._prepare_driver = _tracking_prepare  # type: ignore[method-assign]
+    retained_sessions: list[Any] = []
+    seen_completions: list[Any] = []
+
+    async def stream_route(request: Request) -> StreamingResponse:
+        session = await plugin.get_session_async(request)
+        assert await plugin.get_session_async(request) is session
+        retained_sessions.append(session)
+        owner = get_state_value(request.state, _response_owner_key("db_connection"))
+        seen_completions.append(owner)
+
+        async def chunks() -> "AsyncIterator[bytes]":
+            first = await session.select_value("SELECT 1")
+            yield f"{first}:".encode()
+            second = await session.select_value("SELECT 2")
+            yield f"{second}".encode()
+
+        return StreamingResponse(chunks())
+
+    app = Starlette(routes=[Route("/stream", stream_route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with TestClient(app) as client:
+        resp = client.get("/stream")
+        assert resp.status_code == 200
+        assert resp.text == "1:2"
+
+    assert len(prepare_calls) == 1
+    assert len(retained_sessions) == 1
+    session = retained_sessions[0]
+    assert lifecycle_events == [("start", session), ("end", session)]
+    assert len(seen_completions) == 1
+    assert isinstance(seen_completions[0], _ResponseCompletion)
+    assert not hasattr(seen_completions[0], "__dict__")
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        _ = session.connection.cursor
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("adapter_kind", "commit_mode", "in_tx", "expect_auto_begin", "expect_commit"),
+    [
+        ("asyncpg", "autocommit", False, True, False),
+        ("asyncpg", "autocommit", True, True, True),
+        ("asyncpg", "autocommit_include_redirect", False, True, False),
+        ("asyncpg", "manual", False, False, False),
+        ("aiosqlite", "autocommit", False, False, True),
+    ],
+)
+async def test_starlette_armed_and_unarmed_session_finalization(
+    adapter_kind: str, commit_mode: str, in_tx: bool, expect_auto_begin: bool, expect_commit: bool
+) -> None:
+    """Starlette arms _auto_begin_on_write on lazy-begin adapters and skips commit when idle outside a transaction."""
+    config: Any = (
+        AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/db"})
+        if adapter_kind == "asyncpg"
+        else AiosqliteConfig(connection_config={"database": ":memory:"})
+    )
+    state = _make_state(config, cast("CommitMode", commit_mode))
+    request = _make_request()
+    tx = AsyncMock()
+    if adapter_kind == "asyncpg":
+        conn: Any = AsyncMock(is_in_transaction=MagicMock(return_value=in_tx))
+    else:
+        conn = AsyncMock(_conn=None, autocommit=False, in_transaction=in_tx)
+    set_state_value(request.state, state.connection_key, conn)
+
+    session = get_or_create_driver_session(request, state)
+    assert session._auto_begin_on_write is expect_auto_begin
+    if adapter_kind == "asyncpg":
+        session._transaction = tx
+
+    if commit_mode != "manual":
+        await _finalize_request_transaction(request, state, conn, commit=True)
+
+    committed = (tx.commit.await_count > 0) if adapter_kind == "asyncpg" else (conn.commit.await_count > 0)
+    assert committed is expect_commit
+
+
+@pytest.mark.anyio
+async def test_starlette_autocommit_dispatch_rolls_back_on_cancellation() -> None:
+    """SQLSpecAutocommitMiddleware.dispatch rolls back the connection on asyncio.CancelledError."""
+    conn = AsyncMock(_conn=None, autocommit=False, in_transaction=True)
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    config.provide_connection = MagicMock(return_value=_AsyncConnCtx(conn))  # type: ignore[method-assign]
+    state = _make_state(config, "autocommit")
+    middleware = SQLSpecAutocommitMiddleware(lambda scope, receive, send: None, state)
+    request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace(**{state.pool_key: object()}))})
+
+    async def cancelled_call_next(req: Request) -> Response:
+        await acquire_pending_connection_async(req, state)
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware.dispatch(request, cancelled_call_next)
+
+    conn.rollback.assert_awaited_once()
+    conn.commit.assert_not_awaited()
+
+
+class _AsyncConnCtx:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("use_deferred", [False, True])
+def test_starlette_async_lifecycle_hooks_execute_on_async_and_deferred_sessions(
+    use_deferred: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Starlette awaits async on_session_start and on_session_end hooks across async and deferred sessions."""
+    events: list[str] = []
+
+    async def _on_start(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("start")
+
+    async def _on_end(_ctx: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        events.append("end")
+
+    config = AiosqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"starlette": {"commit_mode": "autocommit"}},
+        observability_config=ObservabilityConfig(
+            lifecycle=cast("LifecycleConfig", {"on_session_start": [_on_start], "on_session_end": [_on_end]})
+        ),
+    )
+
+    async def route(request: Request) -> JSONResponse:
+        session = plugin.get_session(request) if use_deferred else await plugin.get_session_async(request)
+        value = await session.select_value("SELECT 1")
+        return JSONResponse({"value": value})
+
+    app = Starlette(routes=[Route("/items", route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.get("/items")
+        assert response.status_code == 200
+        assert response.json() == {"value": 1}
+
+    assert events == ["start", "end"]
+    assert "Async lifecycle hook invoked on sync path" not in caplog.text

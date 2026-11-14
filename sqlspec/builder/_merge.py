@@ -4,6 +4,7 @@ Provides a fluent interface for building SQL MERGE queries with
 parameter binding and validation.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -11,17 +12,22 @@ from itertools import starmap
 from typing import TYPE_CHECKING, Any, Final, Self, cast
 from uuid import UUID
 
+import sqlglot
 from mypy_extensions import trait
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import (
     _coerce_column,
+    _normalize_dialect,
+    _parse_alias_identifier,
     _parse_table_reference,
     resolve_value_expression,
     unwrap_expression_source,
 )
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
@@ -73,6 +79,17 @@ _DB2_TYPE_DISPATCHER.register(dict, "CLOB")
 _DB2_TYPE_DISPATCHER.register(list, "CLOB")
 _DB2_TYPE_DISPATCHER.register(UUID, "VARCHAR(36)")
 
+_SIMPLE_JSON_STEP_RE: Final["re.Pattern[str]"] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_FORBIDDEN_MERGE_CONDITION_NODES: Final[tuple[type[exp.Expr], ...]] = (
+    exp.Block,
+    exp.Command,
+    exp.DDL,
+    exp.DML,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+)
+
 
 @trait
 class _MergeAssignmentMixin:
@@ -116,6 +133,9 @@ class MergeIntoClauseMixin:
             cast("QueryBuilder", self)._merge_target_quoted = any(  # pyright: ignore[reportPrivateUsage]
                 part.meta.get("sqlspec_explicit_table_quote") for part in table_expr.parts
             )
+        elif alias is not None:
+            alias_ident = _parse_alias_identifier(alias)
+            table_expr = exp.alias_(table, alias_ident, table=True)
         else:
             table_expr = table
 
@@ -135,6 +155,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         builder = cast("QueryBuilder", self)
         is_teradata = builder.dialect_name == "vantage"
+        if alias is not None:
+            _parse_alias_identifier(alias)
         source_expr: exp.Expr
         unwrapped_source = unwrap_expression_source(source, builder=cast("SQLBuilderProtocol", self))
         if isinstance(source, str):
@@ -142,7 +164,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         elif isinstance(source, (dict, list)):
             paren_expr = self._create_dict_source_expression(source, alias)
             if alias and isinstance(paren_expr, exp.Paren):
-                source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
+                source_expr = exp.Subquery(this=paren_expr.this, alias=_parse_alias_identifier(alias))
             else:
                 source_expr = paren_expr
         elif isinstance(source, QueryBuilder):
@@ -150,41 +172,40 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             subquery_expression_source = builder._embed_subquery(source, alias_hint=effective_alias or "using_src")
             if isinstance(subquery_expression_source, exp.Subquery):
                 if alias:
-                    source_expr = subquery_expression_source.copy()
-                    source_expr.set("alias", exp.to_identifier(alias))
+                    subquery_expression_source.set("alias", _parse_alias_identifier(alias))
                 elif effective_alias and not subquery_expression_source.alias:
-                    source_expr = subquery_expression_source.copy()
-                    source_expr.set("alias", exp.to_identifier(effective_alias))
-                else:
-                    source_expr = subquery_expression_source
+                    subquery_expression_source.set("alias", _parse_alias_identifier(effective_alias))
+                source_expr = subquery_expression_source
             elif effective_alias:
-                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(effective_alias))
+                source_expr = exp.Subquery(
+                    this=subquery_expression_source, alias=_parse_alias_identifier(effective_alias)
+                )
             else:
-                source_expr = exp.paren(subquery_expression_source)
+                source_expr = exp.paren(subquery_expression_source, copy=False)
         elif unwrapped_source is not None:
             effective_alias = alias or ("src" if is_teradata else None)
-            if isinstance(unwrapped_source, (exp.Select, exp.SetOperation)):
+            source_copy = unwrapped_source.copy() if isinstance(source, exp.Expr) else unwrapped_source
+            if isinstance(source_copy, (exp.Select, exp.SetOperation)):
                 source_expr = (
-                    exp.Subquery(this=unwrapped_source, alias=exp.to_identifier(effective_alias))
+                    exp.Subquery(this=source_copy, alias=_parse_alias_identifier(effective_alias))
                     if effective_alias
-                    else exp.paren(unwrapped_source)
+                    else exp.paren(source_copy, copy=False)
                 )
-            elif isinstance(unwrapped_source, exp.Paren) and (
-                alias or (is_teradata and isinstance(unwrapped_source.this, (exp.Select, exp.SetOperation)))
+            elif isinstance(source_copy, exp.Paren) and (
+                alias or (is_teradata and isinstance(source_copy.this, (exp.Select, exp.SetOperation)))
             ):
-                inner = unwrapped_source.this
-                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(effective_alias or "src"))
-            elif isinstance(unwrapped_source, exp.Subquery):
+                inner = source_copy.this
+                source_expr = exp.Subquery(this=inner, alias=_parse_alias_identifier(effective_alias or "src"))
+            elif isinstance(source_copy, exp.Subquery):
                 if alias:
-                    source_expr = unwrapped_source.copy()
-                    source_expr.set("alias", exp.to_identifier(alias))
-                elif is_teradata and not unwrapped_source.alias:
-                    source_expr = unwrapped_source.copy()
-                    source_expr.set("alias", exp.to_identifier("src"))
-                else:
-                    source_expr = unwrapped_source
+                    source_copy.set("alias", _parse_alias_identifier(alias))
+                elif is_teradata and not source_copy.alias:
+                    source_copy.set("alias", exp.to_identifier("src"))
+                source_expr = source_copy
             else:
-                source_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
+                source_expr = (
+                    exp.alias_(source_copy, _parse_alias_identifier(alias), copy=False) if alias else source_copy
+                )
         else:
             msg = f"Unsupported source type for USING clause: {type(source)}"
             raise SQLBuilderError(msg)
@@ -210,20 +231,46 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         Returns:
             Expression for USING clause
         """
-        data: list[dict[str, Any]]
+        raw_rows: list[Any]
         is_list: bool
         if isinstance(source, list):
-            data = source
+            raw_rows = source
             is_list = True
         else:
-            data = [source]
+            raw_rows = [source]
             is_list = False
 
-        if not data:
+        if not raw_rows:
             msg = "Cannot create USING clause from empty list"
             raise SQLBuilderError(msg)
 
-        columns = list(data[0].keys())
+        for index, record in enumerate(raw_rows):
+            if not isinstance(record, Mapping) or not record:
+                msg = f"MERGE USING row {index} must be a non-empty mapping."
+                raise SQLBuilderError(msg)
+            for key in record:
+                if not isinstance(key, str) or not key.strip() or "\x00" in key:
+                    msg = f"Invalid column key {key!r} in MERGE USING row {index}."
+                    raise SQLBuilderError(msg)
+
+        columns: list[str] = []
+        seen_columns: set[str] = set()
+        for record in raw_rows:
+            for key in record:
+                if key not in seen_columns:
+                    seen_columns.add(key)
+                    columns.append(key)
+        column_tuple = tuple(columns)
+        differs = False
+        for record in raw_rows:
+            if tuple(record.keys()) != column_tuple:
+                differs = True
+                break
+        data: list[dict[str, Any]] = (
+            [{col: record.get(col) for col in columns} for record in raw_rows]
+            if differs
+            else [dict(record) for record in raw_rows]
+        )
         builder = cast("QueryBuilder", self)
         dialect = builder.dialect_name
 
@@ -295,7 +342,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         )
 
         parsed = exp.Select(
-            expressions=[exp.column(column) for column in columns], from_=exp.From(this=recordset_table)
+            expressions=[exp.column(column, copy=False) for column in columns], from_=exp.From(this=recordset_table)
         )
         return exp.Subquery(
             this=parsed,
@@ -314,7 +361,14 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         sample_values: dict[str, Any] = {}
         for record in data:
             for column, value in record.items():
-                if value is not None and column not in sample_values:
+                if value is None:
+                    continue
+                existing = sample_values.get(column)
+                if existing is None or (
+                    _ORACLE_TYPE_DISPATCHER.get(existing) is None
+                    and _ORACLE_TYPE_DISPATCHER.get(value) is None
+                    and len(str(value)) > len(str(existing))
+                ):
                     sample_values[column] = value
 
         alias_name = alias or "src"
@@ -329,14 +383,16 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                             kind=exp.DataType.build(
                                 self._infer_oracle_type(sample_values.get(column)), dialect="oracle"
                             ),
-                            path=exp.Literal.string(f"$.{column}"),
+                            path=exp.Literal.string(_format_oracle_json_path(column)),
                         )
                         for column in columns
                     ]
                 ),
             )
         )
-        parsed = exp.Select(expressions=[exp.column(column) for column in columns], from_=exp.From(this=json_table))
+        parsed = exp.Select(
+            expressions=[exp.column(column, copy=False) for column in columns], from_=exp.From(this=json_table)
+        )
         return exp.Subquery(this=parsed, alias=exp.TableAlias(this=exp.to_identifier(alias_name)))
 
     def _infer_postgres_type(self, value: "Any") -> str:
@@ -465,7 +521,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                         value = bytes(value)
                     placeholder, _ = builder.create_placeholder(value, leaf)
                     resolved = exp.Cast(this=placeholder, to=column_types[column].copy())
-                projections.append(exp.alias_(resolved, column))
+                projections.append(exp.alias_(resolved, column, copy=False))
             branch = exp.Select(expressions=projections)
             if len(rows) > 1:
                 branch.set("from_", exp.From(this=_teradata_single_row_table()))
@@ -502,7 +558,12 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         sample_values: dict[str, Any] = {}
         for record in rows:
             for column, value in record.items():
-                if value is not None and column not in sample_values:
+                if value is None:
+                    continue
+                existing = sample_values.get(column)
+                if existing is None or (
+                    isinstance(existing, str) and isinstance(value, str) and len(value) > len(existing)
+                ):
                     sample_values[column] = value
         column_types = {
             column: exp.DataType.build(self._infer_db2_type(sample_values.get(column)), dialect="db2")
@@ -519,11 +580,11 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                 column_name = str(column).split(".")[-1]
                 resolved = resolve_value_expression(value, self, column_name)
                 if resolved is not None:
-                    select_items.append(exp.alias_(resolved, column))
+                    select_items.append(exp.alias_(resolved, column, copy=False))
                     continue
                 placeholder, _ = builder.create_placeholder(value, column_name)
                 cast_expr = exp.Cast(this=placeholder, to=column_types[column].copy())
-                select_items.append(exp.alias_(cast_expr, column))
+                select_items.append(exp.alias_(cast_expr, column, copy=False))
             select_expr = exp.Select(expressions=select_items)
             source_expr = (
                 select_expr
@@ -539,7 +600,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     this=exp.to_identifier(alias), columns=[exp.to_identifier(column) for column in columns]
                 ),
             )
-        return exp.paren(query)
+        return exp.paren(query, copy=False)
 
     def _create_select_union_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
@@ -566,7 +627,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             for row_params in parameterized_values:
                 select_expr = exp.Select()
                 select_expr.set(
-                    "expressions", [exp.alias_(row_params[index], column) for index, column in enumerate(columns)]
+                    "expressions",
+                    [exp.alias_(row_params[index], column, copy=False) for index, column in enumerate(columns)],
                 )
                 union_selects.append(select_expr)
 
@@ -579,14 +641,15 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     union_expr = exp.Union(this=union_expr, expression=select, distinct=False)
                 source_expr = union_expr
 
-            return exp.paren(source_expr)
+            return exp.paren(source_expr, copy=False)
 
         select_expr = exp.Select()
         select_expr.set(
-            "expressions", [exp.alias_(parameterized_values[0][index], column) for index, column in enumerate(columns)]
+            "expressions",
+            [exp.alias_(parameterized_values[0][index], column, copy=False) for index, column in enumerate(columns)],
         )
 
-        return exp.paren(select_expr)
+        return exp.paren(select_expr, copy=False)
 
 
 @trait
@@ -602,7 +665,7 @@ class MergeOnClauseMixin:
         current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
         condition_expr = _parse_merge_condition(cast("SQLBuilderProtocol", self), condition, "ON condition", "ON")
 
-        current_expr.set("on", exp.paren(condition_expr))
+        current_expr.set("on", exp.paren(condition_expr, copy=isinstance(condition, exp.Expr)))
         return self
 
 
@@ -698,7 +761,8 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                     except AttributeError:
                         using_alias = None
                 column_values = [
-                    exp.column(col, table=using_alias) if using_alias else exp.column(col) for col in column_names
+                    exp.column(col, table=using_alias, copy=False) if using_alias else exp.column(col, copy=False)
+                    for col in column_names
                 ]
             else:
                 column_values = list(values)
@@ -706,7 +770,7 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                     msg = "Number of columns must match number of values for MERGE insert"
                     raise SQLBuilderError(msg)
 
-        insert_columns = [exp.column(name) for name in column_names]
+        insert_columns = [_coerce_column(name) for name in column_names]
 
         insert_values: list[exp.Expr] = []
         for column_name, value in zip(column_names, column_values, strict=True):
@@ -909,6 +973,14 @@ def _ensure_merge_expression(builder: "SQLBuilderProtocol") -> exp.Merge:
     return expression
 
 
+def _format_oracle_json_path(column: str) -> str:
+    """Format a column name as an Oracle JSON path step."""
+    if _SIMPLE_JSON_STEP_RE.fullmatch(column):
+        return f"$.{column}"
+    escaped = column.replace("\\", "\\\\").replace('"', '\\"')
+    return f'$."{escaped}"'
+
+
 def _parse_merge_condition(
     builder: "SQLBuilderProtocol", condition: "str | exp.Expr", condition_label: str, clause_label: str
 ) -> exp.Expr:
@@ -918,12 +990,38 @@ def _parse_merge_condition(
         SQLBuilderError: If a condition string cannot be parsed or the condition type is unsupported.
     """
     if isinstance(condition, str):
-        parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
-        if parsed_condition is None:
+        dialect_name = _normalize_dialect(builder.dialect)
+        if (
+            not condition.strip()
+            or "\x00" in condition
+            or contains_statement_terminator(condition, dialect=dialect_name)
+        ):
+            msg = f"Could not parse {condition_label}: {condition}"
+            raise SQLBuilderError(msg)
+        try:
+            statements = sqlglot.parse(condition, read=dialect_name)
+        except SqlglotError as exc:
+            msg = f"Could not parse {condition_label}: {condition}"
+            raise SQLBuilderError(msg) from exc
+        if len(statements) != 1 or statements[0] is None:
+            msg = f"Could not parse {condition_label}: {condition}"
+            raise SQLBuilderError(msg)
+        parsed_condition = statements[0]
+        if (
+            isinstance(parsed_condition, _FORBIDDEN_MERGE_CONDITION_NODES)
+            or parsed_condition.find(*_FORBIDDEN_MERGE_CONDITION_NODES) is not None
+            or not isinstance(parsed_condition, (exp.Condition, exp.Paren))
+        ):
             msg = f"Could not parse {condition_label}: {condition}"
             raise SQLBuilderError(msg)
         return parsed_condition
     if isinstance(condition, exp.Expr):
+        if (
+            isinstance(condition, _FORBIDDEN_MERGE_CONDITION_NODES)
+            or condition.find(*_FORBIDDEN_MERGE_CONDITION_NODES) is not None
+        ):
+            msg = f"Unsupported condition expression for {clause_label} clause: {type(condition)}"
+            raise SQLBuilderError(msg)
         return condition
     msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
     raise SQLBuilderError(msg)
@@ -932,6 +1030,6 @@ def _parse_merge_condition(
 def _teradata_single_row_table() -> exp.Expr:
     """Return a one-row derived table for Teradata set-operation branches."""
     return exp.Subquery(
-        this=exp.Select(expressions=[exp.alias_(exp.Literal.number(1), "sqlspec_one")]),
+        this=exp.Select(expressions=[exp.alias_(exp.Literal.number(1), "sqlspec_one", copy=False)]),
         alias=exp.TableAlias(this=exp.to_identifier("sqlspec_row")),
     )

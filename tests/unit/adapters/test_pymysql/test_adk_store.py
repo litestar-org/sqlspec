@@ -1,13 +1,17 @@
 """Unit tests for PyMySQL ADK store extension configuration."""
 
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.adk import PyMysqlADKConfig, PyMysqlADKMemoryStore, PyMysqlADKStore
+from sqlspec.adapters.pymysql.adk.store import _is_mysql_table_missing
+from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
 from sqlspec.config import ADKConfig
+from sqlspec.extensions.adk import StoredEvent
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -21,8 +25,6 @@ class _MysqlMissingTableError(Exception):
 
 
 def test_pymysql_table_missing_uses_errno_attribute() -> None:
-    from sqlspec.adapters.pymysql.adk.store import _is_mysql_table_missing
-
     assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
 
 
@@ -214,8 +216,6 @@ def test_pymysql_list_sessions_rejects_invalid_options(options: "dict[str, Any]"
 
 def test_pymysql_adk_memory_store_insert_and_search_json_handling() -> None:
     """PyMysqlADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
-    from datetime import datetime
-
     cursor = MagicMock()
     cursor.rowcount = 1
     now = datetime.now(tz=UTC)
@@ -286,8 +286,6 @@ def test_pymysql_adk_memory_store_insert_and_search_json_handling() -> None:
 
 def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
     """PyMysqlStreamSource.start() closes the cursor if execute() fails."""
-    from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
-
     cursor = MagicMock()
     cursor.execute.side_effect = RuntimeError("execute boom")
     connection = MagicMock()
@@ -305,9 +303,7 @@ def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
 
 def test_pymysql_adk_memory_store_missing_table_returns_empty_or_zero() -> None:
     """_search_entries and deletes return empty/0 when table is missing (errno 1146)."""
-    from pymysql.err import MySQLError
-
-    missing_err = MySQLError(1146, "Table 'test.mem' doesn't exist")
+    missing_err = PyMysqlMySQLError(1146, "Table 'test.mem' doesn't exist")
 
     cursor = MagicMock()
     cursor.execute.side_effect = missing_err
@@ -458,3 +454,204 @@ def test_pymysql_companions_propagate_failure_and_retry() -> None:
         "CREATE INDEX idx_e_app_timestamp ON `app`.`e` (app_name, timestamp ASC)",
     ]
     retry_driver.commit.assert_not_called()
+
+
+def _make_pymysql_scoping_mocks(
+    *, rowcount: int = 1, session_row: tuple[Any, ...] | None = None
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    cursor = MagicMock()
+    cursor.rowcount = rowcount
+    cursor.fetchone.return_value = session_row
+    cursor.fetchall.return_value = []
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    return config, conn, cursor
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond"),
+        pytest.param(30, True, id="positive"),
+    ],
+)
+def test_pymysql_get_session_renews_only_for_positive_duration(
+    renew_for: "int | timedelta | None", expect_update: bool
+) -> None:
+    """get_session executes an UPDATE only when renew_for is positive."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config, conn, cursor = _make_pymysql_scoping_mocks(session_row=("s1", "app", "u1", "{}", now, now))
+    store = PyMysqlADKStore(config)
+
+    result = store.get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert result is not None
+    executed_sqls = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert any(sql.startswith("UPDATE adk_session") for sql in executed_sqls) is expect_update
+    assert conn.commit.call_count == (1 if expect_update else 0)
+
+
+@pytest.mark.parametrize(
+    ("rowcount", "expect_succeed"),
+    [pytest.param(1, True, id="owner-found"), pytest.param(0, False, id="owner-missing")],
+)
+def test_pymysql_append_event_enforces_session_ownership(rowcount: int, expect_succeed: bool) -> None:
+    """append_event selects from adk_session by (id, app_name, user_id) and raises ValueError when 0 rows match."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config, conn, cursor = _make_pymysql_scoping_mocks(rowcount=rowcount)
+    store = PyMysqlADKStore(config)
+    event = StoredEvent(
+        id="evt-1",
+        app_name="app-a",
+        user_id="user-1",
+        session_id="sess-1",
+        invocation_id="inv-1",
+        timestamp=now,
+        event_data={"msg": "hi"},
+    )
+
+    if expect_succeed:
+        store.append_event(event)
+        conn.commit.assert_called_once()
+        conn.rollback.assert_not_called()
+    else:
+        with pytest.raises(ValueError, match="not found"):
+            store.append_event(event)
+        conn.commit.assert_not_called()
+        conn.rollback.assert_called_once()
+
+    sql, params = cursor.execute.call_args_list[0].args
+    assert "FROM adk_session WHERE id = %s AND app_name = %s AND user_id = %s" in _normalized(sql)
+    assert params[-3:] == ("sess-1", "app-a", "user-1")
+
+
+@pytest.mark.parametrize(
+    ("record_app", "record_user", "record_session"),
+    [
+        pytest.param("other-app", "user-1", "sess-1", id="app-mismatch"),
+        pytest.param("app-a", "other-user", "sess-1", id="user-mismatch"),
+        pytest.param("app-a", "user-1", "other-sess", id="session-mismatch"),
+    ],
+)
+def test_pymysql_append_event_and_update_state_rejects_mismatched_record(
+    record_app: str, record_user: str, record_session: str
+) -> None:
+    """Mismatched event_record identifiers fail before executing any SQL statement."""
+    config, _conn, cursor = _make_pymysql_scoping_mocks()
+    store = PyMysqlADKStore(config)
+    event = StoredEvent(
+        id="evt-1",
+        app_name=record_app,
+        user_id=record_user,
+        session_id=record_session,
+        invocation_id="inv-1",
+        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        event_data={},
+    )
+
+    with pytest.raises(ValueError, match="event_record scope"):
+        store.append_event_and_update_state(event, "app-a", "user-1", "sess-1", {})
+
+    cursor.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("rowcount", "expect_succeed"),
+    [pytest.param(1, True, id="session-updated"), pytest.param(0, False, id="session-missing")],
+)
+def test_pymysql_append_event_and_update_state_updates_session_before_insert(
+    rowcount: int, expect_succeed: bool
+) -> None:
+    """Session UPDATE runs before event INSERT; missing session raises ValueError without inserting."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    session_row = ("sess-1", "app-a", "user-1", '{"k": 1}', now, now) if expect_succeed else None
+    config, conn, cursor = _make_pymysql_scoping_mocks(rowcount=rowcount, session_row=session_row)
+    store = PyMysqlADKStore(config)
+    event = StoredEvent(
+        id="evt-1",
+        app_name="app-a",
+        user_id="user-1",
+        session_id="sess-1",
+        invocation_id="inv-1",
+        timestamp=now,
+        event_data={"k": 1},
+    )
+
+    if expect_succeed:
+        updated = store.append_event_and_update_state(event, "app-a", "user-1", "sess-1", {"k": 1})
+        assert updated["id"] == "sess-1"
+        executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+        assert executed[0].startswith("UPDATE adk_session")
+        assert executed[1].startswith("SELECT id, app_name, user_id, state")
+        assert executed[2].startswith("INSERT INTO adk_event")
+        conn.commit.assert_called_once()
+    else:
+        with pytest.raises(ValueError, match="not found"):
+            store.append_event_and_update_state(event, "app-a", "user-1", "sess-1", {"k": 1})
+        executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+        assert executed == [
+            (
+                "UPDATE adk_session SET state = %s, update_time = UTC_TIMESTAMP(6) "
+                "WHERE app_name = %s AND user_id = %s AND id = %s"
+            )
+        ]
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+def test_pymysql_get_events_joins_session_on_three_columns() -> None:
+    """get_events joins adk_event to adk_session on (session_id, app_name, user_id)."""
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    config, _conn, cursor = _make_pymysql_scoping_mocks()
+    store = PyMysqlADKStore(config)
+
+    store.get_events("app-a", "user-1", "sess-1", after_timestamp=cutoff, limit=5)
+
+    sql, params = cursor.execute.call_args_list[0].args
+    assert _normalized(sql) == (
+        "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data "
+        "FROM adk_event e JOIN adk_session s "
+        "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+        "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s AND e.timestamp > %s "
+        "ORDER BY e.timestamp ASC LIMIT %s"
+    )
+    assert params == ("app-a", "user-1", "sess-1", cutoff, 5)
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(None, None, "session_id = %s", ("sess-1",), id="session-only"),
+        pytest.param("app-a", None, "session_id = %s AND app_name = %s", ("sess-1", "app-a"), id="app-scoped"),
+        pytest.param(
+            "app-a",
+            "user-1",
+            "session_id = %s AND app_name = %s AND user_id = %s",
+            ("sess-1", "app-a", "user-1"),
+            id="app-user-scoped",
+        ),
+    ],
+)
+def test_pymysql_delete_entries_by_session_scopes_predicates(
+    app_name: "str | None", user_id: "str | None", expected_where: str, expected_params: tuple[str, ...]
+) -> None:
+    """delete_entries_by_session appends app_name and user_id predicates when provided."""
+    config, _conn, cursor = _make_pymysql_scoping_mocks(rowcount=2)
+    memory_store = PyMysqlADKMemoryStore(config)
+
+    deleted = memory_store.delete_entries_by_session("sess-1", app_name=app_name, user_id=user_id)
+
+    assert deleted == 2
+    sql, params = cursor.execute.call_args_list[0].args
+    assert _normalized(sql) == f"DELETE FROM adk_memory WHERE {expected_where}"
+    assert params == expected_params
+    memory_ddl = memory_store._memory_table_ddl()
+    assert "UNIQUE KEY idx_adk_memory_app_user_event (app_name, user_id, event_id)" in memory_ddl
+    assert "NOT NULL UNIQUE" not in memory_ddl

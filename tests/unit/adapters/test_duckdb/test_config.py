@@ -1,10 +1,12 @@
 """DuckDB configuration tests covering statement config builders."""
 
+from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
 from uuid import UUID
 
 import duckdb
+import pytest
 
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
@@ -21,6 +23,8 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -247,3 +251,87 @@ def test_version_tuple_parsing() -> None:
     assert _parse_duckdb_version("2.0.0rc1") == (2, 0, 0)
     assert _parse_duckdb_version("v0.9.2") == (0, 9, 2)
     assert duckdb_version_tuple() >= (0, 0, 0)
+
+
+def test_duckdb_replica_paths_reject_writer_file_and_memory(tmp_path) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    database = str(tmp_path / "writer.duckdb")
+    for replica in (True, database, ":memory:"):
+        with pytest.raises(ImproperConfigurationError):
+            DuckDBConfig(connection_config={"database": database}, replicas=replica)
+    primary = DuckDBConfig(connection_config={"database": database}, replicas=str(tmp_path / "snapshot.duckdb"))
+    reader = primary.replica_groups["default"].configs[0]
+    assert reader.connection_config["read_only"] is True
+    assert primary.connection_config.get("read_only", False) is False
+    shared_reader = DuckDBConfig(connection_config={"database": database, "read_only": True}, replicas=database)
+    assert shared_reader.replica_groups["default"].configs[0].connection_config["read_only"] is True
+
+
+def test_duckdb_snapshot_reader_enforces_native_read_only(tmp_path) -> None:
+    from sqlspec.exceptions import ReadOnlyTransactionError
+
+    snapshot_path = str(tmp_path / "snapshot.duckdb")
+    snapshot = DuckDBConfig(connection_config={"database": snapshot_path})
+    with snapshot.provide_session() as session:
+        session.execute("CREATE TABLE entries (id INTEGER)")
+        session.execute("INSERT INTO entries VALUES (1)")
+    snapshot.close_pool()
+    primary = DuckDBConfig(connection_config={"database": str(tmp_path / "writer.duckdb")}, replicas=snapshot_path)
+    with primary.provide_read_session() as reader:
+        assert reader.select_value("SELECT COUNT(*) FROM entries") == 1
+        with pytest.raises(ReadOnlyTransactionError):
+            reader.execute("INSERT INTO entries VALUES (2)")
+    primary.close_pool()
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
+def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) -> None:
+    """DuckDB provide_session rolls back uncommitted work and detaches the driver on clean and error exit."""
+    config = DuckDBConfig(connection_config={"database": ":memory:session_rollback_test"})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE IF NOT EXISTS items (id INTEGER); DELETE FROM items;")
+        if body_raises:
+            with pytest.raises(ValueError, match="abort"), config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+                raise ValueError("abort")
+        else:
+            with config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()
+
+
+def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean-exit rollback failure forwards error metadata to pool release, detaches the driver, and avoids commit."""
+    db_file = tmp_path / "failed_rollback.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_file)})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE items (id INTEGER)")
+
+        def fail_rollback(_self: DuckDBDriver) -> None:
+            raise RuntimeError("duckdb rollback failed")
+
+        monkeypatch.setattr(DuckDBDriver, "rollback", fail_rollback)
+        with pytest.raises(RuntimeError, match="duckdb rollback failed"), config.provide_session() as session:
+            session.begin()
+            session.execute("INSERT INTO items VALUES (42)")
+
+        assert session.connection is _DETACHED_CONNECTION
+        assert config.provide_pool().size() == 0
+        monkeypatch.undo()
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()

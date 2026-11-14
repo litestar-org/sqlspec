@@ -1,7 +1,7 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast, overload
 
@@ -11,7 +11,9 @@ import sqlspec.adapters.asyncpg._typing as _asyncpg_typing
 from sqlspec.adapters.asyncpg._typing import (
     AsyncpgConnection,
     AsyncpgCursor,
+    AsyncpgInterfaceError,
     AsyncpgPool,
+    AsyncpgPostgresError,
     AsyncpgPreparedStatement,
     AsyncpgSessionContext,
     asyncpg_connect,
@@ -26,6 +28,7 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgRecord as Record
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
@@ -85,6 +88,24 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
 _CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
 _ALLOYDB_URI_PARTS: Final[int] = 8
 _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME: Final[float] = 1800.0
+_ASYNCPG_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
+    "dsn",
+    "conninfo",
+    "url",
+    "connection_string",
+    "host",
+    "port",
+    "user",
+    "username",
+    "password",
+    "passfile",
+    "database",
+    "dbname",
+    "db",
+    "service",
+    "servicefile",
+    "target_session_attrs",
+)
 
 logger = get_logger(__name__)
 
@@ -98,10 +119,10 @@ class AsyncpgConnectionConfig(TypedDict):
 
     dsn: NotRequired[str]
     """PostgreSQL connection URI (``postgresql://user:pass@host:port/dbname``)."""
-    host: NotRequired[str]
-    """Database server hostname or Unix domain socket directory."""
-    port: NotRequired[int]
-    """Database server TCP port (defaults to ``5432``)."""
+    host: NotRequired[str | Sequence[str]]
+    """Database hostname, socket directory, or sequence of failover hosts."""
+    port: NotRequired[int | Sequence[int]]
+    """Server port or sequence of ports matching the hosts (defaults to ``5432``)."""
     user: NotRequired[str]
     """PostgreSQL role name used for authentication."""
     password: NotRequired[str]
@@ -285,11 +306,23 @@ class _AsyncpgAlloydbConnector:
 class _AsyncpgSessionFactory(AsyncPoolSessionFactory):
     __slots__ = ()
 
+    async def acquire_connection(self) -> AsyncpgConnection:
+        try:
+            return cast("AsyncpgConnection", await super().acquire_connection())
+        except (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class AsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AsyncPG connections."""
 
     __slots__ = ()
+
+    async def __aenter__(self) -> AsyncpgConnection:
+        try:
+            return cast("AsyncpgConnection", await super().__aenter__())
+        except (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -503,9 +536,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             prepare_driver=self._prepare_driver,
         )
 
-    def _default_runtime_statement_config(self) -> "StatementConfig":
-        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
-
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AsyncPG types.
 
@@ -555,9 +585,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         else:
             conn_cfg.pop("server_settings", None)
         if isinstance(direct_dsn, str):
+            for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
+                conn_cfg.pop(key, None)
             conn_cfg["dsn"] = direct_dsn
         elif isinstance(direct_dsn, Mapping):
-            conn_cfg.update(build_connection_config(direct_dsn))
+            normalized_direct = build_connection_config(direct_dsn)
+            if "dsn" in normalized_direct:
+                for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
+                    conn_cfg.pop(key, None)
+            conn_cfg.update(normalized_direct)
         features: dict[str, Any] = dict(self.driver_features)
         features["pooler_mode"] = "session"
         features["direct_dsn"] = None
@@ -573,6 +609,50 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             extension_config=cast("ExtensionConfigs", dict(self.extension_config)),
             observability_config=self.observability_config,
         )
+
+    def _default_runtime_statement_config(self) -> "StatementConfig":
+        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_statement_cache_size and "statement_cache_size" not in overrides:
+            config.pop("statement_cache_size", None)
+        if "server_settings" not in overrides:
+            if self._explicit_server_settings is None:
+                config.pop("server_settings", None)
+            else:
+                config["server_settings"] = dict(self._explicit_server_settings)
+        aliases = ("dsn", "url", "conninfo", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS:
+                config.pop(key, None)
+            config.update({
+                key: value
+                for key, value in overrides.items()
+                if key in _ASYNCPG_ENDPOINT_IDENTITY_KEYS and key not in aliases
+            })
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        if "database" not in overrides and ("dbname" in overrides or "db" in overrides):
+            config["database"] = overrides.get("dbname", overrides.get("db"))
+        config.pop("dbname", None)
+        config.pop("db", None)
+        if "user" not in overrides and "username" in overrides:
+            config["user"] = overrides["username"]
+        config.pop("username", None)
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            endpoint = spec_input.strip()
+            if not endpoint:
+                msg = "AsyncpgConfig replica endpoint must not be empty"
+                raise ImproperConfigurationError(msg)
+            key = "dsn" if ("://" in endpoint or "=" in endpoint) else "host"
+            return {"connection_config_overrides": {key: endpoint}}
+        return super()._build_replica_spec_overrides(spec_input)
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
@@ -708,7 +788,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         try:
             return await asyncpg_create_pool(**config)
-        except BaseException:
+        except BaseException as exc:
             if self._cloud_sql_connector is not None:
                 with suppress(Exception):
                     await self._cloud_sql_connector.close_async()
@@ -717,6 +797,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 with suppress(Exception):
                     await self._alloydb_connector.close()
                 self._alloydb_connector = None
+            if isinstance(exc, (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError)):
+                raise create_mapped_exception(exc) from exc
             raise
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:

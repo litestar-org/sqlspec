@@ -147,3 +147,37 @@ async def test_litestar_delete_operations_commit_and_count(monkeypatch: pytest.M
     assert await store.delete_expired() == 3
     driver.execute.assert_called_with("DELETE FROM litestar_session WHERE expires_at <= CURRENT_TIMESTAMP()")
     assert driver.commit.call_count == 3
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_litestar_get_renews_only_for_positive_duration(
+    monkeypatch: pytest.MonkeyPatch, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    config, driver = store_config(monkeypatch)
+    driver.select_one_or_none.return_value = {
+        "data": b"payload",
+        "expires_at": datetime.now(UTC) + timedelta(seconds=60),
+    }
+
+    assert await SnowflakeStore(config).get("sid", renew_for=renew_for) == b"payload"
+
+    if expect_renew:
+        driver.execute.assert_called_once()
+        sql, parameters = driver.execute.call_args.args
+        assert sql == "UPDATE litestar_session SET expires_at = ? WHERE session_id = ?"
+        assert parameters[1] == "sid"
+        assert parameters[0] > datetime.now(UTC) - timedelta(seconds=2)
+        driver.commit.assert_called_once_with()
+    else:
+        driver.execute.assert_not_called()
+        driver.commit.assert_not_called()

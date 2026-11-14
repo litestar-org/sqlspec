@@ -46,72 +46,14 @@ def teradata_datatype_sql(gen: generator.Generator, expression: exp.DataType) ->
     return f"{rendered} COLLATE {collate}" if collate else rendered
 
 
-def _strip_order_table_qualifiers(query: exp.Query, order: exp.Expr | None) -> None:
-    """Strip inner table qualifiers from outer ORDER BY columns on wrapped queries."""
-    if order is None:
-        return
-    projected = {item.alias_or_name for item in query.selects}
-    inner_tables = (
-        {table.alias_or_name for table in query.find_all(exp.Table)}
-        if any(item.is_star for item in query.selects)
-        else set()
-    )
-    for column in order.find_all(exp.Column):
-        if column.name in projected or (column.table and column.table in inner_tables):
-            column.set("table", None)
-            column.set("db", None)
-            column.set("catalog", None)
-
-
-def _page_query(expression: exp.Query) -> exp.Select:
-    query = expression.copy()
-    offset = query.args.pop("offset")
-    limit = query.args.pop("limit", None)
-    order = query.args.pop("order", None)
-    start = simplify(exp.Add(this=offset.expression.copy(), expression=exp.Literal.number(1)))
-    count: exp.Expr | None
-    if isinstance(limit, exp.Limit):
-        count = limit.expression
-    elif isinstance(limit, exp.Fetch):
-        fetch_count = cast("exp.Expr | None", limit.args.get("count"))
-        count = fetch_count if fetch_count is not None else exp.Literal.number(1)
-    else:
-        count = None
-    wrap = isinstance(query, exp.SetOperation) or any(
-        query.args.get(key) for key in ("distinct", "group", "having", "qualify")
-    )
-    cte = query.args.pop("with_", None) if wrap else None
-    if wrap:
-        _strip_order_table_qualifiers(query, order)
-        result = exp.select("*").from_(
-            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
-        )
-        result.set("with_", cte)
-    else:
-        result = cast("exp.Select", query)
-    window = exp.Window(
-        this=exp.RowNumber(),
-        order=order or exp.Order(expressions=[exp.Ordered(this=exp.Literal.number(1), nulls_first=True)]),
-    )
-    condition = (
-        exp.Between(
-            this=window, low=start, high=simplify(exp.Add(this=offset.expression.copy(), expression=count.copy()))
-        )
-        if count is not None
-        else exp.GTE(this=window, expression=start)
-    )
-    result.set("qualify", exp.Qualify(this=condition))
-    return result
-
-
 def teradata_select_sql(gen: generator.Generator, expression: exp.Select) -> str:
     """Render TOP limits or QUALIFY offset pagination without mutating input."""
     working = expression.copy()
     limit = working.args.get("limit")
     if isinstance(limit, exp.Fetch):
-        working.set("limit", exp.Limit(expression=limit.args.get("count") or exp.Literal.number(1)))
+        working.set("limit", _fetch_to_limit(limit))
     if working.args.get("offset") is not None:
-        return _BASE_SELECT_TRANSFORM(gen, _page_query(working))
+        return _BASE_SELECT_TRANSFORM(gen, _page_query(working, copy=False))
     return _BASE_SELECT_TRANSFORM(gen, working)
 
 
@@ -125,8 +67,8 @@ def teradata_set_operation_sql(gen: generator.Generator, expression: exp.SetOper
         order = query.args.pop("order", None)
         cte = query.args.pop("with_", None)
         _strip_order_table_qualifiers(query, order)
-        result = exp.select("*").from_(
-            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
+        result = exp.select("*", copy=False).from_(
+            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged"))), copy=False
         )
         result.set("limit", limit)
         result.set("order", order)
@@ -149,3 +91,109 @@ def teradata_dispatch(
 ) -> dict[type[exp.Expr], Callable[..., str]]:
     """Overlay Vantage handlers without changing shared SQLGlot tables."""
     return {**base_dispatch, **TERADATA_TRANSFORMS}
+
+
+def _strip_order_table_qualifiers(query: exp.Query, order: exp.Expr | None) -> None:
+    """Strip inner table qualifiers from outer ORDER BY columns on wrapped queries."""
+    if order is None:
+        return
+    projected = {item.alias_or_name for item in query.selects}
+    inner_tables = (
+        {table.alias_or_name for table in query.find_all(exp.Table)}
+        if any(item.is_star for item in query.selects)
+        else set()
+    )
+    for column in order.find_all(exp.Column):
+        if column.name in projected or (column.table and column.table in inner_tables):
+            column.set("table", None)
+            column.set("db", None)
+            column.set("catalog", None)
+
+
+def _build_qualify_pagination_condition(
+    offset_expr: exp.Expr, count: exp.Expr | None, window_order: exp.Order, *, is_percent: bool, with_ties: bool
+) -> exp.Expr:
+    """Build a QUALIFY filter preserving OFFSET, FETCH count/PERCENT, and WITH TIES semantics."""
+    start = simplify(exp.Add(this=offset_expr.copy(), expression=exp.Literal.number(1)))
+    rn_window = exp.Window(this=exp.RowNumber(), order=window_order)
+    if count is None:
+        return exp.GTE(this=rn_window, expression=start)
+
+    effective_count: exp.Expr
+    if is_percent:
+        effective_count = exp.Ceil(
+            this=exp.Div(
+                this=exp.Mul(this=exp.Window(this=exp.Count(this=exp.Star())), expression=count.copy()),
+                expression=exp.Literal.number("100.0"),
+            )
+        )
+    else:
+        effective_count = count.copy()
+
+    high = simplify(exp.Add(this=offset_expr.copy(), expression=effective_count))
+    if not with_ties:
+        return exp.Between(this=rn_window, low=start, high=high)
+
+    positive_guard: exp.Expr | None = None
+    if count.is_number:
+        try:
+            if float(str(count.this)) <= 0:
+                return exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
+        except ValueError:
+            positive_guard = exp.GT(this=count.copy(), expression=exp.Literal.number(0))
+    else:
+        positive_guard = exp.GT(this=count.copy(), expression=exp.Literal.number(0))
+
+    rank_window = exp.Window(this=exp.Rank(), order=window_order.copy())
+    ties_condition: exp.Expr = exp.And(
+        this=exp.GTE(this=rn_window, expression=start), expression=exp.LTE(this=rank_window, expression=high)
+    )
+    if positive_guard is not None:
+        return exp.And(this=positive_guard, expression=ties_condition)
+    return ties_condition
+
+
+def _page_query(expression: exp.Query, *, copy: bool = True) -> exp.Select:
+    query = expression.copy() if copy else expression
+    offset = query.args.pop("offset")
+    limit = query.args.pop("limit", None)
+    order = query.args.pop("order", None)
+    count: exp.Expr | None
+    opts = limit.args.get("limit_options") if limit is not None else None
+    is_percent = bool(isinstance(opts, exp.LimitOptions) and opts.args.get("percent"))
+    with_ties = bool(isinstance(opts, exp.LimitOptions) and opts.args.get("with_ties"))
+    if isinstance(limit, exp.Limit):
+        count = limit.expression
+    elif isinstance(limit, exp.Fetch):
+        fetch_count = cast("exp.Expr | None", limit.args.get("count"))
+        count = fetch_count if fetch_count is not None else exp.Literal.number(1)
+    else:
+        count = None
+    wrap = isinstance(query, exp.SetOperation) or any(
+        query.args.get(key) for key in ("distinct", "group", "having", "qualify")
+    )
+    cte = query.args.pop("with_", None) if wrap else None
+    if wrap:
+        _strip_order_table_qualifiers(query, order)
+        result = exp.select("*", copy=False).from_(
+            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged"))), copy=False
+        )
+        result.set("with_", cte)
+    else:
+        result = cast("exp.Select", query)
+    window_order = order or exp.Order(expressions=[exp.Ordered(this=exp.Literal.number(1), nulls_first=True)])
+    condition = _build_qualify_pagination_condition(
+        offset.expression, count, window_order, is_percent=is_percent, with_ties=with_ties
+    )
+    result.set("qualify", exp.Qualify(this=condition))
+    return result
+
+
+def _fetch_to_limit(limit: exp.Fetch) -> exp.Limit:
+    opts = limit.args.get("limit_options")
+    limit_options: exp.LimitOptions | None = None
+    if isinstance(opts, exp.LimitOptions) and (opts.args.get("percent") or opts.args.get("with_ties")):
+        limit_options = exp.LimitOptions(
+            percent=bool(opts.args.get("percent")), with_ties=bool(opts.args.get("with_ties"))
+        )
+    return exp.Limit(expression=limit.args.get("count") or exp.Literal.number(1), limit_options=limit_options)

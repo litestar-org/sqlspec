@@ -217,6 +217,12 @@ with config.provide_session(tenant="acme") as session:
 
 `SYS_CONTEXT` returns `NULL` for an unset attribute, so the policy above hides every row from sessions without a tenant. Attribute names are case-sensitive. Use `SnowflakeSessionAttributeStrategy(tenant_attribute="tenant_id", variable_keys={"region": "tenant_region"})` to choose the attribute names and map `TenantContextPayload` variables to more attributes. `create_connection()` is rejected on tenant configurations; use `provide_session()` or `provide_connection()`. ADBC Snowflake configurations do not support `tenant_strategy`. See [Multi-Tenancy](../learn/recipes/multi-tenancy.md).
 
+## Read Warehouses and Replica Accounts
+
+Set `replicas={"warehouse": "ANALYTICS_RO"}` to open a pool on separate read compute. Set `account` and matching credentials for a reader account or a copied dataset. A warehouse picks compute. It does not stop writes or make copied data current. Set up role grants and data replication on the server.
+
+Derived pools keep `SnowflakeTenantLease` and its tenant session state. Tenant sockets still close after use. They never return to the pool. Native read-only errors map to `ReadOnlyTransactionError`. See [Read Replicas](../learn/recipes/read-replicas.md) for groups and [Replica Operations](../learn/recipes/read-replicas-operations.md) for lag and failure rules.
+
 ## Type Mappings and Related Reference
 
 | Snowflake | Python / Arrow |

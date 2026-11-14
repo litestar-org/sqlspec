@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence, Sized
 from logging import Logger
 from typing import Any, Literal
+from urllib.parse import unquote, urlsplit
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.dialects.teradata import Vantage as _VantageDialect
@@ -19,6 +20,7 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -354,6 +356,14 @@ def extract_error_code(error: BaseException) -> int | None:
 
 def create_mapped_exception(error: BaseException, *, logger: Logger | None = None) -> SQLSpecError:
     """Map native database codes, retaining the original cause."""
+    if (
+        getattr(error, "sqlstate", None) == "25006"
+        or "25006" in str(error)
+        or "read-only transaction" in str(error).lower()
+    ):
+        mapped_readonly = ReadOnlyTransactionError(str(error))
+        mapped_readonly.__cause__ = error
+        return mapped_readonly
     code = extract_error_code(error)
     cls: type[SQLSpecError] = SQLSpecError
     mapped_cls = _ERROR_CODE_MAPPING.get(code) if code is not None else None
@@ -375,3 +385,50 @@ def create_mapped_exception(error: BaseException, *, logger: Logger | None = Non
 driver_profile = build_profile()
 _ = _VantageDialect
 default_statement_config = build_statement_config()
+
+
+def merge_teradata_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve explicit endpoint aliases in a fresh derivation mapping."""
+    config = dict(base_config)
+    config.update(overrides)
+    explicit = dict(overrides)
+    if "url" in explicit:
+        explicit.update(parse_teradata_replica_endpoint(str(explicit.pop("url"))))
+        config.update(explicit)
+        config.pop("url", None)
+    for canonical, alias in (("user", "username"), ("database", "db")):
+        if alias in explicit and canonical not in explicit:
+            config[canonical] = explicit[alias]
+            config.pop(alias, None)
+    if "sJson" in explicit:
+        pool_keys = ("pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval")
+        config = {key: config[key] for key in pool_keys if key in config}
+        config["sJson"] = explicit["sJson"]
+    elif "host" in explicit:
+        config.pop("sJson", None)
+    if "port" in explicit and "dbs_port" not in explicit:
+        config.pop("dbs_port", None)
+    return config
+
+
+def parse_teradata_replica_endpoint(endpoint: str) -> dict[str, Any]:
+    """Parse a reader URL or host endpoint without connecting."""
+    try:
+        parsed = urlsplit(endpoint if "://" in endpoint else "//" + endpoint)
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        msg = "Invalid teradata replica endpoint"
+        raise ImproperConfigurationError(msg) from exc
+    if not hostname or (parsed.scheme and parsed.scheme != "teradata"):
+        msg = "Invalid teradata replica endpoint"
+        raise ImproperConfigurationError(msg)
+    config: dict[str, Any] = {"host": hostname}
+    if port is not None:
+        config["port"] = port
+    if parsed.username is not None:
+        config["user"] = unquote(parsed.username)
+    if parsed.password is not None:
+        config["password"] = unquote(parsed.password)
+    if parsed.path.strip("/"):
+        config["database"] = unquote(parsed.path.strip("/"))
+    return config

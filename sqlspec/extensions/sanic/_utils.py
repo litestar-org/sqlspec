@@ -1,11 +1,12 @@
 """Request context state utilities for the Sanic SQLSpec extension."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.sanic._state import tenant_receipt_key
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ __all__ = (
     "get_connection_from_request",
     "get_context_value",
     "get_or_create_session",
+    "get_or_create_session_async",
     "get_request_tenant",
     "has_context_value",
     "pop_context_value",
@@ -23,6 +25,15 @@ __all__ = (
 )
 
 _MISSING = object()
+_LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
+    "adbc",
+    "arrow_odbc",
+    "asyncpg",
+    "cockroach_asyncpg",
+    "duckdb",
+    "psqlpy",
+    "teradata",
+})
 
 
 def get_context_value(context: Any, key: str, default: Any = _MISSING) -> Any:
@@ -118,17 +129,29 @@ def get_or_create_session(request: Any, config_state: "SanicConfigState") -> Any
     Returns:
         Database session driver instance.
     """
-    session_instance_key = f"{config_state.session_key}_instance"
+    session, created = _resolve_or_build_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
+    return session
 
-    existing_session = get_context_value(request.ctx, session_instance_key, None)
-    if existing_session is not None:
-        return existing_session
-    session = config_state.config.driver_type(
-        connection=get_connection_from_request(request, config_state),
-        statement_config=config_state.config.statement_config,
-        driver_features=config_state.config.driver_features,
-    )
-    set_context_value(request.ctx, session_instance_key, session)
+
+async def get_or_create_session_async(request: Any, config_state: "SanicConfigState") -> Any:
+    """Get or create database session asynchronously, awaiting session-start hooks.
+
+    Args:
+        request: Sanic request instance.
+        config_state: Configuration state for the database.
+
+    Returns:
+        Database session driver instance.
+    """
+    session, created = _resolve_or_build_session(request, config_state)
+    if created:
+        runtime = session.observability
+        if not runtime.is_idle:
+            await runtime.emit_session_start_async(session)
     return session
 
 
@@ -170,3 +193,26 @@ def get_request_tenant(request: Any, config_state: "SanicConfigState") -> Any:
         if stored is not None:
             return stored
     return None
+
+
+def _resolve_or_build_session(request: Any, config_state: "SanicConfigState") -> tuple[Any, bool]:
+    """Return the cached request session or build and cache a fresh one."""
+    session_instance_key = f"{config_state.session_key}_instance"
+    existing_session = get_context_value(request.ctx, session_instance_key, None)
+    if existing_session is not None:
+        return existing_session, False
+    config = config_state.config
+    session = config._prepare_driver(
+        config.driver_type(
+            connection=get_connection_from_request(request, config_state),
+            statement_config=config.statement_config,
+            driver_features=config.driver_features,
+        )
+    )
+    if (
+        config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
+        and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+    ):
+        session._auto_begin_on_write = True
+    set_context_value(request.ctx, session_instance_key, session)
+    return session, True

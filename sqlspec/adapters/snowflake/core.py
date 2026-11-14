@@ -24,6 +24,7 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReadOnlyTransactionError,
     SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
@@ -49,6 +50,7 @@ __all__ = (
     "driver_profile",
     "format_snowflake_identifier",
     "is_snowflake_error",
+    "merge_snowflake_derive_overrides",
     "normalize_column_names",
     "normalize_connection_params",
     "normalize_execute_parameters",
@@ -358,6 +360,52 @@ def normalize_connection_params(connection_config: Mapping[str, Any]) -> dict[st
     return params
 
 
+def merge_snowflake_derive_overrides(base_config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply explicit clone aliases without retaining inherited normalized shadows."""
+    result = {**base_config, **overrides}
+    shadowed: set[str] = set()
+    if "username" in overrides and "user" not in overrides:
+        result["user"] = overrides["username"]
+        result.pop("username", None)
+    if "auth_type" in overrides and "authenticator" not in overrides:
+        result.pop("authenticator", None)
+        shadowed.add("authenticator")
+        if str(overrides["auth_type"]).lower() in {"password", "snowflake"}:
+            result.pop("auth_type", None)
+            shadowed.add("auth_type")
+            for key in (
+                "private_key",
+                "private_key_file",
+                "private_key_passphrase",
+                "private_key_file_pwd",
+                "auth_token_provider",
+            ):
+                if key not in overrides:
+                    result.pop(key, None)
+                    shadowed.add(key)
+    elif "authenticator" in overrides and "auth_type" not in overrides:
+        result.pop("auth_type", None)
+        shadowed.add("auth_type")
+    if "private_key_passphrase" in overrides and "private_key_file_pwd" not in overrides:
+        result.pop("private_key_file_pwd", None)
+        shadowed.add("private_key_file_pwd")
+    extra = result.get("extra")
+    if isinstance(extra, Mapping) and "extra" not in overrides:
+        extra = {key: value for key, value in extra.items() if key not in shadowed}
+        result["extra"] = extra
+    if "session_parameters" not in overrides:
+        inherited_session = result.get("session_parameters")
+        if inherited_session is None and isinstance(extra, Mapping):
+            inherited_session = extra.get("session_parameters")
+        session = dict(inherited_session or {})
+        for shortcut, key in (("query_tag", "QUERY_TAG"), ("timezone", "TIMEZONE")):
+            if shortcut in overrides:
+                session[key] = overrides[shortcut]
+        if session:
+            result["session_parameters"] = session
+    return result
+
+
 def normalize_column_names(column_names: Sequence[str], *, enable_lowercase_column_names: bool = True) -> list[str]:
     """Fold implicit uppercase names and retain explicitly mixed-case aliases."""
     return [
@@ -487,7 +535,9 @@ def create_mapped_exception(error: BaseException) -> SQLSpecError:
     errno = getattr(error, "errno", None)
     sqlstate = str(getattr(error, "sqlstate", None) or "")
     exception_type: type[SQLSpecError] = OperationalError
-    if name == "ForbiddenError" or errno == _FORBIDDEN_ERRNO:
+    if sqlstate == "25006" or "read-only" in str(getattr(error, "msg", None) or error).lower():
+        exception_type = ReadOnlyTransactionError
+    elif name == "ForbiddenError" or errno == _FORBIDDEN_ERRNO:
         exception_type = PermissionDeniedError
     elif errno == _OBJECT_NOT_FOUND_ERRNO:
         exception_type = NotFoundError

@@ -61,21 +61,6 @@ _SPANNER_DIALECT = Spanner
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 _DDL_TIMEOUT_SECONDS = 300
 _SPANNER_VECTOR_LENGTH = re.compile(r"\(vector_length=>\d+\)")
-
-
-def _parse_spanner_target(table: str, ddl: str) -> SchemaTarget:
-    """Parse Spanner DDL, removing vector_length only for parsing and keeping the original statement."""
-    parsed = SchemaTarget.from_ddl(table, _SPANNER_VECTOR_LENGTH.sub("", ddl), dialect="spanner")
-    return SchemaTarget(
-        parsed.table_name,
-        parsed.create_table,
-        schema=parsed.schema,
-        create_statement=ddl,
-        constraint_columns=parsed.constraint_columns,
-        unsafe_add_columns=parsed.unsafe_add_columns,
-    )
-
-
 _EMBEDDING_ROW_INDEX = 12
 _SPANNER_DISTANCE_FUNCTIONS: dict[str, str] = {
     "COSINE": "COSINE_DISTANCE",
@@ -355,6 +340,25 @@ class _SpannerADKStoreMixin:
         }
         return [(delete_events_sql, params, types), (delete_session_sql, params, types)]
 
+    def _build_session_ownership_query(
+        self, app_name: str, user_id: str, session_id: str
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+        sql = f"""
+            SELECT 1
+            FROM {self._session_table}
+            WHERE id = @id AND app_name = @app_name AND user_id = @user_id
+        """
+        if self._shard_count > 1:
+            sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@id), {self._shard_count})"
+        sql = f"{sql} LIMIT 1"
+        params = {"id": session_id, "app_name": app_name, "user_id": user_id}
+        types = {
+            "id": SPANNER_PARAM_TYPES.STRING,
+            "app_name": SPANNER_PARAM_TYPES.STRING,
+            "user_id": SPANNER_PARAM_TYPES.STRING,
+        }
+        return (sql, params, types)
+
     def _build_insert_event_statement(
         self, event_record: "StoredEvent"
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
@@ -385,8 +389,8 @@ class _SpannerADKStoreMixin:
         user_state: "dict[str, Any] | None" = None,
     ) -> "list[tuple[str, dict[str, Any], dict[str, Any]]]":
         statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
-            self._build_insert_event_statement(event_record),
             self._build_update_session_state_statement(app_name, user_id, session_id, state),
+            self._build_insert_event_statement(event_record),
         ]
         if app_state is not None:
             statements.append(self._build_upsert_app_state_statement(app_name, app_state))
@@ -409,8 +413,9 @@ class _SpannerADKStoreMixin:
         sql = f"""
             SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
             FROM {self._events_table} e
-            JOIN {self._session_table} s ON e.session_id = s.id{join_shard_clause}
-            WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
+            JOIN {self._session_table} s
+                ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id{join_shard_clause}
+            WHERE s.app_name = @app_name AND s.user_id = @user_id AND s.id = @session_id
         """
         if self._shard_count > 1:
             sql = f"{sql} AND e.shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
@@ -677,8 +682,8 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerSyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerSyncConfig, *, read_config: "SpannerSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._session_table_options,
@@ -708,7 +713,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     ) -> "StoredSession | None":
         """Get session by ID."""
         try:
-            return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+            return self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
@@ -733,7 +738,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         """List sessions for an app."""
         try:
             return self._list_sessions(
-                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
             )
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
@@ -776,7 +781,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     ) -> "list[StoredEvent]":
         """Get events for a session."""
         try:
-            return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+            return self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
@@ -820,6 +825,18 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         """Set a metadata value."""
         self._set_metadata(key, value)
 
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_session_schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing session and event expiration indexes using the active sync driver."""
+        for table_name, index_name, ddl in self._session_companion_indexes():
+            rows = driver.data_dictionary.get_indexes(driver, table=table_name)
+            if not metadata_has_index(rows, table_name, index_name):
+                driver.execute_script(ddl)
+
     def _database(self) -> "SpannerDatabase":
         return self._config.get_database()
 
@@ -833,10 +850,15 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             raise create_mapped_exception(exc) from exc
 
     def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
         try:
-            with self._config.provide_connection(transaction=False) as snapshot:
+            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
                 reader = cast("_SpannerReadProtocol", snapshot)
                 return list(reader.execute_sql(sql, params=params, param_types=types))
         except SpannerGoogleAPICallError as exc:
@@ -868,13 +890,19 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         }
 
     def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         if not rows:
             return None
         return self._decode_session_row(rows[0])
@@ -891,6 +919,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         query = self._build_list_sessions_query(
             app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
@@ -898,7 +927,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         if query is None:
             return []
         sql, params, types = query
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return [self._decode_session_row(row) for row in rows]
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -915,11 +944,16 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically insert an event and update session state in one transaction."""
+        """Atomically update session state and insert an event in one transaction."""
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         statements = self._build_append_event_and_update_state_statements(
             event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
-        self._run_write(statements)
+        job = _SpannerSyncAppendAndUpdateJob(statements[0], statements[1:], session_id=session_id)
+        try:
+            cast("Any", self._database()).run_in_transaction(job)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
         record = self._get_session(app_name, user_id, session_id)
         if record is None:
@@ -937,17 +971,30 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         query = self._build_get_events_query(app_name, user_id, session_id, after_timestamp, limit)
         if query is None:
             return []
         sql, params, types = query
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return self._decode_event_rows(rows)
 
     def _append_event(self, event_record: StoredEvent) -> None:
         """Synchronous implementation of append_event."""
-        self._insert_event(event_record)
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        check_sql, check_params, check_types = self._build_session_ownership_query(app_name, user_id, session_id)
+        insert_stmt = self._build_insert_event_statement(event_record)
+        job = _SpannerSyncAppendEventJob(
+            check_sql, check_params, check_types, insert_stmt, session_id=session_id, app_name=app_name, user_id=user_id
+        )
+        try:
+            cast("Any", self._database()).run_in_transaction(job)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql, params, types = self._build_delete_expired_events_statement(before, app_name)
@@ -1016,18 +1063,6 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
     def _schema_targets(self) -> "list[SchemaTarget]":
         return self._build_session_schema_targets()
 
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return session-store SchemaTarget definitions without opening a session."""
-        del driver
-        return self._build_session_schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing session and event expiration indexes using the active sync driver."""
-        for table_name, index_name, ddl in self._session_companion_indexes():
-            rows = driver.data_dictionary.get_indexes(driver, table=table_name)
-            if not metadata_has_index(rows, table_name, index_name):
-                driver.execute_script(ddl)
-
 
 class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsyncConfig]):
     """Spanner ADK store backed by asynchronous Spanner client."""
@@ -1045,8 +1080,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerAsyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerAsyncConfig, *, read_config: "SpannerAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._session_table_options,
@@ -1076,7 +1111,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     ) -> "StoredSession | None":
         """Get session by ID."""
         try:
-            return await self._get_session(app_name, user_id, session_id, renew_for=renew_for)
+            return await self._get_session(app_name, user_id, session_id, renew_for=renew_for, read=renew_for is None)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
@@ -1101,7 +1136,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         """List sessions for an app."""
         try:
             return await self._list_sessions(
-                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
+                app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset, read=True
             )
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
@@ -1144,7 +1179,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     ) -> "list[StoredEvent]":
         """Get events for a session."""
         try:
-            return await self._get_events(app_name, user_id, session_id, after_timestamp, limit)
+            return await self._get_events(app_name, user_id, session_id, after_timestamp, limit, read=True)
         except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
@@ -1188,6 +1223,18 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         """Set a metadata value."""
         await self._set_metadata(key, value)
 
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return session-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_session_schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing session and event expiration indexes using the active async driver."""
+        for table_name, index_name, ddl in self._session_companion_indexes():
+            rows = await driver.data_dictionary.get_indexes(driver, table=table_name)
+            if not metadata_has_index(rows, table_name, index_name):
+                await driver.execute_script(ddl)
+
     async def _database(self) -> "SpannerAsyncDatabase":
         return await self._config.get_database()
 
@@ -1201,9 +1248,19 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             raise create_mapped_exception(exc) from exc
 
     async def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return await _run_read_async(await self._database(), sql, params, types)
+        try:
+            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+                return [row async for row in result_set]
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         database = await self._database()
@@ -1233,13 +1290,19 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         }
 
     async def _get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+        self,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        *,
+        renew_for: "int | timedelta | None" = None,
+        read: bool = False,
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             await self._run_write([self._build_renew_session_statement(app_name, user_id, session_id)])
 
         sql, params, types = self._build_get_session_query(app_name, user_id, session_id)
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         if not rows:
             return None
         return self._decode_session_row(rows[0])
@@ -1258,6 +1321,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         descending: bool = True,
         limit: "int | None" = None,
         offset: "int | None" = None,
+        read: bool = False,
     ) -> "list[StoredSession]":
         query = self._build_list_sessions_query(
             app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
@@ -1265,7 +1329,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         if query is None:
             return []
         sql, params, types = query
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return [self._decode_session_row(row) for row in rows]
 
     async def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -1282,11 +1346,17 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         app_state: "dict[str, Any] | None" = None,
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically insert an event and update session state in one transaction."""
+        """Atomically update session state and insert an event in one transaction."""
+        _validate_event_record_scope(event_record, app_name, user_id, session_id)
         statements = self._build_append_event_and_update_state_statements(
             event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
         )
-        await self._run_write(statements)
+        database = await self._database()
+        job = _SpannerAsyncAppendAndUpdateJob(statements[0], statements[1:], session_id=session_id)
+        try:
+            await database.run_in_transaction(job)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
         record = await self._get_session(app_name, user_id, session_id)
         if record is None:
@@ -1304,17 +1374,31 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         session_id: str,
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredEvent]":
         query = self._build_get_events_query(app_name, user_id, session_id, after_timestamp, limit)
         if query is None:
             return []
         sql, params, types = query
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return self._decode_event_rows(rows)
 
     async def _append_event(self, event_record: StoredEvent) -> None:
         """Asynchronous implementation of append_event."""
-        await self._insert_event(event_record)
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        check_sql, check_params, check_types = self._build_session_ownership_query(app_name, user_id, session_id)
+        insert_stmt = self._build_insert_event_statement(event_record)
+        database = await self._database()
+        job = _SpannerAsyncAppendEventJob(
+            check_sql, check_params, check_types, insert_stmt, session_id=session_id, app_name=app_name, user_id=user_id
+        )
+        try:
+            await database.run_in_transaction(job)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql, params, types = self._build_delete_expired_events_statement(before, app_name)
@@ -1383,18 +1467,6 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
     async def _schema_targets(self) -> "list[SchemaTarget]":
         return self._build_session_schema_targets()
 
-    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
-        """Return session-store SchemaTarget definitions without opening a session."""
-        del driver
-        return self._build_session_schema_targets()
-
-    async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing session and event expiration indexes using the active async driver."""
-        for table_name, index_name, ddl in self._session_companion_indexes():
-            rows = await driver.data_dictionary.get_indexes(driver, table=table_name)
-            if not metadata_has_index(rows, table_name, index_name):
-                await driver.execute_script(ddl)
-
 
 class _SpannerADKMemoryStoreMixin:
     """Shared SQL, DDL, parameter type, and decoding helpers for Spanner ADK memory stores."""
@@ -1447,13 +1519,13 @@ class _SpannerADKMemoryStoreMixin:
         return _convert_json_row_value(raw, json_deserializer=self._json_deserializer)
 
     def _deduplicate_entries(self, entries: "list[StoredMemory]") -> "list[StoredMemory]":
-        seen: set[str] = set()
+        seen: set[tuple[str, str, str]] = set()
         unique_entries: list[StoredMemory] = []
         for entry in entries:
-            event_id = entry["event_id"]
-            if event_id in seen:
+            key = (entry["app_name"], entry["user_id"], entry["event_id"])
+            if key in seen:
                 continue
-            seen.add(event_id)
+            seen.add(key)
             unique_entries.append(entry)
         return unique_entries
 
@@ -1616,7 +1688,7 @@ CREATE TABLE {self._memory_table} (
         return (insert_sql, params, self._memory_param_types(self._owner_id_column_name is not None))
 
     def _build_existing_event_ids_query(self, event_ids: "list[str]") -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id IN UNNEST(@event_ids)"
+        sql = f"SELECT app_name, user_id, event_id FROM {self._memory_table} WHERE event_id IN UNNEST(@event_ids)"
         return (sql, {"event_ids": event_ids}, {"event_ids": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)})
 
     def _build_search_entries_query(
@@ -1752,11 +1824,21 @@ CREATE TABLE {self._memory_table} (
         return (sql, params, types)
 
     def _build_delete_entries_by_session_statement(
-        self, session_id: str
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        sql = f"DELETE FROM {self._memory_table} WHERE session_id = @session_id"
-        params = {"session_id": session_id}
-        types = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        clauses = ["session_id = @session_id"]
+        params: dict[str, Any] = {"session_id": session_id}
+        types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        if app_name is not None:
+            clauses.append("app_name = @app_name")
+            params["app_name"] = app_name
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        if user_id is not None:
+            clauses.append("user_id = @user_id")
+            params["user_id"] = user_id
+            types["user_id"] = SPANNER_PARAM_TYPES.STRING
+        where_sql = " AND ".join(clauses)
+        sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         return (sql, params, types)
 
     def _build_delete_entries_older_than_statement(
@@ -1823,8 +1905,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerSyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerSyncConfig, *, read_config: "SpannerSyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._memory_table_options,
@@ -1862,15 +1944,34 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query or vector embedding."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        return self._delete_entries_by_session(session_id, app_name, user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days, app_name, scope)
+
+    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_memory_schema_targets()
+
+    def reconcile_companion_objects_sync(self, driver: Any) -> None:
+        """Create missing memory indexes and refresh the optional property graph."""
+        if not self._enabled:
+            return
+        rows = driver.data_dictionary.get_indexes(driver, table=self._memory_table)
+        for index_name, ddl in self._memory_companion_indexes():
+            if not metadata_has_index(rows, self._memory_table, index_name):
+                driver.execute_script(ddl)
+        graph_ddl = self._memory_graph_ddl()
+        if graph_ddl is not None:
+            driver.execute_script(graph_ddl)
 
     def _database(self) -> "SpannerDatabase":
         return self._config.get_database()
@@ -1885,10 +1986,15 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             raise create_mapped_exception(exc) from exc
 
     def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
         try:
-            with self._config.provide_connection(transaction=False) as snapshot:
+            with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
                 reader = cast("_SpannerReadProtocol", snapshot)
                 return list(reader.execute_sql(sql, params=params, param_types=types))
         except SpannerGoogleAPICallError as exc:
@@ -1914,23 +2020,6 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
     def _schema_targets(self) -> "list[SchemaTarget]":
         return self._build_memory_schema_targets()
 
-    def get_schema_targets_sync(self, driver: Any) -> "list[SchemaTarget]":
-        """Return memory-store SchemaTarget definitions without opening a session."""
-        del driver
-        return self._build_memory_schema_targets()
-
-    def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing memory indexes and refresh the optional property graph."""
-        if not self._enabled:
-            return
-        rows = driver.data_dictionary.get_indexes(driver, table=self._memory_table)
-        for index_name, ddl in self._memory_companion_indexes():
-            if not metadata_has_index(rows, self._memory_table, index_name):
-                driver.execute_script(ddl)
-        graph_ddl = self._memory_graph_ddl()
-        if graph_ddl is not None:
-            driver.execute_script(graph_ddl)
-
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1940,10 +2029,14 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         if not unique_entries:
             return 0
 
-        event_ids = [entry["event_id"] for entry in unique_entries]
+        event_ids = list(dict.fromkeys(entry["event_id"] for entry in unique_entries))
         check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
         candidates = [
-            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id)) for entry in unique_entries
+            (
+                (entry["app_name"], entry["user_id"], entry["event_id"]),
+                self._build_insert_memory_entry_statement(entry, owner_id),
+            )
+            for entry in unique_entries
         ]
         job = _SpannerSyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
         try:
@@ -1959,6 +2052,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1971,11 +2066,13 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         sql, params, types = self._build_search_entries_query(
             query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
         )
-        rows = self._run_read(sql, params, types)
+        rows = self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
-    def _delete_entries_by_session(self, session_id: str) -> int:
-        sql, params, types = self._build_delete_entries_by_session_statement(session_id)
+    def _delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        sql, params, types = self._build_delete_entries_by_session_statement(session_id, app_name, user_id)
         return self._execute_update(sql, params, types)
 
     def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -2003,8 +2100,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
 
     connector_name: ClassVar[str] = "spanner"
 
-    def __init__(self, config: SpannerAsyncConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: SpannerAsyncConfig, *, read_config: "SpannerAsyncConfig | None" = None) -> None:
+        super().__init__(config, read_config=read_config)
         (
             self._shard_count,
             self._memory_table_options,
@@ -2042,17 +2139,36 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         """Search memory entries by text query or vector embedding."""
-        return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
+        return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return await self._delete_entries_by_session(session_id)
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner."""
+        return await self._delete_entries_by_session(session_id, app_name, user_id)
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
     ) -> int:
         """Delete memory entries older than specified days."""
         return await self._delete_entries_older_than(days, app_name, scope)
+
+    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
+        """Return memory-store SchemaTarget definitions without opening a session."""
+        del driver
+        return self._build_memory_schema_targets()
+
+    async def reconcile_companion_objects_async(self, driver: Any) -> None:
+        """Create missing memory indexes and refresh the optional property graph."""
+        if not self._enabled:
+            return
+        rows = await driver.data_dictionary.get_indexes(driver, table=self._memory_table)
+        for index_name, ddl in self._memory_companion_indexes():
+            if not metadata_has_index(rows, self._memory_table, index_name):
+                await driver.execute_script(ddl)
+        graph_ddl = self._memory_graph_ddl()
+        if graph_ddl is not None:
+            await driver.execute_script(graph_ddl)
 
     async def _database(self) -> "SpannerAsyncDatabase":
         return await self._config.get_database()
@@ -2067,9 +2183,19 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
             raise create_mapped_exception(exc) from exc
 
     async def _run_read(
-        self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        types: "dict[str, Any] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[Any]":
-        return await _run_read_async(await self._database(), sql, params, types)
+        try:
+            async with self._provide_read_connection(transaction=False, primary=not read) as snapshot:
+                result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+                return [row async for row in result_set]
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
@@ -2094,23 +2220,6 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     async def _schema_targets(self) -> "list[SchemaTarget]":
         return self._build_memory_schema_targets()
 
-    async def get_schema_targets_async(self, driver: Any) -> "list[SchemaTarget]":
-        """Return memory-store SchemaTarget definitions without opening a session."""
-        del driver
-        return self._build_memory_schema_targets()
-
-    async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing memory indexes and refresh the optional property graph."""
-        if not self._enabled:
-            return
-        rows = await driver.data_dictionary.get_indexes(driver, table=self._memory_table)
-        for index_name, ddl in self._memory_companion_indexes():
-            if not metadata_has_index(rows, self._memory_table, index_name):
-                await driver.execute_script(ddl)
-        graph_ddl = self._memory_graph_ddl()
-        if graph_ddl is not None:
-            await driver.execute_script(graph_ddl)
-
     async def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2120,10 +2229,14 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         if not unique_entries:
             return 0
 
-        event_ids = [entry["event_id"] for entry in unique_entries]
+        event_ids = list(dict.fromkeys(entry["event_id"] for entry in unique_entries))
         check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
         candidates = [
-            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id)) for entry in unique_entries
+            (
+                (entry["app_name"], entry["user_id"], entry["event_id"]),
+                self._build_insert_memory_entry_statement(entry, owner_id),
+            )
+            for entry in unique_entries
         ]
         database = await self._database()
         job = _SpannerAsyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
@@ -2140,6 +2253,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
+        *,
+        read: bool = False,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2152,11 +2267,13 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         sql, params, types = self._build_search_entries_query(
             query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
         )
-        rows = await self._run_read(sql, params, types)
+        rows = await self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
-    async def _delete_entries_by_session(self, session_id: str) -> int:
-        sql, params, types = self._build_delete_entries_by_session_statement(session_id)
+    async def _delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        sql, params, types = self._build_delete_entries_by_session_statement(session_id, app_name, user_id)
         return await self._execute_update(sql, params, types)
 
     async def _delete_entries_older_than(
@@ -2164,6 +2281,27 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     ) -> int:
         sql, params, types = self._build_delete_entries_older_than_statement(days, app_name, scope)
         return await self._execute_update(sql, params, types)
+
+
+def _parse_spanner_target(table: str, ddl: str) -> SchemaTarget:
+    """Parse Spanner DDL, removing vector_length only for parsing and keeping the original statement."""
+    parsed = SchemaTarget.from_ddl(table, _SPANNER_VECTOR_LENGTH.sub("", ddl), dialect="spanner")
+    return SchemaTarget(
+        parsed.table_name,
+        parsed.create_table,
+        schema=parsed.schema,
+        create_statement=ddl,
+        constraint_columns=parsed.constraint_columns,
+        unsafe_add_columns=parsed.unsafe_add_columns,
+    )
+
+
+def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_id: str, session_id: str) -> None:
+    record_scope = (event_record["app_name"], event_record["user_id"], event_record["session_id"])
+    expected_scope = (app_name, user_id, session_id)
+    if record_scope != expected_scope:
+        msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
+        raise ValueError(msg)
 
 
 async def _run_read_async(
@@ -2364,6 +2502,132 @@ class _SpannerAsyncWriteJob:
             await transaction.execute_update(sql, params=params, param_types=types)
 
 
+class _SpannerSyncAppendEventJob:
+    """Callable transaction work item verifying session ownership before inserting an ADK event."""
+
+    __slots__ = ("_app_name", "_check_params", "_check_sql", "_check_types", "_insert_stmt", "_session_id", "_user_id")
+
+    def __init__(
+        self,
+        check_sql: str,
+        check_params: "dict[str, Any]",
+        check_types: "dict[str, Any]",
+        insert_stmt: "tuple[str, dict[str, Any], dict[str, Any]]",
+        *,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+    ) -> None:
+        self._check_sql = check_sql
+        self._check_params = check_params
+        self._check_types = check_types
+        self._insert_stmt = insert_stmt
+        self._session_id = session_id
+        self._app_name = app_name
+        self._user_id = user_id
+
+    def __call__(self, transaction: "SpannerTransaction") -> None:
+        rows = list(
+            cast("_SpannerReadProtocol", transaction).execute_sql(
+                self._check_sql, params=self._check_params, param_types=self._check_types
+            )
+        )
+        if not rows:
+            msg = f"Session {self._session_id} not found for app={self._app_name!r}, user={self._user_id!r}"
+            raise ValueError(msg)
+        sql, params, types = self._insert_stmt
+        cast("_SpannerWriteTransactionProtocol", transaction).execute_update(sql, params=params, param_types=types)
+
+
+class _SpannerAsyncAppendEventJob:
+    """Callable async transaction work item verifying session ownership before inserting an ADK event."""
+
+    __slots__ = ("_app_name", "_check_params", "_check_sql", "_check_types", "_insert_stmt", "_session_id", "_user_id")
+
+    def __init__(
+        self,
+        check_sql: str,
+        check_params: "dict[str, Any]",
+        check_types: "dict[str, Any]",
+        insert_stmt: "tuple[str, dict[str, Any], dict[str, Any]]",
+        *,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+    ) -> None:
+        self._check_sql = check_sql
+        self._check_params = check_params
+        self._check_types = check_types
+        self._insert_stmt = insert_stmt
+        self._session_id = session_id
+        self._app_name = app_name
+        self._user_id = user_id
+
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> None:
+        result_set = await cast("Any", transaction).execute_sql(
+            self._check_sql, params=self._check_params, param_types=self._check_types
+        )
+        rows = [row async for row in result_set]
+        if not rows:
+            msg = f"Session {self._session_id} not found for app={self._app_name!r}, user={self._user_id!r}"
+            raise ValueError(msg)
+        sql, params, types = self._insert_stmt
+        await transaction.execute_update(sql, params=params, param_types=types)
+
+
+class _SpannerSyncAppendAndUpdateJob:
+    """Callable transaction work item updating session state before inserting an ADK event."""
+
+    __slots__ = ("_remaining_statements", "_session_id", "_update_statement")
+
+    def __init__(
+        self,
+        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
+        remaining_statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]",
+        *,
+        session_id: str,
+    ) -> None:
+        self._update_statement = update_statement
+        self._remaining_statements = remaining_statements
+        self._session_id = session_id
+
+    def __call__(self, transaction: "SpannerTransaction") -> None:
+        writer = cast("_SpannerWriteTransactionProtocol", transaction)
+        update_sql, update_params, update_types = self._update_statement
+        updated = writer.execute_update(update_sql, params=update_params, param_types=update_types)
+        if updated == 0:
+            msg = f"Session {self._session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+        if self._remaining_statements:
+            _SpannerSyncWriteJob(self._remaining_statements)(transaction)
+
+
+class _SpannerAsyncAppendAndUpdateJob:
+    """Callable async transaction work item updating session state before inserting an ADK event."""
+
+    __slots__ = ("_remaining_statements", "_session_id", "_update_statement")
+
+    def __init__(
+        self,
+        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
+        remaining_statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]",
+        *,
+        session_id: str,
+    ) -> None:
+        self._update_statement = update_statement
+        self._remaining_statements = remaining_statements
+        self._session_id = session_id
+
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> None:
+        update_sql, update_params, update_types = self._update_statement
+        updated = await transaction.execute_update(update_sql, params=update_params, param_types=update_types)
+        if updated == 0:
+            msg = f"Session {self._session_id} not found during append_event_and_update_state."
+            raise ValueError(msg)
+        if self._remaining_statements:
+            await _SpannerAsyncWriteJob(self._remaining_statements)(transaction)
+
+
 class _SpannerSyncMemoryInsertJob:
     """Callable transaction work item for Spanner sync ADK memory batch deduplication and insert."""
 
@@ -2374,7 +2638,7 @@ class _SpannerSyncMemoryInsertJob:
         check_sql: str,
         check_params: "dict[str, Any]",
         check_types: "dict[str, Any]",
-        candidates: "list[tuple[str, tuple[str, dict[str, Any], dict[str, Any]]]]",
+        candidates: "list[tuple[tuple[str, str, str], tuple[str, dict[str, Any], dict[str, Any]]]]",
     ) -> None:
         self._check_sql = check_sql
         self._check_params = check_params
@@ -2385,8 +2649,8 @@ class _SpannerSyncMemoryInsertJob:
         rows = cast("_SpannerReadProtocol", transaction).execute_sql(
             self._check_sql, params=self._check_params, param_types=self._check_types
         )
-        existing = {str(row[0]) for row in rows}
-        statements = [stmt for event_id, stmt in self._candidates if event_id not in existing]
+        existing = {(str(row[0]), str(row[1]), str(row[2])) for row in rows}
+        statements = [stmt for key, stmt in self._candidates if key not in existing]
         if not statements:
             return 0
         _SpannerSyncWriteJob(statements)(transaction)
@@ -2403,7 +2667,7 @@ class _SpannerAsyncMemoryInsertJob:
         check_sql: str,
         check_params: "dict[str, Any]",
         check_types: "dict[str, Any]",
-        candidates: "list[tuple[str, tuple[str, dict[str, Any], dict[str, Any]]]]",
+        candidates: "list[tuple[tuple[str, str, str], tuple[str, dict[str, Any], dict[str, Any]]]]",
     ) -> None:
         self._check_sql = check_sql
         self._check_params = check_params
@@ -2414,8 +2678,8 @@ class _SpannerAsyncMemoryInsertJob:
         result_set = await cast("Any", transaction).execute_sql(
             self._check_sql, params=self._check_params, param_types=self._check_types
         )
-        existing = {str(row[0]) async for row in result_set}
-        statements = [stmt for event_id, stmt in self._candidates if event_id not in existing]
+        existing = {(str(row[0]), str(row[1]), str(row[2])) async for row in result_set}
+        statements = [stmt for key, stmt in self._candidates if key not in existing]
         if not statements:
             return 0
         await _SpannerAsyncWriteJob(statements)(transaction)

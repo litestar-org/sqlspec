@@ -7,7 +7,6 @@ import pytest
 
 import tests.integration.fixtures as fixtures_pkg
 from tests.fixtures.modules import module_is_available
-from tests.fixtures.rustfs import ensure_rustfs_bucket
 
 if TYPE_CHECKING:
     from pytest_databases.docker.rustfs import RustfsService
@@ -48,6 +47,7 @@ _FIXTURE_DRIVER_REQUIREMENTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "postgres": (("adbc_driver_manager", "pyarrow"), ("asyncpg",), ("psqlpy",), ("psycopg", "psycopg_pool")),
     "snowflake": (("snowflake.connector",),),
     "spanner": (("google.cloud.spanner",),),
+    "tenant": (("psycopg",),),
     "spanner_adk": (("google.cloud.spanner",),),
     "spanner_events": (("google.cloud.spanner",),),
     "spanner_litestar": (("google.cloud.spanner", "litestar"),),
@@ -79,7 +79,8 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def rustfs_bucket_name(rustfs_service: "RustfsService", rustfs_default_bucket_name: str) -> str:
     """Return the verified RustFS bucket used by S3-compatible integration tests."""
-    return ensure_rustfs_bucket(rustfs_service, rustfs_default_bucket_name)
+    rustfs_service.ensure_bucket(rustfs_default_bucket_name)
+    return rustfs_default_bucket_name
 
 
 def _requirements_satisfied(requirements: tuple[tuple[str, ...], ...]) -> bool:

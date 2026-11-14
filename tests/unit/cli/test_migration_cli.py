@@ -619,7 +619,7 @@ def test_cli_single_and_multi_config_dry_run_ops_succeed_without_importing_recon
 
 @pytest.mark.parametrize(
     "cli_args",
-    [("upgrade", "0001", "--no-prompt"), ("downgrade", "--no-prompt")],
+    [("upgrade", "0001", "--no-prompt"), ("downgrade", "base", "--no-prompt")],
     ids=["upgrade-live", "downgrade-live"],
 )
 def test_cli_single_and_multi_config_live_ops_report_reconciler_errors(
@@ -667,3 +667,41 @@ def test_cli_multi_config_head_dry_run_succeeds_and_missing_reconcile_module_exi
     bad_res = _invoke([cfg1, bad_cfg], "upgrade", "--dry-run")
     _assert_cli_error(bad_res, "reconcile.py")
     assert "Would upgrade" not in bad_res.output
+
+
+@pytest.mark.parametrize(
+    ("case_id", "cli_args", "pre_upgrade"),
+    [
+        ("upgrade-sql-error", ("upgrade", "--no-prompt"), False),
+        ("downgrade-sql-error", ("downgrade", "base", "--no-prompt"), True),
+        ("stamp-unknown-revision", ("stamp", "9999_missing"), False),
+    ],
+    ids=["upgrade-sql-error", "downgrade-sql-error", "stamp-unknown-revision"],
+)
+def test_cli_migration_command_failures_exit_nonzero(
+    tmp_path: Path, case_id: str, cli_args: tuple[str, ...], pre_upgrade: bool
+) -> None:
+    """CLI upgrade, downgrade, and stamp return non-zero exit codes when commands fail."""
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    if case_id == "upgrade-sql-error":
+        (migrations_dir / "0001_broken.sql").write_text(
+            "-- name: migrate-0001-up\nINVALID SQL STATEMENT HERE;\n", encoding="utf-8"
+        )
+    elif case_id == "downgrade-sql-error":
+        (migrations_dir / "0001_broken_down.sql").write_text(
+            "-- name: migrate-0001-up\nCREATE TABLE valid_t (id INTEGER PRIMARY KEY);\n\n"
+            "-- name: migrate-0001-down\nINVALID DOWNGRADE SQL;\n",
+            encoding="utf-8",
+        )
+    else:
+        _write_migrations(migrations_dir)
+
+    cfg = _sqlite_config(tmp_path / "errors.db", migrations_dir)
+    if pre_upgrade:
+        up_res = _invoke(cfg, "upgrade", "--no-prompt")
+        assert up_res.exit_code == 0, up_res.output
+
+    res = _invoke(cfg, *cli_args)
+    assert res.exit_code != 0, res.output
+    cfg.close_pool()

@@ -3,17 +3,20 @@
 
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.events.store import AiosqliteEventQueueStore
 from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
 from sqlspec.core import StatementConfig
 from sqlspec.core.parameters import structural_fingerprint
-from sqlspec.exceptions import EventChannelError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError
 from sqlspec.extensions.events import (
     AsyncTableEventQueue,
     EventMessage,
@@ -626,3 +629,217 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
     assert len(await async_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
     assert async_session_kwargs == [{"transaction": False}, {"transaction": False}]
     assert [kind for kind, _ in async_tx_calls] == ["execute", "execute_many"]
+
+
+@pytest.mark.parametrize(
+    ("max_attempts", "retry_backoff_seconds"),
+    [(0, 1.0), (-2, 1.0), (False, 1.0), (5, -1.0), (5, float("inf")), (5, float("-inf")), (5, float("nan")), (5, True)],
+    ids=[
+        "zero_attempts",
+        "negative_attempts",
+        "bool_attempts",
+        "negative_backoff",
+        "inf_backoff",
+        "neg_inf_backoff",
+        "nan_backoff",
+        "bool_backoff",
+    ],
+)
+def test_table_event_queue_rejects_invalid_retry_settings(
+    tmp_path: Any, max_attempts: Any, retry_backoff_seconds: Any
+) -> None:
+    """Invalid max_attempts or retry_backoff_seconds raise ImproperConfigurationError."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "invalid.db")})
+    with pytest.raises(ImproperConfigurationError):
+        SyncTableEventQueue(config, max_attempts=max_attempts, retry_backoff_seconds=retry_backoff_seconds)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("claim_channel", "future_offset", "initial_attempts", "expect_claimed", "expected_status", "expected_attempts"),
+    [
+        ("billing", 0, 0, True, "leased", 1),
+        ("public_feed", 0, 0, False, "pending", 0),
+        ("billing", 120, 0, False, "pending", 0),
+        ("billing", 0, 5, False, "pending", 5),
+    ],
+    ids=["matching_channel", "mismatched_channel", "future_available_at", "exhausted_attempts"],
+)
+async def test_dequeue_by_event_id_enforces_channel_availability_and_attempt_bound(
+    tmp_path: Any,
+    is_async: bool,
+    claim_channel: str,
+    future_offset: int,
+    initial_attempts: int,
+    expect_claimed: bool,
+    expected_status: str,
+    expected_attempts: int,
+) -> None:
+    """dequeue_by_event_id claims only due rows on the requested channel below max_attempts."""
+    db_file = str(tmp_path / f"claim_by_id_{is_async}_{claim_channel}_{future_offset}_{initial_attempts}.db")
+    if is_async:
+        async_cfg = AiosqliteConfig(connection_config={"database": db_file})
+        async with async_cfg.provide_session() as driver:
+            for ddl in AiosqliteEventQueueStore(async_cfg).create_statements():
+                await driver.execute_script(ddl)
+        async_queue = AsyncTableEventQueue(async_cfg, max_attempts=5)
+        try:
+            event_id = await async_queue.publish("billing", {"amount": 42})
+            if future_offset or initial_attempts:
+                target_time = async_queue._utcnow() + timedelta(seconds=future_offset)
+                async with async_cfg.provide_session(transaction=True) as driver:
+                    await driver.execute(
+                        "UPDATE sqlspec_event_queue SET available_at = :available_at, attempts = :attempts WHERE event_id = :event_id",
+                        {"available_at": target_time, "attempts": initial_attempts, "event_id": event_id},
+                    )
+                    await driver.commit()
+            claimed = await async_queue.dequeue_by_event_id(event_id, claim_channel)
+            async with async_cfg.provide_session() as driver:
+                stored = await driver.select_one(
+                    "SELECT status, attempts FROM sqlspec_event_queue WHERE event_id = :event_id",
+                    {"event_id": event_id},
+                )
+        finally:
+            await async_cfg.close_pool()
+    else:
+        sync_cfg = SqliteConfig(connection_config={"database": db_file})
+        with sync_cfg.provide_session() as driver:
+            for ddl in SqliteEventQueueStore(sync_cfg).create_statements():
+                driver.execute_script(ddl)
+        sync_queue = SyncTableEventQueue(sync_cfg, max_attempts=5)
+        try:
+            event_id = sync_queue.publish("billing", {"amount": 42})
+            if future_offset or initial_attempts:
+                target_time = sync_queue._utcnow() + timedelta(seconds=future_offset)
+                with sync_cfg.provide_session(transaction=True) as driver:
+                    driver.execute(
+                        "UPDATE sqlspec_event_queue SET available_at = :available_at, attempts = :attempts WHERE event_id = :event_id",
+                        {"available_at": target_time, "attempts": initial_attempts, "event_id": event_id},
+                    )
+                    driver.commit()
+            claimed = sync_queue.dequeue_by_event_id(event_id, claim_channel)
+            with sync_cfg.provide_session() as driver:
+                stored = driver.select_one(
+                    "SELECT status, attempts FROM sqlspec_event_queue WHERE event_id = :event_id",
+                    {"event_id": event_id},
+                )
+        finally:
+            sync_cfg.close_pool()
+
+    assert (claimed is not None) is expect_claimed
+    if claimed is not None:
+        assert claimed.channel == "billing"
+        assert claimed.attempts == expected_attempts
+    assert stored["status"] == expected_status
+    assert int(stored["attempts"]) == expected_attempts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("attempts", "expected_status", "expected_backoff"),
+    [(1, "pending", 1.0), (2, "pending", 2.0), (3, "pending", 4.0), (4, "pending", 8.0), (5, "failed", 0.0)],
+)
+async def test_nack_applies_exponential_backoff_and_fails_at_max_attempts(
+    tmp_path: Any, is_async: bool, attempts: int, expected_status: str, expected_backoff: float
+) -> None:
+    """nack delays leased events exponentially below max_attempts and marks exhausted rows failed."""
+    db_file = str(tmp_path / f"nack_{is_async}_{attempts}.db")
+    fixed_now = datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC)
+
+    if is_async:
+        async_cfg = AiosqliteConfig(connection_config={"database": db_file})
+        async with async_cfg.provide_session() as driver:
+            for ddl in AiosqliteEventQueueStore(async_cfg).create_statements():
+                await driver.execute_script(ddl)
+        async_queue = AsyncTableEventQueue(async_cfg, max_attempts=5, retry_backoff_seconds=1.0)
+        try:
+            event_id = await async_queue.publish("orders", {"order": 1})
+            async with async_cfg.provide_session(transaction=True) as driver:
+                await driver.execute(
+                    "UPDATE sqlspec_event_queue SET status = 'leased', attempts = :attempts, available_at = :now WHERE event_id = :event_id",
+                    {"attempts": attempts, "now": fixed_now, "event_id": event_id},
+                )
+                await driver.commit()
+            before = datetime.now(UTC)
+            await async_queue.nack(event_id)
+            after = datetime.now(UTC)
+            async with async_cfg.provide_session() as driver:
+                stored = await driver.select_one(
+                    "SELECT status, available_at, lease_expires_at FROM sqlspec_event_queue WHERE event_id = :event_id",
+                    {"event_id": event_id},
+                )
+            if expected_status == "failed":
+                assert await async_queue.dequeue("orders") is None
+                assert await async_queue.dequeue_by_event_id(event_id, "orders") is None
+        finally:
+            await async_cfg.close_pool()
+    else:
+        sync_cfg = SqliteConfig(connection_config={"database": db_file})
+        with sync_cfg.provide_session() as driver:
+            for ddl in SqliteEventQueueStore(sync_cfg).create_statements():
+                driver.execute_script(ddl)
+        sync_queue = SyncTableEventQueue(sync_cfg, max_attempts=5, retry_backoff_seconds=1.0)
+        try:
+            event_id = sync_queue.publish("orders", {"order": 1})
+            with sync_cfg.provide_session(transaction=True) as driver:
+                driver.execute(
+                    "UPDATE sqlspec_event_queue SET status = 'leased', attempts = :attempts, available_at = :now WHERE event_id = :event_id",
+                    {"attempts": attempts, "now": fixed_now, "event_id": event_id},
+                )
+                driver.commit()
+            before = datetime.now(UTC)
+            sync_queue.nack(event_id)
+            after = datetime.now(UTC)
+            with sync_cfg.provide_session() as driver:
+                stored = driver.select_one(
+                    "SELECT status, available_at, lease_expires_at FROM sqlspec_event_queue WHERE event_id = :event_id",
+                    {"event_id": event_id},
+                )
+            if expected_status == "failed":
+                assert sync_queue.dequeue("orders") is None
+                assert sync_queue.dequeue_by_event_id(event_id, "orders") is None
+        finally:
+            sync_cfg.close_pool()
+
+    assert stored["status"] == expected_status
+    assert stored["lease_expires_at"] is None
+    if expected_status == "pending":
+        available_at = parse_event_timestamp(stored["available_at"])
+        assert (
+            (before.timestamp() + expected_backoff - 0.5)
+            <= available_at.timestamp()
+            <= (after.timestamp() + expected_backoff + 0.5)
+        )
+
+
+@pytest.mark.parametrize("initial_status", ["pending", "acked", "failed"])
+def test_nack_ignores_non_leased_rows_and_dequeue_skips_attempt_bound(tmp_path: Any, initial_status: str) -> None:
+    """nack leaves non-leased rows untouched and dequeue skips rows that reached max_attempts."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / f"non_leased_{initial_status}.db")})
+    with config.provide_session() as driver:
+        for ddl in SqliteEventQueueStore(config).create_statements():
+            driver.execute_script(ddl)
+    queue = SyncTableEventQueue(config, max_attempts=3, retry_backoff_seconds=5.0)
+    baseline_time = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    try:
+        event_id = queue.publish("alerts", {"n": 1})
+        with config.provide_session(transaction=True) as driver:
+            driver.execute(
+                "UPDATE sqlspec_event_queue SET status = :status, available_at = :available_at, attempts = 3 WHERE event_id = :event_id",
+                {"status": initial_status, "available_at": baseline_time, "event_id": event_id},
+            )
+            driver.commit()
+        queue.nack(event_id)
+        with config.provide_session() as driver:
+            row = driver.select_one(
+                "SELECT status, available_at, attempts FROM sqlspec_event_queue WHERE event_id = :event_id",
+                {"event_id": event_id},
+            )
+        assert row["status"] == initial_status
+        assert parse_event_timestamp(row["available_at"]) == baseline_time
+        assert int(row["attempts"]) == 3
+        assert queue.dequeue("alerts") is None
+    finally:
+        config.close_pool()

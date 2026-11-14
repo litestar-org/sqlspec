@@ -4,6 +4,7 @@ import pytest
 from pytest_databases.docker.mysql import MySQLService
 
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlConnectionParams, PyMysqlDriverFeatures, PyMysqlPoolParams
+from sqlspec.adapters.pymysql._typing import PyMysqlConnection
 from sqlspec.core import StatementConfig
 
 pytestmark = [pytest.mark.xdist_group("mysql"), pytest.mark.mysql, pytest.mark.pymysql]
@@ -78,3 +79,44 @@ def test_pymysql_config_provide_session(mysql_service: MySQLService) -> None:
     with config.provide_session() as session:
         assert session.statement_config is not None
         assert session.statement_config.parameter_config is not None
+
+
+@pytest.mark.parametrize("read_only", [True, False])
+def test_pymysql_replica_preserves_init_command_and_creation_hook(mysql_service: MySQLService, read_only: bool) -> None:
+    """Run caller initialization before hooks while enforcing replica session mode."""
+    hook_values: list[object] = []
+
+    def on_create(connection: PyMysqlConnection) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT @probe, @@session.transaction_read_only")
+            hook_values.append(cursor.fetchone())
+
+    config = PyMysqlConfig(
+        connection_config={
+            "host": mysql_service.host,
+            "port": mysql_service.port,
+            "user": mysql_service.user,
+            "password": mysql_service.password,
+            "database": mysql_service.db,
+            "init_command": "SET @probe=1",
+        },
+        driver_features={"on_connection_create": on_create},
+        replicas=[{"host": mysql_service.host, "read_only": read_only}],
+    )
+    replica = config.replica_groups["default"].configs[0]
+    try:
+        with config.provide_session() as writer:
+            assert writer.select_value("SELECT 1") == 1
+        for _ in range(2):
+            with config.provide_read_session() as reader:
+                assert reader.select_value("SELECT @@session.transaction_read_only") == int(read_only)
+        connection = replica.create_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT @probe, @@session.transaction_read_only")
+                assert cursor.fetchone() == (1, int(read_only))
+        finally:
+            connection.close()
+        assert hook_values == [(1, 0), (1, int(read_only)), (1, int(read_only))]
+    finally:
+        config.close_pool()

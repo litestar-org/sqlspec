@@ -79,6 +79,15 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `manage_schema` | `bool` | `True` | Apply additive session-table reconciliation. Default: True. |
 | `create_schema` | `bool` | `True` | Create a missing session table during managed reconciliation. Default: True. |
 | `migration_mode` | `ExtensionMigrationMode` | `'reconcile'` | Extension migration strategy (`'versioned'` or `'reconcile'`). Default: `'reconcile'`. |
+| `read_session_key` | `str` | - | Request key for a read session. |
+| `read_connection_key` | `str` | - | Request key for a read connection. |
+| `routing_session_key` | `str` | - | Request key for a routing session. |
+| `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
+| `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
+| `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
+| `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
+| `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
+| `read_pool_key` | `str` | - | Request key for the selected read pool. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -91,7 +100,7 @@ When an application connects to multiple databases (for example, a transactional
 
 ## On-Demand Session and Connection Acquisition
 
-In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. Connections acquired before `http.response.start` are finalized in `before_send`, while connections acquired after `http.response.start` (such as inside `Stream` responses or `after_response` hooks) are finalized by `ConnectionCleanupMiddleware` when the ASGI request completes:
+In custom guards, middleware, streaming iterators, or event hooks where standard route dependency injection is not active, `SQLSpecPlugin` exposes direct scope-backed session and connection accessors. `ConnectionCleanupMiddleware` stays outer to application middleware so inner `before_send` hooks evaluate `commit_mode` on `http.response.start` and release non-streaming HTTP responses on the terminal `http.response.body` (`more_body=False`) (or immediately on `http.response.start` if finalization raises), while streaming responses (`more_body=True`, `Stream` responses, or connections acquired after `http.response.start`) defer cleanup to `ConnectionCleanupMiddleware` when the ASGI request completes or cancels. Once released, the request session detaches its underlying connection and raises `ImproperConfigurationError` if accessed after teardown:
 
 - `plugin.provide_request_session(key, state, scope)` and `plugin.provide_request_connection(key, state, scope)` (when the connection already exists in ASGI scope). For an async configuration whose connection is not open yet, `provide_request_session` returns a session that acquires it on the first awaited call, with the same tenant resolution and commit handling as `provide_request_session_async`; `provide_request_connection` raises `ImproperConfigurationError` naming the async accessor.
 - `plugin.provide_request_session_sync(key, state, scope)` and `plugin.provide_request_connection_sync(key, state, scope)` (acquires a sync connection on demand if not yet present in `scope`; async configurations behave as `provide_request_session` and `provide_request_connection`).
@@ -100,6 +109,14 @@ In custom guards, middleware, streaming iterators, or event hooks where standard
 ## Tenant-Aware Requests
 
 With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, injected `db_session` and `db_connection` dependencies and `guards=[require_tenant()]` resolve the request tenant from verified authentication state, using the selector and user attribute names set once in `extension_config["litestar"]`. Mark public routes with `opt={"tenant_bypass": True}`. See [Litestar Multi-Tenancy](../learn/recipes/multi-tenancy-litestar.md) for JWT, server-side session, separate auth database, and `litestar-security` examples, and the [Tenant Request Contract](../learn/recipes/multi-tenancy-frameworks.md#one-request-contract) for the rules every framework shares.
+
+#### Reader and routing dependencies
+
+A config with replicas exposes `read_session`, `read_connection`, and `read_pool`. Rename them with `read_session_key`, `read_connection_key`, and `read_pool_key`. Set `routing_session_key` to opt into a routing session. A reader opens on first use. It does not open a primary session first.
+
+For direct access, use `get_read_session(request)` or `provide_request_read_session` and its `_sync`/`_async` forms. The `provide_request_routing_session*` helpers return routing sessions. Read connection helpers use the same names with `connection` in place of `session`. Pass a config or bind key to choose the database.
+
+Tenant middleware binds the captured `TenantContextPayload` around each physical checkout, including readers. `SQLSpecRoutingMiddleware` scopes primary pins and reads stateless hints. Check tenant access in the normal request path. See [Read Replicas](../learn/recipes/read-replicas.md) for fallback and freshness choices.
 
 ## Automatic HTTP 404 and 409 Exception Mapping
 
@@ -124,11 +141,13 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 
 Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
 
+On `asyncpg`, `cockroach_asyncpg`, `psqlpy`, `duckdb`, `teradata`, `adbc`, and `arrow_odbc`, requests running under `"autocommit"` or `"autocommit_include_redirect"` open their transaction lazily on the first write statement rather than issuing an eager `BEGIN` at request start, eliminating extra transaction round trips on read-only handlers.
+
 ## Request Failure Handling
 
 Litestar manages request connections across two distinct paths, and both forward exceptions and cancellations to the adapter's connection context exit (`__aexit__`):
 
-- **Injected dependencies (`db_session` / `db_connection`)**: The dependency generator owns the connection context while the route handler executes. If the handler raises `BaseException`, the generator exits the connection context immediately with `(exc_type, exc_val, exc_tb)` before Litestar renders an exception response. When an HTTP handler returns normally before `http.response.start`, the generator hands the open context to ASGI scope so `before_send` applies `commit_mode` against the response status and exits the context. If `asyncio.CancelledError` or an error in `after_request`, response serialization, or an exception handler aborts the request before `http.response.start`, `ConnectionCleanupMiddleware` rolls back uncommitted work and exits the context.
+- **Injected dependencies (`db_session` / `db_connection`)**: The dependency generator owns the connection context while the route handler executes. If the handler raises `BaseException`, the generator exits the connection context immediately with `(exc_type, exc_val, exc_tb)` before Litestar renders an exception response. When an HTTP handler returns normally before `http.response.start`, the generator hands the open context to ASGI scope so inner `before_send` applies `commit_mode` against the response status and exits the context immediately for non-streaming responses, deferring streaming responses (`Stream`) until the stream completes or cancels in the outer `ConnectionCleanupMiddleware`. If `asyncio.CancelledError` or an error in `after_request`, response serialization, or an exception handler aborts the request before `http.response.start`, `ConnectionCleanupMiddleware` rolls back uncommitted work and exits the context. After finalization, the detached session raises `ImproperConfigurationError` on further queries instead of reading a returned pool connection.
 - **On-demand accessors (`provide_request_session_*` / `provide_request_connection_*`)**: Connections live directly in ASGI scope. Whenever a handler or hook raises an exception, Litestar's `after_exception` hook runs `record_request_exception` to store the exception in scope before sending the error response. Both `before_send` (under `autocommit` and `manual` modes) and `ConnectionCleanupMiddleware` check this recorded exception before inspecting HTTP status codes, rolling back uncommitted writes and passing `(exc_type, exc_val, exc_tb)` to `__aexit__`.
 
 Both unhandled exceptions and exceptions mapped to HTTP responses by Litestar `exception_handlers` (such as `HTTPException`, `NotFoundError`, `IntegrityError`, or custom handlers returning `4xx` or `2xx` fallback responses) record the exception via `after_exception` and roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies.
@@ -200,6 +219,8 @@ Supported database adapters export a Litestar `Store` implementation under `sqls
 ```
 
 Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
+
+When pairing `ServerSideSessionConfig` (`AsyncpgStore` or another SQLSpec store) with long-lived streaming responses or analytical queries, bind the session store to its own SQLSpec configuration key with explicit `min_size` and `max_size` pool settings so concurrent streams cannot starve session-store checkouts.
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 

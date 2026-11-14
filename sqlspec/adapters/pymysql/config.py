@@ -10,17 +10,31 @@ from sqlspec.adapters.pymysql._typing import (
     PyMysqlConnection,
     PyMysqlCursor,
     PyMysqlDictCursor,
+    PyMysqlMySQLError,
     PyMysqlRawCursor,
     PyMysqlSessionContext,
     PyMysqlSSCursor,
 )
-from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.pymysql.core import (
+    apply_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+    merge_derive_overrides,
+    parse_mysql_replica_shorthand,
+)
 from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    MissingDependencyError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import CLOUD_SQL_CONNECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
@@ -168,6 +182,8 @@ class PyMysqlConnectionParams(TypedDict):
 class PyMysqlPoolParams(PyMysqlConnectionParams):
     """PyMySQL pool parameters."""
 
+    read_only: NotRequired[bool]
+    """Initialize each connection in session read-only mode after native initialization."""
     pool_recycle_seconds: NotRequired[int]
     """Maximum connection age in seconds before recycling pooled PyMySQL connections."""
     health_check_interval: NotRequired[float]
@@ -285,9 +301,23 @@ class PyMysqlConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> PyMysqlConnection:
+        try:
+            return cast("PyMysqlConnection", super().__enter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
+
 
 class _PyMysqlSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> PyMysqlConnection:
+        try:
+            return cast("PyMysqlConnection", super().acquire_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
 
 class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool, PyMysqlDriver]):
@@ -362,7 +392,11 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         Returns:
             PyMysqlConnection: A newly opened connection.
         """
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -385,6 +419,30 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return merge_derive_overrides(config, overrides, clear_pool_name=False)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        values = parse_mysql_replica_shorthand(spec_input)
+        read_only = values.pop("read_only", True)
+        connection = dict(values.pop("connection_config_overrides", {}))
+        config_keys = {
+            "driver_features_overrides",
+            "statement_config",
+            "migration_config",
+            "extension_config",
+            "observability_config",
+            "bind_key",
+        }
+        forwarded = {key: values.pop(key) for key in tuple(values) if key in config_keys}
+        connection.update(values)
+        read_only = connection.pop("read_only", read_only)
+        connection["read_only"] = read_only is not False
+        forwarded["connection_config_overrides"] = connection
+        return forwarded
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
@@ -428,6 +486,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
+        read_only = config.pop("read_only", False)
         connection_factory = None
         if self.driver_features.get("enable_cloud_sql", False):
             connection_factory = self._setup_cloud_sql_connector(config)
@@ -438,12 +497,15 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
                 health_check_interval=health_check,
                 on_connection_create=self._user_connection_hook,
                 connection_factory=connection_factory,
+                read_only=read_only,
             )
-        except BaseException:
+        except BaseException as exc:
             if self._cloud_sql_connector is not None:
                 with contextlib.suppress(Exception):
                     self._cloud_sql_connector.close()
                 self._cloud_sql_connector = None
+            if isinstance(exc, Exception):
+                _raise_mapped_connection_error(exc)
             raise
 
     def _close_pool(self) -> None:
@@ -462,3 +524,16 @@ def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, A
     allow_local_infile = bool(config.pop("allow_local_infile", False))
     config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
     return config
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, PyMysqlMySQLError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

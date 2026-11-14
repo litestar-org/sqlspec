@@ -11,12 +11,14 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast, overload
 from sqlspec.base import SQLSpec, coerce_sqlspec
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions._deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.extensions.sanic._state import SanicConfigState
 from sqlspec.extensions.sanic._utils import (
     get_context_value,
     get_or_create_session,
+    get_or_create_session_async,
     get_request_tenant,
     has_context_value,
     pop_context_value,
@@ -25,6 +27,7 @@ from sqlspec.extensions.sanic._utils import (
 )
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, apply_request_routing_hints
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload, TenantRequestBinding, is_tenant_bypass_route
 from sqlspec.utils.type_guards import has_name
@@ -49,6 +52,8 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.sanic")
+_ROUTING_SCOPE_KEY: Final = "sqlspec_routing_token"
+_RESOURCE_CONTEXTS_KEY: Final = "sqlspec_read_routing_contexts"
 _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 
 _REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
@@ -180,7 +185,15 @@ class SQLSpecPlugin:
                 if getattr(state.config, "bind_key", None) == name:
                     return state.config
             for state in self._config_states:
-                if name in {state.session_key, state.connection_key, state.pool_key}:
+                if name in {
+                    state.session_key,
+                    state.connection_key,
+                    state.pool_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.routing_session_key,
+                }:
                     return state.config
             msg = f"No configuration found for key '{name}'."
             raise KeyError(msg)
@@ -241,26 +254,11 @@ class SQLSpecPlugin:
             self._acquire_deferred_connection_sync(request, config_state)
         return get_or_create_session(request, config_state)
 
-    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
-        """Return a session that opens the asynchronous request connection on its first awaited call."""
-
-        def current_session() -> Any:
-            if has_context_value(request.ctx, config_state.connection_key):
-                return get_or_create_session(request, config_state)
-            return None
-
-        return DeferredAsyncSession(
-            config_state.config,
-            lambda: self.get_session_async(request, config_state.config),
-            current_session,
-            "await plugin.get_session_async(request)",
-        )
-
     async def get_session_async(self, request: Any, key: Any = None) -> Any:
         """Get or create database session asynchronously, acquiring deferred tenant leases on demand."""
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         await self.get_connection_async(request, key)
-        return get_or_create_session(request, config_state)
+        return await get_or_create_session_async(request, config_state)
 
     def get_connection(self, request: Any, key: Any = None) -> Any:
         """Get database connection from request context, checking it out on first access.
@@ -297,6 +295,175 @@ class SQLSpecPlugin:
                         pop_context_value(request.ctx, self._deferred_key(config_state))
         return get_context_value(request.ctx, config_state.connection_key)
 
+    def get_read_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read session."""
+        return self._read_routing_resource(request, key, "session")
+
+    async def get_read_session_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy read session."""
+        return await self._read_routing_resource_async(request, key, "session")
+
+    def get_read_connection(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy read connection."""
+        return self._read_routing_resource(request, key, "connection")
+
+    async def get_read_connection_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy read connection."""
+        return await self._read_routing_resource_async(request, key, "connection")
+
+    def get_routing_session(self, request: Any, key: Any = None) -> Any:
+        """Return the request's lazy routing session."""
+        return self._read_routing_resource(request, key, "routing")
+
+    async def get_routing_session_async(self, request: Any, key: Any = None) -> Any:
+        """Open and return the request's lazy routing session."""
+        return await self._read_routing_resource_async(request, key, "routing")
+
+    def _deferred_session(self, request: Any, config_state: SanicConfigState) -> DeferredAsyncSession:
+        """Return a session that opens the asynchronous request connection on its first awaited call."""
+
+        def current_session() -> Any:
+            if has_context_value(request.ctx, config_state.connection_key):
+                return get_or_create_session(request, config_state)
+            return None
+
+        return DeferredAsyncSession(
+            config_state.config,
+            lambda: self.get_session_async(request, config_state.config),
+            current_session,
+            "await plugin.get_session_async(request)",
+        )
+
+    def _resource_key(self, state: SanicConfigState, kind: str) -> str:
+        key = (
+            state.read_session_key
+            if kind == "session"
+            else state.read_connection_key
+            if kind == "connection"
+            else state.routing_session_key
+        )
+        if key is None:
+            msg = "routing_session_key must be configured to use routing sessions"
+            raise ImproperConfigurationError(msg)
+        return key
+
+    def _read_routing_resource(self, request: Any, key: Any, kind: str) -> Any:
+        state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = self._resource_key(state, kind)
+        current = get_context_value(request.ctx, resource_key, None)
+        if current is not None:
+            return current
+        if state.config.is_async:
+            if kind == "connection":
+                raise_async_connection_required("await plugin.get_read_connection_async(request)")
+            deferred_key = f"{resource_key}_deferred"
+            current = get_context_value(request.ctx, deferred_key, None)
+            if current is None:
+                accessor = (
+                    "await plugin.get_routing_session_async(request)"
+                    if kind == "routing"
+                    else "await plugin.get_read_session_async(request)"
+                )
+                current = DeferredAsyncSession(
+                    state.config,
+                    lambda: self._read_routing_resource_async(request, state.config, kind),
+                    lambda: get_context_value(request.ctx, resource_key, None),
+                    accessor,
+                    target_type=AsyncRoutingSession if kind == "routing" else None,
+                )
+                set_context_value(request.ctx, deferred_key, current)
+            return current
+        captured = TenantContext.require(state.config) if _has_tenant_strategy(state.config) else None
+        context = self._new_read_routing_context(state, kind)
+        with TenantContext.bind(captured):
+            current = context.__enter__()
+        self._publish_read_routing_resource(request, state, resource_key, context, current, captured)
+        return current
+
+    def _new_read_routing_context(self, state: SanicConfigState, kind: str) -> Any:
+        if kind == "routing":
+            return state.config.provide_routing_session()
+        if kind == "session":
+            return state.config.provide_read_session()
+        return state.config.provide_read_connection()
+
+    def _publish_read_routing_resource(
+        self,
+        request: Any,
+        state: SanicConfigState,
+        key: str,
+        context: Any,
+        resource: Any,
+        captured: TenantContextPayload | None,
+    ) -> None:
+        contexts = get_context_value(request.ctx, _RESOURCE_CONTEXTS_KEY, None)
+        if contexts is None:
+            contexts = []
+            set_context_value(request.ctx, _RESOURCE_CONTEXTS_KEY, contexts)
+        contexts.append((state, key, context, resource, captured))
+        set_context_value(request.ctx, key, resource)
+
+    async def _read_routing_resource_async(self, request: Any, key: Any, kind: str) -> Any:
+        state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        resource_key = self._resource_key(state, kind)
+        current = get_context_value(request.ctx, resource_key, None)
+        if current is not None:
+            return current
+        lock_key = f"{resource_key}_lock"
+        lock = get_context_value(request.ctx, lock_key, None)
+        if lock is None:
+            lock = asyncio.Lock()
+            set_context_value(request.ctx, lock_key, lock)
+        async with lock:
+            current = get_context_value(request.ctx, resource_key, None)
+            if current is None:
+                captured = await TenantContext.arequire(state.config) if _has_tenant_strategy(state.config) else None
+                with TenantContext.bind(captured):
+                    context = with_ensure_async_(self._new_read_routing_context(state, kind))
+                    current = await context.__aenter__()
+                self._publish_read_routing_resource(request, state, resource_key, context, current, captured)
+            return current
+
+    async def _close_read_routing_resources(self, request: Any, response: Any, *, cancelled: bool = False) -> None:
+        contexts = pop_context_value(request.ctx, _RESOURCE_CONTEXTS_KEY) or []
+        primary_error: BaseException | None = None
+        for state, key, context, resource, captured in reversed(contexts):
+            error = get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+            if error is None and cancelled:
+                error = asyncio.CancelledError()
+            try:
+                if key == state.routing_session_key and state.commit_mode != "manual" and resource.pinned_to_primary:
+                    if error is None and state.should_commit(self._response_status_code(response)):
+                        try:
+                            await ensure_async_(resource.commit)()
+                        except BaseException:
+                            with contextlib.suppress(Exception):
+                                await ensure_async_(resource.rollback)()
+                            raise
+                    else:
+                        await ensure_async_(resource.rollback)()
+            except BaseException as finalization_error:
+                error = finalization_error
+                primary_error = _select_teardown_exception(primary_error, finalization_error)
+            finally:
+                try:
+                    exit_args = (type(error), error, error.__traceback__) if error is not None else (None, None, None)
+                    with TenantContext.bind(captured):
+                        await with_ensure_async_(context).__aexit__(*exit_args)
+                except BaseException as cleanup_error:
+                    primary_error = _select_teardown_exception(primary_error, cleanup_error)
+                finally:
+                    pop_context_value(request.ctx, key)
+                    _detach_deferred_session(pop_context_value(request.ctx, f"{key}_deferred"))
+                    pop_context_value(request.ctx, f"{key}_lock")
+        for state in self._config_states:
+            for resource_key in (state.read_connection_key, state.read_session_key, state.routing_session_key):
+                if resource_key is not None:
+                    _detach_deferred_session(pop_context_value(request.ctx, f"{resource_key}_deferred"))
+                    pop_context_value(request.ctx, f"{resource_key}_lock")
+        if primary_error is not None:
+            raise primary_error
+
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
 
@@ -315,6 +482,27 @@ class SQLSpecPlugin:
             "connection_key": framework_config.get("connection_key", DEFAULT_CONNECTION_KEY),
             "pool_key": pool_key,
             "session_key": framework_config.get("session_key", DEFAULT_SESSION_KEY),
+            "read_session_key": framework_config.get(
+                "read_session_key",
+                "read_session"
+                if framework_config.get("session_key", DEFAULT_SESSION_KEY) == DEFAULT_SESSION_KEY
+                else f"{framework_config['session_key']}_read",
+            ),
+            "read_connection_key": framework_config.get(
+                "read_connection_key",
+                "read_connection"
+                if framework_config.get("connection_key", DEFAULT_CONNECTION_KEY) == DEFAULT_CONNECTION_KEY
+                else f"{framework_config['connection_key']}_read",
+            ),
+            "read_pool_key": framework_config.get(
+                "read_pool_key", "read_pool" if pool_key == DEFAULT_POOL_KEY else f"{pool_key}_read"
+            ),
+            "routing_session_key": framework_config.get("routing_session_key"),
+            "default_routing_mode": framework_config.get("default_routing_mode", "auto"),
+            "enable_routing_middleware": framework_config.get("enable_routing_middleware", True),
+            "routing_header": framework_config.get("routing_header"),
+            "write_pin_cookie": framework_config.get("write_pin_cookie"),
+            "routing_secret": framework_config.get("routing_secret"),
             "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
@@ -360,6 +548,15 @@ class SQLSpecPlugin:
             auto_trace_headers=settings["auto_trace_headers"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
+            read_session_key=settings["read_session_key"],
+            read_connection_key=settings["read_connection_key"],
+            read_pool_key=settings["read_pool_key"],
+            routing_session_key=settings["routing_session_key"],
+            default_routing_mode=settings["default_routing_mode"],
+            enable_routing_middleware=settings["enable_routing_middleware"],
+            routing_header=settings["routing_header"],
+            write_pin_cookie=settings["write_pin_cookie"],
+            routing_secret=settings["routing_secret"],
         )
 
     def _tenant_state_for(self, key: Any) -> Any:
@@ -418,6 +615,12 @@ class SQLSpecPlugin:
         token = pop_context_value(request.ctx, _TENANT_SCOPE_KEY)
         if token is not None:
             TenantContext.reset(token)
+        self._reset_routing(request)
+
+    def _reset_routing(self, request: Any) -> None:
+        token = pop_context_value(request.ctx, _ROUTING_SCOPE_KEY)
+        if token is not None:
+            RoutingContext.reset(token)
 
     def _add_lifecycle_listeners(self, app: "Sanic[Any, Any]") -> None:
         """Register Sanic server lifecycle listeners.
@@ -486,11 +689,10 @@ class SQLSpecPlugin:
             set_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, exception)
 
     async def _on_lifecycle_response(self, request: Any = None, response: Any = None, **_: Any) -> None:
-        """Finalize request state when an earlier response middleware short-circuits ``_on_response``.
+        """Finalize request connections after the handler returns and restore tenant context.
 
-        Sanic stops running response middleware once one returns a response, so this per-request
-        signal repeats the idempotent finalization before the response is sent. The signal fires
-        after the handler returns, so it also restores the caller's tenant context.
+        Sanic dispatches ``http.lifecycle.response`` once the handler finishes, including after
+        handler-driven ``request.respond()`` streaming, before transmitting the terminal frame.
 
         Args:
             request: Sanic request instance.
@@ -500,7 +702,10 @@ class SQLSpecPlugin:
         if request is None or not hasattr(request, "ctx"):
             return
         try:
-            await self._on_response(request, response)
+            binding = TenantContext.current_binding()
+            if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                await binding.afreeze()
+            await self._finalize_request(request, response)
         finally:
             self._reset_tenant(request)
 
@@ -553,6 +758,17 @@ class SQLSpecPlugin:
                             )
                     except BaseException as exc:
                         primary_exc = _select_teardown_exception(primary_exc, exc)
+            else:
+                for config_state in self._config_states:
+                    if not config_state.disable_di:
+                        pop_context_value(target_request.ctx, self._deferred_key(config_state))
+                        _detach_deferred_session(
+                            pop_context_value(target_request.ctx, self._deferred_session_key(config_state))
+                        )
+            try:
+                await self._close_read_routing_resources(target_request, None, cancelled=True)
+            except BaseException as error:
+                primary_exc = _select_teardown_exception(primary_exc, error)
             if primary_exc is not None:
                 raise primary_exc
         finally:
@@ -568,6 +784,25 @@ class SQLSpecPlugin:
             request: Sanic request instance.
         """
         self._bind_active_request(request)
+        routing_states = [state for state in self._config_states if state.enable_routing_middleware]
+        if routing_states and not has_context_value(request.ctx, _ROUTING_SCOPE_KEY):
+            payload = RoutingContext.current() or RoutingContextPayload()
+            for state in routing_states:
+                if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
+                    payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+                payload = apply_request_routing_hints(
+                    payload,
+                    bind_key=state.config.bind_key,
+                    routing_header_value=request.headers.get(state.routing_header)
+                    if state.routing_header is not None
+                    else None,
+                    cookie_value=request.cookies.get(state.write_pin_cookie)
+                    if state.write_pin_cookie is not None
+                    else None,
+                    write_pin_cookie=state.write_pin_cookie,
+                    routing_secret=state.routing_secret,
+                )
+            set_context_value(request.ctx, _ROUTING_SCOPE_KEY, RoutingContext.set(payload))
         self._set_observability_contexts(request)
         try:
             tenant_keys = tuple(state.config for state in self._config_states if _has_tenant_strategy(state.config))
@@ -595,19 +830,25 @@ class SQLSpecPlugin:
                     self._reset_tenant(request)
 
     async def _on_response(self, request: Any, response: Any) -> None:
-        """Finalize request-scoped connections.
+        """Freeze pending tenant resolutions and restore observability contexts for the response.
 
-        Pending tenant resolutions finish first, so streaming bodies keep the request tenant.
-        The tenant binding itself stays active until the handler returns.
+        Request connections remain active on ``request.ctx`` until ``http.lifecycle.response``
+        runs after the handler returns, so handler-driven streaming keeps its connection.
 
         Args:
             request: Sanic request instance.
             response: Sanic response instance.
         """
+        try:
+            binding = TenantContext.current_binding()
+            if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
+                await binding.afreeze()
+        finally:
+            self._restore_observability_contexts(request, response)
+
+    async def _finalize_request(self, request: Any, response: Any) -> None:
+        """Finalize and release all request-scoped database connections."""
         primary_exc: BaseException | None = None
-        binding = TenantContext.current_binding()
-        if isinstance(binding, TenantRequestBinding) and has_context_value(request.ctx, _TENANT_SCOPE_KEY):
-            await binding.afreeze()
         try:
             for config_state in self._config_states[::-1]:
                 if config_state.disable_di:
@@ -616,11 +857,16 @@ class SQLSpecPlugin:
                     await self._finalize_request_connection(request, response, config_state)
                 except BaseException as exc:
                     primary_exc = _select_teardown_exception(primary_exc, exc)
+            try:
+                await self._close_read_routing_resources(request, response)
+            except BaseException as error:
+                primary_exc = _select_teardown_exception(primary_exc, error)
             if primary_exc is not None:
                 raise primary_exc
         finally:
             self._restore_observability_contexts(request, response)
             self._unbind_active_request(request)
+            self._reset_routing(request)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.
@@ -847,8 +1093,7 @@ class SQLSpecPlugin:
         pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = get_context_value(request.ctx, config_state.connection_key, None)
         if connection is None:
-            if has_context_value(request.ctx, self._connection_manager_key(config_state)):
-                await self._release_request_connection(request, config_state)
+            await self._release_request_connection(request, config_state)
             return
 
         exc_override: BaseException | None = None
@@ -874,6 +1119,12 @@ class SQLSpecPlugin:
     async def _commit_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
         """Commit transaction using active session or connection."""
         session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         target = session if session is not None and hasattr(session, "commit") else connection
         if hasattr(target, "commit"):
             await ensure_async_(target.commit)()
@@ -881,6 +1132,12 @@ class SQLSpecPlugin:
     async def _rollback_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
         """Roll back transaction using active session or connection."""
         session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        if (
+            session is not None
+            and getattr(session, "_auto_begin_on_write", False) is True
+            and not session._connection_in_transaction()
+        ):
+            return
         target = session if session is not None and hasattr(session, "rollback") else connection
         if hasattr(target, "rollback"):
             await ensure_async_(target.rollback)()
@@ -897,33 +1154,52 @@ class SQLSpecPlugin:
         """
         pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = pop_context_value(request.ctx, config_state.connection_key)
-        pop_context_value(request.ctx, f"{config_state.session_key}_instance")
-        pop_context_value(request.ctx, self._deferred_session_key(config_state))
+        session = pop_context_value(request.ctx, f"{config_state.session_key}_instance")
+        deferred = pop_context_value(request.ctx, self._deferred_session_key(config_state))
         connection_manager = pop_context_value(request.ctx, self._connection_manager_key(config_state))
         payload_key = self._tenant_payload_key(config_state)
         has_payload = has_context_value(request.ctx, payload_key)
         captured_payload = pop_context_value(request.ctx, payload_key)
 
-        if connection is None and connection_manager is None:
+        if deferred is not None:
+            deferred_detach = getattr(deferred, "_detach_connection", None)
+            if deferred_detach is not None:
+                deferred_detach()
+
+        if connection is None and connection_manager is None and session is None:
             return
 
-        exc = exc_override if exc_override is not None else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
-        exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
+        try:
+            if session is not None:
+                try:
+                    runtime = getattr(session, "observability", None)
+                    if runtime is not None and not runtime.is_idle:
+                        await runtime.emit_session_end_async(session)
+                finally:
+                    detach = getattr(session, "_detach_connection", None)
+                    if detach is not None:
+                        detach()
+        finally:
+            if connection is not None or connection_manager is not None:
+                exc = (
+                    exc_override
+                    if exc_override is not None
+                    else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+                )
+                exit_args = (type(exc), exc, exc.__traceback__) if exc is not None else (None, None, None)
 
-        if connection_manager is not None:
-            if has_payload:
-                with TenantContext.bind(captured_payload):
-                    await connection_manager.__aexit__(*exit_args)
-            else:
-                await connection_manager.__aexit__(*exit_args)
-            return
-
-        if connection is not None:
-            if has_payload:
-                with TenantContext.bind(captured_payload):
-                    await ensure_async_(connection.close)()
-            else:
-                await ensure_async_(connection.close)()
+                if connection_manager is not None:
+                    if has_payload:
+                        with TenantContext.bind(captured_payload):
+                            await connection_manager.__aexit__(*exit_args)
+                    else:
+                        await connection_manager.__aexit__(*exit_args)
+                elif connection is not None:
+                    if has_payload:
+                        with TenantContext.bind(captured_payload):
+                            await ensure_async_(connection.close)()
+                    else:
+                        await ensure_async_(connection.close)()
 
     def _should_commit(self, config_state: SanicConfigState, status_code: int) -> bool:
         """Determine whether a response status should commit.
@@ -984,6 +1260,12 @@ class SQLSpecPlugin:
             try:
                 pool = await ensure_async_(config_state.config.create_pool)()
                 set_context_value(app.ctx, config_state.pool_key, pool)
+                if config_state.config.has_replicas:
+                    set_context_value(
+                        app.ctx,
+                        config_state.read_pool_key,
+                        config_state.config.replica_groups.get("default", config_state.config.replica_groups),
+                    )
             except Exception:
                 log_with_context(
                     logger,
@@ -1039,6 +1321,7 @@ class SQLSpecPlugin:
                 )
             finally:
                 pop_context_value(app.ctx, config_state.pool_key)
+                pop_context_value(app.ctx, config_state.read_pool_key)
 
     def _ensure_unique_keys(self) -> None:
         """Validate that all context keys are unique across configs.
@@ -1048,9 +1331,21 @@ class SQLSpecPlugin:
         """
         all_keys: set[str] = set()
         for state in self._config_states:
-            keys = {state.connection_key, state.pool_key, state.session_key}
-            duplicates = all_keys & keys
-            if duplicates:
+            keys = [
+                key
+                for key in (
+                    state.connection_key,
+                    state.pool_key,
+                    state.session_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.routing_session_key,
+                )
+                if key is not None
+            ]
+            duplicates = all_keys.intersection(keys)
+            if duplicates or len(keys) != len(set(keys)):
                 msg = f"Duplicate context keys found: {duplicates}"
                 raise ImproperConfigurationError(msg)
             all_keys.update(keys)
@@ -1072,7 +1367,15 @@ class SQLSpecPlugin:
                 if state.session_key == key:
                     return state
             for state in self._config_states:
-                if key in {state.connection_key, state.pool_key, getattr(state.config, "bind_key", None)}:
+                if key in {
+                    state.connection_key,
+                    state.pool_key,
+                    state.read_session_key,
+                    state.read_connection_key,
+                    state.read_pool_key,
+                    state.routing_session_key,
+                    getattr(state.config, "bind_key", None),
+                }:
                     return state
             msg = f"No configuration found with session_key: {key}"
             raise ValueError(msg)
@@ -1116,3 +1419,11 @@ def _select_teardown_exception(current: BaseException | None, candidate: BaseExc
     if isinstance(current, Exception) and not isinstance(candidate, Exception):
         return candidate
     return current
+
+
+def _detach_deferred_session(deferred: Any) -> None:
+    """Detach an unawaited deferred session handle when present."""
+    if deferred is not None:
+        detach = getattr(deferred, "_detach_connection", None)
+        if detach is not None:
+            detach()
