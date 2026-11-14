@@ -207,7 +207,7 @@ requires = ["hatchling", "hatch-mypyc"]
 
 [tool.hatch.build.targets.sdist]
 dev-mode-dirs = ["."]
-exclude = ["/.github", "/docs"]
+exclude = ["/.github", "/docs", "/tests", "/tools", "/uv.lock"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
