@@ -41,7 +41,6 @@ from sqlspec.driver._common import (
     ExecutionResult,
     StackExecutionObserver,
     SyncExceptionHandler,
-    _cache_param_values,
     _raise_database_exception,
     _resolve_fast_params,
     _sqlglot_dialect,
@@ -56,6 +55,7 @@ from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialec
 from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.storage._ingest import execute_load_from_storage_sync, execute_staged_load_sync
 from sqlspec.storage.pipeline import (
     StorageBridgeJob,
@@ -539,11 +539,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a multi-statement script.
-
-        By default, validates each statement and logs warnings for dangerous
-        operations. Use suppress_warnings=True for migrations and admin scripts.
-        """
+        """Execute a multi-statement SQL script."""
         config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
@@ -1375,7 +1371,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                         self._commit_stack_success()
 
                 if started_transaction:
-                    self.commit()
+                    self._commit_stack_success()
             except Exception:
                 if started_transaction:
                     try:
@@ -1654,8 +1650,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return runner(**runner_kwargs)
         driver_name = type(self).__name__
         db_system = self.observability_db_system
+        observed_sql = (
+            redact_sql_literals(compiled_sql)
+            if is_script and runtime._redaction is not None and runtime._redaction.mask_parameters
+            else compiled_sql
+        )
         query_context = {
-            "sql": compiled_sql,
+            "sql": observed_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
             "operation": operation,
@@ -1669,8 +1670,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime.span_manager.is_enabled or (
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
-            sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
+            sql_hash = observability_runtime.compute_sql_hash(observed_sql)
+        span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1679,13 +1680,30 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             self._pending_statement_profile = None
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error_sync(exc, **query_context)
+            runtime.emit_statement_event(
+                sql=observed_sql,
+                parameters=execution_parameters,
+                driver=driver_name,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=is_many,
+                is_script=is_script,
+                rows_affected=None,
+                duration_s=perf_counter() - started,
+                storage_backend=None,
+                started_at=started,
+                precomputed_sql_hash=sql_hash,
+                is_error=True,
+                profile=None,
+                db_system=db_system,
+            )
             raise
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         runtime.emit_query_complete_sync(**{**query_context, "rows_affected": result.rows_affected})
         runtime.emit_statement_event(
-            sql=compiled_sql,
+            sql=observed_sql,
             parameters=execution_parameters,
             driver=driver_name,
             operation=operation,
@@ -1942,9 +1960,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         cached = self._stmt_cache.get(statement)
         if cached is None or cached.param_count != len(params) or cached.input_named_parameters:
             return
-        if self.statement_config.parameter_config.ast_transformer is not None and any(
-            p is None for p in _cache_param_values(params)
-        ):
+        if self.statement_config.parameter_config.ast_transformer is not None:
             return
         self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
 
@@ -1993,11 +2009,11 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
     def _commit_stack_success(self) -> None:
-        """Attempt to commit after a successful stack operation when not batching."""
-        try:
+        """Commit after a successful stack operation when not batching."""
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
             self.commit()
-        except Exception as commit_error:  # pragma: no cover
-            logger.debug("Commit after stack operation failed: %s", commit_error)
+        self._check_pending_exception(exc_handler)
 
     def _storage_pipeline(self) -> "SyncStoragePipeline":
         """Get or create a sync storage pipeline.

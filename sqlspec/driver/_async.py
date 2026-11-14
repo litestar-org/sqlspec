@@ -42,7 +42,6 @@ from sqlspec.driver._common import (
     DataDictionaryMixin,
     ExecutionResult,
     StackExecutionObserver,
-    _cache_param_values,
     _raise_database_exception,
     _resolve_fast_params,
     _sqlglot_dialect,
@@ -57,6 +56,7 @@ from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialec
 from sqlspec.driver._stream import AsyncRowStream, _LazyEagerAsyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.storage._ingest import execute_load_from_storage_async, execute_staged_load_async
 from sqlspec.storage.pipeline import (
     AsyncStoragePipeline,
@@ -541,11 +541,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SQLResult":
-        """Execute a multi-statement script.
-
-        By default, validates each statement and logs warnings for dangerous
-        operations. Use suppress_warnings=True for migrations and admin scripts.
-        """
+        """Execute a multi-statement SQL script."""
         return await self._execute_script(statement, parameters, statement_config, kwargs)
 
     @overload
@@ -1378,7 +1374,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         await self._commit_stack_success()
 
                 if started_transaction:
-                    await self.commit()
+                    await self._commit_stack_success()
             except Exception:
                 if started_transaction:
                     try:
@@ -1664,8 +1660,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             return await runner(**runner_kwargs)
         driver_name = type(self).__name__
         db_system = self.observability_db_system
+        observed_sql = (
+            redact_sql_literals(compiled_sql)
+            if is_script and runtime._redaction is not None and runtime._redaction.mask_parameters
+            else compiled_sql
+        )
         query_context = {
-            "sql": compiled_sql,
+            "sql": observed_sql,
             "parameters": execution_parameters,
             "driver": driver_name,
             "operation": operation,
@@ -1679,8 +1680,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         if runtime.span_manager.is_enabled or (
             runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
         ):
-            sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
+            sql_hash = observability_runtime.compute_sql_hash(observed_sql)
+        span = runtime.start_query_span(observed_sql, operation, driver_name, sql_hash=sql_hash, db_system=db_system)
         started = perf_counter()
         self._pending_statement_profile = None
         try:
@@ -1689,13 +1690,30 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             self._pending_statement_profile = None
             runtime.span_manager.end_span(span, error=exc)
             await runtime.emit_error_async(exc, **query_context)
+            runtime.emit_statement_event(
+                sql=observed_sql,
+                parameters=execution_parameters,
+                driver=driver_name,
+                operation=operation,
+                execution_mode=self.statement_config.execution_mode,
+                is_many=is_many,
+                is_script=is_script,
+                rows_affected=None,
+                duration_s=perf_counter() - started,
+                storage_backend=None,
+                started_at=started,
+                precomputed_sql_hash=sql_hash,
+                is_error=True,
+                profile=None,
+                db_system=db_system,
+            )
             raise
         profile = self._consume_statement_profile()
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         await runtime.emit_query_complete_async(**{**query_context, "rows_affected": result.rows_affected})
         runtime.emit_statement_event(
-            sql=compiled_sql,
+            sql=observed_sql,
             parameters=execution_parameters,
             driver=driver_name,
             operation=operation,
@@ -1920,9 +1938,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         cached = self._stmt_cache.get(statement)
         if cached is None or cached.param_count != len(params) or cached.input_named_parameters:
             return
-        if self.statement_config.parameter_config.ast_transformer is not None and any(
-            p is None for p in _cache_param_values(params)
-        ):
+        if self.statement_config.parameter_config.ast_transformer is not None:
             return
         await self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
 
@@ -2078,11 +2094,11 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger.debug("Rollback after stack error failed: %s", rollback_error)
 
     async def _commit_stack_success(self) -> None:
-        """Attempt to commit after a successful stack operation when not batching (async)."""
-        try:
+        """Commit after a successful stack operation when not batching (async)."""
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler:
             await self.commit()
-        except Exception as commit_error:  # pragma: no cover
-            logger.debug("Commit after stack operation failed: %s", commit_error)
+        self._check_pending_exception(exc_handler)
 
     def _storage_pipeline(self) -> "AsyncStoragePipeline":
         """Get or create an async storage pipeline.

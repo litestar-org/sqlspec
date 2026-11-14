@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage = false
 """Tests for SQL query caching functionality."""
 
+import gc
 import sqlite3
 import threading
 from collections import UserDict
@@ -8,6 +9,7 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
@@ -17,7 +19,9 @@ import pytest
 from sqlglot import parse_one
 
 from sqlspec import ObservabilityConfig
+from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.base import SQLSpec
 from sqlspec.config import LifecycleConfig
@@ -33,6 +37,7 @@ from sqlspec.core import (
     ProcessedState,
     StatementConfig,
     TypedParameter,
+    build_null_pruning_transform,
     clear_all_caches,
     get_cache,
 )
@@ -41,7 +46,7 @@ from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _check_declared_parameters
+from sqlspec.driver._common import _callable_cache_key, _check_declared_parameters, _has_uncacheable_transformers
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import LoggingConfig, StatementEvent
@@ -1767,3 +1772,239 @@ def test_prepare_statement_cache_respects_statement_config_override(tmp_path: Pa
             assert default_after.statement_config is session.statement_config
     finally:
         cfg.close_pool()
+
+
+def _static_output_transformer(sql: str, parameters: Any, alias: str = "tag") -> tuple[str, Any]:
+    return f"SELECT 1 AS {alias}", parameters
+
+
+def _static_statement_transformer(expr: Any, parameters: Any) -> tuple[Any, Any]:
+    return expr, parameters
+
+
+class _IdentityCallable:
+    def __init__(self, marker: str) -> None:
+        self.marker = marker
+
+    def __call__(self, sql: str, parameters: Any) -> tuple[str, Any]:
+        return f"SELECT '{self.marker}' AS marker", parameters
+
+
+def test_callable_cache_key_handles_static_vs_dynamic_callables() -> None:
+    """Static functions stay cacheable while closures, lambdas, and default-hash instances get dynamic keys."""
+    assert _callable_cache_key(None) is None
+    assert _callable_cache_key(_static_statement_transformer) is not None
+    assert (
+        _has_uncacheable_transformers(StatementConfig(statement_transformers=(_static_statement_transformer,))) is False
+    )
+
+    label = "dyn"
+
+    def local_closure(sql: str, parameters: Any) -> tuple[str, Any]:
+        return sql, parameters
+
+    def local_stmt_closure(expr: Any, parameters: Any) -> tuple[Any, Any]:
+        return expr, parameters
+
+    def second_closure(sql: str, parameters: Any) -> tuple[str, Any]:
+        return sql, parameters
+
+    k1 = _callable_cache_key(local_closure)
+    k2 = _callable_cache_key(second_closure)
+    k3 = _callable_cache_key(lambda sql, params: (f"{sql} -- {label}", params))
+    k4 = _callable_cache_key(_IdentityCallable("a"))
+    k5 = _callable_cache_key(partial(_static_output_transformer, alias="x"))
+
+    assert k1 != k2
+    assert "dynamic" in k1
+    assert "dynamic" in k3
+    assert "dynamic" in k4
+    assert "dynamic" in k5
+    assert _has_uncacheable_transformers(StatementConfig(output_transformer=local_closure)) is True
+    assert _has_uncacheable_transformers(StatementConfig(output_transformer=_IdentityCallable("a"))) is True
+    assert _has_uncacheable_transformers(StatementConfig(statement_transformers=(local_stmt_closure,))) is True
+
+
+def test_statement_and_output_transformer_closures_bypass_cache(tmp_path: Path) -> None:
+    """Dynamic closure and stateful callable transformers bypass statement cache safely across GC cycles."""
+
+    def make_output_transform(marker: str) -> Any:
+        def transform(sql: str, parameters: Any) -> tuple[str, Any]:
+            return f"SELECT '{marker}' AS marker", parameters
+
+        return transform
+
+    cfg = SqliteConfig(connection_config={"database": str(tmp_path / "closure_cache.sqlite")})
+    try:
+        with cfg.provide_session() as session:
+            t1 = make_output_transform("first")
+            sc1 = session.statement_config.replace(output_transformer=t1)
+            r1 = session.execute("SELECT 'orig' AS marker", statement_config=sc1).get_data()
+            assert r1 == [{"marker": "first"}]
+            del t1, sc1
+            gc.collect()
+
+            t2 = make_output_transform("second")
+            sc2 = session.statement_config.replace(output_transformer=t2)
+            r2 = session.execute("SELECT 'orig' AS marker", statement_config=sc2).get_data()
+            assert r2 == [{"marker": "second"}]
+
+            c1 = _IdentityCallable("obj-1")
+            r3 = session.execute(
+                "SELECT 'orig' AS marker", statement_config=session.statement_config.replace(output_transformer=c1)
+            ).get_data()
+            assert r3 == [{"marker": "obj-1"}]
+            del c1
+            gc.collect()
+
+            c2 = _IdentityCallable("obj-2")
+            r4 = session.execute(
+                "SELECT 'orig' AS marker", statement_config=session.statement_config.replace(output_transformer=c2)
+            ).get_data()
+            assert r4 == [{"marker": "obj-2"}]
+
+            def make_stmt_transform(literal_val: int) -> Any:
+                def transform(expr: Any, params: Any) -> tuple[Any, Any]:
+                    return parse_one(f"SELECT {literal_val} AS v"), params
+
+                return transform
+
+            st1 = make_stmt_transform(101)
+            sr1 = session.execute(
+                "SELECT 0 AS v", statement_config=session.statement_config.replace(statement_transformers=(st1,))
+            ).get_data()
+            assert sr1 == [{"v": 101}]
+            del st1
+            gc.collect()
+
+            st2 = make_stmt_transform(202)
+            sr2 = session.execute(
+                "SELECT 0 AS v", statement_config=session.statement_config.replace(statement_transformers=(st2,))
+            ).get_data()
+            assert sr2 == [{"v": 202}]
+    finally:
+        cfg.close_pool()
+
+
+def test_ast_transformer_bypasses_statement_cache_with_named_null_pruning(tmp_path: Path) -> None:
+    """Drivers with parameter ast_transformer bypass statement caching even when pruned param counts vary."""
+    clear_all_caches()
+    adbc_cfg = AdbcConfig(connection_config={"driver_name": "adbc_driver_sqlite", "uri": ":memory:"})
+    base_pc = adbc_cfg.statement_config.parameter_config
+    pruning_sc = adbc_cfg.statement_config.replace(
+        parameter_config=base_pc.replace(ast_transformer=build_null_pruning_transform(dialect="sqlite"))
+    )
+    adbc_pruned = AdbcConfig(
+        connection_config={"driver_name": "adbc_driver_sqlite", "uri": str(tmp_path / "adbc_null_prune.sqlite")},
+        statement_config=pruning_sc,
+    )
+    sql_text = "SELECT :a AS c0, :p1 AS c1, :c0 AS c2, :a AS c3"
+    try:
+        with adbc_pruned.provide_session() as session:
+            assert session._stmt_cache_enabled is False
+            first = session.execute(sql_text, {"a": "A1", "p1": None, "c0": "C1"}).get_data()
+            second = session.execute(sql_text, {"a": "A2", "p1": "P2", "c0": "C2"}).get_data()
+            third = session.execute(sql_text, {"a": "A3", "p1": None, "c0": "C3"}).get_data()
+            assert first == [{"c0": "A1", "c1": None, "c2": "C1", "c3": "A1"}]
+            assert second == [{"c0": "A2", "c1": "P2", "c2": "C2", "c3": "A2"}]
+            assert third == [{"c0": "A3", "c1": None, "c2": "C3", "c3": "A3"}]
+    finally:
+        adbc_cfg.close_pool()
+        adbc_pruned.close_pool()
+
+    sqlite_base = SqliteConfig(connection_config={"database": str(tmp_path / "sqlite_null_prune.sqlite")})
+    sqlite_pc = sqlite_base.statement_config.parameter_config.replace(
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+        ast_transformer=build_null_pruning_transform(dialect="sqlite"),
+    )
+    sqlite_pruned = SqliteConfig(
+        connection_config={"database": str(tmp_path / "sqlite_null_prune.sqlite")},
+        statement_config=sqlite_base.statement_config.replace(parameter_config=sqlite_pc),
+    )
+    try:
+        with sqlite_pruned.provide_session() as session:
+            assert session._stmt_cache_enabled is False
+            r1 = session.execute(sql_text, {"a": "A1", "p1": None, "c0": "C1"}).get_data()
+            r2 = session.execute(sql_text, {"a": "A2", "p1": "P2", "c0": "C2"}).get_data()
+            assert r1 == [{"c0": "A1", "c1": None, "c2": "C1", "c3": "A1"}]
+            assert r2 == [{"c0": "A2", "c1": "P2", "c2": "C2", "c3": "A2"}]
+    finally:
+        sqlite_base.close_pool()
+        sqlite_pruned.close_pool()
+
+
+def test_warm_cache_mapping_parameters_with_numeric_and_qmark_styles(tmp_path: Path) -> None:
+    """Warm statement cache aligns positional mapping keys identically to cold compilation across DuckDB and SQLite."""
+    clear_all_caches()
+    duck_cfg = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with duck_cfg.provide_session() as session:
+            cold_rev = session.execute("SELECT $1 AS first_col, $2 AS second_col", {"2": "two", "1": "one"}).get_data()
+            warm_rev = session.execute(
+                "SELECT $1 AS first_col, $2 AS second_col", {"2": "two_w", "1": "one_w"}
+            ).get_data()
+            assert cold_rev == [{"first_col": "one", "second_col": "two"}]
+            assert warm_rev == [{"first_col": "one_w", "second_col": "two_w"}]
+
+            eleven_sql = ", ".join(f"${idx} AS c{idx}" for idx in range(1, 12))
+            eleven_query = f"SELECT {eleven_sql}"
+            reversed_eleven = {str(idx): f"val_{idx}" for idx in range(11, 0, -1)}
+            cold_eleven = session.execute(eleven_query, reversed_eleven).get_data()
+            warm_eleven = session.execute(eleven_query, reversed_eleven).get_data()
+            expected_eleven = [{f"c{idx}": f"val_{idx}" for idx in range(1, 12)}]
+            assert cold_eleven == expected_eleven
+            assert warm_eleven == expected_eleven
+
+            dollar_cold = session.execute("SELECT $1 AS a, $2 AS b", {"$2": "second", "$1": "first"}).get_data()
+            dollar_warm = session.execute("SELECT $1 AS a, $2 AS b", {"$2": "second_w", "$1": "first_w"}).get_data()
+            assert dollar_cold == [{"a": "first", "b": "second"}]
+            assert dollar_warm == [{"a": "first_w", "b": "second_w"}]
+
+            param_cold = session.execute(
+                "SELECT $1 AS a, $2 AS b", {"param_1": "p_second", "param_0": "p_first"}
+            ).get_data()
+            param_warm = session.execute(
+                "SELECT $1 AS a, $2 AS b", {"param_1": "p_second_w", "param_0": "p_first_w"}
+            ).get_data()
+            assert param_cold == [{"a": "p_first", "b": "p_second"}]
+            assert param_warm == [{"a": "p_first_w", "b": "p_second_w"}]
+    finally:
+        duck_cfg.close_pool()
+
+    sqlite_cfg = SqliteConfig(connection_config={"database": str(tmp_path / "sqlite_pos_map.sqlite")})
+    try:
+        with sqlite_cfg.provide_session() as session:
+            qmark_tuple = session.execute("SELECT ? AS first_col, ? AS second_col", ("one", "two")).get_data()
+            qmark_map = session.execute(
+                "SELECT ? AS first_col, ? AS second_col", {"2": "two_w", "1": "one_w"}
+            ).get_data()
+            assert qmark_tuple == [{"first_col": "one", "second_col": "two"}]
+            assert qmark_map == [{"first_col": "one_w", "second_col": "two_w"}]
+
+            clear_all_caches()
+            qmark_cold_map = session.execute(
+                "SELECT ? AS first_col, ? AS second_col", {"2": "two_cold", "1": "one_cold"}
+            ).get_data()
+            qmark_warm_map = session.execute(
+                "SELECT ? AS first_col, ? AS second_col", {"2": "two_warm", "1": "one_warm"}
+            ).get_data()
+            assert qmark_cold_map == [{"first_col": "one_cold", "second_col": "two_cold"}]
+            assert qmark_warm_map == [{"first_col": "one_warm", "second_col": "two_warm"}]
+
+            direct_num_qmark = SQL(
+                "SELECT ?1 AS first_col, ?2 AS second_col",
+                {"2": "two_nq", "1": "one_nq"},
+                statement_config=sqlite_cfg.statement_config,
+            ).compile()
+            clear_all_caches()
+            prepared_num_qmark = session.prepare_statement(
+                "SELECT ?1 AS first_col, ?2 AS second_col", ({"2": "two_nq", "1": "one_nq"},)
+            )
+            driver_num_qmark = session.prepare_driver_parameters(
+                {"2": "two_nq", "1": "one_nq"}, sqlite_cfg.statement_config, prepared_statement=prepared_num_qmark
+            )
+            assert direct_num_qmark[1] == ["one_nq", "two_nq"]
+            assert driver_num_qmark == ["one_nq", "two_nq"]
+    finally:
+        sqlite_cfg.close_pool()

@@ -13,7 +13,9 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import count as _itertools_count
 from time import perf_counter
+from types import BuiltinFunctionType, FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
 from uuid import UUID
 
@@ -21,6 +23,7 @@ import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.builder._ddl import compile_table_ddl_results
@@ -86,6 +89,7 @@ from sqlspec.exceptions import (
     TransactionError,
 )
 from sqlspec.observability import ObservabilityRuntime, get_trace_context, resolve_db_system
+from sqlspec.observability._common import redact_sql_literals
 from sqlspec.protocols import StatementProtocol
 from sqlspec.storage._ingest import (
     execute_load_from_storage_async,
@@ -187,6 +191,26 @@ _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_DOLLAR.value,
     ParameterStyle.NAMED_PYFORMAT.value,
 ))
+_CACHED_POSITIONAL_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.QMARK.value,
+    ParameterStyle.NUMERIC.value,
+    ParameterStyle.POSITIONAL_COLON.value,
+    ParameterStyle.POSITIONAL_PYFORMAT.value,
+))
+_POSITIONAL_DRIVER_STYLES: Final[frozenset[ParameterStyle]] = frozenset((
+    ParameterStyle.NUMERIC,
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_COLON,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+))
+_NAMED_EXECUTION_STYLES: Final[frozenset[ParameterStyle]] = frozenset((
+    ParameterStyle.NAMED_COLON,
+    ParameterStyle.NAMED_PYFORMAT,
+    ParameterStyle.NAMED_AT,
+    ParameterStyle.NAMED_DOLLAR,
+))
+_TOP_LIMIT_DIALECTS: Final[frozenset[str]] = frozenset({"tsql", "mssql"})
+_DYNAMIC_CALLABLE_COUNTER: Final = _itertools_count(1)
 
 
 class SyncExceptionHandler(Protocol):
@@ -1893,10 +1917,14 @@ class CommonDriverAttributesMixin:
             and not cached.applied_wrap_types
             and not config.type_coercion_map
             and not cached.needs_style_remap
+            and not isinstance(params, Mapping)
         ):
             return params
+        rebound_input = _prepare_cached_rebind_input(
+            params, cached.parameter_profile, input_named_parameters=cached.input_named_parameters, is_many=False
+        )
         return self._stmt_cache_rebind_processor.transform_cached_parameters(
-            params,
+            rebound_input,
             cached.parameter_profile,
             config,
             input_named_parameters=cached.input_named_parameters,
@@ -2188,7 +2216,7 @@ class CommonDriverAttributesMixin:
                     return parameters
                 return formatted_many
             return [self._batch_parameters(parameters, statement_config)]
-        return self._driver_parameters(parameters, statement_config)
+        return self._driver_parameters(parameters, statement_config, prepared_statement=prepared_statement)
 
     @staticmethod
     def find_filter(
@@ -2261,6 +2289,7 @@ class CommonDriverAttributesMixin:
             self.connection is not _DETACHED_CONNECTION
             and self._stmt_cache_max_size > 0
             and not self.statement_config._has_transformers
+            and not _has_uncacheable_transformers(self.statement_config)
         )
 
     def _require_capability(self, capability_flag: str) -> None:
@@ -2355,8 +2384,11 @@ class CommonDriverAttributesMixin:
         runtime = self._observability
         if runtime is None or not runtime.has_statement_observers:
             return
+        observed_sql = (
+            redact_sql_literals(sql) if runtime._redaction is not None and runtime._redaction.mask_parameters else sql
+        )
         runtime.emit_statement_event(
-            sql=sql,
+            sql=observed_sql,
             parameters=parameters,
             driver=type(self).__name__,
             operation=operation,
@@ -2396,16 +2428,16 @@ class CommonDriverAttributesMixin:
         config = self.statement_config
         param_config = config.parameter_config
         if param_config.ast_transformer is not None:
-            param_values = _cache_param_values(params)
-            if any(p is None for p in param_values):
-                return None
-        else:
-            param_values = None
+            return None
 
-        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap)
+        needs_rebind = bool(
+            cached.input_named_parameters
+            or cached.applied_wrap_types
+            or cached.needs_style_remap
+            or isinstance(params, Mapping)
+        )
         if not needs_rebind and params:
-            if param_values is None:
-                param_values = _cache_param_values(params)
+            param_values = _cache_param_values(params)
             needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
 
         if not needs_rebind and not config._has_output_transformer:
@@ -2512,9 +2544,7 @@ class CommonDriverAttributesMixin:
         if not statement.is_processed:
             return
         if statement.statement_config.parameter_config.ast_transformer is not None:
-            params = statement.positional_parameters
-            if any(p is None for p in params):
-                return
+            return
         if self._stmt_cache.get(statement.raw_sql) is not None:
             return
 
@@ -2752,13 +2782,18 @@ class CommonDriverAttributesMixin:
         return tuple(updated_params) if isinstance(parameters, tuple) else updated_params
 
     def _driver_parameters(
-        self, parameters: "StatementParameters", statement_config: "StatementConfig"
+        self,
+        parameters: "StatementParameters",
+        statement_config: "StatementConfig",
+        *,
+        prepared_statement: Any | None = None,
     ) -> "ConvertedParameters":
         """Prepare a single parameter set for database driver consumption.
 
         Args:
             parameters: Single parameter set in any format
             statement_config: Statement configuration for parameter style detection
+            prepared_statement: Optional prepared statement containing parameter metadata
 
         Returns:
             Processed parameter set with TypedParameter objects unwrapped and type coercion applied
@@ -2774,16 +2809,31 @@ class CommonDriverAttributesMixin:
             return [coerce_value(parameters, type_coercion_map, fallback_items)]
 
         if isinstance(parameters, dict):
-            if statement_config.parameter_config.supported_execution_parameter_styles and (
-                ParameterStyle.NAMED_PYFORMAT in statement_config.parameter_config.supported_execution_parameter_styles
-                or ParameterStyle.NAMED_COLON in statement_config.parameter_config.supported_execution_parameter_styles
+            processed_state = (
+                prepared_statement._processed_state
+                if isinstance(prepared_statement, SQL)
+                and isinstance(prepared_statement._processed_state, ProcessedState)
+                else None
+            )
+            if processed_state is not None and _is_positional_only_profile(processed_state.parameter_profile):
+                aligned_values = _align_positional_mapping(parameters, processed_state.parameter_profile)
+                return [coerce_value(value, type_coercion_map, fallback_items) for value in aligned_values]
+
+            param_config = statement_config.parameter_config
+            supported_exec = param_config.supported_execution_parameter_styles
+            default_exec = param_config.default_execution_parameter_style
+            supports_named_exec = bool(
+                supported_exec
+                and (ParameterStyle.NAMED_PYFORMAT in supported_exec or ParameterStyle.NAMED_COLON in supported_exec)
+            )
+            if supports_named_exec and not (
+                default_exec in _POSITIONAL_DRIVER_STYLES
+                and all(_parameter_sort_key((key, None)) != float("inf") for key in parameters)
             ):
                 return _lazy_copy_coerce_dict(parameters, coerce_value, type_coercion_map, fallback_items)
-            if statement_config.parameter_config.default_parameter_style in {
-                ParameterStyle.NUMERIC,
-                ParameterStyle.QMARK,
-                ParameterStyle.POSITIONAL_PYFORMAT,
-            }:
+            if param_config.default_parameter_style in _POSITIONAL_DRIVER_STYLES or (
+                default_exec in _POSITIONAL_DRIVER_STYLES and default_exec not in _NAMED_EXECUTION_STYLES
+            ):
                 sorted_items = sorted(parameters.items(), key=_parameter_sort_key)
                 return [coerce_value(value, type_coercion_map, fallback_items) for _, value in sorted_items]
 
@@ -2917,7 +2967,11 @@ class CommonDriverAttributesMixin:
         dialect_key = str(statement.dialect) if statement.dialect else None
         cache_key = None
         cache = None
-        if cache_config.compiled_cache_enabled and statement_config.enable_caching:
+        if (
+            cache_config.compiled_cache_enabled
+            and statement_config.enable_caching
+            and not _has_uncacheable_transformers(statement_config)
+        ):
             cache_key = self._compile_cache_key(statement, statement_config, flatten_single_parameters)
             cache = get_cache()
             cached_result = cache.get_statement(cache_key, dialect_key)
@@ -2931,8 +2985,14 @@ class CommonDriverAttributesMixin:
             if cached_result is not None:
                 parameter_profile = cached_result.parameter_profile
                 if parameter_profile is not None:
-                    prepared_parameters = self._stmt_cache_rebind_processor.transform_cached_parameters(
+                    rebound_input = _prepare_cached_rebind_input(
                         statement.parameters,
+                        parameter_profile,
+                        input_named_parameters=cached_result.input_named_parameters,
+                        is_many=statement.is_many,
+                    )
+                    prepared_parameters = self._stmt_cache_rebind_processor.transform_cached_parameters(
+                        rebound_input,
                         parameter_profile,
                         statement_config.parameter_config,
                         input_named_parameters=cached_result.input_named_parameters,
@@ -3072,6 +3132,9 @@ class CommonDriverAttributesMixin:
                 expr.set("with_", None)
 
         positional_only = not _has_named_input_parameters(original_sql)
+        cte_placeholders = (
+            _count_anonymous_placeholders(cte, count_named_as_positional=positional_only) if cte is not None else 0
+        )
 
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from_")
@@ -3103,7 +3166,14 @@ class CommonDriverAttributesMixin:
                 or has_having
                 or has_agg_or_window
             )
-            leading_stripped = (
+            limit_clause = expr.args.get("limit")
+            has_leading_top = _has_leading_top_limit(expr, original_sql)
+            top_placeholders = (
+                _count_anonymous_placeholders(limit_clause, count_named_as_positional=positional_only)
+                if has_leading_top
+                else 0
+            )
+            select_stripped = (
                 0
                 if needs_subquery
                 else sum(
@@ -3111,9 +3181,13 @@ class CommonDriverAttributesMixin:
                     for select_expr in expr.expressions
                 )
             )
+            leading_stripped = top_placeholders + select_stripped
+            trailing_clauses = (
+                ("order", "offset", "fetch") if has_leading_top else ("order", "limit", "offset", "fetch")
+            )
             trailing_stripped = sum(
                 _count_anonymous_placeholders(expr.args.get(clause), count_named_as_positional=positional_only)
-                for clause in ("order", "limit", "offset", "fetch")
+                for clause in trailing_clauses
             )
             pagination_params = _pagination_names(original_sql, include_select_expressions=not needs_subquery)
             if needs_subquery:
@@ -3138,6 +3212,7 @@ class CommonDriverAttributesMixin:
                 pagination_params=pagination_params,
                 leading_stripped=leading_stripped,
                 trailing_stripped=trailing_stripped,
+                leading_offset=cte_placeholders if cte_placeholders and leading_stripped else 0,
             )
 
         leading_stripped = 0
@@ -3555,11 +3630,131 @@ def _parameter_sort_key(item: "tuple[str, object]") -> float:
     key = item[0]
     if key.isdigit():
         return float(int(key))
+    if len(key) > 1 and key[0] in {"$", ":", "?"} and key[1:].isdigit():
+        return float(int(key[1:]))
     if key.startswith("param_"):
         suffix = key[6:]
         if suffix.isdigit():
             return float(int(suffix))
     return float("inf")
+
+
+def _is_positional_only_profile(parameter_profile: Any) -> bool:
+    if parameter_profile is None or not parameter_profile.parameters:
+        return False
+    return all(style in _CACHED_POSITIONAL_STYLES for style in parameter_profile.styles)
+
+
+def _lookup_mapping_value_for_param(
+    param: Any, mapping: "Mapping[str, Any]", positional_keys: "list[str]", consumed: "set[str]"
+) -> "tuple[Any, bool]":
+    for candidate in (param.name, param.placeholder_text, f"param_{param.ordinal}", str(param.ordinal + 1)):
+        if candidate and candidate in mapping:
+            consumed.add(candidate)
+            return mapping[candidate], True
+    for key in positional_keys:
+        if key not in consumed:
+            consumed.add(key)
+            return mapping[key], True
+    return None, False
+
+
+def _align_positional_mapping(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "tuple[Any, ...]":
+    positional_keys = list(mapping.keys())
+    consumed: set[str] = set()
+    values: list[Any] = []
+    for param in parameter_profile.parameters:
+        value, found = _lookup_mapping_value_for_param(param, mapping, positional_keys, consumed)
+        if not found:
+            return tuple(mapping.values())
+        values.append(value)
+    return tuple(values)
+
+
+def _remap_positional_mapping_dict(mapping: "Mapping[str, Any]", parameter_profile: Any) -> "dict[str, Any]":
+    positional_keys = list(mapping.keys())
+    consumed: set[str] = set()
+    remapped: dict[str, Any] = {}
+    for param in parameter_profile.parameters:
+        target_key = param.name or f"param_{param.ordinal}"
+        if target_key in remapped:
+            continue
+        value, found = _lookup_mapping_value_for_param(param, mapping, positional_keys, consumed)
+        if found:
+            remapped[target_key] = value
+    return remapped
+
+
+def _prepare_single_cached_mapping(
+    mapping: "Mapping[str, Any]", parameter_profile: Any, input_named_parameters: "tuple[str, ...]"
+) -> Any:
+    if input_named_parameters:
+        for name in input_named_parameters:
+            if name not in mapping:
+                return _remap_positional_mapping_dict(mapping, parameter_profile)
+        return mapping
+    return _align_positional_mapping(mapping, parameter_profile)
+
+
+def _prepare_cached_rebind_input(
+    params: Any, parameter_profile: Any, *, input_named_parameters: "tuple[str, ...]", is_many: bool
+) -> Any:
+    if params is None or parameter_profile is None or not _is_positional_only_profile(parameter_profile):
+        return params
+    if not is_many:
+        if isinstance(params, Mapping):
+            return _prepare_single_cached_mapping(params, parameter_profile, input_named_parameters)
+        return params
+    if isinstance(params, (list, tuple)) and params:
+        has_mapping = False
+        for row in params:
+            if isinstance(row, Mapping):
+                has_mapping = True
+                break
+        if not has_mapping:
+            return params
+        updated_rows = [
+            _prepare_single_cached_mapping(row, parameter_profile, input_named_parameters)
+            if isinstance(row, Mapping)
+            else row
+            for row in params
+        ]
+        return tuple(updated_rows) if isinstance(params, tuple) else updated_rows
+    return params
+
+
+def _has_leading_top_limit(expr: "exp.Select", original_sql: "SQL") -> bool:
+    limit_clause = expr.args.get("limit")
+    if not isinstance(limit_clause, exp.Limit):
+        return False
+    dialect = str(original_sql.statement_config.dialect) if original_sql.statement_config.dialect else None
+    normalized_dialect = dialect.lower() if dialect else ""
+    sql_text = original_sql.raw_sql or expr.sql(dialect=dialect)
+    if not sql_text:
+        return normalized_dialect in _TOP_LIMIT_DIALECTS
+    try:
+        tokens = sqlglot.tokenize(sql_text, read=dialect)
+    except SqlglotError:
+        return normalized_dialect in _TOP_LIMIT_DIALECTS
+    depth = 0
+    saw_top = False
+    saw_limit = False
+    for token in tokens:
+        if token.token_type is TokenType.L_PAREN:
+            depth += 1
+        elif token.token_type is TokenType.R_PAREN:
+            if depth > 0:
+                depth -= 1
+        elif depth == 0:
+            if token.token_type is TokenType.TOP:
+                saw_top = True
+            elif token.token_type is TokenType.LIMIT:
+                saw_limit = True
+    if saw_top and not saw_limit:
+        return True
+    if saw_limit:
+        return False
+    return normalized_dialect in _TOP_LIMIT_DIALECTS
 
 
 def _lazy_copy_coerce_dict(
@@ -3800,6 +3995,7 @@ def _build_rewritten_sql(
     pagination_params: "set[str]",
     leading_stripped: int,
     trailing_stripped: int,
+    leading_offset: int = 0,
 ) -> "SQL":
     """Construct a rewritten SQL object with stripped positional or named parameters."""
     positional = original_sql.positional_parameters
@@ -3814,7 +4010,13 @@ def _build_rewritten_sql(
     retained_positional: Any = positional
     if positional and (leading_stripped or trailing_stripped):
         end_idx = len(positional) - trailing_stripped if trailing_stripped else len(positional)
-        retained_positional = positional[leading_stripped:end_idx]
+        if leading_offset:
+            retained_positional = (
+                *positional[:leading_offset],
+                *positional[leading_offset + leading_stripped : end_idx],
+            )
+        else:
+            retained_positional = positional[leading_stripped:end_idx]
 
     if original_sql.named_parameters:
         materialized_parameters = _parameters_for_repeated_names(original_sql, pagination_params)
@@ -3842,6 +4044,27 @@ def _build_rewritten_sql(
     return SQL(rewritten_expr, *retained_positional, statement_config=original_sql.statement_config)
 
 
+def _is_dynamic_callable(func: Any) -> bool:
+    if func is None:
+        return False
+    if isinstance(func, (FunctionType, BuiltinFunctionType)):
+        qualname = getattr(func, "__qualname__", "") or ""
+        return "<locals>" in qualname or getattr(func, "__closure__", None) is not None
+    func_type = type(func)
+    return (
+        getattr(func_type, "__hash__", None) is object.__hash__ or getattr(func_type, "__eq__", None) is object.__eq__
+    )
+
+
+def _has_uncacheable_transformers(config: "StatementConfig") -> bool:
+    param_config = config.parameter_config
+    if param_config.ast_transformer is not None:
+        return True
+    if _is_dynamic_callable(config.output_transformer) or _is_dynamic_callable(param_config.output_transformer):
+        return True
+    return any(_is_dynamic_callable(transformer) for transformer in config.statement_transformers)
+
+
 def _callable_cache_key(func: Any) -> Any:
     """Return a stable cache key component for callables.
 
@@ -3855,7 +4078,11 @@ def _callable_cache_key(func: Any) -> Any:
         return None
     module = getattr(func, "__module__", None)
     qualname = getattr(func, "__qualname__", type(func).__name__)
-    return (module, qualname, id(func))
+    if _is_dynamic_callable(func):
+        return (module, qualname, "dynamic", next(_DYNAMIC_CALLABLE_COUNTER))
+    if isinstance(func, (FunctionType, BuiltinFunctionType)):
+        return (module, qualname, id(func))
+    return (module, qualname, hash(func))
 
 
 def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:

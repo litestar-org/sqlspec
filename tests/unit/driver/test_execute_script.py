@@ -1,10 +1,24 @@
 """Unit tests for execute_script behavior in driver base classes."""
 
+from pathlib import Path
 from typing import Any
 
+import pytest
+
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.core import default_statement_config
+from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL
 from sqlspec.driver import SyncDriverAdapterBase
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.observability import (
+    ObservabilityConfig,
+    ObservabilityRuntime,
+    RedactionConfig,
+    SamplingConfig,
+    StatementEvent,
+)
 from tests.conftest import requires_interpreted
 
 
@@ -137,3 +151,136 @@ def test_dispatch_execute_script_releases_sub_statement_when_statement_fails(
     except RuntimeError:
         pass
     assert len(released) == 2
+
+
+def test_sync_execute_script_redacts_literals_when_mask_parameters_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sync execute_script redacts embedded parameter literals across spans, lifecycle, and observers."""
+    events: list[StatementEvent] = []
+    starts: list[dict[str, Any]] = []
+    span_sqls: list[str] = []
+
+    orig_start_span = ObservabilityRuntime.start_query_span
+
+    def spy_start_span(self: ObservabilityRuntime, sql: str, *args: Any, **kwargs: Any) -> Any:
+        span_sqls.append(sql)
+        return orig_start_span(self, sql, *args, **kwargs)
+
+    monkeypatch.setattr(ObservabilityRuntime, "start_query_span", spy_start_span)
+
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "script_redact_sync.sqlite")},
+        observability_config=ObservabilityConfig(
+            statement_observers=(events.append,),
+            redaction=RedactionConfig(mask_parameters=True, mask_literals=False),
+            lifecycle=LifecycleConfig(on_query_start=[starts.append]),
+        ),
+    )
+    secret = "top-secret-token-sync"
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE items (name TEXT)")
+            events.clear()
+            starts.clear()
+            span_sqls.clear()
+            session.execute_script(
+                "INSERT INTO items (name) VALUES (:secret); SELECT name FROM items WHERE name = :secret", secret=secret
+            )
+    finally:
+        config.close_pool()
+
+    assert events
+    assert all(secret not in event.sql for event in events)
+    assert starts
+    assert all(secret not in str(ctx.get("sql", "")) for ctx in starts)
+    assert span_sqls
+    assert all(secret not in sql_text for sql_text in span_sqls)
+
+
+async def test_async_execute_script_redacts_literals_when_mask_parameters_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Async execute_script redacts embedded parameter literals across spans, lifecycle, and observers."""
+    events: list[StatementEvent] = []
+    starts: list[dict[str, Any]] = []
+    span_sqls: list[str] = []
+
+    orig_start_span = ObservabilityRuntime.start_query_span
+
+    def spy_start_span(self: ObservabilityRuntime, sql: str, *args: Any, **kwargs: Any) -> Any:
+        span_sqls.append(sql)
+        return orig_start_span(self, sql, *args, **kwargs)
+
+    monkeypatch.setattr(ObservabilityRuntime, "start_query_span", spy_start_span)
+
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "script_redact_async.sqlite")},
+        observability_config=ObservabilityConfig(
+            statement_observers=(events.append,),
+            redaction=RedactionConfig(mask_parameters=True, mask_literals=False),
+            lifecycle=LifecycleConfig(on_query_start=[starts.append]),
+        ),
+    )
+    secret = "top-secret-token-async"
+    try:
+        async with config.provide_session() as session:
+            await session.execute("CREATE TABLE items (name TEXT)")
+            events.clear()
+            starts.clear()
+            span_sqls.clear()
+            await session.execute_script(
+                "INSERT INTO items (name) VALUES (:secret); SELECT name FROM items WHERE name = :secret", secret=secret
+            )
+    finally:
+        await config.close_pool()
+
+    assert events
+    assert all(secret not in event.sql for event in events)
+    assert starts
+    assert all(secret not in str(ctx.get("sql", "")) for ctx in starts)
+    assert span_sqls
+    assert all(secret not in sql_text for sql_text in span_sqls)
+
+
+def test_sync_execute_with_observability_emits_error_event_under_zero_sample_rate(tmp_path: Path) -> None:
+    """Sync driver emits an error statement event when force_sample_on_error is enabled."""
+    events: list[StatementEvent] = []
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "err_obs_sync.sqlite")},
+        observability_config=ObservabilityConfig(
+            statement_observers=(events.append,), sampling=SamplingConfig(sample_rate=0.0, force_sample_on_error=True)
+        ),
+    )
+    try:
+        with config.provide_session() as session, pytest.raises(SQLSpecError):
+            session.execute("SELECT * FROM missing_table_sync_err")
+    finally:
+        config.close_pool()
+
+    assert len(events) == 1
+    assert events[0].rows_affected is None
+    assert events[0].duration_s >= 0.0
+    assert events[0].sql == "SELECT * FROM missing_table_sync_err"
+
+
+async def test_async_execute_with_observability_emits_error_event_under_zero_sample_rate(tmp_path: Path) -> None:
+    """Async driver emits an error statement event when force_sample_on_error is enabled."""
+    events: list[StatementEvent] = []
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "err_obs_async.sqlite")},
+        observability_config=ObservabilityConfig(
+            statement_observers=(events.append,), sampling=SamplingConfig(sample_rate=0.0, force_sample_on_error=True)
+        ),
+    )
+    try:
+        async with config.provide_session() as session:
+            with pytest.raises(SQLSpecError):
+                await session.execute("SELECT * FROM missing_table_async_err")
+    finally:
+        await config.close_pool()
+
+    assert len(events) == 1
+    assert events[0].rows_affected is None
+    assert events[0].duration_s >= 0.0
+    assert events[0].sql == "SELECT * FROM missing_table_async_err"

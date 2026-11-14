@@ -1340,3 +1340,52 @@ def test_count_query_handles_parameter_nodes_for_named_at_numeric_and_colon(
     assert compiled_params == expected_params
     if expect_zero_reparses:
         assert parse_calls == []
+
+
+@pytest.mark.parametrize(
+    ("query_sql", "param_arg", "expected_params"),
+    [
+        ("SELECT TOP (?) id, name FROM items WHERE tenant_id = ?", (10, "acme"), ["acme"]),
+        ("SELECT TOP (?) id, name FROM items WHERE tenant_id = ? ORDER BY ?", (5, "acme", "id"), ["acme"]),
+        ("SELECT TOP (?) tenant_id FROM items WHERE active = ? GROUP BY tenant_id", (3, True), [True]),
+        (
+            "WITH recent AS (SELECT id FROM logs WHERE org_id = ?) SELECT TOP (?) id FROM recent WHERE active = ?",
+            ("org-1", 5, True),
+            ["org-1", True],
+        ),
+        (
+            "SELECT TOP (:lim) id FROM items WHERE tenant_id = :tenant_id",
+            {"lim": 10, "tenant_id": "acme"},
+            {"tenant_id": "acme"},
+        ),
+    ],
+)
+def test_count_query_strips_tsql_leading_top_placeholders(
+    mock_driver: "MockSyncDriver", query_sql: str, param_arg: Any, expected_params: Any
+) -> None:
+    """_count_query strips T-SQL TOP placeholders from leading parameters instead of trailing parameters."""
+    param_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        supported_execution_parameter_styles={ParameterStyle.QMARK},
+    )
+    if isinstance(param_arg, dict):
+        param_config = param_config.replace(
+            default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+            supported_execution_parameter_styles={ParameterStyle.NAMED_COLON},
+        )
+    cfg = StatementConfig(dialect="tsql", parameter_config=param_config)
+    mock_driver.statement_config = cfg
+    sql = (
+        mock_driver.prepare_statement(SQL(query_sql, statement_config=cfg, **param_arg), statement_config=cfg)
+        if isinstance(param_arg, dict)
+        else mock_driver.prepare_statement(SQL(query_sql, param_arg, statement_config=cfg), statement_config=cfg)
+    )
+    sql.compile()
+
+    count_sql = mock_driver._count_query(sql)
+    compiled_sql, compiled_params = count_sql.compile()
+    assert "count(*)" in compiled_sql.lower()
+    assert "TOP" not in compiled_sql.upper()
+    assert compiled_params == expected_params
