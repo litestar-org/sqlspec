@@ -486,3 +486,13 @@ def test_split_caches_only_scripts_within_size_bound() -> None:
     second = splitter.split(large)
     assert first == second
     assert first is not second
+
+
+def test_unknown_dialects_reuse_generic_splitter_cache_and_bound_warnings() -> None:
+    """Unknown dialect names reuse the generic splitter entry and bound warning history."""
+    splitter_module.clear_splitter_caches()
+    _ = [split_sql_script("SELECT 1;", dialect=f"custom_dialect_{i}") for i in range(300)]
+
+    assert len(splitter_module._splitter_cache) == 1
+    assert next(iter(splitter_module._splitter_cache)) == ("generic", False)
+    assert len(splitter_module._warned_unknown_dialects) <= splitter_module._MAX_WARNED_UNKNOWN_DIALECTS

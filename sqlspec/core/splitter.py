@@ -17,6 +17,7 @@ import logging
 import re
 import threading
 from abc import abstractmethod
+from collections import OrderedDict
 from collections.abc import Callable
 from enum import Enum
 from re import Pattern
@@ -269,10 +270,10 @@ class _EagerDialectConfig(DialectConfig):
     __slots__ = ()
 
     _DIALECT_NAME = ""
-    _BLOCK_STARTERS: frozenset[str] = frozenset()
-    _BLOCK_ENDERS: frozenset[str] = frozenset({"END"})
-    _STATEMENT_TERMINATORS: frozenset[str] = frozenset({";"})
-    _BATCH_SEPARATORS: frozenset[str] = frozenset()
+    _BLOCK_STARTERS: tuple[str, ...] = ()
+    _BLOCK_ENDERS: tuple[str, ...] = ("END",)
+    _STATEMENT_TERMINATORS: tuple[str, ...] = (";",)
+    _BATCH_SEPARATORS: tuple[str, ...] = ()
     _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = ()
     _MAX_NESTING_DEPTH = 256
 
@@ -330,7 +331,7 @@ class OracleDialectConfig(_EagerDialectConfig):
     """Configuration for Oracle PL/SQL dialect."""
 
     _DIALECT_NAME = "oracle"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "DECLARE", "CASE")
 
     def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed for Oracle slash terminators.
@@ -459,9 +460,9 @@ class TSQLDialectConfig(_EagerDialectConfig):
     """Configuration for T-SQL (SQL Server) dialect."""
 
     _DIALECT_NAME = "tsql"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "TRY"})
-    _BLOCK_ENDERS = frozenset({"END", "CATCH"})
-    _BATCH_SEPARATORS = frozenset({"GO"})
+    _BLOCK_STARTERS = ("BEGIN", "TRY")
+    _BLOCK_ENDERS = ("END", "CATCH")
+    _BATCH_SEPARATORS = ("GO",)
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get T-SQL-specific token patterns.
@@ -476,7 +477,7 @@ class PostgreSQLDialectConfig(_EagerDialectConfig):
     """Configuration for PostgreSQL dialect with dollar-quoted strings."""
 
     _DIALECT_NAME = "postgresql"
-    _BLOCK_STARTERS = frozenset({"CASE", "BEGIN ATOMIC"})
+    _BLOCK_STARTERS = ("CASE", "BEGIN ATOMIC")
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get PostgreSQL-specific token patterns.
@@ -514,7 +515,7 @@ class GenericDialectConfig(_EagerDialectConfig):
     """Generic SQL dialect configuration for standard SQL."""
 
     _DIALECT_NAME = "generic"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "DECLARE", "CASE")
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get generic token patterns covering common quote extensions."""
@@ -531,7 +532,7 @@ class MySQLDialectConfig(_EagerDialectConfig):
     """Configuration for MySQL dialect."""
 
     _DIALECT_NAME = "mysql"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "DECLARE", "CASE")
     _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = (
         ("\\g", _special_terminator_true),
         ("\\G", _special_terminator_true),
@@ -555,7 +556,7 @@ class SQLiteDialectConfig(_EagerDialectConfig):
     """Configuration for SQLite dialect."""
 
     _DIALECT_NAME = "sqlite"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "CASE")
 
 
 @final
@@ -563,7 +564,7 @@ class DuckDBDialectConfig(_EagerDialectConfig):
     """Configuration for DuckDB dialect."""
 
     _DIALECT_NAME = "duckdb"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "CASE")
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get DuckDB-specific token patterns.
@@ -579,7 +580,7 @@ class BigQueryDialectConfig(_EagerDialectConfig):
     """Configuration for BigQuery dialect."""
 
     _DIALECT_NAME = "bigquery"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "CASE")
 
 
 @final
@@ -587,7 +588,7 @@ class Db2DialectConfig(_EagerDialectConfig):
     """Configuration for IBM Db2 LUW scripts."""
 
     _DIALECT_NAME = "db2"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "CASE")
 
 
 @final
@@ -597,7 +598,7 @@ class SnowflakeDialectConfig(_EagerDialectConfig):
     __slots__ = ()
 
     _DIALECT_NAME = "snowflake"
-    _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+    _BLOCK_STARTERS = ("BEGIN", "DECLARE", "CASE")
 
     def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Match literals before comments and distinguish transactions from blocks."""
@@ -655,7 +656,8 @@ _result_cache: LRUCache | None = None
 _cache_lock = threading.Lock()
 _splitter_cache_lock = threading.Lock()
 _unknown_dialect_warning_lock = threading.Lock()
-_warned_unknown_dialects: set[str] = set()
+_MAX_WARNED_UNKNOWN_DIALECTS: Final[int] = 256
+_warned_unknown_dialects: OrderedDict[str, None] = OrderedDict()
 _splitter_cache: dict[tuple[str, bool], "StatementSplitter"] = {}
 
 
@@ -1001,6 +1003,7 @@ def _get_cached_splitter(dialect: str | None, *, strip_trailing_terminator: bool
     if config_class is None:
         _warn_unknown_dialect_once(dialect)
         config_class = GenericDialectConfig
+        dialect_key = "generic"
 
     cache_key = (dialect_key, strip_trailing_terminator)
     splitter = _splitter_cache.get(cache_key)
@@ -1061,8 +1064,11 @@ def _warn_unknown_dialect_once(dialect: "str | None") -> None:
     key = "<none>" if dialect is None else dialect.lower()
     with _unknown_dialect_warning_lock:
         if key in _warned_unknown_dialects:
+            _warned_unknown_dialects.move_to_end(key)
             return
-        _warned_unknown_dialects.add(key)
+        if len(_warned_unknown_dialects) >= _MAX_WARNED_UNKNOWN_DIALECTS:
+            _warned_unknown_dialects.popitem(last=False)
+        _warned_unknown_dialects[key] = None
     logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
 
 

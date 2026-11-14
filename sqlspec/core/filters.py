@@ -23,7 +23,7 @@ import re
 from abc import abstractmethod
 from collections import abc
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -79,6 +79,7 @@ __all__ = (
 )
 
 _MAX_QUALIFIED_PARTS = 4
+_CURSOR_KEY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 T = TypeVar("T")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
@@ -606,7 +607,7 @@ class CursorKey:
             msg = "nulls must be 'first', 'last', or None"
             raise ValueError(msg)
         name = field_name.rsplit(".", 1)[-1] if result_name is None else result_name
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+        if not _CURSOR_KEY_NAME_PATTERN.fullmatch(name):
             msg = "result_name must be a simple column name"
             raise ValueError(msg)
         self._field_name = field_name
@@ -779,7 +780,8 @@ class CursorFilter(PaginationFilter):
         target = (
             current if isinstance(current, exp.Select) and not wrap else wrap_as_subquery(current, alias="cursor_page")
         )
-        proposed = list(self.extract_parameters()[1])
+        _, extracted_parameters = self.extract_parameters()
+        proposed = list(extracted_parameters)
         resolved = dict(zip(proposed, self._resolve_parameter_conflicts(statement, proposed), strict=True))
         items: list[exp.Ordered] = []
         predicates: list[tuple[exp.Expr | bool, exp.Expr | bool]] = []
@@ -816,7 +818,7 @@ class CursorFilter(PaginationFilter):
         target.limit(exp.Placeholder(this=resolved["cursor_limit"]), copy=False)
         target.set("offset", None)
         result = statement.copy(statement=target)
-        for name, value in self.extract_parameters()[1].items():
+        for name, value in extracted_parameters.items():
             result = result.add_named_parameter(resolved[name], value)
         return result
 

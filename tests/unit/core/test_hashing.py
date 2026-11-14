@@ -579,3 +579,17 @@ def test_hash_sql_statement_includes_statement_config() -> None:
     stmt1 = SQL("SELECT 1", statement_config=cfg1)
     stmt2 = SQL("SELECT 1", statement_config=cfg2)
     assert hash_sql_statement(stmt1) != hash_sql_statement(stmt2)
+
+
+def test_hash_expression_is_deterministic_across_shared_child_nodes() -> None:
+    """DAGs reusing the same child node object hash identically to non-aliased ASTs."""
+    shared_col = exp.column("id")
+    dag_expr = exp.select(shared_col).from_("users").where(exp.EQ(this=shared_col, expression=exp.Literal.number(1)))
+    fresh_expr = (
+        exp
+        .select(exp.column("id"))
+        .from_("users")
+        .where(exp.EQ(this=exp.column("id"), expression=exp.Literal.number(1)))
+    )
+
+    assert hash_expression(dag_expr) == hash_expression(fresh_expr)
