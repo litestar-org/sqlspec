@@ -217,3 +217,22 @@ def test_local_backends_confine_symlinks_outside_root(tmp_path: Path, backend_ki
         import pyarrow as pa
 
         assert pa.Table.from_batches(batches).to_pydict() == {"id": [1]}
+
+
+def test_local_store_rejects_outside_file_uri_and_resolves_inside_file_uri(tmp_path: Path) -> None:
+    """LocalStore rejects escaping file:// URIs and resolves in-root file:// URIs and globs consistently."""
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "nested" / "data.txt"
+    target.parent.mkdir()
+    target.write_bytes(b"ok")
+
+    store = LocalStore(f"file://{root}")
+    assert store.resolve_uri(f"file://{target}") == str(target.resolve())
+    assert store.read_bytes_sync(f"file://{target}") == b"ok"
+    assert store.glob_sync(f"file://{root}/nested/*.txt") == ["nested/data.txt"]
+
+    with pytest.raises(StoragePathTraversalError):
+        store.resolve_uri("file:///etc/passwd")
+    with pytest.raises(StoragePathTraversalError):
+        store.glob_sync("file:///etc/*.txt")

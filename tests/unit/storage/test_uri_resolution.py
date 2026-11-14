@@ -85,6 +85,8 @@ def test_file_backends_resolve_equivalent_absolute_paths(tmp_path: Path) -> None
     )
 
     assert [backend.resolve_uri("data.parquet") for backend in backends] == [expected, expected, expected]
+    file_target = f"file://{tmp_path / 'workspaces' / 'data.parquet'}"
+    assert [backend.resolve_uri(file_target) for backend in backends] == [expected, expected, expected]
 
 
 def _remote_obstore(store_uri: str, base_path: str = "") -> Any:
