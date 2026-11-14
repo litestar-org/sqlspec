@@ -2,11 +2,12 @@
 
 import hashlib
 import importlib
+import inspect
 import os
 from abc import abstractmethod
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NotRequired, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NotRequired, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
@@ -49,6 +50,9 @@ DriverT = TypeVar("DriverT")
 ConfigT = TypeVar("ConfigT", bound="DatabaseConfigProtocol[Any, Any, Any]")
 
 logger = get_logger("sqlspec.migrations.base")
+_MAX_LOCK_NAME_LENGTH: Final[int] = 64
+_LOCK_NAME_HASH_BYTES: Final[int] = 6
+_LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
 
 
 class LoadedMigrationMetadata(TypedDict):
@@ -524,8 +528,14 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     def _migration_lock_key(self) -> "tuple[str, int]":
         """Derive the bounded lock name and signed 64-bit integer advisory lock ID."""
-        lock_name = f"sqlspec_mig_{self.version_table}"[:64]
-        lock_id = int.from_bytes(hashlib.sha256(lock_name.encode("utf-8")).digest()[:8], "big", signed=True)
+        raw_key = f"sqlspec_mig_{self.version_table}"
+        digest = hashlib.sha256(raw_key.encode("utf-8")).digest()
+        lock_name = (
+            raw_key
+            if len(raw_key) <= _MAX_LOCK_NAME_LENGTH
+            else f"{raw_key[:_LOCK_NAME_PREFIX_LENGTH]}_{digest[:_LOCK_NAME_HASH_BYTES].hex()}"
+        )
+        lock_id = int.from_bytes(digest[:8], "big", signed=True)
         return lock_name, lock_id
 
     @classmethod
@@ -1141,3 +1151,17 @@ out-of-order migrations gracefully.
         resolved_echo = self._resolve_echo(echo)
         resolved_summary_only = self._resolve_summary_only(summary_only)
         return resolved_use_logger, resolved_echo, resolved_summary_only
+
+
+async def _driver_in_transaction_async(driver: Any) -> bool:
+    """Return True when ``driver`` reports an active transaction via async or sync hooks."""
+    transaction_open = getattr(driver, "_transaction_open", None)
+    if callable(transaction_open):
+        return bool(await cast("Awaitable[Any]", transaction_open()))
+    conn_checker = getattr(driver, "_connection_in_transaction", None)
+    if callable(conn_checker):
+        result = conn_checker()
+        if inspect.isawaitable(result):
+            return bool(await result)
+        return bool(result)
+    return False

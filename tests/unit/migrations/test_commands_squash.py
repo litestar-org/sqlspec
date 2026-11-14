@@ -5,6 +5,7 @@ Tests for:
 - AsyncMigrationCommands.squash()
 """
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,12 @@ import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.data_dictionary import DDLResult, MetadataSupport, ObjectIdentity
+from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import SquashValidationError
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
 from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.squash import MigrationSquasher
 
 
 def _write_users_posts_migrations(migrations_dir: Path) -> None:
@@ -312,3 +316,80 @@ async def test_async_default_concat_squash_round_trip(tmp_path: Path) -> None:
 
     assert _schema_and_rows(tmp_path / "author.db")[1] == [("0001", "0001,0002,0003")]
     assert _schema_and_rows(tmp_path / "fresh.db") == (expected_schema, [("0001", "0001,0002,0003")], expected_users)
+
+
+def test_schema_squash_unquotes_dotted_version_table_exclusion(tmp_path: Path) -> None:
+    """MigrationSquasher unquotes dotted schema-qualified version table names before excluding from DDL."""
+    seen_exclusions: list[tuple[str, ...]] = []
+
+    class _FakeDataDictionary:
+        def get_schema_ddl(self, _driver: Any, *, exclude_tables: tuple[str, ...], direction: str) -> list[DDLResult]:
+            seen_exclusions.append(exclude_tables)
+            sql_text = "CREATE TABLE users (id INTEGER);" if direction == "create" else "DROP TABLE users;"
+            return [DDLResult(ObjectIdentity("users", "table"), MetadataSupport.SUPPORTED, ddl=sql_text)]
+
+    class _FakeDriver(SyncDriverAdapterBase):
+        dialect = "sqlite"
+
+        @property
+        def data_dictionary(self) -> Any:
+            return _FakeDataDictionary()
+
+        def __init__(self) -> None:
+            pass
+
+    runner = Mock()
+    runner.context = MigrationContext(driver=_FakeDriver(), dialect="sqlite")
+    squasher = MigrationSquasher(tmp_path, runner, strategy="schema", version_table='"audit.v1"."ddl.migrations"')
+    create_stmts, drop_stmts = squasher._extract_schema_ddl_from_context()  # pyright: ignore[reportPrivateUsage]
+    assert seen_exclusions == [("ddl.migrations",), ("ddl.migrations",)]
+    assert create_stmts == ["CREATE TABLE users (id INTEGER);"]
+    assert drop_stmts == ["DROP TABLE users;"]
+
+
+@pytest.mark.anyio
+async def test_squash_and_fix_restore_backups_on_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BaseException interrupts during squash or fix restore backup files instead of leaving partial edits."""
+    squash_dir = tmp_path / "squash_migrations"
+    _write_users_posts_migrations(squash_dir)
+    squash_cfg = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "squash_cancel.db")},
+        migration_config={"script_location": str(squash_dir), "enabled": True},
+    )
+    try:
+        squash_cmds = AsyncMigrationCommands(squash_cfg)
+        await squash_cmds.upgrade(echo=False)
+
+        async def _cancel_replace(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(squash_cmds.tracker, "replace_with_squash", _cancel_replace)
+        with pytest.raises(asyncio.CancelledError):
+            await squash_cmds.squash(yes=True)
+    finally:
+        await squash_cfg.close_pool()
+
+    assert sorted(p.name for p in squash_dir.glob("*.sql")) == ["0001_users.sql", "0002_email.sql", "0003_posts.sql"]
+
+    fix_dir = tmp_path / "fix_migrations"
+    fix_dir.mkdir()
+    (fix_dir / "20250101120000_first.sql").write_text(
+        "-- name: migrate-20250101120000-up\nCREATE TABLE a (id INT);", encoding="utf-8"
+    )
+    fix_cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "fix_cancel.db")},
+        migration_config={"script_location": str(fix_dir), "enabled": True},
+    )
+    try:
+        fix_cmds = SyncMigrationCommands(fix_cfg)
+
+        def _interrupt_ensure(*_args: Any, **_kwargs: Any) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(fix_cmds.tracker, "ensure_tracking_table", _interrupt_ensure)
+        with pytest.raises(KeyboardInterrupt):
+            fix_cmds.fix(yes=True)
+    finally:
+        fix_cfg.close_pool()
+
+    assert sorted(p.name for p in fix_dir.glob("*.sql")) == ["20250101120000_first.sql"]

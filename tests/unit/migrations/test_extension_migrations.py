@@ -3,6 +3,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -30,6 +31,7 @@ from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError, MigrationError
 from sqlspec.migrations.base import ExtensionReconcilerDescriptor
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.utils import UNCONDITIONAL_BUILTIN_RECONCILE_ADAPTERS, validate_builtin_reconcile_adapter
 
 
@@ -757,3 +759,153 @@ def downgrade(context):
         }
     cfg.close_pool()
     assert "ext_demo_t" not in tables_after_base
+
+
+@pytest.mark.anyio
+async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontransactional_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AsyncMigrationRunner awaits async transaction hooks during non-transactional commit and error recovery."""
+
+    async def _open_true() -> bool:
+        return True
+
+    async def _open_false() -> bool:
+        return False
+
+    async def _not_impl() -> bool:
+        raise NotImplementedError
+
+    def _attr_err() -> bool:
+        raise AttributeError
+
+    assert await AsyncMigrationRunner._has_active_implicit_transaction_async(cast("Any", SimpleNamespace())) is False  # pyright: ignore[reportPrivateUsage]
+    assert (
+        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
+            cast("Any", SimpleNamespace(_transaction_open=_open_true))
+        )
+        is True
+    )
+    assert (
+        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
+            cast("Any", SimpleNamespace(_connection_in_transaction=_open_true))
+        )
+        is True
+    )
+    assert (
+        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
+            cast("Any", SimpleNamespace(_connection_in_transaction=_open_false, _has_implicit_transaction=_open_true))
+        )
+        is True
+    )
+    assert (
+        await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
+            cast(
+                "Any",
+                SimpleNamespace(
+                    _transaction_open=_not_impl,
+                    _connection_in_transaction=_attr_err,
+                    _has_implicit_transaction="not-callable",
+                ),
+            )
+        )
+        is False
+    )
+
+    events: list[str] = []
+
+    class _AsyncNontxDriver:
+        dialect = "postgres"
+
+        async def _transaction_open(self) -> bool:
+            events.append("tx_open")
+            return True
+
+        def _connection_in_transaction(self) -> bool:
+            raise AssertionError("sync _connection_in_transaction should not be called")
+
+        async def commit(self) -> None:
+            events.append("commit")
+
+        async def rollback(self) -> None:
+            events.append("rollback")
+
+    runner = AsyncMigrationRunner(tmp_path)
+    driver: Any = _AsyncNontxDriver()
+    await runner._commit_nontransactional_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+    assert events == ["tx_open", "commit"]
+
+    events.clear()
+    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path="demo.reconcile")
+    monkeypatch.setattr(runner, "_resolve_migration_schema", lambda _meta: None)
+    monkeypatch.setattr(runner, "_resolve_use_transaction", lambda _meta, _default: False)
+
+    async def _fail_invoke(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("reconcile boom")
+
+    monkeypatch.setattr(runner, "_invoke_reconciler", _fail_invoke)
+    with pytest.raises(MigrationError, match="failed with RuntimeError") as exc_info:
+        await runner._execute_reconciler_step(driver, descriptor, direction="up")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events == ["tx_open", "rollback"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_reconciler_savepoint_start_discards_stale_recovery_marker(
+    tmp_path: Path, is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Starting a reconciler savepoint inside an outer lock clears stale savepoint recovery flags."""
+    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path="demo.reconcile")
+
+    if is_async:
+        runner_async = AsyncMigrationRunner(tmp_path)
+        observed_before_body: list[bool] = []
+
+        class _AsyncSavepointDriver:
+            dialect = "sqlite"
+
+            async def create_savepoint(self, _name: str) -> None:
+                observed_before_body.append(id(self) in runner_async._savepoint_recovered_drivers)  # pyright: ignore[reportPrivateUsage]
+
+            async def release_savepoint(self, _name: str) -> None:
+                return None
+
+        async def _noop_async(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(runner_async, "_resolve_migration_schema", lambda _meta: None)
+        monkeypatch.setattr(runner_async, "_resolve_use_transaction", lambda _meta, _default: True)
+        monkeypatch.setattr(runner_async, "_invoke_reconciler", _noop_async)
+        driver_async: Any = _AsyncSavepointDriver()
+        with runner_async.outer_lock(driver_async):
+            runner_async._savepoint_recovered_drivers.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
+            await runner_async._execute_reconciler_step(driver_async, descriptor, direction="up")  # pyright: ignore[reportPrivateUsage]
+        assert observed_before_body == [False]
+        assert id(driver_async) not in runner_async._savepoint_recovered_drivers  # pyright: ignore[reportPrivateUsage]
+        return
+
+    runner_sync = SyncMigrationRunner(tmp_path)
+    observed_sync: list[bool] = []
+
+    class _SyncSavepointDriver:
+        dialect = "sqlite"
+
+        def create_savepoint(self, _name: str) -> None:
+            observed_sync.append(id(self) in runner_sync._savepoint_recovered_drivers)  # pyright: ignore[reportPrivateUsage]
+
+        def release_savepoint(self, _name: str) -> None:
+            return None
+
+    def _noop_sync(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(runner_sync, "_resolve_migration_schema", lambda _meta: None)
+    monkeypatch.setattr(runner_sync, "_resolve_use_transaction", lambda _meta, _default: True)
+    monkeypatch.setattr(runner_sync, "_invoke_reconciler", _noop_sync)
+    driver_sync: Any = _SyncSavepointDriver()
+    with runner_sync.outer_lock(driver_sync):
+        runner_sync._savepoint_recovered_drivers.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
+        runner_sync._execute_reconciler_step(driver_sync, descriptor, direction="up")  # pyright: ignore[reportPrivateUsage]
+    assert observed_sync == [False]
+    assert id(driver_sync) not in runner_sync._savepoint_recovered_drivers  # pyright: ignore[reportPrivateUsage]

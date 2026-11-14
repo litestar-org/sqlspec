@@ -38,7 +38,7 @@ from sqlspec.migrations.validation import (
 )
 from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.text import slugify
+from sqlspec.utils.text import slugify, split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.migrations.runner import SyncMigrationRunner
@@ -2171,7 +2171,8 @@ class MigrationSquasher:
                 "pass schema_ddl when reflecting through an async driver"
             )
             raise SquashValidationError(msg)
-        version_table = self.version_table.rsplit(".", 1)[-1].strip('"`[]')
+        version_parts = split_qualified_identifier(self.version_table, quote_chars='"`', allow_bracket_quotes=True)
+        version_table = version_parts[-1] if version_parts else self.version_table.strip('"`[]')
         data_dictionary = driver.data_dictionary
         create_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="create")
         drop_res = data_dictionary.get_schema_ddl(driver, exclude_tables=(version_table,), direction="drop")

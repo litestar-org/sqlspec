@@ -25,7 +25,7 @@ from sqlglot.errors import SqlglotError
 
 from sqlspec.builder import CreateTable, sql
 from sqlspec.exceptions import MigrationError, SQLBuilderError, SQLSpecError, SquashValidationError
-from sqlspec.migrations.base import BaseMigrationCommands, BaseMigrationTracker
+from sqlspec.migrations.base import BaseMigrationCommands, BaseMigrationTracker, _driver_in_transaction_async
 from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, BaseMigrationRunner, SyncMigrationRunner
@@ -1966,7 +1966,7 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                     console.print("[green]✓ Updated migration tracking table[/]")
             else:
                 self._apply_squash_files(squasher, plans)
-        except Exception:
+        except BaseException:
             squasher.rollback_backup()
             raise
         self._finish_squash(squasher)
@@ -2050,6 +2050,9 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             console.print(f"[red]✗ Error: {e}[/]")
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
+            raise
+        except BaseException:
+            fixer.rollback()
             raise
 
     def _run_reconcilers(
@@ -2150,7 +2153,10 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
                         step_error = exc
                     if step_error is not None:
                         if self.runner.consume_savepoint_recovery(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                            driver.commit()
+                            try:
+                                driver.commit()
+                            except Exception as commit_exc:
+                                raise commit_exc from step_error
                         raise step_error
             else:
                 yield
@@ -3165,7 +3171,7 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     console.print("[green]✓ Updated migration tracking table[/]")
             else:
                 self._apply_squash_files(squasher, plans)
-        except Exception:
+        except BaseException:
             squasher.rollback_backup()
             raise
         self._finish_squash(squasher)
@@ -3249,6 +3255,9 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             console.print(f"[red]✗ Error: {e}[/]")
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
+            raise
+        except BaseException:
+            fixer.rollback()
             raise
 
     async def _run_reconcilers(
@@ -3348,8 +3357,13 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
                     except BaseException as exc:
                         step_error = exc
                     if step_error is not None:
-                        if self.runner.consume_savepoint_recovery(driver) and driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
-                            await driver.commit()
+                        if self.runner.consume_savepoint_recovery(driver) and await _driver_in_transaction_async(
+                            driver
+                        ):
+                            try:
+                                await driver.commit()
+                            except Exception as commit_exc:
+                                raise commit_exc from step_error
                         raise step_error
             else:
                 yield
