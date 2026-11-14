@@ -234,7 +234,7 @@ exclude = [
   "sqlspec/config.py",                      # Main config
   "sqlspec/**/__init__.py",                 # Init files (usually just imports)
   "sqlspec/protocols.py",                   # Protocol definitions
-  "sqlspec/driver/_routing.py",
+  "sqlspec/driver/_routing.py",             # interpreted: generic routing facades retain typed Python context and streaming boundaries
   "sqlspec/migrations/commands.py",         # interpreted: inspect.signature/functools.wraps on coroutines
   "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass

@@ -39,6 +39,14 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "keep_interpreted",
         "reason": "Pure ASGI middleware and request routing contexts preserve Python callable boundaries.",
     },
+    "sqlspec/extensions/_deferred_session.py": {
+        "classification": "keep_interpreted",
+        "reason": "Deferred session proxies preserve dynamic __getattr__ forwarding across sync and async drivers.",
+    },
+    "sqlspec/adapters/oracledb/_plugins.py": {
+        "classification": "keep_interpreted",
+        "reason": "Cold-path Oracle cloud plugin loaders and SDK hook registry mutate dynamic module registries under RLock.",
+    },
     "sqlspec/data_dictionary/dialects/teradata/config.py": {
         "classification": "compile_now",
         "reason": "Teradata catalog configuration compiles with dialect helpers.",
@@ -501,6 +509,7 @@ PRESERVED_EXCLUSIONS: frozenset[str] = frozenset({
     "sqlspec/extensions/adk/converters.py",
     "sqlspec/config.py",
     "sqlspec/core/_pagination.py",
+    "sqlspec/driver/_routing.py",
 })
 
 
@@ -524,13 +533,6 @@ def classify_module(module_path: str, include_patterns: list[str], exclude_patte
     included = any(_matches_hatch_glob(module_path, pattern) for pattern in include_patterns)
     excluded = any(_matches_hatch_glob(module_path, pattern) for pattern in exclude_patterns)
     return "compiled" if included and not excluded else "interpreted"
-
-
-def _matches_hatch_glob(module_path: str, pattern: str) -> bool:
-    """Return whether a module matches hatch-style recursive glob semantics."""
-    if fnmatch(module_path, pattern):
-        return True
-    return "**/" in pattern and fnmatch(module_path, pattern.replace("**/", ""))
 
 
 def classify_surface(status: str, classification: str | None = None) -> str:
@@ -727,6 +729,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dump(inventory, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
     return 0
+
+
+def _matches_hatch_glob(module_path: str, pattern: str) -> bool:
+    """Return whether a module matches hatch-style recursive glob semantics."""
+    if fnmatch(module_path, pattern):
+        return True
+    return "**/" in pattern and fnmatch(module_path, pattern.replace("**/", ""))
 
 
 if __name__ == "__main__":  # pragma: no cover
