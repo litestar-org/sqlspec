@@ -96,6 +96,8 @@ def test_teradata_native_byte_types() -> None:
         ),
         ("SELECT id FROM a UNION ALL SELECT id FROM b", "SELECT id FROM a UNION ALL SELECT id FROM b"),
         ("SELECT id FROM a FETCH FIRST 2 ROWS ONLY", "SELECT TOP 2 id FROM a"),
+        ("SELECT id FROM a FETCH FIRST 50 PERCENT ROWS ONLY", "SELECT TOP 50 PERCENT id FROM a"),
+        ("SELECT id FROM a ORDER BY id FETCH FIRST 5 ROWS WITH TIES", "SELECT TOP 5 WITH TIES id FROM a ORDER BY id"),
     ],
 )
 def test_teradata_set_limits_and_fetch(source: str, expected: str) -> None:

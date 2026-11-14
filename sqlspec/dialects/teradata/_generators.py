@@ -51,7 +51,7 @@ def teradata_select_sql(gen: generator.Generator, expression: exp.Select) -> str
     working = expression.copy()
     limit = working.args.get("limit")
     if isinstance(limit, exp.Fetch):
-        working.set("limit", exp.Limit(expression=limit.args.get("count") or exp.Literal.number(1)))
+        working.set("limit", _fetch_to_limit(limit))
     if working.args.get("offset") is not None:
         return _BASE_SELECT_TRANSFORM(gen, _page_query(working, copy=False))
     return _BASE_SELECT_TRANSFORM(gen, working)
@@ -149,3 +149,13 @@ def _page_query(expression: exp.Query, *, copy: bool = True) -> exp.Select:
     )
     result.set("qualify", exp.Qualify(this=condition))
     return result
+
+
+def _fetch_to_limit(limit: exp.Fetch) -> exp.Limit:
+    opts = limit.args.get("limit_options")
+    limit_options: exp.LimitOptions | None = None
+    if isinstance(opts, exp.LimitOptions) and (opts.args.get("percent") or opts.args.get("with_ties")):
+        limit_options = exp.LimitOptions(
+            percent=bool(opts.args.get("percent")), with_ties=bool(opts.args.get("with_ties"))
+        )
+    return exp.Limit(expression=limit.args.get("count") or exp.Literal.number(1), limit_options=limit_options)
