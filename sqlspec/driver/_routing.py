@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Self, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Self, cast, overload
 from uuid import UUID
 
 from typing_extensions import TypeVar
@@ -49,6 +49,7 @@ __all__ = ("AsyncRoutingSession", "SyncRoutingSession")
 
 SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDriverAdapterBase)
 AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase, default=AsyncDriverAdapterBase)
+_ARROW_STACK_OPTIONS: Final[tuple[str, ...]] = ("return_format", "native_only", "batch_size", "arrow_schema")
 
 
 class _RoutingSessionState:
@@ -241,12 +242,24 @@ class _RoutingSessionState:
             or (entry is not None and entry.bind_group is not None)
         )
 
+    @staticmethod
+    def _validate_stack(stack: Any) -> None:
+        if not isinstance(stack, StatementStack):
+            msg = "execute_stack expects a StatementStack instance"
+            raise TypeError(msg)
+        if not stack:
+            msg = "Cannot execute an empty StatementStack"
+            raise ValueError(msg)
+
     def _is_stack_read_only(self, stack: StatementStack) -> bool:
         for operation in stack:
             if operation.method not in {"execute", "execute_arrow"}:
                 return False
             kwargs = dict(operation.keyword_arguments or {})
             statement_config = kwargs.pop("statement_config", None)
+            if operation.method == "execute_arrow":
+                for option_name in _ARROW_STACK_OPTIONS:
+                    kwargs.pop(option_name, None)
             if not self._prepare(operation.statement, operation.arguments, statement_config, kwargs).is_read_only():
                 return False
         return True
@@ -376,6 +389,7 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     def execute_stack(self, stack: StatementStack, *, continue_on_error: bool = False) -> tuple[StackResult, ...]:
         """Execute a stack on one connection, pinning any mixed or write stack."""
         self._ensure_open()
+        self._validate_stack(stack)
         driver = (
             self._acquire_replica()
             if self._choose_replica(self._is_stack_read_only(stack))
@@ -691,6 +705,10 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
         **kwargs: Any,
     ) -> "SyncRowStream[SchemaT] | SyncRowStream[dict[str, Any]]":
         """Execute a query and stream rows in chunks."""
+        self._ensure_open()
+        if chunk_size < 1:
+            msg = "chunk_size must be positive"
+            raise ValueError(msg)
         driver, sql = self._resolve_driver(statement, parameters, statement_config, kwargs)
         inner = driver.select_stream(sql, chunk_size=chunk_size, native_only=native_only)
         return SyncRowStream(_SyncRoutingRowSource(self, inner, driver), schema_type=schema_type)
@@ -875,6 +893,9 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
 
                     context = _RuntimeSyncContext(context, self._config.get_observability_runtime(), self._config)
                 self._primary_driver = self._stack.enter_context(context)
+        elif self._replica_streams and self._primary_driver is self._replica_driver:
+            msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+            raise RoutingContextError(msg)
         return cast("SyncDriverT", self._primary_driver)
 
     def _acquire_replica(self) -> SyncDriverT:
@@ -903,15 +924,21 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
 
                 context = _RuntimeReadSyncContext(context, session=True)
             self._release_replica()
-            lease_stack = self._stack.enter_context(ExitStack())
-            self._replica_driver = lease_stack.enter_context(context)
+            lease_stack = ExitStack()
+            try:
+                driver = lease_stack.enter_context(context)
+            except BaseException:
+                lease_stack.close()
+                raise
+            self._stack.enter_context(lease_stack)
+            self._replica_driver = driver
             self._replica_stack = lease_stack
             managed_replicas = self._config.has_replicas
             if getattr(selection_receipt, "config", None) is self._config:
                 features = self._replica_driver.driver_features
                 if features.get("read_only_session") or features.get("enable_follower_reads"):
                     self._primary_read_stack = lease_stack
-                elif managed_replicas:
+                elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token
@@ -1056,6 +1083,7 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     async def execute_stack(self, stack: StatementStack, *, continue_on_error: bool = False) -> tuple[StackResult, ...]:
         """Execute a stack on one connection, pinning any mixed or write stack."""
         self._ensure_open()
+        self._validate_stack(stack)
         driver = (
             await self._acquire_replica()
             if self._choose_replica(self._is_stack_read_only(stack))
@@ -1558,6 +1586,9 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
 
                     context = _RuntimeAsyncContext(context, self._config.get_observability_runtime(), self._config)
                 self._primary_driver = await self._stack.enter_async_context(context)
+        elif self._replica_streams and self._primary_driver is self._replica_driver:
+            msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
+            raise RoutingContextError(msg)
         return cast("AsyncDriverT", self._primary_driver)
 
     async def _acquire_replica(self) -> AsyncDriverT:
@@ -1586,15 +1617,21 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
 
                 context = _RuntimeReadAsyncContext(context, session=True)
             await self._release_replica()
-            lease_stack = await self._stack.enter_async_context(AsyncExitStack())
-            self._replica_driver = await lease_stack.enter_async_context(context)
+            lease_stack = AsyncExitStack()
+            try:
+                driver = await lease_stack.enter_async_context(context)
+            except BaseException:
+                await lease_stack.aclose()
+                raise
+            await self._stack.enter_async_context(lease_stack)
+            self._replica_driver = driver
             self._replica_stack = lease_stack
             managed_replicas = self._config.has_replicas
             if getattr(selection_receipt, "config", None) is self._config:
                 features = self._replica_driver.driver_features
                 if features.get("read_only_session") or features.get("enable_follower_reads"):
                     self._primary_read_stack = lease_stack
-                elif managed_replicas:
+                elif managed_replicas and self._primary_driver is None:
                     self._primary_driver = self._replica_driver
             self._replica_bind_group = bind_group
             self._replica_causal_token = causal_token

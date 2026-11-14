@@ -579,3 +579,190 @@ async def test_promoted_fallback_writer_survives_conflicting_replica_scope(tmp_p
             await primary.close_pool()
         else:
             primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_routing_execute_stack_arrow_options_and_empty_stack(tmp_path: Path, async_mode: bool) -> None:
+    pytest.importorskip("pyarrow")
+    primary_db, replica_db = seed_routing_databases(tmp_path)
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(connection_config={"database": primary_db}, replicas=[{"database": replica_db}])
+    empty_stack = StatementStack()
+    read_arrow_stack = StatementStack().push_execute_arrow(
+        "SELECT origin FROM notes WHERE id = ?", (1,), return_format="table", batch_size=1, native_only=False
+    )
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                with pytest.raises(ValueError, match="Cannot execute an empty StatementStack"):
+                    await session.execute_stack(empty_stack)
+                assert session.primary_session is None
+                assert session.replica_session is None
+
+                results = await session.execute_stack(read_arrow_stack)
+                assert len(results) == 1
+                arrow_result = results[0].result
+                assert arrow_result is not None
+                assert arrow_result.get_data().to_pydict()["origin"] == ["replica"]
+                assert session.primary_session is None
+                assert session.replica_session is not None
+        else:
+            with primary.provide_routing_session() as session:
+                with pytest.raises(ValueError, match="Cannot execute an empty StatementStack"):
+                    session.execute_stack(empty_stack)
+                assert session.primary_session is None
+                assert session.replica_session is None
+
+                results = session.execute_stack(read_arrow_stack)
+                assert len(results) == 1
+                arrow_result = results[0].result
+                assert arrow_result is not None
+                assert arrow_result.get_data().to_pydict()["origin"] == ["replica"]
+                assert session.primary_session is None
+                assert session.replica_session is not None
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_routing_select_stream_invalid_chunk_size_skips_checkout(tmp_path: Path, async_mode: bool) -> None:
+    primary_db, replica_db = seed_routing_databases(tmp_path)
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(connection_config={"database": primary_db}, replicas=[{"database": replica_db}])
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                with pytest.raises(ValueError, match="chunk_size must be positive"):
+                    session.select_stream("SELECT origin FROM notes", chunk_size=0)
+                assert session.primary_session is None
+                assert session.replica_session is None
+        else:
+            with primary.provide_routing_session() as session:
+                with pytest.raises(ValueError, match="chunk_size must be positive"):
+                    session.select_stream("SELECT origin FROM notes", chunk_size=0)
+                assert session.primary_session is None
+                assert session.replica_session is None
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_routing_failed_replica_checkout_does_not_leak_stack_or_clobber_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, async_mode: bool
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    failing_primary = config_type(
+        connection_config={"database": primary_db}, replicas=[{"database": str(tmp_path / "missing" / "reader.db")}]
+    )
+    primary_no_fallback = config_type(
+        connection_config={"database": primary_db},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+        driver_features={"enable_replica_fallback": False},
+    )
+
+    class _BoomContext:
+        def __enter__(self) -> Any:
+            raise RuntimeError("checkout failure")
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        async def __aenter__(self) -> Any:
+            raise RuntimeError("checkout failure")
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    orig_provide_read_session = config_type.provide_read_session
+
+    def boom_for_target(cfg: Any, *args: Any, **kwargs: Any) -> Any:
+        if cfg is primary_no_fallback:
+            return _BoomContext()
+        return orig_provide_read_session(cfg, *args, **kwargs)
+
+    monkeypatch.setattr(config_type, "provide_read_session", boom_for_target)
+
+    try:
+        if async_mode:
+            async with failing_primary.provide_routing_session() as session:
+                with RoutingContext.primary():
+                    assert await session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+                orig_primary = session.primary_session
+                assert orig_primary is not None
+                assert await session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+                assert session.primary_session is orig_primary
+
+            async with primary_no_fallback.provide_routing_session() as session:
+                for _ in range(2):
+                    with pytest.raises(RuntimeError, match="checkout failure"):
+                        await session.select_value("SELECT 1")
+                assert len(session._stack._exit_callbacks) == 0  # pyright: ignore[reportPrivateUsage]
+        else:
+            with failing_primary.provide_routing_session() as session:
+                with RoutingContext.primary():
+                    assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+                orig_primary = session.primary_session
+                assert orig_primary is not None
+                assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+                assert session.primary_session is orig_primary
+
+            with primary_no_fallback.provide_routing_session() as session:
+                for _ in range(2):
+                    with pytest.raises(RuntimeError, match="checkout failure"):
+                        session.select_value("SELECT 1")
+                assert len(session._stack._exit_callbacks) == 0  # pyright: ignore[reportPrivateUsage]
+    finally:
+        if async_mode:
+            await failing_primary.close_pool()
+            await primary_no_fallback.close_pool()
+        else:
+            failing_primary.close_pool()
+            primary_no_fallback.close_pool()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_routing_fallback_promoted_primary_guards_open_stream_against_writes(
+    tmp_path: Path, async_mode: bool
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    config_type: Any = AiosqliteConfig if async_mode else SqliteConfig
+    primary = config_type(
+        connection_config={"database": primary_db, **({"pool_size": 1} if async_mode else {})},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+    )
+    query = "SELECT id FROM notes ORDER BY id"
+    try:
+        if async_mode:
+            async with primary.provide_routing_session() as session:
+                stream = session.select_stream(query, chunk_size=1)
+                await stream.__aenter__()
+                assert await anext(stream) == {"id": 1}
+                assert session.replica_session is session.primary_session
+                with pytest.raises(RoutingContextError, match="stream"):
+                    await session.execute("INSERT INTO notes VALUES (99, 'blocked')")
+                await stream.aclose()
+                await session.execute("INSERT INTO notes VALUES (99, 'allowed')")
+                await session.commit()
+        else:
+            with primary.provide_routing_session() as session:
+                stream = session.select_stream(query, chunk_size=1)
+                stream.__enter__()
+                assert next(stream) == {"id": 1}
+                assert session.replica_session is session.primary_session
+                with pytest.raises(RoutingContextError, match="stream"):
+                    session.execute("INSERT INTO notes VALUES (99, 'blocked')")
+                stream.close()
+                session.execute("INSERT INTO notes VALUES (99, 'allowed')")
+                session.commit()
+    finally:
+        if async_mode:
+            await primary.close_pool()
+        else:
+            primary.close_pool()
