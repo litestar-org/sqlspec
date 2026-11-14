@@ -8,7 +8,13 @@ import pytest
 
 from sqlspec import sign_write_pin, verify_write_pin
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError
-from sqlspec.utils.routing import RoutingContext, RoutingContextPayload, RoutingEntry, SQLSpecRoutingMiddleware
+from sqlspec.utils.routing import (
+    RoutingContext,
+    RoutingContextPayload,
+    RoutingEntry,
+    SQLSpecRoutingMiddleware,
+    apply_request_routing_hints,
+)
 
 
 @pytest.mark.parametrize(
@@ -208,3 +214,88 @@ async def test_middleware_signed_cookie_and_disabled_header(
     observed.clear()
     await middleware({"type": "http", "headers": [(b"cookie", f"wp={signed}".encode("ascii"))]}, receive, send)
     assert observed == [("primary", None, "lsn-77")]
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [
+        ("auto", ("primary", None, "lsn-77", True)),
+        ("primary", ("primary", None, None, False)),
+        ("replica", ("replica", None, None, False)),
+        ("replica:reporting", ("replica", "reporting", None, False)),
+    ],
+)
+def test_apply_request_routing_hints_auto_header_preserves_verified_write_pin(
+    header_value: str, expected: tuple[str, str | None, str | None, bool]
+) -> None:
+    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-77")
+    payload = apply_request_routing_hints(
+        RoutingContextPayload(),
+        bind_key="orders",
+        routing_header_value=header_value,
+        cookie_value=signed,
+        write_pin_cookie="wp",
+        routing_secret="cookie-secret",
+    )
+    entry = payload.get("orders")
+    assert entry is not None
+    assert (entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write) == expected
+
+
+@pytest.mark.parametrize("cookie_value", ["1", "lsn-10"])
+def test_apply_request_routing_hints_auto_header_preserves_unsigned_write_pin(cookie_value: str) -> None:
+    expected_causal = None if cookie_value == "1" else cookie_value
+    payload = apply_request_routing_hints(
+        RoutingContextPayload(),
+        bind_key="orders",
+        routing_header_value="auto",
+        cookie_value=cookie_value,
+        write_pin_cookie="wp",
+    )
+    entry = payload.get("orders")
+    assert entry is not None
+    assert (entry.mode, entry.causal_token, entry.pinned_by_write) == ("primary", expected_causal, True)
+
+
+def test_apply_request_routing_hints_auto_header_applies_without_active_write_pin() -> None:
+    unpinned_primary = RoutingContextPayload().with_entry("orders", RoutingEntry("primary"))
+    cleared = apply_request_routing_hints(
+        unpinned_primary,
+        bind_key="orders",
+        routing_header_value="auto",
+        cookie_value="tampered",
+        write_pin_cookie="wp",
+        routing_secret="cookie-secret",
+    )
+    entry = cleared.get("orders")
+    assert entry is not None
+    assert (entry.mode, entry.causal_token, entry.pinned_by_write) == ("auto", None, False)
+
+
+async def test_middleware_auto_header_preserves_signed_write_pin() -> None:
+    observed: list[tuple[str, str | None, str | None, bool]] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        entry = RoutingContext.get_entry("orders") or RoutingEntry()
+        observed.append((entry.mode, entry.bind_group, entry.causal_token, entry.pinned_by_write))
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def send(message: Any) -> None:
+        pass
+
+    signed = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-88")
+    middleware = SQLSpecRoutingMiddleware(
+        app,
+        bind_key="orders",
+        routing_header="x-sqlspec-routing",
+        write_pin_cookie="wp",
+        routing_secret="cookie-secret",
+    )
+    await middleware(
+        {"type": "http", "headers": [(b"cookie", f"wp={signed}".encode("ascii")), (b"x-sqlspec-routing", b"auto")]},
+        receive,
+        send,
+    )
+    assert observed == [("primary", None, "lsn-88", True)]

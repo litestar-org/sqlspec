@@ -1,7 +1,15 @@
 """Lazy sync and async session routing with explicit driver method contracts."""
 
+import sys
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+)
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Self, cast, overload
 from uuid import UUID
@@ -263,6 +271,18 @@ class _RoutingSessionState:
             if not self._prepare(operation.statement, operation.arguments, statement_config, kwargs).is_read_only():
                 return False
         return True
+
+    def _can_reuse_primary_fallback(self, *, strict_replica: bool) -> bool:
+        if self._primary_driver is None or strict_replica:
+            return False
+        config_features = self._config.driver_features
+        primary_features = self._primary_driver.driver_features
+        return not (
+            config_features.get("read_only_session")
+            or config_features.get("enable_follower_reads")
+            or primary_features.get("read_only_session")
+            or primary_features.get("enable_follower_reads")
+        )
 
 
 class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
@@ -858,11 +878,13 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
     fetch_stream = select_stream
 
     def _release_replica(self) -> None:
-        if self._replica_stack is not None:
+        if self._replica_stack is not None or self._replica_driver is not None:
             if self._replica_streams:
                 msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
                 raise RoutingContextError(msg)
-            if self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction()):
+            if self._replica_stack is None or (
+                self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction())
+            ):
                 self._primary_read_stack = None
                 self._replica_stack = None
                 self._replica_driver = None
@@ -919,16 +941,37 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
                 bypass_tenant=self._bypass_tenant,
             )
             selection_receipt = getattr(context, "_selection_receipt", None)
+            self._release_replica()
+            adopted_context: _AdoptedReadSyncContext | None = None
+            if self._can_reuse_primary_fallback(strict_replica=strict_replica):
+                token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
+                try:
+                    driver = context.__enter__()
+                finally:
+                    RoutingContext._reset_primary_fallback(token)
+                if driver is self._primary_driver:
+                    context.__exit__(None, None, None)
+                    self._replica_driver = self._primary_driver
+                    self._replica_bind_group = bind_group
+                    self._replica_causal_token = causal_token
+                    self._replica_max_staleness = max_staleness
+                    self._replica_strict = strict_replica
+                    return cast("SyncDriverT", self._replica_driver)
+                adopted_context = _AdoptedReadSyncContext(context, driver, selection_receipt)
+                context = adopted_context
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadSyncContext
 
                 context = _RuntimeReadSyncContext(context, session=True)
-            self._release_replica()
             lease_stack = ExitStack()
             try:
                 driver = lease_stack.enter_context(context)
             except BaseException:
-                lease_stack.close()
+                try:
+                    if adopted_context is not None:
+                        adopted_context._close_on_error(*sys.exc_info())
+                finally:
+                    lease_stack.close()
                 raise
             self._stack.enter_context(lease_stack)
             self._replica_driver = driver
@@ -1551,11 +1594,13 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
     fetch_stream = select_stream
 
     async def _release_replica(self) -> None:
-        if self._replica_stack is not None:
+        if self._replica_stack is not None or self._replica_driver is not None:
             if self._replica_streams:
                 msg = "Cannot change replica policy or acquire a writer while a replica stream is open"
                 raise RoutingContextError(msg)
-            if self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction()):
+            if self._replica_stack is None or (
+                self._replica_driver is self._primary_driver and (self._pinned_primary or self.in_transaction())
+            ):
                 self._primary_read_stack = None
                 self._replica_stack = None
                 self._replica_driver = None
@@ -1612,16 +1657,37 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
                 bypass_tenant=self._bypass_tenant,
             )
             selection_receipt = getattr(context, "_selection_receipt", None)
+            await self._release_replica()
+            adopted_context: _AdoptedReadAsyncContext | None = None
+            if self._can_reuse_primary_fallback(strict_replica=strict_replica):
+                token = RoutingContext._set_primary_fallback(self._config, self._primary_driver)
+                try:
+                    driver = await context.__aenter__()
+                finally:
+                    RoutingContext._reset_primary_fallback(token)
+                if driver is self._primary_driver:
+                    await context.__aexit__(None, None, None)
+                    self._replica_driver = self._primary_driver
+                    self._replica_bind_group = bind_group
+                    self._replica_causal_token = causal_token
+                    self._replica_max_staleness = max_staleness
+                    self._replica_strict = strict_replica
+                    return cast("AsyncDriverT", self._replica_driver)
+                adopted_context = _AdoptedReadAsyncContext(context, driver, selection_receipt)
+                context = adopted_context
             if self._registry_lifecycle:
                 from sqlspec.base import _RuntimeReadAsyncContext
 
                 context = _RuntimeReadAsyncContext(context, session=True)
-            await self._release_replica()
             lease_stack = AsyncExitStack()
             try:
                 driver = await lease_stack.enter_async_context(context)
             except BaseException:
-                await lease_stack.aclose()
+                try:
+                    if adopted_context is not None:
+                        await adopted_context._close_on_error(*sys.exc_info())
+                finally:
+                    await lease_stack.aclose()
                 raise
             await self._stack.enter_async_context(lease_stack)
             self._replica_driver = driver
@@ -2019,3 +2085,63 @@ class _AsyncRoutingDataDictionary(Generic[AsyncDriverT]):
         self._routing_session._primary_only()
         primary = await self._routing_session._acquire_primary()
         return await primary.data_dictionary.get_foreign_keys(primary, table, schema)
+
+
+class _AdoptedReadSyncContext:
+    """Adapt an already-entered sync read context onto a lifetime stack."""
+
+    __slots__ = ("_closed", "_context", "_driver", "_selection_receipt")
+
+    def __init__(self, context: AbstractContextManager[Any], driver: Any, selection_receipt: Any) -> None:
+        self._context = context
+        self._driver = driver
+        self._selection_receipt = selection_receipt
+        self._closed = False
+
+    def __enter__(self) -> Any:
+        return self._driver
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool | None:
+        if self._closed:
+            return None
+        self._closed = True
+        return self._context.__exit__(exc_type, exc_val, exc_tb)
+
+    def _close_on_error(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        if not self._closed:
+            self._closed = True
+            self._context.__exit__(exc_type, exc_val, exc_tb)
+
+
+class _AdoptedReadAsyncContext:
+    """Adapt an already-entered async read context onto a lifetime stack."""
+
+    __slots__ = ("_closed", "_context", "_driver", "_selection_receipt")
+
+    def __init__(self, context: AbstractAsyncContextManager[Any], driver: Any, selection_receipt: Any) -> None:
+        self._context = context
+        self._driver = driver
+        self._selection_receipt = selection_receipt
+        self._closed = False
+
+    async def __aenter__(self) -> Any:
+        return self._driver
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool | None:
+        if self._closed:
+            return None
+        self._closed = True
+        return await self._context.__aexit__(exc_type, exc_val, exc_tb)
+
+    async def _close_on_error(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        if not self._closed:
+            self._closed = True
+            await self._context.__aexit__(exc_type, exc_val, exc_tb)

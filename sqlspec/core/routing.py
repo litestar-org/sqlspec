@@ -179,7 +179,7 @@ class RoundRobinSelector:
     ) -> list[int]:
         """Pick a weighted first choice followed by unique eligible failovers.
 
-        Replicas without a declared staleness bound remain eligible.
+        Unbounded replicas remain eligible only when no replica declares a staleness bound.
         """
         eligible = _eligible(self._specs, breaker, max_staleness_seconds)
         if not eligible:
@@ -256,13 +256,15 @@ def build_selector(strategy: SelectionStrategy | ReplicaSelector, specs: Sequenc
 def _eligible(
     specs: tuple[ReplicaSpec, ...], breaker: ReplicaHealthBreaker | None, max_staleness_seconds: float | None
 ) -> list[int]:
+    if max_staleness_seconds is None:
+        return [index for index in range(len(specs)) if breaker is None or breaker.is_available(index)]
+    has_bounded_specs = any(spec.max_staleness_seconds is not None for spec in specs)
+    if not has_bounded_specs:
+        return [index for index in range(len(specs)) if breaker is None or breaker.is_available(index)]
     return [
         index
         for index, spec in enumerate(specs)
         if (breaker is None or breaker.is_available(index))
-        and (
-            max_staleness_seconds is None
-            or spec.max_staleness_seconds is None
-            or spec.max_staleness_seconds <= max_staleness_seconds
-        )
+        and spec.max_staleness_seconds is not None
+        and spec.max_staleness_seconds <= max_staleness_seconds
     ]

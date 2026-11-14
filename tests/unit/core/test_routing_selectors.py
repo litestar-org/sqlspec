@@ -67,8 +67,20 @@ def test_selection_filters_stale_and_unhealthy_replicas(strategy: SelectionStrat
         [ReplicaSpec("a", max_staleness_seconds=1), ReplicaSpec("b", max_staleness_seconds=5), ReplicaSpec("c")],
     )
     breaker = ReplicaHealthBreaker(3, failure_threshold=1)
+    assert selector.select_order(breaker, max_staleness_seconds=2) == [0]
+    assert sorted(selector.select_order(breaker, max_staleness_seconds=None)) == [0, 1, 2]
     breaker.record_failure(0)
-    assert selector.select_order(breaker, max_staleness_seconds=2) == [2]
+    assert selector.select_order(breaker, max_staleness_seconds=2) == []
+    assert sorted(selector.select_order(breaker, max_staleness_seconds=6)) == [1]
+
+
+@pytest.mark.parametrize("strategy", ["round_robin", "random"])
+def test_selection_allows_unbounded_homogeneous_group_with_staleness_request(strategy: SelectionStrategy) -> None:
+    selector = build_selector(strategy, [ReplicaSpec("a"), ReplicaSpec("b")])
+    breaker = ReplicaHealthBreaker(2, failure_threshold=1)
+    assert sorted(selector.select_order(breaker, max_staleness_seconds=2)) == [0, 1]
+    breaker.record_failure(0)
+    assert selector.select_order(breaker, max_staleness_seconds=2) == [1]
 
 
 @pytest.mark.parametrize("weight", [0, -1, True, 1.5])

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -14,8 +14,8 @@ from sqlspec.core import StatementStack
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.driver._stream import AsyncRowStream
-from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError, SQLSpecError
-from sqlspec.utils.routing import RoutingContext, RoutingEntry
+from sqlspec.exceptions import ImproperConfigurationError, ReplicaUnavailableError, RoutingContextError, SQLSpecError
+from sqlspec.utils.routing import DEFAULT_BIND_KEY, RoutingContext, RoutingContextPayload, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 
 
@@ -215,3 +215,112 @@ async def test_async_single_pool_aliases_and_savepoints(tmp_path: Path) -> None:
             await session.aclose()
     finally:
         await config.close_pool()
+
+
+@pytest.mark.parametrize("use_registry", [False, True])
+async def test_async_max_size_one_primary_pool_reuses_held_primary_on_auto_fallback(
+    tmp_path: Path, use_registry: bool
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    events: list[str] = []
+
+    async def on_connect(_conn: object) -> None:
+        events.append("connect")
+
+    def on_start(_driver: object) -> None:
+        events.append("start")
+
+    def on_end(_driver: object) -> None:
+        events.append("end")
+
+    def on_destroy(_conn: object) -> None:
+        events.append("destroy")
+
+    primary = AiosqliteConfig(
+        connection_config={"database": primary_db, "pool_size": 1, "connect_timeout": 0.2},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+        driver_features={
+            "on_connection_create": on_connect,
+            "on_session_start": on_start,
+            "on_session_end": on_end,
+            "on_connection_destroy": on_destroy,
+        },
+    )
+    registry = SQLSpec() if use_registry else None
+    if registry is not None:
+        registry.add_config(primary)
+    try:
+        cm = registry.provide_routing_session(primary) if registry is not None else primary.provide_routing_session()
+        async with cm as session:
+            with RoutingContext.primary():
+                assert (
+                    await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
+                    == "primary"
+                )
+            orig_primary = session.primary_session
+            assert orig_primary is not None
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            assert (
+                await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
+                == "primary"
+            )
+            assert session.primary_session is orig_primary
+            assert session.replica_session is orig_primary
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
+            assert session.primary_session is orig_primary
+            assert session.replica_session is None
+            assert orig_primary.connection is not _DETACHED_CONNECTION
+
+            with RoutingContext.scope(
+                RoutingContextPayload({DEFAULT_BIND_KEY: RoutingEntry("auto", causal_token="lsn-2")})
+            ):
+                assert (
+                    await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
+                    == "primary"
+                )
+            assert session.replica_session is orig_primary
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            stream = session.select_stream("SELECT id FROM notes ORDER BY id", chunk_size=1)
+            await stream.__aenter__()
+            assert await anext(stream) == {"id": 1}
+            with pytest.raises(RoutingContextError, match="stream"):
+                await session.execute("INSERT INTO notes VALUES (99, 'blocked')")
+            await stream.aclose()
+
+            await session.execute("INSERT INTO notes VALUES (4, 'after_reuse')")
+            await session.commit()
+            assert await session.select_value("SELECT count(*) FROM notes") == 4
+        assert orig_primary.connection is _DETACHED_CONNECTION
+        expected_count = 1 if use_registry else 0
+        assert events.count("start") == expected_count
+        assert events.count("end") == expected_count
+        assert events.count("connect") == 1
+        assert events.count("destroy") == expected_count
+    finally:
+        await primary.close_pool()
+
+
+@pytest.mark.parametrize("constraint_key", ["read_only_session", "enable_follower_reads"])
+async def test_async_primary_fallback_does_not_reuse_when_read_constraints_are_configured(
+    tmp_path: Path, constraint_key: str
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    primary = AiosqliteConfig(
+        connection_config={"database": primary_db, "pool_size": 1, "connect_timeout": 0.1},
+        replicas=[{"database": str(tmp_path / "missing" / "reader.db")}],
+        driver_features={constraint_key: True},
+    )
+    try:
+        async with primary.provide_routing_session() as session:
+            with RoutingContext.primary():
+                assert await session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+            with pytest.raises(Exception) as exc_info:
+                await asyncio.wait_for(session.select_value("SELECT origin FROM notes WHERE id=1"), timeout=2)
+            assert "Timeout" in type(exc_info.value).__name__ or "timeout" in str(exc_info.value).lower()
+    finally:
+        await primary.close_pool()

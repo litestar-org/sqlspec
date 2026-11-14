@@ -41,6 +41,7 @@ _MIN_PRINTABLE_ASCII: Final[int] = 32
 _ASCII_DEL: Final[int] = 127
 _COOKIE_HEADER_BYTES: Final[bytes] = b"cookie"
 _ROUTING_VAR: ContextVar["RoutingContextPayload | None"] = ContextVar("sqlspec_routing_context", default=None)
+_PRIMARY_FALLBACK_VAR: ContextVar[tuple[Any, Any] | None] = ContextVar("sqlspec_routing_primary_fallback", default=None)
 
 
 @final
@@ -237,6 +238,21 @@ class RoutingContext:
         """Create a scope allowing automatic routing for a bind."""
         payload = cls.current() or RoutingContextPayload()
         return cls.scope(payload.with_entry(bind_key, RoutingEntry()))
+
+    @classmethod
+    def _set_primary_fallback(cls, config: Any, driver: Any) -> Token[tuple[Any, Any] | None]:
+        return _PRIMARY_FALLBACK_VAR.set((config, driver))
+
+    @classmethod
+    def _reset_primary_fallback(cls, token: Token[tuple[Any, Any] | None]) -> None:
+        _PRIMARY_FALLBACK_VAR.reset(token)
+
+    @classmethod
+    def _get_primary_fallback(cls, config: Any) -> Any:
+        active = _PRIMARY_FALLBACK_VAR.get()
+        if active is not None and active[0] is config:
+            return active[1]
+        return None
 
 
 class SQLSpecRoutingMiddleware:
@@ -481,10 +497,12 @@ def apply_request_routing_hints(
                 get_logger("sqlspec.routing").debug("Ignoring invalid write-pin cookie %r", resolved_cookie)
     cleaned_header = routing_header_value.strip() if routing_header_value is not None else ""
     if cleaned_header:
-        if cleaned_header in {"auto", "primary", "replica"}:
-            entry = RoutingEntry(
-                "primary" if cleaned_header == "primary" else "replica" if cleaned_header == "replica" else "auto"
-            )
+        if cleaned_header == "auto":
+            existing = payload.get(bind_key)
+            if existing is None or not existing.pinned_by_write:
+                payload = payload.with_entry(bind_key, RoutingEntry("auto"))
+        elif cleaned_header in {"primary", "replica"}:
+            entry = RoutingEntry("primary" if cleaned_header == "primary" else "replica")
             payload = payload.with_entry(bind_key, entry)
         elif cleaned_header.startswith("replica:") and is_valid_routing_token(cleaned_header[8:]):
             payload = payload.with_entry(bind_key, RoutingEntry("replica", bind_group=cleaned_header[8:]))

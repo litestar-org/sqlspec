@@ -6,7 +6,12 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.config import NoPoolAsyncConfig, NoPoolSyncConfig, ReadReplicaGroup
-from sqlspec.exceptions import ImproperConfigurationError, ReplicaUnavailableError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReplicaUnavailableError,
+)
 
 
 class SyncEndpoint(NoPoolSyncConfig[Any, Any]):
@@ -252,4 +257,127 @@ async def test_primary_may_refuse_checkout_fallback_without_losing_original_erro
         else:
             with primary.provide_read_session():
                 pytest.fail("failed checkout must not yield")
+    assert primary.events == []
+
+
+@pytest.mark.parametrize("endpoint_type", [SyncEndpoint, AsyncEndpoint])
+@pytest.mark.parametrize("exc_type", [DatabaseConnectionError, OperationalError, OSError, TimeoutError])
+async def test_causal_validator_transient_failure_fails_over_and_trips_breaker(
+    endpoint_type: Any, exc_type: type[Exception]
+) -> None:
+    failing = endpoint_type(connection_config={"dsn": "failing"})
+    ready = endpoint_type(connection_config={"dsn": "ready"})
+
+    def sync_validator(session: Any, _token: str) -> bool:
+        if session == "failing":
+            raise exc_type("replica unreachable during causal check")
+        return True
+
+    async def async_validator(session: Any, _token: str) -> bool:
+        if session == "failing":
+            raise exc_type("replica unreachable during causal check")
+        return True
+
+    group = ReadReplicaGroup(
+        [failing, ready],
+        failure_threshold=1,
+        fallback_to_primary=False,
+        causal_validator=async_validator if endpoint_type is AsyncEndpoint else sync_validator,
+    )
+    context = group.provide_session(causal_token="lsn-10")
+    if group.is_async:
+        async with context as session:
+            assert session == "ready"
+    else:
+        with context as session:
+            assert session == "ready"
+    assert failing.events[-2:] == [exc_type, "exit"]
+    assert not group.breaker.is_available(0)
+    assert group.breaker.is_available(1)
+
+
+@pytest.mark.parametrize("endpoint_type", [SyncEndpoint, AsyncEndpoint])
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_causal_validator_exhaustion_falls_back_or_raises_with_cause(endpoint_type: Any, fallback: bool) -> None:
+    failing = endpoint_type(connection_config={"dsn": "failing"})
+    primary = endpoint_type(connection_config={"dsn": "primary"})
+    causal_error = OperationalError("replication check failed")
+
+    def validator(_session: Any, _token: str) -> bool:
+        raise causal_error
+
+    group = ReadReplicaGroup([failing], failure_threshold=1, fallback_to_primary=fallback, causal_validator=validator)
+    if fallback:
+        context = group.provide_session(primary=primary, causal_token="lsn-11")
+        if group.is_async:
+            async with context as session:
+                assert session == "primary"
+        else:
+            with context as session:
+                assert session == "primary"
+    else:
+        with pytest.raises(ReplicaUnavailableError) as failure:
+            if group.is_async:
+                async with group.provide_session(primary=primary, causal_token="lsn-11"):
+                    pytest.fail("exhausted causal failover must not yield")
+            else:
+                with group.provide_session(primary=primary, causal_token="lsn-11"):
+                    pytest.fail("exhausted causal failover must not yield")
+        assert failure.value.__cause__ is causal_error
+    assert failing.events[-2:] == [OperationalError, "exit"]
+    assert not group.breaker.is_available(0)
+
+
+@pytest.mark.parametrize("endpoint_type", [SyncEndpoint, AsyncEndpoint])
+async def test_causal_validator_failure_reopens_half_open_probe(endpoint_type: Any) -> None:
+    now = [0.0]
+    endpoint = endpoint_type(connection_config={"dsn": "probe"})
+
+    def validator(_session: Any, _token: str) -> bool:
+        raise TimeoutError("probe timed out")
+
+    group = ReadReplicaGroup(
+        [endpoint],
+        failure_threshold=1,
+        recovery_seconds=5.0,
+        fallback_to_primary=False,
+        causal_validator=validator,
+        clock=lambda: now[0],
+    )
+    group.breaker.record_failure(0)
+    assert not group.breaker.is_available(0)
+    now[0] = 6.0
+    assert group.breaker.is_available(0)
+    with pytest.raises(ReplicaUnavailableError) as failure:
+        if group.is_async:
+            async with group.provide_session(causal_token="lsn-12"):
+                pytest.fail("failed half-open probe must not yield")
+        else:
+            with group.provide_session(causal_token="lsn-12"):
+                pytest.fail("failed half-open probe must not yield")
+    assert isinstance(failure.value.__cause__, TimeoutError)
+    assert not group.breaker.is_available(0)
+    now[0] = 12.0
+    assert group.breaker.try_acquire_probe(0)
+    group.breaker.release_probe(0)
+
+
+@pytest.mark.parametrize(
+    ("endpoint_type", "primary_type"), [(SyncEndpoint, _StrictSyncPrimary), (AsyncEndpoint, _StrictAsyncPrimary)]
+)
+async def test_causal_validator_failure_respects_primary_fallback_policy(endpoint_type: Any, primary_type: Any) -> None:
+    failing = endpoint_type(connection_config={"dsn": "failing"})
+    primary = primary_type(connection_config={"dsn": "primary"})
+
+    def validator(_session: Any, _token: str) -> bool:
+        raise DatabaseConnectionError("lag query disconnected")
+
+    group = ReadReplicaGroup([failing], failure_threshold=1, causal_validator=validator)
+    with pytest.raises(DatabaseConnectionError, match="lag query disconnected"):
+        if group.is_async:
+            async with group.provide_session(primary=primary, causal_token="lsn-13"):
+                pytest.fail("strict primary must reject fallback")
+        else:
+            with group.provide_session(primary=primary, causal_token="lsn-13"):
+                pytest.fail("strict primary must reject fallback")
     assert primary.events == []

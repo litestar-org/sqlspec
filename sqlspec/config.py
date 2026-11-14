@@ -1660,6 +1660,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             msg = "No read replica is configured for the requested bind"
             raise ReplicaUnavailableError(msg)
         receipt = _ReadSelectionReceipt()
+        reused = _resolve_primary_fallback_reuse(self, session=session, kwargs=kwargs)
+        if reused is not None:
+            if self.is_async:
+                return _ReadAsyncContext(_yield_reused_primary_async(reused, self, receipt), receipt)
+            return _ReadSyncContext(_yield_reused_primary_sync(reused, self, receipt), receipt)
         provider = self.provide_session if session else self.provide_connection
         context = provider(*args, **kwargs)
         if self.is_async:
@@ -3088,6 +3093,14 @@ class ReadReplicaGroup(Generic[ConfigT]):
             raise ImproperConfigurationError(msg)
         return result
 
+    async def _validate_async_causal(self, value: Any, causal_token: str | None) -> bool:
+        if causal_token is None or self._causal_validator is None:
+            return True
+        result = self._causal_validator(value, causal_token)
+        if isawaitable(result):
+            return await result
+        return result
+
     @contextmanager
     def _provide_sync(
         self,
@@ -3119,6 +3132,13 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 raise
             try:
                 caught_up = self._validate_sync_causal(value, causal_token)
+            except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
+                try:
+                    stack.__exit__(*sys.exc_info())
+                finally:
+                    self._breaker.record_failure(index)
+                last_error = exc
+                continue
             except BaseException:
                 self._breaker.release_probe(index)
                 stack.__exit__(*sys.exc_info())
@@ -3135,6 +3155,11 @@ class ReadReplicaGroup(Generic[ConfigT]):
         if self._fallback_to_primary and primary is not None:
             if last_error is not None and not primary._allow_replica_fallback(last_error):
                 raise last_error
+            reused = _resolve_primary_fallback_reuse(primary, session=session, kwargs=kwargs)
+            if reused is not None:
+                receipt.config = primary
+                yield reused
+                return
             provider = primary.provide_session if session else primary.provide_connection
             with cast("AbstractContextManager[Any]", provider(*args, **kwargs)) as value:
                 receipt.config = primary
@@ -3175,13 +3200,14 @@ class ReadReplicaGroup(Generic[ConfigT]):
                 await stack.__aexit__(*sys.exc_info())
                 raise
             try:
-                caught_up = (
-                    self._causal_validator(value, causal_token)
-                    if causal_token is not None and self._causal_validator is not None
-                    else True
-                )
-                if isawaitable(caught_up):
-                    caught_up = await caught_up
+                caught_up = await self._validate_async_causal(value, causal_token)
+            except (DatabaseConnectionError, OperationalError, OSError, TimeoutError) as exc:
+                try:
+                    await stack.__aexit__(*sys.exc_info())
+                finally:
+                    self._breaker.record_failure(index)
+                last_error = exc
+                continue
             except BaseException:
                 self._breaker.release_probe(index)
                 await stack.__aexit__(*sys.exc_info())
@@ -3198,6 +3224,11 @@ class ReadReplicaGroup(Generic[ConfigT]):
         if self._fallback_to_primary and primary is not None:
             if last_error is not None and not primary._allow_replica_fallback(last_error):
                 raise last_error
+            reused = _resolve_primary_fallback_reuse(primary, session=session, kwargs=kwargs)
+            if reused is not None:
+                receipt.config = primary
+                yield reused
+                return
             provider = primary.provide_session if session else primary.provide_connection
             async with cast("AbstractAsyncContextManager[Any]", provider(*args, **kwargs)) as value:
                 receipt.config = primary
@@ -3275,3 +3306,33 @@ def _report_template_keys(templates: Any) -> "list[str]":
             continue
         lines.extend(_report_unknown_keys(overrides, fragment_keys, f"{path}.", f"'{path}' "))
     return lines
+
+
+def _resolve_primary_fallback_reuse(
+    primary: "DatabaseConfigProtocol[Any, Any, Any]", *, session: bool, kwargs: Mapping[str, Any]
+) -> Any:
+    if (
+        not session
+        or kwargs.get("read_only_session")
+        or kwargs.get("follower_reads")
+        or primary.driver_features.get("read_only_session")
+        or primary.driver_features.get("enable_follower_reads")
+    ):
+        return None
+    return RoutingContext._get_primary_fallback(primary)
+
+
+@contextmanager
+def _yield_reused_primary_sync(
+    value: Any, config: "DatabaseConfigProtocol[Any, Any, Any]", receipt: _ReadSelectionReceipt
+) -> "Generator[Any]":
+    receipt.config = config
+    yield value
+
+
+@asynccontextmanager
+async def _yield_reused_primary_async(
+    value: Any, config: "DatabaseConfigProtocol[Any, Any, Any]", receipt: _ReadSelectionReceipt
+) -> "AsyncGenerator[Any]":
+    receipt.config = config
+    yield value

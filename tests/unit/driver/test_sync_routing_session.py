@@ -2,7 +2,9 @@
 
 import asyncio
 import sqlite3
+import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -12,6 +14,7 @@ import pytest
 from sqlspec import sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.base import SQLSpec
 from sqlspec.core import SQL, StatementConfig, StatementStack
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.driver._routing import SyncRoutingSession
@@ -22,7 +25,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     TransactionError,
 )
-from sqlspec.utils.routing import RoutingContext, RoutingEntry
+from sqlspec.utils.routing import DEFAULT_BIND_KEY, RoutingContext, RoutingContextPayload, RoutingEntry
 
 
 def seed_routing_databases(tmp_path: Path) -> tuple[str, str]:
@@ -766,3 +769,112 @@ async def test_routing_fallback_promoted_primary_guards_open_stream_against_writ
             await primary.close_pool()
         else:
             primary.close_pool()
+
+
+class _BoundedMaxOneSqliteConfig(SqliteConfig):
+    __slots__ = ("_checkout_gate", "checkout_count")
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._checkout_gate = threading.BoundedSemaphore(1)
+        self.checkout_count = 0
+        super().__init__(**kwargs)
+
+    @contextmanager
+    def provide_session(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        if not self._checkout_gate.acquire(blocking=False):
+            msg = "max_size=1 primary pool exhausted"
+            raise TimeoutError(msg)
+        self.checkout_count += 1
+        try:
+            with super().provide_session(*args, **kwargs) as session:
+                yield session
+        finally:
+            self._checkout_gate.release()
+
+
+@pytest.mark.parametrize("use_registry", [False, True])
+def test_sync_max_size_one_primary_pool_reuses_held_primary_on_auto_fallback(
+    tmp_path: Path, use_registry: bool
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    events: list[str] = []
+    primary = _BoundedMaxOneSqliteConfig(
+        connection_config={"database": primary_db},
+        replicas=[SqliteConfig(connection_config={"database": str(tmp_path / "missing" / "reader.db")})],
+        driver_features={
+            "on_connection_create": lambda _conn: events.append("connect"),
+            "on_session_start": lambda _driver: events.append("start"),
+            "on_session_end": lambda _driver: events.append("end"),
+            "on_connection_destroy": lambda _conn: events.append("destroy"),
+        },
+    )
+    registry = SQLSpec() if use_registry else None
+    if registry is not None:
+        registry.add_config(primary)
+    try:
+        cm = registry.provide_routing_session(primary) if registry is not None else primary.provide_routing_session()
+        with cm as session:
+            with RoutingContext.primary():
+                assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+            orig_primary = session.primary_session
+            assert orig_primary is not None
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+            assert session.primary_session is orig_primary
+            assert session.replica_session is orig_primary
+            assert primary.checkout_count == 1
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            with RoutingContext.replica(), pytest.raises(ReplicaUnavailableError):
+                session.select_value("SELECT origin FROM notes WHERE id=1")
+            assert session.primary_session is orig_primary
+            assert session.replica_session is None
+            assert orig_primary.connection is not _DETACHED_CONNECTION
+
+            with RoutingContext.scope(
+                RoutingContextPayload({DEFAULT_BIND_KEY: RoutingEntry("auto", causal_token="lsn-2")})
+            ):
+                assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+            assert session.replica_session is orig_primary
+            assert primary.checkout_count == 1
+            assert len(cast("Any", session._stack)._exit_callbacks) == 1
+
+            stream = session.select_stream("SELECT id FROM notes ORDER BY id", chunk_size=1)
+            stream.__enter__()
+            assert next(stream) == {"id": 1}
+            with pytest.raises(RoutingContextError, match="stream"):
+                session.execute("INSERT INTO notes VALUES (99, 'blocked')")
+            stream.close()
+
+            session.execute("INSERT INTO notes VALUES (4, 'after_reuse')")
+            session.commit()
+            assert session.select_value("SELECT count(*) FROM notes") == 4
+        assert orig_primary.connection is _DETACHED_CONNECTION
+        expected_count = 1 if use_registry else 0
+        assert events.count("start") == expected_count
+        assert events.count("end") == expected_count
+        assert events.count("connect") == 1
+        assert events.count("destroy") == expected_count
+    finally:
+        primary.close_pool()
+
+
+@pytest.mark.parametrize("constraint_key", ["read_only_session", "enable_follower_reads"])
+def test_sync_primary_fallback_does_not_reuse_when_read_constraints_are_configured(
+    tmp_path: Path, constraint_key: str
+) -> None:
+    primary_db, _ = seed_routing_databases(tmp_path)
+    primary = _BoundedMaxOneSqliteConfig(
+        connection_config={"database": primary_db},
+        replicas=[SqliteConfig(connection_config={"database": str(tmp_path / "missing" / "reader.db")})],
+        driver_features={constraint_key: True},
+    )
+    try:
+        with primary.provide_routing_session() as session:
+            with RoutingContext.primary():
+                assert session.select_value("SELECT origin FROM notes WHERE id=1") == "primary"
+            with pytest.raises(TimeoutError, match="max_size=1 primary pool exhausted"):
+                session.select_value("SELECT origin FROM notes WHERE id=1")
+    finally:
+        primary.close_pool()
