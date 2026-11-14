@@ -119,6 +119,18 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         """Return the optional SQL file loader."""
         return self._loader
 
+    @property
+    def read_config(
+        self,
+    ) -> "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None":
+        """Return the optional dedicated read configuration."""
+        return self._read_config
+
+    @property
+    def read_bind_group(self) -> str | None:
+        """Return the preferred replica group."""
+        return self._read_bind_group
+
     def provide_session(
         self, session: AsyncDriverT | None = None, *, read_only: bool = False
     ) -> AbstractAsyncContextManager[AsyncDriverT]:
@@ -144,18 +156,6 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             return self._config.provide_session()
         msg = "No session or config is available to provide a session."
         raise ImproperConfigurationError(msg)
-
-    @property
-    def read_config(
-        self,
-    ) -> "AsyncDatabaseConfig[Any, Any, AsyncDriverT] | NoPoolAsyncConfig[Any, AsyncDriverT] | None":
-        """Return the optional dedicated read configuration."""
-        return self._read_config
-
-    @property
-    def read_bind_group(self) -> str | None:
-        """Return the preferred replica group."""
-        return self._read_bind_group
 
     def provide_read_session(
         self, session: AsyncDriverT | None = None, *, bind_group: str | None = None
@@ -626,6 +626,16 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         """Return the optional SQL file loader."""
         return self._loader
 
+    @property
+    def read_config(self) -> "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None":
+        """Return the optional dedicated read configuration."""
+        return self._read_config
+
+    @property
+    def read_bind_group(self) -> str | None:
+        """Return the preferred replica group."""
+        return self._read_bind_group
+
     def provide_session(
         self, session: SyncDriverT | None = None, *, read_only: bool = False
     ) -> AbstractContextManager[SyncDriverT]:
@@ -651,16 +661,6 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             return self._config.provide_session()
         msg = "No session or config is available to provide a session."
         raise ImproperConfigurationError(msg)
-
-    @property
-    def read_config(self) -> "SyncDatabaseConfig[Any, Any, SyncDriverT] | NoPoolSyncConfig[Any, SyncDriverT] | None":
-        """Return the optional dedicated read configuration."""
-        return self._read_config
-
-    @property
-    def read_bind_group(self) -> str | None:
-        """Return the preferred replica group."""
-        return self._read_bind_group
 
     def provide_read_session(
         self, session: SyncDriverT | None = None, *, bind_group: str | None = None
