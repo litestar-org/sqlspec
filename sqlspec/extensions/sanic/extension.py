@@ -877,6 +877,7 @@ class SQLSpecPlugin:
         return any(
             not state.disable_di
             or _has_tenant_strategy(state.config)
+            or state.enable_routing_middleware
             or state.enable_correlation_middleware
             or self._state_enables_sqlcommenter(state)
             for state in self._config_states

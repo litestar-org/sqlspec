@@ -171,9 +171,9 @@ def test_init_app_registers_request_middleware() -> None:
 
 
 def test_disable_di_skips_request_middleware_registration() -> None:
-    """disable_di should leave pool lifecycle intact but skip request management."""
+    """disable_di with routing middleware disabled skips request management."""
     app = Sanic(f"SQLSpecMiddlewareDisabled{uuid4().hex}")
-    config = _make_config(connection=_make_connection(), disable_di=True)
+    config = _make_config(connection=_make_connection(), disable_di=True, enable_routing_middleware=False)
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
 
     plugin.init_app(app)
@@ -181,6 +181,18 @@ def test_disable_di_skips_request_middleware_registration() -> None:
     assert len(app.request_middleware) == 0
     assert len(app.response_middleware) == 0
     assert "server.init.before" in app.signal_router.name_index
+
+
+def test_disable_di_with_routing_middleware_registers_request_middleware() -> None:
+    """disable_di with enable_routing_middleware=True registers request routing middleware."""
+    app = Sanic(f"SQLSpecRoutingMiddlewareEnabled{uuid4().hex}")
+    config = _make_config(connection=_make_connection(), disable_di=True, enable_routing_middleware=True)
+    plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
+
+    plugin.init_app(app)
+
+    assert len(app.request_middleware) == 1
+    assert len(app.response_middleware) == 1
 
 
 def _make_connection() -> MagicMock:
@@ -197,11 +209,17 @@ def _make_config(
     commit_mode: str = "manual",
     supports_connection_pooling: bool = True,
     disable_di: bool = False,
+    enable_routing_middleware: bool = True,
 ) -> MagicMock:
     config = MagicMock()
     config.supports_connection_pooling = supports_connection_pooling
     config.extension_config = {
-        "sanic": {"commit_mode": commit_mode, "disable_di": disable_di, "enable_correlation_middleware": False}
+        "sanic": {
+            "commit_mode": commit_mode,
+            "disable_di": disable_di,
+            "enable_routing_middleware": enable_routing_middleware,
+            "enable_correlation_middleware": False,
+        }
     }
     config.provide_connection = MagicMock(return_value=_AsyncConnectionManager(connection))
     config.create_connection = AsyncMock(return_value=connection)
