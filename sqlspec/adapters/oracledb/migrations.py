@@ -401,7 +401,7 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, SyncMigrationTrack
             return
 
         formatted_table = format_oracle_table_identifier(self.version_table)
-        quoted_col = quote_identifier(column_def.name)
+        quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""
 
@@ -630,7 +630,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, AsyncMigrationTra
             return
 
         formatted_table = format_oracle_table_identifier(self.version_table)
-        quoted_col = quote_identifier(column_def.name)
+        quoted_col = self._quote_oracle_identifier(column_def.name)
         default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
         not_null_clause = " NOT NULL" if column_def.not_null else ""
 

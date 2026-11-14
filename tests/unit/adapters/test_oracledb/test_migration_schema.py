@@ -345,3 +345,71 @@ def test_oracle_ensure_tracking_table_rejects_malformed_mutated_version_table() 
     tracker.version_table = "bad'; DROP TABLE x; --"
     with pytest.raises(ImproperConfigurationError):
         tracker.ensure_tracking_table(RecordingSyncDriver())  # type: ignore[arg-type]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_oracle_add_missing_replaces_column_quotes_uppercase_identifier(is_async: bool) -> None:
+    """Adding missing migration columns quotes uppercase Oracle identifiers so queries match."""
+    executed: list[str] = []
+    missing_replaces = [
+        {"column_name": name}
+        for name in (
+            "VERSION_NUM",
+            "VERSION_TYPE",
+            "EXECUTION_SEQUENCE",
+            "DESCRIPTION",
+            "APPLIED_AT",
+            "EXECUTION_TIME_MS",
+            "CHECKSUM",
+            "APPLIED_BY",
+        )
+    ]
+
+    if is_async:
+        tracker_async = OracleAsyncMigrationTracker()
+
+        class _AsyncDataDictionary:
+            async def get_columns(self, _driver: Any, _table: str, schema: str | None = None) -> list[dict[str, Any]]:
+                _ = schema
+                return missing_replaces
+
+        class _AsyncAddColumnDriver:
+            data_dictionary = _AsyncDataDictionary()
+
+            async def execute_script(self, sql: str) -> None:
+                _ = sql
+
+            async def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+            async def commit(self) -> None:
+                return None
+
+        await tracker_async.ensure_tracking_table(_AsyncAddColumnDriver())  # type: ignore[arg-type]
+    else:
+        tracker_sync = OracleSyncMigrationTracker()
+
+        class _SyncDataDictionary:
+            def get_columns(self, _driver: Any, _table: str, schema: str | None = None) -> list[dict[str, Any]]:
+                _ = schema
+                return missing_replaces
+
+        class _SyncAddColumnDriver:
+            data_dictionary = _SyncDataDictionary()
+
+            def execute_script(self, sql: str) -> None:
+                _ = sql
+
+            def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+            def commit(self) -> None:
+                return None
+
+        tracker_sync.ensure_tracking_table(_SyncAddColumnDriver())  # type: ignore[arg-type]
+
+    assert len(executed) == 1
+    assert 'ALTER TABLE "DDL_MIGRATIONS"' in executed[0]
+    assert 'ADD "REPLACES" VARCHAR2(4000)' in executed[0]
+    assert '"replaces"' not in executed[0]
