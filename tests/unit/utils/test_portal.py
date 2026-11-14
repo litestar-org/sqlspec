@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import queue
+import threading
 from collections.abc import Callable, Coroutine, Generator
 from typing import Any
 
@@ -473,5 +474,89 @@ def test_portal_call_propagates_cancelled_error() -> None:
     try:
         with pytest.raises(asyncio.CancelledError):
             provider.call(cancel_me)
+    finally:
+        provider.stop()
+
+
+def test_portal_call_isolates_contextvars_across_concurrent_threads() -> None:
+    """Concurrent Portal.call invocations keep caller ContextVars isolated."""
+    tenant_var: contextvars.ContextVar[str] = contextvars.ContextVar("portal_tenant", default="unset")
+    route_var: contextvars.ContextVar[str] = contextvars.ContextVar("portal_route", default="auto")
+    provider = PortalProvider()
+    provider.start()
+    portal = Portal(provider)
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+    results: dict[int, tuple[str, str, str, str]] = {}
+    errors: list[BaseException] = []
+
+    async def inspect_and_mutate(worker_index: int) -> tuple[str, str, str, str]:
+        before_tenant = tenant_var.get()
+        before_route = route_var.get()
+        await asyncio.sleep(0.005)
+        tenant_var.set(f"mutated-{worker_index}")
+        await asyncio.sleep(0.002)
+        return (before_tenant, before_route, tenant_var.get(), route_var.get())
+
+    def worker(worker_index: int) -> None:
+        tenant_tok = tenant_var.set(f"tenant-{worker_index}")
+        route_tok = route_var.set(f"route-{worker_index}")
+        try:
+            barrier.wait(timeout=5.0)
+            results[worker_index] = portal.call(inspect_and_mutate, worker_index)
+            assert tenant_var.get() == f"tenant-{worker_index}"
+            assert route_var.get() == f"route-{worker_index}"
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            route_var.reset(route_tok)
+            tenant_var.reset(tenant_tok)
+
+    threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(thread_count)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10.0)
+    finally:
+        provider.stop()
+
+    assert not errors
+    for idx in range(thread_count):
+        assert results[idx] == (f"tenant-{idx}", f"route-{idx}", f"mutated-{idx}", f"route-{idx}")
+
+
+def test_portal_queued_requests_use_own_caller_context_under_mismatched_wakeup() -> None:
+    """Queued portal requests run in their captured caller context regardless of wakeup context."""
+    correlation_var: contextvars.ContextVar[str] = contextvars.ContextVar("portal_correlation", default="none")
+    provider = PortalProvider()
+    provider.start()
+    try:
+        loop = provider.loop
+        result_a: queue.Queue[tuple[str | None, BaseException | None]] = queue.Queue()
+        result_b: queue.Queue[tuple[str | None, BaseException | None]] = queue.Queue()
+
+        async def read_correlation() -> str:
+            return correlation_var.get()
+
+        def capture(value: str) -> contextvars.Context:
+            tok = correlation_var.set(value)
+            try:
+                return contextvars.copy_context()
+            finally:
+                correlation_var.reset(tok)
+
+        ctx_a = capture("corr-alpha")
+        ctx_b = capture("corr-beta")
+        ctx_other = capture("corr-other")
+
+        provider._request_queue.put((read_correlation, (), {}, result_a, [], ctx_a))  # pyright: ignore[reportPrivateUsage]
+        provider._request_queue.put((read_correlation, (), {}, result_b, [], ctx_b))  # pyright: ignore[reportPrivateUsage]
+
+        loop.call_soon_threadsafe(provider._process_request, context=ctx_other)  # pyright: ignore[reportPrivateUsage]
+        loop.call_soon_threadsafe(provider._process_request, context=ctx_other)  # pyright: ignore[reportPrivateUsage]
+
+        assert result_a.get(timeout=5.0) == ("corr-alpha", None)
+        assert result_b.get(timeout=5.0) == ("corr-beta", None)
     finally:
         provider.stop()
