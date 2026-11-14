@@ -112,3 +112,20 @@ def test_fingerprint_uses_config_hash_plus_unhashed_parameter_discriminators() -
 
     assert registry._fingerprint_config(converter_a_config) != registry._fingerprint_config(converter_b_config)
     assert registry._fingerprint_config(transformer_a_config) != registry._fingerprint_config(transformer_b_config)
+
+
+def test_fingerprint_distinguishes_type_coercion_map_callables() -> None:
+    """Distinct coercion callables under the same key types produce distinct hashes and fingerprints."""
+    from sqlspec.core.parameters import ParameterStyle, ParameterStyleConfig
+
+    registry = StatementPipelineRegistry()
+    config_a = StatementConfig(
+        parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: str})
+    )
+    config_b = StatementConfig(
+        parameter_config=ParameterStyleConfig(ParameterStyle.QMARK, type_coercion_map={int: repr})
+    )
+
+    assert hash(config_a.parameter_config) != hash(config_b.parameter_config)
+    assert hash(config_a) != hash(config_b)
+    assert registry._fingerprint_config(config_a) != registry._fingerprint_config(config_b)

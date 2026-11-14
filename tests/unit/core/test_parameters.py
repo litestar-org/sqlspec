@@ -3521,3 +3521,19 @@ def test_static_literal_requires_dialect_for_backslashes() -> None:
 def test_static_literal_rejects_unknown_string_dialect() -> None:
     with pytest.raises(SQLSpecError, match="Cannot embed a string value"):
         ParameterConverter._format_literal("a", "not_a_dialect")
+
+
+def test_type_coercion_dispatcher_cache_is_bounded() -> None:
+    """Global type coercion dispatcher cache stays bounded by _FALLBACK_CACHE_MAX_SIZE."""
+    from sqlspec.core.parameters._processor import (
+        _FALLBACK_CACHE_MAX_SIZE,
+        _TYPE_COERCION_DISPATCHERS,
+        _TYPE_COERCION_DISPATCHERS_BY_ID,
+        type_coercion_dispatcher,
+    )
+
+    _TYPE_COERCION_DISPATCHERS.clear()
+    _TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+    _ = [type_coercion_dispatcher(((int, lambda value, idx=i: idx),)) for i in range(_FALLBACK_CACHE_MAX_SIZE + 50)]
+    assert len(_TYPE_COERCION_DISPATCHERS) <= _FALLBACK_CACHE_MAX_SIZE
+    assert len(_TYPE_COERCION_DISPATCHERS_BY_ID) <= _FALLBACK_CACHE_MAX_SIZE

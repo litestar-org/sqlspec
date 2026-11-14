@@ -403,8 +403,6 @@ class ParameterProcessor:
         original_styles = {p.style for p in param_info} if param_info else set()
         needs_execution_conversion = self._needs_placeholder_conversion(param_info, config)
 
-        input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
-
         if len(original_styles) > 1 and _is_sequence_payload(parameters, is_many):
             ambiguous = ambiguous_index_placeholder(param_info)
             if ambiguous is not None:
@@ -413,6 +411,7 @@ class ParameterProcessor:
         unescape_output = has_qmark_escape and not executes_qmark(config)
 
         if config.needs_static_script_compilation and param_info and not is_many:
+            input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
             return self._compile_static_script(
                 sql,
                 parameters,
@@ -433,6 +432,7 @@ class ParameterProcessor:
             and not config.output_transformer
             and not requires_mapping
         ):
+            input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
             normalized_sql = (
                 self._normalize_sql_for_parsing(sql, param_info, config, dialect=dialect)
                 if normalize_for_parsing
@@ -475,10 +475,11 @@ class ParameterProcessor:
             )
             original_styles = {target_style}
             needs_execution_conversion = False
-
-        if needs_execution_conversion:
+        elif needs_execution_conversion:
             target_style = self._select_execution_style(original_styles, config)
             input_named_parameters = _named_parameters_for_style(param_info, target_style)
+        else:
+            input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
         applied_wrap_types = False
         if processed_parameters and wrap_types:
@@ -993,6 +994,8 @@ def type_coercion_dispatcher(
 
     dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
     dispatcher.register_all(fallback_items)
+    if len(_TYPE_COERCION_DISPATCHERS) >= _FALLBACK_CACHE_MAX_SIZE:
+        _TYPE_COERCION_DISPATCHERS.clear()
     _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
     if len(_TYPE_COERCION_DISPATCHERS_BY_ID) >= _FALLBACK_CACHE_MAX_SIZE:
         _TYPE_COERCION_DISPATCHERS_BY_ID.clear()
@@ -1345,17 +1348,38 @@ def _align_cached_mapping(
 def _named_parameters_for_style(
     param_info: "list[ParameterInfo]", target_style: "ParameterStyle | None"
 ) -> "tuple[str, ...]":
-    has_named = any(p.style in _NAMED_STYLES for p in param_info)
-    if has_named and any(p.name is None for p in param_info):
+    if not param_info:
+        return ()
+
+    has_named = False
+    has_unnamed = False
+    all_numeric_positional = True
+    for param in param_info:
+        style = param.style
+        if style in _NAMED_STYLES:
+            has_named = True
+        if param.name is None:
+            has_unnamed = True
+        if style is not ParameterStyle.NUMERIC and style is not ParameterStyle.POSITIONAL_COLON:
+            all_numeric_positional = False
+
+    if has_named and has_unnamed:
         generated_names = _named_parameter_names(param_info)
-        names = tuple(p.name if p.name is not None else generated_names[_parameter_lookup_key(p)] for p in param_info)
+        names_list = [
+            param.name if param.name is not None else generated_names[_parameter_lookup_key(param)]
+            for param in param_info
+        ]
     else:
-        names = tuple(p.name for p in param_info if p.name is not None)
+        names_list = [param.name for param in param_info if param.name is not None]
+
     if target_style in _EXPANDING_POSITIONAL_STYLES:
-        return names
-    unique_names = tuple(dict.fromkeys(names))
-    if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} and all(
-        param.style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} for param in param_info
+        return tuple(names_list)
+
+    unique_names = tuple(dict.fromkeys(names_list))
+    if (
+        all_numeric_positional
+        and target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
+        and len(unique_names) > 1
     ):
         return tuple(sorted(unique_names, key=int))
     return unique_names

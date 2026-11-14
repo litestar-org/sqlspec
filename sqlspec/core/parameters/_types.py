@@ -280,6 +280,17 @@ class ParameterStyleConfig:
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
+            coercion_items: tuple[tuple[type, Any], ...] | None = None
+            if self.type_coercion_map:
+                items: list[tuple[type, Any]] = []
+                for key, value in sorted(self.type_coercion_map.items(), key=lambda kv: str(kv[0])):
+                    try:
+                        hash(value)
+                    except TypeError:
+                        items.append((key, id(value)))
+                    else:
+                        items.append((key, value))
+                coercion_items = tuple(items)
             hash_components = (
                 self.default_parameter_style.value,
                 frozenset(style.value for style in self.supported_parameter_styles),
@@ -289,7 +300,7 @@ class ParameterStyleConfig:
                     else None
                 ),
                 self.default_execution_parameter_style.value,
-                tuple(sorted(self.type_coercion_map.keys(), key=str)) if self.type_coercion_map else None,
+                coercion_items,
                 self.has_native_list_expansion,
                 self.preserve_original_params_for_many,
                 id(self.output_transformer) if self.output_transformer else None,

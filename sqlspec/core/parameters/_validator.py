@@ -111,7 +111,7 @@ SNOWFLAKE_PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     _REGEX_FLAGS,
 )
 
-_SKIP_GROUPS: Final[tuple[str, ...]] = (
+_SKIP_GROUPS: Final[frozenset[str]] = frozenset({
     "dquote",
     "squote",
     "dollar_quoted_string",
@@ -120,18 +120,24 @@ _SKIP_GROUPS: Final[tuple[str, ...]] = (
     "pg_q_operator",
     "pg_cast",
     "sql_server_global",
-)
-_ANSI_SKIP_GROUPS: Final[tuple[str, ...]] = (*_SKIP_GROUPS, "escape_squote", "q_squote")
-_MYSQL_SKIP_GROUPS: Final[tuple[str, ...]] = (
-    "dquote",
-    "squote",
-    "bquote",
-    "line_comment",
-    "block_comment",
-    "pg_q_operator",
-    "pg_cast",
-    "sql_server_global",
-)
+})
+_PARAMETER_GROUP_DISPATCH: Final[dict[str, tuple[ParameterStyle, str | None]]] = {
+    "qmark": (ParameterStyle.QMARK, None),
+    "named_colon": (ParameterStyle.NAMED_COLON, "colon_name"),
+    "numeric": (ParameterStyle.NUMERIC, "numeric_num"),
+    "named_at": (ParameterStyle.NAMED_AT, "at_name"),
+    "pyformat_named": (ParameterStyle.NAMED_PYFORMAT, "pyformat_name"),
+    "pyformat_pos": (ParameterStyle.POSITIONAL_PYFORMAT, None),
+    "positional_colon": (ParameterStyle.POSITIONAL_COLON, "colon_num"),
+    "named_dollar_param": (ParameterStyle.NAMED_DOLLAR, "dollar_param_name"),
+}
+_SNOWFLAKE_GROUP_DISPATCH: Final[dict[str, tuple[ParameterStyle, str | None]]] = {
+    "qmark": (ParameterStyle.QMARK, None),
+    "named_colon": (ParameterStyle.NAMED_COLON, "colon_name"),
+    "pyformat_named": (ParameterStyle.NAMED_PYFORMAT, "pyformat_name"),
+    "pyformat_pos": (ParameterStyle.POSITIONAL_PYFORMAT, None),
+    "positional_colon": (ParameterStyle.POSITIONAL_COLON, "colon_num"),
+}
 _SCANNER_ANSI: Final = "ansi"
 _SCANNER_MYSQL: Final = "mysql"
 _SCANNER_SNOWFLAKE: Final = "snowflake"
@@ -166,15 +172,15 @@ _SNOWFLAKE_COLON_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
     ParameterStyle.NAMED_COLON,
     ParameterStyle.POSITIONAL_COLON,
 })
-_SNOWFLAKE_SKIP_GROUPS: Final[tuple[str, ...]] = (
-    *_SKIP_GROUPS,
+_SNOWFLAKE_SKIP_GROUPS: Final[frozenset[str]] = _SKIP_GROUPS | frozenset({
     "sf_slash_comment",
     "sf_user_stage",
     "sf_table_stage",
     "sf_named_stage",
     "sf_numeric_dollar",
     "sf_session_var",
-)
+})
+_SNOWFLAKE_COMMENT_GROUPS: Final[frozenset[str]] = frozenset({"line_comment", "block_comment", "sf_slash_comment"})
 
 
 _OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s(?!\w)|%\(\w+\)s|@\w|\?)")
@@ -297,38 +303,26 @@ class ParameterValidator:
     @staticmethod
     def _extract_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
-        if match.group("qmark"):
-            return ParameterStyle.QMARK, None
-        if match.group("named_colon"):
-            return ParameterStyle.NAMED_COLON, match.group("colon_name")
-        if match.group("numeric"):
-            return ParameterStyle.NUMERIC, match.group("numeric_num")
-        if match.group("named_at"):
-            return ParameterStyle.NAMED_AT, match.group("at_name")
-        if match.group("pyformat_named"):
-            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
-        if match.group("pyformat_pos"):
-            return ParameterStyle.POSITIONAL_PYFORMAT, None
-        if match.group("positional_colon"):
-            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
-        if match.group("named_dollar_param"):
-            return ParameterStyle.NAMED_DOLLAR, match.group("dollar_param_name")
-        return None, None
+        lastgroup = match.lastgroup
+        if lastgroup is None:
+            return None, None
+        entry = _PARAMETER_GROUP_DISPATCH.get(lastgroup)
+        if entry is None:
+            return None, None
+        style, name_group = entry
+        return style, (match.group(name_group) if name_group is not None else None)
 
     @staticmethod
     def _extract_snowflake_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map the binding styles supported by the Snowflake lexical grammar."""
-        if match.group("qmark"):
-            return ParameterStyle.QMARK, None
-        if match.group("named_colon"):
-            return ParameterStyle.NAMED_COLON, match.group("colon_name")
-        if match.group("pyformat_named"):
-            return ParameterStyle.NAMED_PYFORMAT, match.group("pyformat_name")
-        if match.group("pyformat_pos"):
-            return ParameterStyle.POSITIONAL_PYFORMAT, None
-        if match.group("positional_colon"):
-            return ParameterStyle.POSITIONAL_COLON, match.group("colon_num")
-        return None, None
+        lastgroup = match.lastgroup
+        if lastgroup is None:
+            return None, None
+        entry = _SNOWFLAKE_GROUP_DISPATCH.get(lastgroup)
+        if entry is None:
+            return None, None
+        style, name_group = entry
+        return style, (match.group(name_group) if name_group is not None else None)
 
     def _extract_snowflake_parameters(self, sql: str) -> "list[ParameterInfo]":
         """Distinguish colon binds from path access using preceding meaningful tokens.
@@ -341,25 +335,27 @@ class ParameterValidator:
         parameters: list[ParameterInfo] = []
         preceding_operand = False
         for match in SNOWFLAKE_PARAMETER_REGEX.finditer(sql):
-            if match.group("line_comment") or match.group("block_comment") or match.group("sf_slash_comment"):
+            lastgroup = match.lastgroup
+            if lastgroup is None or lastgroup in _SNOWFLAKE_COMMENT_GROUPS:
                 continue
-            word = match.group("sf_word")
-            if word is not None:
-                preceding_operand = word.lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
+            if lastgroup == "sf_word":
+                preceding_operand = match.group(0).lower() not in _SNOWFLAKE_NON_OPERAND_KEYWORDS
                 continue
-            other = match.group("sf_other")
-            if other is not None:
+            if lastgroup == "sf_other":
+                other = match.group(0)
                 preceding_operand = other in ")]" or other.isdigit()
                 continue
-            if any(match.group(*_SNOWFLAKE_SKIP_GROUPS)):
-                preceding_operand = match.group("pg_q_operator") is None
+            if lastgroup in _SNOWFLAKE_SKIP_GROUPS:
+                preceding_operand = lastgroup != "pg_q_operator"
                 continue
-            style, name = self._extract_snowflake_parameter_style(match)
-            if style is None:
+            entry = _SNOWFLAKE_GROUP_DISPATCH.get(lastgroup)
+            if entry is None:
                 continue
+            style, name_group = entry
             if preceding_operand and style in _SNOWFLAKE_COLON_STYLES:
                 continue
             preceding_operand = True
+            name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
@@ -370,22 +366,26 @@ class ParameterValidator:
             return []
         if normalized_dialect == _SCANNER_ANSI:
             regex = ANSI_PARAMETER_REGEX
-            skip_groups = _ANSI_SKIP_GROUPS
         elif normalized_dialect == _SCANNER_MYSQL:
             regex = MYSQL_PARAMETER_REGEX
-            skip_groups = _MYSQL_SKIP_GROUPS
         else:
             regex = PARAMETER_REGEX
-            skip_groups = _SKIP_GROUPS
         parameters: list[ParameterInfo] = []
         for match in regex.finditer(sql):
-            if any(match.group(*skip_groups)):
+            lastgroup = match.lastgroup
+            if lastgroup is None:
                 continue
-            style, name = self._extract_parameter_style(match)
-            if style is None:
+            entry = _PARAMETER_GROUP_DISPATCH.get(lastgroup)
+            if entry is None:
                 continue
-            if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
+            style, name_group = entry
+            if (
+                style is ParameterStyle.QMARK
+                and _OPERAND_START.match(sql, match.end())
+                and _follows_operand(sql, match.start())
+            ):
                 continue
+            name = match.group(name_group) if name_group is not None else None
             parameters.append(ParameterInfo(name, style, match.start(), len(parameters), match.group(0)))
         return parameters
 
@@ -416,7 +416,7 @@ def unescape_qmark_operator(
     else:
         regex = PARAMETER_REGEX
     for match in regex.finditer(sql):
-        if match.group("pg_q_operator") != _QMARK_ESCAPE:
+        if match.lastgroup != "pg_q_operator" or match.group(0) != _QMARK_ESCAPE:
             continue
         segments.extend((sql[last_end : match.start()], "?"))
         escape_positions.append(match.start())
