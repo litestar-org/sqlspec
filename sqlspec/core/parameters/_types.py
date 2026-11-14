@@ -128,6 +128,7 @@ PARAMETER_PROCESSING_RESULT_SLOTS: Final[tuple[str, ...]] = (
     "parameter_profile",
     "parameters",
     "parsed_expression",
+    "placeholder_only",
     "sql",
     "sqlglot_sql",
 )
@@ -538,6 +539,7 @@ class ParameterProcessingResult:
         parsed_expression: Any = None,
         input_named_parameters: "tuple[str, ...] | None" = None,
         applied_wrap_types: bool = False,
+        placeholder_only: bool = False,
     ) -> None:
         self.sql = sql
         self.parameters = parameters
@@ -546,6 +548,7 @@ class ParameterProcessingResult:
         self.parsed_expression = parsed_expression
         self.input_named_parameters = input_named_parameters or ()
         self.applied_wrap_types = applied_wrap_types
+        self.placeholder_only = placeholder_only
 
     def __iter__(self) -> "Generator[str | Any, Any, None]":
         yield self.sql
@@ -574,6 +577,7 @@ class ParameterProcessingResult:
                 self.parsed_expression,
                 self.input_named_parameters,
                 self.applied_wrap_types,
+                self.placeholder_only,
             ),
         )
 

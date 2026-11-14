@@ -1360,3 +1360,25 @@ def test_parameter_casts_assigns_distinct_positions_for_multiple_qmark() -> None
     """Multiple anonymous '?' placeholders advance positions instead of collapsing onto index 1."""
     expression = sqlglot.parse_one("SELECT ?, CAST(? AS INT)")
     assert SQLProcessor._parameter_casts(expression) == {2: "INT"}
+
+
+@requires_interpreted
+def test_expression_override_skips_reparse_on_placeholder_conversion(
+    basic_statement_config: "StatementConfig", postgres_statement_config: "StatementConfig"
+) -> None:
+    """Pre-parsed SQL(expr) avoids calling sqlglot.parse_one again during placeholder conversion."""
+    from sqlspec.core.statement import SQL
+
+    sqlite_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="sqlite")
+    pg_expr = sqlglot.parse_one("SELECT id FROM users WHERE org_id = :org_id", dialect="postgres")
+
+    with patch("sqlspec.core.compiler.sqlglot.parse_one", side_effect=AssertionError("unexpected reparse")):
+        sqlite_stmt = SQL(sqlite_expr, {"org_id": 1}, statement_config=basic_statement_config)
+        sqlite_sql, sqlite_params = sqlite_stmt.compile()
+        assert sqlite_sql == "SELECT id FROM users WHERE org_id = ?"
+        assert sqlite_params == (1,)
+
+        pg_stmt = SQL(pg_expr, {"org_id": 2}, statement_config=postgres_statement_config)
+        pg_sql, pg_params = pg_stmt.compile()
+        assert pg_sql == "SELECT id FROM users WHERE org_id = $1"
+        assert pg_params == (2,)

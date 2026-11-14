@@ -395,6 +395,7 @@ class ParameterProcessor:
                     parsed_expression=cached_result.parsed_expression,
                     input_named_parameters=cached_result.input_named_parameters,
                     applied_wrap_types=cached_result.applied_wrap_types,
+                    placeholder_only=cached_result.placeholder_only and not config.output_transformer,
                 )
             self._cache_misses += 1
 
@@ -450,6 +451,7 @@ class ParameterProcessor:
                 parsed_expression=parsed_expression,
                 input_named_parameters=input_named_parameters,
                 applied_wrap_types=False,
+                placeholder_only=not has_qmark_escape,
             )
             return self._store_cached_result(cache_key, result)
 
@@ -523,6 +525,11 @@ class ParameterProcessor:
             parsed_expression=parsed_expression,
             input_named_parameters=input_named_parameters,
             applied_wrap_types=applied_wrap_types,
+            placeholder_only=(
+                not has_qmark_escape
+                and not config.output_transformer
+                and not self._converter._overrides_public_conversion  # pyright: ignore[reportPrivateUsage]
+            ),
         )
 
         return self._store_cached_result(cache_key, result)

@@ -125,6 +125,8 @@ _RETURNS_ROWS_ROOT_TYPES: Final[tuple[type[exp.Expr], ...]] = (
     exp.Summarize,
 )
 _READ_ONLY_TABLE_HINTS: Final[frozenset[str]] = frozenset({"NOLOCK", "READUNCOMMITTED"})
+_READ_ONLY_EXTRA_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (exp.Column, exp.WithTableHint, exp.Func)
+_POSITIONAL_NON_INDEXED_STYLES: Final[frozenset[str]] = frozenset({"qmark", "pyformat_positional"})
 
 logger: "logging.Logger" = get_logger("sqlspec.core.compiler")
 OperationType = Literal[
@@ -640,7 +642,7 @@ class SQLProcessor:
 
     @staticmethod
     def _normalize_expression_override(
-        expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str
+        expression_override: "exp.Expr | None", sqlglot_sql: str, sql: str, *, allow_placeholder_rewrite: bool = False
     ) -> "exp.Expr | None":
         """Validate expression overrides against the input SQL.
 
@@ -648,13 +650,14 @@ class SQLProcessor:
             expression_override: Pre-parsed SQLGlot expression.
             sqlglot_sql: SQL passed to SQLGlot.
             sql: Original SQL string.
+            allow_placeholder_rewrite: Whether 1-to-1 placeholder conversions preserve override validity.
 
         Returns:
             Expression override when it is safe to reuse.
         """
         if expression_override is None:
             return None
-        if sqlglot_sql != sql:
+        if sqlglot_sql != sql and not allow_placeholder_rewrite:
             return None
         return expression_override
 
@@ -995,8 +998,22 @@ class SQLProcessor:
                 wrap_types=self._enable_parameter_type_wrapping,
                 param_fingerprint=param_fingerprint,
             )
+            has_ast_transforms = bool(
+                self._effective_statement_transformers() or self._parameter_config.ast_transformer is not None
+            )
+            allow_placeholder_rewrite = (
+                process_result.placeholder_only
+                and not has_ast_transforms
+                and not (
+                    bool(process_result.parameter_profile.reused_ordinals)
+                    and self._exec_style in _POSITIONAL_NON_INDEXED_STYLES
+                )
+            )
             expression_override = SQLProcessor._normalize_expression_override(
-                expression_override, process_result.sqlglot_sql, sql
+                expression_override,
+                process_result.sqlglot_sql,
+                sql,
+                allow_placeholder_rewrite=allow_placeholder_rewrite,
             )
 
             final_parameters = process_result.parameters
@@ -1008,9 +1025,6 @@ class SQLProcessor:
             cached_template: exp.Expr | None = None
 
             if self._config.enable_parsing:
-                has_ast_transforms = bool(
-                    self._effective_statement_transformers() or self._parameter_config.ast_transformer is not None
-                )
                 collect_casts = not has_ast_transforms
                 (expression, operation_type, operation_profile, parse_cache_key, resolved_casts, cached_template) = (
                     self._resolve_expression(
@@ -1420,7 +1434,7 @@ def _inspect_operation_profile(
                     need_ro_walk = False
                     if isinstance(node, _MODIFIES_ROWS_AST_TYPES):
                         modifies_rows = True
-                elif _node_disqualifies_read_only_extra(node):
+                elif isinstance(node, _READ_ONLY_EXTRA_AST_TYPES) and _node_disqualifies_read_only_extra(node):
                     is_read_only = False
                     need_ro_walk = False
             elif not modifies_rows and isinstance(node, _MODIFIES_ROWS_AST_TYPES):
