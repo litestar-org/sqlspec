@@ -1,12 +1,16 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
+import json
 from datetime import UTC
 from inspect import isawaitable
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events import decode_notify_payload
 
 
 def test_asyncpg_factory_notify_backend() -> None:
@@ -618,6 +622,20 @@ def test_shared_parse_event_timestamp() -> None:
     assert message.event_id == "evt_decode"
     assert message.channel == "alerts"
     assert message.payload == {"action": "refresh"}
+
+
+def test_decode_notify_payload_rejects_invalid_json() -> None:
+    """Malformed JSON notification payloads raise EventChannelError."""
+    with pytest.raises(EventChannelError, match="Malformed event notification payload"):
+        decode_notify_payload("alerts", "{not-valid-json")
+
+
+@pytest.mark.parametrize("bad_event_id", [123, None, "", ["evt"], {"id": "1"}])
+def test_decode_notify_payload_rejects_non_string_event_id(bad_event_id: Any) -> None:
+    """Notification payloads with non-string or empty event_id raise EventChannelError."""
+    payload = json.dumps({"event_id": bad_event_id, "payload": {"a": 1}})
+    with pytest.raises(EventChannelError, match="event_id must be a non-empty string"):
+        decode_notify_payload("alerts", payload)
 
 
 def test_oracle_backend_build_envelope() -> None:

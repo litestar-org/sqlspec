@@ -71,14 +71,30 @@ def fits_notify_payload(
 
 
 def decode_notify_payload(channel: str, payload: str) -> "EventMessage":
-    """Decode JSON payload from NOTIFY into an EventMessage."""
-    raw = from_json(payload)
+    """Decode JSON payload from NOTIFY into an EventMessage.
+
+    Raises:
+        EventChannelError: If the payload is not valid JSON or has a non-string ``event_id``.
+    """
+    try:
+        raw = from_json(payload)
+    except (TypeError, ValueError) as exc:
+        msg = "Malformed event notification payload"
+        raise EventChannelError(msg) from exc
     data = raw if isinstance(raw, dict) else {"payload": raw}
+    if "event_id" in data:
+        raw_event_id = data["event_id"]
+        if not isinstance(raw_event_id, str) or not raw_event_id:
+            msg = "Malformed event notification payload: event_id must be a non-empty string"
+            raise EventChannelError(msg)
+        event_id = raw_event_id
+    else:
+        event_id = uuid4().hex
     payload_val = data.get("payload")
     metadata_val = data.get("metadata")
     timestamp = parse_event_timestamp(data.get("published_at"))
     return EventMessage(
-        event_id=data.get("event_id", uuid4().hex),
+        event_id=event_id,
         channel=channel,
         payload=coerce_dict(payload_val),
         metadata=coerce_optional_dict(metadata_val),

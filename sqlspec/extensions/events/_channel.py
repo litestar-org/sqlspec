@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.exceptions import EventChannelError, ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._hints import get_runtime_hints, resolve_adapter_name
 from sqlspec.extensions.events._models import EventMessage
@@ -1034,6 +1034,21 @@ class _SyncEventIterator:
             )
             try:
                 event = self._backend.dequeue(self._channel, self._poll_interval)
+            except (EventChannelError, ValueError) as error:
+                _end_event_span(self._runtime, span, error=error)
+                self._runtime.increment_metric("events.dequeue.error")
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name=self._adapter_name,
+                    backend_name=self._backend_name,
+                    channel=self._channel,
+                    mode="sync",
+                    error_type=type(error).__name__,
+                    status="malformed_payload",
+                )
+                continue
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise
@@ -1088,6 +1103,21 @@ class _AsyncEventIterator:
             )
             try:
                 event = await self._backend.dequeue(self._channel, self._poll_interval)
+            except (EventChannelError, ValueError) as error:
+                _end_event_span(self._runtime, span, error=error)
+                self._runtime.increment_metric("events.dequeue.error")
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "event.receive",
+                    adapter_name=self._adapter_name,
+                    backend_name=self._backend_name,
+                    channel=self._channel,
+                    mode="async",
+                    error_type=type(error).__name__,
+                    status="malformed_payload",
+                )
+                continue
             except Exception as error:
                 _end_event_span(self._runtime, span, error=error)
                 raise

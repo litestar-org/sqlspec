@@ -1,5 +1,7 @@
 """Unit tests for Prometheus metrics extension."""
 
+import pytest
+
 from sqlspec import create_event
 from sqlspec.utils import module_loader
 
@@ -350,3 +352,83 @@ def test_enable_metrics_merges_with_base_config(monkeypatch) -> None:
     assert config.print_sql is True
     assert config.statement_observers is not None
     assert len(config.statement_observers) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_label",
+    [
+        "sql",
+        "parameters",
+        "correlation_id",
+        "duration_s",
+        "sql_hash",
+        "trace_id",
+        "span_id",
+        "started_at",
+        "rows_affected",
+        "custom_attribute",
+    ],
+)
+def test_rejects_disallowed_and_high_cardinality_labels(monkeypatch, bad_label: str) -> None:
+    """Reject labels outside the bounded low-cardinality allow-list."""
+    _force_dependency(monkeypatch, "prometheus_client")
+
+    from sqlspec.extensions import prometheus
+
+    with pytest.raises(ValueError, match="High-cardinality Prometheus label names are not allowed"):
+        prometheus.PrometheusStatementObserver(label_names=("db_system", bad_label))
+
+
+def test_allows_all_bounded_low_cardinality_labels(monkeypatch) -> None:
+    """Allow every bounded label in the explicit allow-list."""
+    _force_dependency(monkeypatch, "prometheus_client")
+
+    from sqlspec.extensions import prometheus
+
+    allowed = (
+        "driver",
+        "db_system",
+        "operation",
+        "execution_mode",
+        "is_many",
+        "is_script",
+        "storage_backend",
+        "transaction_state",
+        "prepared_statement",
+        "adapter",
+        "bind_key",
+    )
+    observer = prometheus.PrometheusStatementObserver(label_names=allowed)
+    event = create_event(
+        sql="SELECT 1",
+        parameters=(),
+        driver="SqliteDriver",
+        adapter="SqliteConfig",
+        bind_key="analytics",
+        operation="SELECT",
+        execution_mode="sync",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        correlation_id=None,
+        db_system="sqlite",
+        storage_backend="local",
+        transaction_state="autocommit",
+        prepared_statement=True,
+    )
+
+    values = observer._label_values(event)  # pyright: ignore[reportPrivateUsage]
+    assert values == (
+        "SqliteDriver",
+        "sqlite",
+        "SELECT",
+        "sync",
+        "False",
+        "False",
+        "local",
+        "autocommit",
+        "True",
+        "SqliteConfig",
+        "analytics",
+    )
