@@ -731,3 +731,25 @@ def test_db2_identifier_patterns_reject_trailing_newline() -> None:
     assert _ODBC_KEY_PATTERN.match("HOSTNAME\n") is None
     with pytest.raises(ImproperConfigurationError, match="keyword"):
         build_dsn_string({"extra": {"KEY\n": "val"}})
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.anyio
+async def test_db2_create_connection_maps_native_driver_error(config_type: Any, fake_ibm_db: FakeModules) -> None:
+    """Db2 create_connection maps native driver failures directly to DatabaseConnectionError."""
+    _, module = fake_ibm_db
+    native = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.append(native)
+    config = config_type(connection_config={"database": "TESTDB"})
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            if config.is_async:
+                await config.create_connection()
+            else:
+                config.create_connection()
+        assert exc_info.value.__cause__ is native
+    finally:
+        if config.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()

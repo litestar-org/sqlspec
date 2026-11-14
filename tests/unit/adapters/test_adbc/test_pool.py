@@ -592,7 +592,7 @@ def test_adbc_pool_clone_maps_native_error() -> None:
 
 @pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
 def test_adbc_config_provide_maps_native_connect_error(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
-    """provide_connection and provide_session unwrap native ADBC connect failures while create_connection keeps its contract."""
+    """create_connection, provide_connection, and provide_session map native ADBC connect failures."""
     native = AdbcOperationalError("State: 08001, connection refused", status_code=AdbcStatusCode.IO)
 
     def failing_connect(**_: Any) -> Any:
@@ -601,7 +601,7 @@ def test_adbc_config_provide_maps_native_connect_error(monkeypatch: pytest.Monke
     monkeypatch.setattr(adbc_config_module, "resolve_driver_connect_func", lambda *_a: failing_connect)
     config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
 
-    with pytest.raises(ImproperConfigurationError) as cfg_exc:
+    with pytest.raises(DatabaseConnectionError) as cfg_exc:
         config.create_connection()
     assert cfg_exc.value.__cause__ is native
 

@@ -163,13 +163,15 @@ async def test_cancelled_connect_releases_capacity_and_closes_connection(fake_ib
 
 
 async def test_failed_connect_releases_capacity(fake_ibm_db: FakeModules) -> None:
-    """A connect error surfaces to the caller without consuming the slot."""
+    """A connect error maps to DatabaseConnectionError without consuming the slot."""
     _, module = fake_ibm_db
-    module.connect_errors.append(db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError))
+    native = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.append(native)
     pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1, acquire_timeout=0.05)
     try:
-        with pytest.raises(FakeDb2OperationalError):
+        with pytest.raises(DatabaseConnectionError) as exc_info:
             await pool.acquire()
+        assert exc_info.value.__cause__ is native
         await pool.acquire()
         assert (pool.size(), len(module.connect_calls)) == (1, 2)
     finally:

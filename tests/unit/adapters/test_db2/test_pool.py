@@ -8,7 +8,15 @@ from typing import cast
 import pytest
 
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, FakeIbmDbDbiModule, FakeIbmDbModule
+from sqlspec.exceptions import DatabaseConnectionError
+from tests.unit.adapters.test_db2._fakes import (
+    FakeDb2Connection,
+    FakeDb2Cursor,
+    FakeDb2OperationalError,
+    FakeIbmDbDbiModule,
+    FakeIbmDbModule,
+    db2_error,
+)
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
 
@@ -371,3 +379,28 @@ def test_db2_sync_pool_retires_failed_rollback_and_closed_handle(
             assert cast("object", fresh) is c3
     finally:
         pool_on.close()
+
+
+def test_sync_pool_maps_native_connect_errors(fake_ibm_db: FakeModules) -> None:
+    """Db2SyncConnectionPool maps Db2Error directly across new_connection, acquire, and get_connection."""
+    _, module = fake_ibm_db
+    native_new = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    native_acquire = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    native_ctx = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.extend([native_new, native_acquire, native_ctx])
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(DatabaseConnectionError) as new_exc:
+            pool.new_connection()
+        assert new_exc.value.__cause__ is native_new
+
+        with pytest.raises(DatabaseConnectionError) as acq_exc:
+            pool.acquire()
+        assert acq_exc.value.__cause__ is native_acquire
+
+        with pytest.raises(DatabaseConnectionError) as ctx_exc:
+            with pool.get_connection():
+                pass
+        assert ctx_exc.value.__cause__ is native_ctx
+    finally:
+        pool.close()

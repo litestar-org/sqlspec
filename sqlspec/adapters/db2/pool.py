@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Any
 from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.db2 import _typing as typing_module
-from sqlspec.adapters.db2._typing import ibm_db_dbi
-from sqlspec.adapters.db2.core import build_dsn_string
+from sqlspec.adapters.db2._typing import Db2Error, ibm_db_dbi
+from sqlspec.adapters.db2.core import build_dsn_string, create_mapped_exception
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -163,7 +163,10 @@ class Db2SyncConnectionPool:
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
         options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
-        connection = typing_module.ibm_db_dbi.connect(self._dsn, "", "", "", "", options)
+        try:
+            connection = typing_module.ibm_db_dbi.connect(self._dsn, "", "", "", "", options)
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
         try:
             schema = self._connection_parameters.get("current_schema")
@@ -171,9 +174,11 @@ class Db2SyncConnectionPool:
                 _set_current_schema(connection, schema)
             if self._on_connection_create is not None:
                 self._on_connection_create(connection)
-        except BaseException:
+        except BaseException as exc:
             with contextlib.suppress(BaseException):
                 connection.close()
+            if isinstance(exc, Db2Error):
+                raise create_mapped_exception(exc) from exc
             raise
 
         return connection
@@ -186,7 +191,10 @@ class Db2SyncConnectionPool:
             A thread-local Db2 database connection.
         """
         depth = getattr(self._thread_local, "depth", 0)
-        connection = self._get_thread_connection()
+        try:
+            connection = self._get_thread_connection()
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
         self._thread_local.depth = depth + 1
         body_failed = False
         try:
@@ -218,7 +226,10 @@ class Db2SyncConnectionPool:
 
     def acquire(self) -> Any:
         """Acquire a thread-local connection."""
-        return self._get_thread_connection()
+        try:
+            return self._get_thread_connection()
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     def release(self, connection: Any) -> None:
         """Release connection back to the thread-local pool."""
@@ -503,7 +514,10 @@ class Db2AsyncConnectionPool:
             else typing_module.ibm_db_dbi.SQL_AUTOCOMMIT_OFF
         )
         options = _build_connection_options(self._conn_options, autocommit_mode, self._read_only)
-        connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
+        try:
+            connection = await typing_module.ibm_db_dbi.AsyncConnection.connect(self._dsn, "", "", "", "", options)
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
         try:
             schema = self._connection_parameters.get("current_schema")
             if schema is not None:
@@ -512,9 +526,11 @@ class Db2AsyncConnectionPool:
                 result = self._on_connection_create(connection)
                 if inspect.isawaitable(result):
                     await result
-        except BaseException:
+        except BaseException as exc:
             with contextlib.suppress(BaseException):
                 await connection.close()
+            if isinstance(exc, Db2Error):
+                raise create_mapped_exception(exc) from exc
             raise
         return connection
 
@@ -543,8 +559,10 @@ class Db2AsyncConnectionPool:
             raise DatabaseConnectionError(msg)
         try:
             record = await self._checkout()
-        except BaseException:
+        except BaseException as exc:
             semaphore.release()
+            if isinstance(exc, Db2Error):
+                raise create_mapped_exception(exc) from exc
             raise
         if self._closed:
             try:

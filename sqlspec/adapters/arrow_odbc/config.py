@@ -136,7 +136,7 @@ class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
         self._connection: ArrowOdbcConnection | None = None
 
     def __enter__(self) -> "ArrowOdbcConnection":
-        self._connection = _open_arrow_odbc_connection(self._config)
+        self._connection = self._config.create_connection()
         return cast("ArrowOdbcConnection", self._connection)
 
     def __exit__(
@@ -159,7 +159,7 @@ class _ArrowOdbcSessionConnectionHandler(SyncPoolSessionFactory):
         self._connection: ArrowOdbcConnection | None = None
 
     def acquire_connection(self) -> "ArrowOdbcConnection":
-        self._connection = _open_arrow_odbc_connection(self._config)
+        self._connection = self._config.create_connection()
         return cast("ArrowOdbcConnection", self._connection)
 
     def release_connection(self, _conn: "ArrowOdbcConnection", **kwargs: Any) -> None:
@@ -270,6 +270,8 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             return cast("ArrowOdbcConnection", connection)
         except ImproperConfigurationError:
             raise
+        except ArrowOdbcError as exc:
+            raise create_mapped_exception(exc) from exc
         except Exception as exc:
             msg = f"Could not configure arrow-odbc connection. Error: {exc}"
             raise ImproperConfigurationError(msg) from exc
@@ -442,12 +444,3 @@ def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
     if dialect == "mssql":
         return _apply_json_serializer_override(build_statement_config(dialect="tsql"), features)
     return _apply_json_serializer_override(build_statement_config(dialect=dialect), features)
-
-
-def _open_arrow_odbc_connection(config: "ArrowOdbcConfig") -> "ArrowOdbcConnection":
-    try:
-        return config.create_connection()
-    except ImproperConfigurationError as exc:
-        if isinstance(exc.__cause__, ArrowOdbcError):
-            raise create_mapped_exception(exc.__cause__) from exc.__cause__
-        raise

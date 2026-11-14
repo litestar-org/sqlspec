@@ -9,7 +9,6 @@ from sqlspec.adapters.db2._typing import (
     Db2AsyncCursor,
     Db2AsyncRawCursor,
     Db2AsyncSessionContext,
-    Db2Error,
     Db2RawCursor,
     Db2SyncConnection,
     Db2SyncCursor,
@@ -19,7 +18,6 @@ from sqlspec.adapters.db2.core import (
     apply_driver_features,
     build_connection_config,
     build_dsn_string,
-    create_mapped_exception,
     default_statement_config,
     resolve_connection_overrides,
 )
@@ -144,21 +142,9 @@ class Db2SyncConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
-    def __enter__(self) -> "Db2SyncConnection":
-        try:
-            return cast("Db2SyncConnection", super().__enter__())
-        except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
-
 
 class _Db2SyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
-
-    def acquire_connection(self) -> "Db2SyncConnection":
-        try:
-            return cast("Db2SyncConnection", super().acquire_connection())
-        except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -327,21 +313,9 @@ class Db2AsyncConnectionContext(AsyncPoolConnectionContext):
 
     __slots__ = ()
 
-    async def __aenter__(self) -> "Db2AsyncConnection":
-        try:
-            return cast("Db2AsyncConnection", await super().__aenter__())
-        except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
-
 
 class _Db2AsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
-
-    async def acquire_connection(self) -> "Db2AsyncConnection":
-        try:
-            return cast("Db2AsyncConnection", await super().acquire_connection())
-        except Db2Error as exc:
-            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)

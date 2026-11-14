@@ -20,6 +20,8 @@ import adbc_driver_manager.dbapi
 import adbc_driver_sqlite.dbapi
 import pytest
 from adbc_driver_bigquery import DatabaseOptions
+from adbc_driver_manager import AdbcStatusCode
+from adbc_driver_manager import OperationalError as AdbcOperationalError
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver, AdbcDriverFeatures
 from sqlspec.adapters.adbc._typing import AdbcSessionContext
@@ -33,7 +35,7 @@ from sqlspec.adapters.adbc.core import (
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
 from sqlspec.core import SQL, ParameterStyle
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import reset_dependency_cache
 
 
@@ -508,6 +510,24 @@ def test_adbc_config_hook_failure_closes_owned_connection(
         assert caught.value.__cause__ is primary
     else:
         assert caught.value is primary
+    connection.close.assert_called_once_with()
+
+
+def test_adbc_config_native_hook_error_closes_connection_and_maps_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AdbcConfig.create_connection maps AdbcNativeError directly after closing an owned connection."""
+    connection = MagicMock()
+    monkeypatch.setattr(adbc_driver_sqlite.dbapi, "connect", lambda **_kwargs: connection)
+    native = AdbcOperationalError("State: 08001, connection lost", status_code=AdbcStatusCode.IO)
+
+    def fail_hook(_connection: Any) -> None:
+        raise native
+
+    config = AdbcConfig(
+        connection_config={"driver_name": "sqlite"}, driver_features={"on_connection_create": fail_hook}
+    )
+    with pytest.raises(DatabaseConnectionError) as caught:
+        config.create_connection()
+    assert caught.value.__cause__ is native
     connection.close.assert_called_once_with()
 
 

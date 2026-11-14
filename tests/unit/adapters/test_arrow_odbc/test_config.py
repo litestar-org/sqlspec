@@ -542,7 +542,7 @@ def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection
 
 @pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
 def test_arrow_odbc_config_provide_maps_native_connect_error(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
-    """provide_connection and provide_session unwrap native arrow-odbc connect failures for failover."""
+    """create_connection, provide_connection, and provide_session map native arrow-odbc connect failures."""
 
     class _FakeArrowOdbcError(ArrowOdbcError):
         def __init__(self, message: str) -> None:
@@ -556,7 +556,7 @@ def test_arrow_odbc_config_provide_maps_native_connect_error(monkeypatch: pytest
     monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", failing_connect)
     config = ArrowOdbcConfig(connection_config={"dsn": "analytics"})
 
-    with pytest.raises(ImproperConfigurationError) as cfg_exc:
+    with pytest.raises(DatabaseConnectionError) as cfg_exc:
         config.create_connection()
     assert cfg_exc.value.__cause__ is native
 
@@ -564,6 +564,37 @@ def test_arrow_odbc_config_provide_maps_native_connect_error(monkeypatch: pytest
         with getattr(config, method)():
             pass
     assert mapped_exc.value.__cause__ is native
+
+
+def test_create_connection_maps_native_hook_error_after_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_connection closes the raw ODBC connection and maps native ArrowOdbcError from hooks."""
+
+    class _FakeArrowOdbcError(ArrowOdbcError):
+        def __init__(self, message: str) -> None:
+            Exception.__init__(self, message)
+
+    close_calls = 0
+
+    class _CreatedConnection:
+        def close(self) -> None:
+            nonlocal close_calls
+            close_calls += 1
+
+    native = _FakeArrowOdbcError("State: 08001, Native error: 0, Message: Hook lost connection")
+
+    def failing_hook(_conn: Any) -> None:
+        raise native
+
+    monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", lambda *_a, **_kw: _CreatedConnection())
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics"}, driver_features={"on_connection_create": failing_hook}
+    )
+
+    with pytest.raises(DatabaseConnectionError) as exc_info:
+        config.create_connection()
+
+    assert exc_info.value.__cause__ is native
+    assert close_calls == 1
 
 
 @pytest.mark.parametrize(

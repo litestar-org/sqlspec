@@ -551,7 +551,8 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
             A new connection instance, or ``connection_instance`` when configured.
 
         Raises:
-            ImproperConfigurationError: If the connection could not be established.
+            SQLSpecError: If the native ADBC driver fails to connect or configure the session.
+            ImproperConfigurationError: If connection settings are invalid.
         """
         if self._pool_config is None and self.connection_instance is not None:
             return cast("AdbcConnection", self.connection_instance)
@@ -575,6 +576,10 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
                 with contextlib.suppress(BaseException):
                     connection.close()
             if not isinstance(e, Exception):
+                raise
+            if isinstance(e, AdbcNativeError):
+                raise create_mapped_exception(e) from e
+            if isinstance(e, ImproperConfigurationError):
                 raise
             err_driver_name = (
                 self.connection_config.get("driver_name") or self.connection_config.get("driver") or "Unknown"
@@ -835,9 +840,4 @@ def _rollback_connection_instance(
 
 
 def _acquire_adbc_connection(config: "AdbcConfig", pool: "AdbcConnectionPool | None" = None) -> "AdbcConnection":
-    try:
-        return pool.acquire() if pool is not None else config.create_connection()
-    except ImproperConfigurationError as exc:
-        if isinstance(exc.__cause__, AdbcNativeError):
-            raise create_mapped_exception(exc.__cause__) from exc.__cause__
-        raise
+    return pool.acquire() if pool is not None else config.create_connection()
