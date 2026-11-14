@@ -213,11 +213,11 @@ def merge_scoped_state(
 
 
 def _normalize_event_data(event_data: "dict[str, Any]") -> "dict[str, Any]":
-    """Return event data acceptable to ADK 2.2's Event model.
+    """Return event data without explicit ``actions: null`` entries.
 
-    ADK 2.2 guards an assigned ``event.actions = None`` during service writes,
-    but explicit ``actions: null`` does not validate as a durable Event shape.
-    SQLSpec therefore omits that key before storing or restoring payloads.
+    Google ADK guards an assigned ``event.actions = None`` during service
+    writes, but explicit ``actions: null`` fails Pydantic model validation when
+    restoring stored payloads.
     """
 
     normalized = dict(event_data)

@@ -103,42 +103,6 @@ def temporary_project_path(project_root: Path) -> Iterator[None]:
             sys.path.remove(path_to_add)
 
 
-def _exec_reconcile_module(
-    module_path: Path, *, extension_name: str, project_root: Path | None = None
-) -> types.ModuleType:
-    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
-    root = project_root if project_root is not None else find_project_root(module_path.parent)
-    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
-
-    try:
-        source_code = module_path.read_text(encoding="utf-8")
-        compiled_code = compile(source_code, str(module_path), "exec")
-    except Exception as exc:
-        msg = f"Failed to load extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
-        error = MigrationError(msg)
-        error.__cause__ = exc
-        raise error
-
-    module = types.ModuleType(module_name)
-    module.__file__ = str(module_path)
-
-    with temporary_project_path(root):
-        try:
-            sys.modules[module_name] = module
-            builtins.__dict__["exec"](compiled_code, module.__dict__)
-        except MigrationError:
-            raise
-        except Exception as exc:
-            msg = f"Failed to execute extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
-            exec_error = MigrationError(msg)
-            exec_error.__cause__ = exc
-            raise exec_error
-        finally:
-            sys.modules.pop(module_name, None)
-
-    return module
-
-
 def load_reconcile_callable(
     module_path: Path, *, extension_name: str, project_root: Path | None = None
 ) -> ReconcileCallable:
@@ -614,6 +578,42 @@ def get_migration_loader(
         return SQLFileLoader(sql_loader)
     msg = f"Unsupported migration file type: {suffix}"
     raise MigrationLoadError(msg)
+
+
+def _exec_reconcile_module(
+    module_path: Path, *, extension_name: str, project_root: Path | None = None
+) -> types.ModuleType:
+    """Compile and execute a reconcile.py module fresh from disk and return the executed module."""
+    root = project_root if project_root is not None else find_project_root(module_path.parent)
+    module_name = f"_sqlspec_reconcile_{extension_name}_{uuid4().hex}"
+
+    try:
+        source_code = module_path.read_text(encoding="utf-8")
+        compiled_code = compile(source_code, str(module_path), "exec")
+    except Exception as exc:
+        msg = f"Failed to load extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+        error = MigrationError(msg)
+        error.__cause__ = exc
+        raise error
+
+    module = types.ModuleType(module_name)
+    module.__file__ = str(module_path)
+
+    with temporary_project_path(root):
+        try:
+            sys.modules[module_name] = module
+            builtins.__dict__["exec"](compiled_code, module.__dict__)
+        except MigrationError:
+            raise
+        except Exception as exc:
+            msg = f"Failed to execute extension reconciler '{extension_name}' from {module_path}: {type(exc).__name__}"
+            exec_error = MigrationError(msg)
+            exec_error.__cause__ = exc
+            raise exec_error
+        finally:
+            sys.modules.pop(module_name, None)
+
+    return module
 
 
 def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., Any] | None":

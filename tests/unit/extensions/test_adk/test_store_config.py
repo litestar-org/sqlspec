@@ -34,7 +34,15 @@ class _Config:
 
 class _AsyncSessionStore(BaseAsyncADKStore[Any]):
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         return StoredSession(
             id=session_id,
@@ -79,10 +87,12 @@ class _AsyncSessionStore(BaseAsyncADKStore[Any]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        return await self.create_session(session_id, app_name, user_id, state)
+        return await self.create_session(
+            session_id, app_name, user_id, state, app_state_delta=app_state_delta, user_state_delta=user_state_delta
+        )
 
     async def get_events(
         self,
@@ -164,7 +174,15 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         self.create_tables_called = False
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         return StoredSession(
             id=session_id,
@@ -209,10 +227,12 @@ class _SyncSessionStore(BaseSyncADKStore[Any]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        return self.create_session(session_id, app_name, user_id, state)
+        return self.create_session(
+            session_id, app_name, user_id, state, app_state_delta=app_state_delta, user_state_delta=user_state_delta
+        )
 
     def get_events(
         self,

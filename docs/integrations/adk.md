@@ -1,6 +1,6 @@
 # Google ADK Integration
 
-`sqlspec.extensions.adk` integrates SQLSpec with [Google Agent Development Kit (`google-adk >= 2.10.0`)](https://google.github.io/adk-docs/), providing persistent database-backed implementations of ADK's `BaseSessionService` (`SQLSpecSessionService`), `BaseMemoryService` (`SQLSpecMemoryService`), and `BaseArtifactService` (`SQLSpecArtifactService`) across supported database adapters.
+`sqlspec.extensions.adk` integrates SQLSpec with [Google Agent Development Kit (`google-adk >= 2.14.1`)](https://google.github.io/adk-docs/), providing persistent database-backed implementations of ADK's `BaseSessionService` (`SQLSpecSessionService`), `BaseMemoryService` (`SQLSpecMemoryService`), and `BaseArtifactService` (`SQLSpecArtifactService`) across supported database adapters.
 
 ## Installation
 

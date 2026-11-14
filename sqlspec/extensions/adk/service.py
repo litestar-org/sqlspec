@@ -123,16 +123,6 @@ class SQLSpecSessionService(BaseSessionService):
                     msg = f"Session with id {resolved_session_id} already exists."
                     raise AlreadyExistsError(msg)
 
-            current_app_state = await self._call_store("get_app_state", app_name, _primary=True)
-            current_user_state = await self._call_store("get_user_state", app_name, user_id, _primary=True)
-
-            app_state = dict(current_app_state or {})
-            if app_state_delta:
-                app_state.update(app_state_delta)
-            user_state = dict(current_user_state or {})
-            if user_state_delta:
-                user_state.update(user_state_delta)
-
             try:
                 record = await self._call_store(
                     "create_session",
@@ -140,18 +130,14 @@ class SQLSpecSessionService(BaseSessionService):
                     app_name=app_name,
                     user_id=user_id,
                     state=session_state,
+                    app_state_delta=app_state_delta or None,
+                    user_state_delta=user_state_delta or None,
                     _primary=True,
                 )
             except (UniqueViolationError, IntegrityError) as exc:
                 msg = f"Session with id {resolved_session_id} already exists."
                 raise AlreadyExistsError(msg) from exc
 
-            if app_state_delta:
-                await self._call_store("upsert_app_state", app_name, app_state, _primary=True)
-            if user_state_delta:
-                await self._call_store("upsert_user_state", app_name, user_id, user_state, _primary=True)
-
-        record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
             logger,
             logging.DEBUG,
@@ -404,18 +390,6 @@ class SQLSpecSessionService(BaseSessionService):
             _, _, session_state = split_scoped_state(filter_temp_state(session.state))
             session_state.update(session_state_delta)
 
-            app_state = None
-            if app_state_delta:
-                app_state = dict(await self._call_store("get_app_state", session.app_name, _primary=True) or {})
-                app_state.update(app_state_delta)
-
-            user_state = None
-            if user_state_delta:
-                user_state = dict(
-                    await self._call_store("get_user_state", session.app_name, session.user_id, _primary=True) or {}
-                )
-                user_state.update(user_state_delta)
-
             updated_record = await self._call_store(
                 "append_event_and_update_state",
                 event_record,
@@ -423,16 +397,16 @@ class SQLSpecSessionService(BaseSessionService):
                 session.user_id,
                 session.id,
                 session_state,
-                app_state=app_state,
-                user_state=user_state,
+                app_state_delta=app_state_delta or None,
+                user_state_delta=user_state_delta or None,
                 _primary=True,
             )
-            updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
             self._apply_temp_state(session, original_event)
             session.last_update_time = updated_record["update_time"].timestamp()
             setattr(session, "_storage_update_marker", compute_update_marker(updated_record["update_time"]))
 
+            session.state.update(updated_record["state"])
             self._update_session_state(session, trimmed_event)
             session.events.append(trimmed_event)
 

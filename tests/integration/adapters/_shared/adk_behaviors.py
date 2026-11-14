@@ -1,11 +1,13 @@
 """Behavior helpers for shared ADK session/event store contract tests."""
 
+import asyncio
 from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from inspect import isawaitable
-from typing import Any, TypeVar
+from inspect import isawaitable, iscoroutinefunction
+from typing import Any, TypeVar, cast
 
-from sqlspec.extensions.adk import StoredEvent
+from sqlspec.extensions.adk import StoredEvent, StoredSession
 
 T = TypeVar("T")
 
@@ -154,12 +156,23 @@ async def assert_adk_append_and_get_events_contract(make_store: Any) -> None:
 
 
 async def assert_adk_append_event_and_update_state_contract(make_store: Any) -> None:
-    """Atomic append updates state and stores the event in one round-trip."""
+    """Atomic append merges deltas into state and stores the event in one round-trip."""
     config, store = make_store()
     try:
         await _resolve(store.create_tables())
         session_id = "session-atomic"
-        await _resolve(store.create_session(session_id, "app", "user", {}))
+        created = await _resolve(
+            store.create_session(
+                session_id,
+                "app",
+                "user",
+                {"turn": 0},
+                app_state_delta={"app:seed": "keep"},
+                user_state_delta={"user:seed": "keep"},
+            )
+        )
+        assert created["state"] == {"turn": 0, "app:seed": "keep", "user:seed": "keep"}
+
         updated = await _resolve(
             store.append_event_and_update_state(
                 _event("app", "user", session_id, 1, datetime(2026, 5, 10, 12, 0, tzinfo=UTC)),
@@ -167,11 +180,17 @@ async def assert_adk_append_event_and_update_state_contract(make_store: Any) -> 
                 "user",
                 session_id,
                 {"turn": 1},
-                app_state={"app:theme": "dark"},
-                user_state={"user:locale": "en-US"},
+                app_state_delta={"app:theme": "dark"},
+                user_state_delta={"user:locale": "en-US"},
             )
         )
-        assert updated["state"] == {"turn": 1}
+        assert updated["state"] == {
+            "turn": 1,
+            "app:seed": "keep",
+            "app:theme": "dark",
+            "user:seed": "keep",
+            "user:locale": "en-US",
+        }
 
         session = await _resolve(store.get_session("app", "user", session_id))
         events = await _resolve(store.get_events("app", "user", session_id))
@@ -179,14 +198,73 @@ async def assert_adk_append_event_and_update_state_contract(make_store: Any) -> 
         assert session["state"] == {"turn": 1}
         assert len(events) == 1
         assert events[0]["invocation_id"] == "inv-1"
-        assert await _resolve(store.get_app_state("app")) == {"app:theme": "dark"}
-        assert await _resolve(store.get_user_state("app", "user")) == {"user:locale": "en-US"}
+        assert await _resolve(store.get_app_state("app")) == {"app:seed": "keep", "app:theme": "dark"}
+        assert await _resolve(store.get_user_state("app", "user")) == {"user:seed": "keep", "user:locale": "en-US"}
+    finally:
+        await _aclose(config)
+
+
+async def assert_adk_concurrent_state_merge_contract(make_store: Any) -> None:
+    """Concurrent scoped delta merges preserve every disjoint app and user key."""
+    config, store = make_store()
+    worker_count = 8
+    try:
+        await _resolve(store.create_tables())
+        for idx in range(worker_count):
+            await _resolve(store.create_session(f"session-merge-{idx}", "app", "user", {"session_idx": idx}))
+        base = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+
+        def _append_sync(idx: int) -> StoredSession:
+            return cast(
+                "StoredSession",
+                store.append_event_and_update_state(
+                    _event("app", "user", f"session-merge-{idx}", idx, base + timedelta(seconds=idx)),
+                    "app",
+                    "user",
+                    f"session-merge-{idx}",
+                    {"session_idx": idx, "done": True},
+                    app_state_delta={f"app:k_{idx}": idx},
+                    user_state_delta={f"user:u_{idx}": idx},
+                ),
+            )
+
+        if iscoroutinefunction(store.append_event_and_update_state):
+            results = list(
+                await asyncio.gather(
+                    *(
+                        store.append_event_and_update_state(
+                            _event("app", "user", f"session-merge-{idx}", idx, base + timedelta(seconds=idx)),
+                            "app",
+                            "user",
+                            f"session-merge-{idx}",
+                            {"session_idx": idx, "done": True},
+                            app_state_delta={f"app:k_{idx}": idx},
+                            user_state_delta={f"user:u_{idx}": idx},
+                        )
+                        for idx in range(worker_count)
+                    )
+                )
+            )
+        else:
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                results = list(
+                    await asyncio.gather(
+                        *(loop.run_in_executor(executor, _append_sync, idx) for idx in range(worker_count))
+                    )
+                )
+
+        assert len(results) == worker_count
+        app_state = await _resolve(store.get_app_state("app"))
+        user_state = await _resolve(store.get_user_state("app", "user"))
+        assert app_state == {f"app:k_{idx}": idx for idx in range(worker_count)}
+        assert user_state == {f"user:u_{idx}": idx for idx in range(worker_count)}
     finally:
         await _aclose(config)
 
 
 async def assert_adk_get_events_filtering_contract(make_store: Any) -> None:
-    """get_events honors after_timestamp and limit."""
+    """get_events honors after_timestamp and returns newest limit events chronologically."""
     config, store = make_store()
     try:
         await _resolve(store.create_tables())
@@ -202,7 +280,10 @@ async def assert_adk_get_events_filtering_contract(make_store: Any) -> None:
             store.get_events("app", "user", session_id, after_timestamp=base + timedelta(milliseconds=500), limit=1)
         )
         assert len(events) == 1
-        assert events[0]["invocation_id"] == "inv-1"
+        assert events[0]["invocation_id"] == "inv-2"
+
+        recent_two = await _resolve(store.get_events("app", "user", session_id, limit=2))
+        assert [item["invocation_id"] for item in recent_two] == ["inv-1", "inv-2"]
 
         assert await _resolve(store.get_events("app", "user", session_id, limit=0)) == []
     finally:

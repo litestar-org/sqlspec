@@ -369,19 +369,32 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
 
     @abstractmethod
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "StoredSession":
-        """Create a new session.
+        """Create a new session and atomically merge any initial scoped state deltas.
 
         Args:
             session_id: Unique identifier for the session.
             app_name: Name of the application.
             user_id: ID of the user.
-            state: Session state dictionary.
+            state: Session-scoped state dictionary.
             owner_id: Optional owner ID value for owner_id_column (if configured).
+            app_state_delta: Delta of ``app:*`` keys to merge atomically into
+                the app state store inside the same transaction, or ``None``.
+            user_state_delta: Delta of ``user:*`` keys to merge atomically into
+                the user state store inside the same transaction, or ``None``.
 
         Returns:
-            The created session record.
+            The created session record with its ``state`` merged with current
+            app and user state.
         """
         raise NotImplementedError
 
@@ -472,31 +485,33 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "StoredSession":
-        """Atomically append an event and update the session's durable state.
+        """Atomically append an event and merge session and scoped state deltas.
 
         This is the authoritative durable write boundary for post-creation
-        app-scoped snapshot to replace/upsert for ``app_name``. When
-        ``user_state`` is provided, it is a full merged user-scoped snapshot to
-        replace/upsert for ``(app_name, user_id)``. ``None`` means that scope
-        was untouched by the event and must not be written.
+        mutations. When ``app_state_delta`` or ``user_state_delta`` is provided,
+        the store merges those keys atomically into the durable app or user
+        state inside the store transaction instead of overwriting concurrent
+        writes. ``None`` or empty deltas leave the corresponding scoped row
+        untouched.
 
         Args:
             event_record: Event record to store.
-            app_name: Application name for routing scoped-state upserts.
-            user_id: User identifier for routing user-scoped upserts.
+            app_name: Application name for routing scoped-state merges.
+            user_id: User identifier for routing user-scoped merges.
             session_id: Session identifier whose state should be updated.
             state: Post-append durable session-scoped state snapshot
                 (``temp:`` keys already stripped by the service layer).
-            app_state: Full app-scoped state snapshot (``app:*`` keys) to
-                upsert atomically, or ``None`` when untouched.
-            user_state: Full user-scoped state snapshot (``user:*`` keys) to
-                upsert atomically, or ``None`` when untouched.
+            app_state_delta: Delta of ``app:*`` keys to merge atomically into
+                the durable app state, or ``None`` when untouched.
+            user_state_delta: Delta of ``user:*`` keys to merge atomically into
+                the durable user state, or ``None`` when untouched.
 
         Returns:
-            The updated StoredSession reflecting the new state and update_time.
+            The updated StoredSession reflecting the new session state merged
+            with any updated app and user state scopes and the new update_time.
 
         Raises:
             ValueError: If the session row no longer exists at update time
@@ -520,7 +535,7 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
             user_id: ID of the user.
             session_id: Session identifier.
             after_timestamp: Only return events after this time.
-            limit: Maximum number of events to return.
+            limit: Maximum number of most recent events to return.
 
         Returns:
             List of event records ordered by timestamp ascending.
@@ -839,9 +854,17 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
 
     @abstractmethod
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "StoredSession":
-        """Create a new session."""
+        """Create a new session and atomically merge any initial scoped state deltas."""
         raise NotImplementedError
 
     @abstractmethod
@@ -914,10 +937,10 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> "StoredSession":
-        """Atomically append an event and update the session's durable state."""
+        """Atomically append an event and merge session and scoped state deltas."""
         raise NotImplementedError
 
     @abstractmethod
@@ -929,7 +952,7 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
-        """Get events for a session."""
+        """Get the most recent events for a session ordered chronologically."""
         raise NotImplementedError
 
     @abstractmethod

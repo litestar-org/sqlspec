@@ -347,29 +347,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             **kwargs,
         )
 
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, bool):
-            msg = "DuckDB replicas require a separate snapshot path or remote database"
-            raise ImproperConfigurationError(msg)
-        if isinstance(spec_input, str):
-            connection = {"database": spec_input, "read_only": True}
-            validate_duckdb_replica_config(self.connection_config, connection)
-            return {"connection_config_overrides": connection}
-        result = dict(spec_input)
-        connection = {**self.connection_config, **result.get("connection_config_overrides", {}), **result}
-        if "read_only" not in result and "read_only" not in result.get("connection_config_overrides", {}):
-            result["read_only"] = True
-            connection["read_only"] = True
-        validate_duckdb_replica_config(self.connection_config, connection)
-        return result
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        if config.get("read_only", False):
-            validate_duckdb_replica_config(self.connection_config, config)
-        return super()._prepare_derived_connection_config(config, overrides)
-
     def create_connection(self) -> DuckDBConnection:
         """Open a standalone connection owned by the caller.
 
@@ -413,6 +390,29 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Return polling defaults optimized for DuckDB."""
 
         return EventRuntimeHints(poll_interval=0.15, lease_seconds=15)
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, bool):
+            msg = "DuckDB replicas require a separate snapshot path or remote database"
+            raise ImproperConfigurationError(msg)
+        if isinstance(spec_input, str):
+            connection = {"database": spec_input, "read_only": True}
+            validate_duckdb_replica_config(self.connection_config, connection)
+            return {"connection_config_overrides": connection}
+        result = dict(spec_input)
+        connection = {**self.connection_config, **result.get("connection_config_overrides", {}), **result}
+        if "read_only" not in result and "read_only" not in result.get("connection_config_overrides", {}):
+            result["read_only"] = True
+            connection["read_only"] = True
+        validate_duckdb_replica_config(self.connection_config, connection)
+        return result
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if config.get("read_only", False):
+            validate_duckdb_replica_config(self.connection_config, config)
+        return super()._prepare_derived_connection_config(config, overrides)
 
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create connection pool from configuration."""

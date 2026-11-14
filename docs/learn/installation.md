@@ -83,7 +83,7 @@ See [Integrations](../integrations/index.md) for plugin wiring, request-scoped s
 | Extra | Target Integration |
 | --- | --- |
 | `litestar` | `SQLSpecPlugin`, DI providers, `FilterConfig` query dependencies, and session stores (`litestar>=2.23.0`) |
-| `adk` | Google Agent Development Kit session, memory, and artifact services (`google-adk>=2.10.0`) |
+| `adk` | Google Agent Development Kit session, memory, and artifact services (`google-adk>=2.14.1`) |
 | `fastapi` | FastAPI request lifespan and `Depends` session providers |
 | `starlette` | Starlette middleware and `request.state` session management |
 | `flask` | Flask `teardown_appcontext` and `g`-scoped synchronous sessions |

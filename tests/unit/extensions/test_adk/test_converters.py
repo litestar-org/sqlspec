@@ -379,7 +379,7 @@ def test_record_to_event_roundtrip_preserves_branch() -> None:
 
 
 def test_record_to_event_roundtrip_preserves_isolation_scope() -> None:
-    """ADK 2.2 isolation_scope survives the round-trip."""
+    """isolation_scope survives the round-trip."""
     original = _make_event(isolation_scope="scope-1")
     record = event_to_record(original, "app", "u1", "s1")
     restored = record_to_event(record)
