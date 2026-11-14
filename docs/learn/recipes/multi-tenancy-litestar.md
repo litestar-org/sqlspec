@@ -192,7 +192,11 @@ class Account(msgspec.Struct):
 
 auth_config = AsyncpgConfig(
     bind_key="auth",
-    connection_config={"dsn": os.environ["AUTH_DATABASE_URL"]},
+    connection_config={
+        "dsn": os.environ["AUTH_DATABASE_URL"],
+        "min_size": 2,
+        "max_size": 10,
+    },
     extension_config={
         "litestar": {
             "session_key": "auth_db",

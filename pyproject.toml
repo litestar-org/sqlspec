@@ -59,7 +59,7 @@ mysql-connector = [
 ]
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
-opentelemetry = ["opentelemetry-instrumentation"]
+opentelemetry = ["opentelemetry-api>=1.45.1", "opentelemetry-instrumentation"]
 oracledb = ["oracledb>=3.4"]
 orjson = ["orjson"]
 pandas = ["pandas", "pyarrow"]
@@ -82,7 +82,7 @@ uuid = ["uuid-utils>=0.17.0"]
 
 [dependency-groups]
 benchmarks = ["sqlalchemy[asyncio]", "psutil", "types-psutil", "duckdb-engine>=0.17.0"]
-build = ["bump-my-version", "hatch-mypyc", "mypy>=2.0.0", "pydantic-settings"]
+build = ["bump-my-version", "cibuildwheel", "hatch-mypyc", "hatchling", "mypy>=2.0.0", "pydantic-settings"]
 dev = [
   { include-group = "extras" },
   { include-group = "lint" },
@@ -176,9 +176,11 @@ override-dependencies = [
   "mysql-connector-python<9.7.0; python_version >= '3.12'",
   "pymysql<=1.2.0",
 ]
+constraint-dependencies = ["opentelemetry-sdk>=1.45.1"]
 
 [tool.uv.exclude-newer-package]
 advanced-alchemy = false
+google-adk = false
 litestar = false
 litestar-asyncapi = false
 litestar-asyncpg = false
@@ -220,7 +222,7 @@ packages = []
 
 
 [tool.hatch.build.targets.wheel.hooks.mypyc]
-dependencies = ["hatch-mypyc", "hatch-cython", "mypy>=2.0.0"]
+dependencies = ["hatch-mypyc", "mypy>=2.0.0"]
 enable-by-default = false
 exclude = [
   "tests/**",                               # Test files
@@ -700,7 +702,6 @@ split-on-trailing-comma = false
 [tool.ruff.lint.per-file-ignores]
 "docs/examples/**" = ["B", "DTZ", "PLR2004", "RET", "S", "T201", "TC"]
 "sqlspec/adapters/spanner/config.py" = ["PLC2801"]
-"sqlspec/extensions/adk/converters.py" = ["S403"]
 "sqlspec/migrations/utils.py" = ["S404"]
 "tests/**/*.*" = [
   "A",
