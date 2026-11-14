@@ -1471,31 +1471,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "Generator[ArrowRecordBatch, None, None]":
-        params = parameters if parameters is not None else []
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
-        try:
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
-            )
-        except TypeError as exc:
-            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
-            if retry_kwargs is None:
-                raise
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
-            )
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+        oracle_dfs = _open_oracle_df_batches(
+            self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
+        )
         try:
             for oracle_df in oracle_dfs:
-                batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
-                column_names = normalize_column_names(batch_table.column_names, self.driver_features)
-                if column_names != batch_table.column_names:
-                    batch_table = batch_table.rename_columns(column_names).replace_schema_metadata(
-                        batch_table.schema.metadata
-                    )
-                if arrow_schema is not None:
-                    batch_table = batch_table.cast(arrow_schema)
+                batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
                 if batch_table.num_rows:
                     yield from batch_table.to_batches()
                 else:
@@ -1514,31 +1495,23 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
-        params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
+        oracle_dfs = _open_oracle_df_batches(
+            self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
+        )
         try:
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
-            )
-        except TypeError as exc:
-            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
-            if retry_kwargs is None:
-                raise
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
-            )
-        for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
-            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
-            if column_names != batch_table.column_names:
-                batch_table = batch_table.rename_columns(column_names)
-            if arrow_schema is not None:
-                batch_table = batch_table.cast(arrow_schema)
-            if batch_schema is None:
-                batch_schema = batch_table.schema
-            record_batches.extend(batch_table.to_batches())
+            for oracle_df in oracle_dfs:
+                batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
+                if batch_schema is None:
+                    batch_schema = batch_table.schema
+                record_batches.extend(batch_table.to_batches())
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        finally:
+            close_dfs = getattr(oracle_dfs, "close", None)
+            if callable(close_dfs):
+                close_dfs()
         return record_batches, batch_schema
 
 
@@ -2660,32 +2633,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "AsyncIterator[ArrowRecordBatch]":
-        params = parameters if parameters is not None else []
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
-        try:
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
-            )
-        except TypeError as exc:
-            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
-            if retry_kwargs is None:
-                raise
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
-            )
-        except OracleError as exc:
-            raise create_mapped_exception(exc) from exc
+        oracle_dfs = _open_oracle_df_batches(
+            self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
+        )
         yielded = False
         try:
             async for oracle_df in oracle_dfs:
-                batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
-                column_names = normalize_column_names(batch_table.column_names, self.driver_features)
-                if column_names != batch_table.column_names:
-                    batch_table = batch_table.rename_columns(column_names).replace_schema_metadata(
-                        batch_table.schema.metadata
-                    )
-                if arrow_schema is not None:
-                    batch_table = batch_table.cast(arrow_schema)
+                batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
                 if batch_table.num_rows:
                     for batch in batch_table.to_batches():
                         yielded = True
@@ -2713,31 +2667,27 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
-        params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
-        fetch_kwargs = build_arrow_fetch_kwargs(self.driver_features, arrow_schema=arrow_schema)
+        oracle_dfs = _open_oracle_df_batches(
+            self.connection, sql, parameters, batch_size, self.driver_features, arrow_schema
+        )
         try:
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
-            )
-        except TypeError as exc:
-            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
-            if retry_kwargs is None:
-                raise
-            oracle_dfs = self.connection.fetch_df_batches(
-                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
-            )
-        async for oracle_df in oracle_dfs:
-            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
-            column_names = normalize_column_names(batch_table.column_names, self.driver_features)
-            if column_names != batch_table.column_names:
-                batch_table = batch_table.rename_columns(column_names)
-            if arrow_schema is not None:
-                batch_table = batch_table.cast(arrow_schema)
-            if batch_schema is None:
-                batch_schema = batch_table.schema
-            record_batches.extend(batch_table.to_batches())
+            async for oracle_df in oracle_dfs:
+                batch_table = _coerce_oracle_arrow_batch_table(oracle_df, self.driver_features, arrow_schema)
+                if batch_schema is None:
+                    batch_schema = batch_table.schema
+                record_batches.extend(batch_table.to_batches())
+        except OracleError as exc:
+            raise create_mapped_exception(exc) from exc
+        finally:
+            aclose_dfs = getattr(oracle_dfs, "aclose", None)
+            if callable(aclose_dfs):
+                await cast("Any", aclose_dfs)()
+            else:
+                close_dfs = getattr(oracle_dfs, "close", None)
+                if callable(close_dfs):
+                    close_dfs()
         return record_batches, batch_schema
 
     async def _execute_stack_native(
@@ -3092,3 +3042,41 @@ def _slice_script_parameters(statement: str, parameters: Any, pos_offset: int) -
             return sliced, pos_offset + pos_count
         return [], pos_offset
     return parameters, pos_offset
+
+
+def _open_oracle_df_batches(
+    connection: Any,
+    sql: str,
+    parameters: "StatementParameters | None",
+    batch_size: int | None,
+    driver_features: Any,
+    arrow_schema: "ArrowSchema | None",
+) -> Any:
+    """Invoke Oracle fetch_df_batches with fetch_lobs fallback and error mapping."""
+    params = parameters if parameters is not None else []
+    fetch_kwargs = build_arrow_fetch_kwargs(driver_features, arrow_schema=arrow_schema)
+    try:
+        try:
+            return connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **fetch_kwargs
+            )
+        except TypeError as exc:
+            retry_kwargs = _retry_arrow_without_fetch_lobs(exc, fetch_kwargs)
+            if retry_kwargs is None:
+                raise
+            return connection.fetch_df_batches(
+                statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
+            )
+    except OracleError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+def _coerce_oracle_arrow_batch_table(oracle_df: Any, driver_features: Any, arrow_schema: "ArrowSchema | None") -> Any:
+    """Convert one Oracle DataFrame batch to an Arrow table with normalized columns."""
+    batch_table = coerce_oracle_df_to_arrow_table(oracle_df, import_pyarrow())
+    column_names = normalize_column_names(batch_table.column_names, driver_features)
+    if column_names != batch_table.column_names:
+        batch_table = batch_table.rename_columns(column_names).replace_schema_metadata(batch_table.schema.metadata)
+    if arrow_schema is not None:
+        batch_table = batch_table.cast(arrow_schema)
+    return batch_table
