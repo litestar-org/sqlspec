@@ -125,9 +125,11 @@ class _FailingStore(_RecordingStore):
         raise RuntimeError(msg)
 
 
-def _service(store: Any, backend: _RecordingBackend) -> "tuple[SQLSpecArtifactService, _RecordingRegistry]":
+def _service(
+    store: Any, backend: _RecordingBackend, uri: str = STORAGE_URI
+) -> "tuple[SQLSpecArtifactService, _RecordingRegistry]":
     registry: Any = _RecordingRegistry(backend)
-    service = SQLSpecArtifactService(store, STORAGE_URI, registry=registry)
+    service = SQLSpecArtifactService(store, uri, registry=registry)
     return service, registry
 
 
@@ -358,3 +360,94 @@ async def test_load_artifact_returns_none_for_rewind_tombstone() -> None:
         app_name="agent_app", user_id="user-1", filename="rewound.bin", session_id="sess-1"
     )
     assert loaded is None
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected_base_uri", "expected_prefix"),
+    [
+        ("s3://bucket/tenant-a", "s3://bucket/tenant-a", "tenant-a"),
+        ("s3://bucket/tenant-a/", "s3://bucket/tenant-a", "tenant-a"),
+        ("gs://bucket/prefix/nested", "gs://bucket/prefix/nested", "prefix/nested"),
+        ("az://container/tenant-b", "az://container/tenant-b", "tenant-b"),
+    ],
+)
+async def test_cloud_uri_prefix_preserved_across_save_load_and_delete(
+    uri: str, expected_base_uri: str, expected_prefix: str
+) -> None:
+    """Cloud URIs with non-empty path prefixes write, read, and delete under that prefix matching canonical_uri."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, registry = _service(store, backend, uri)
+
+    version = await service.save_artifact(
+        app_name="agent_app",
+        user_id="user-1",
+        filename="report.txt",
+        artifact=types.Part.from_text(text="scoped payload"),
+        session_id="sess-1",
+    )
+
+    assert version == 0
+    expected_relative = "apps/agent_app/users/user-1/sessions/sess-1/artifacts/report.txt/v0"
+    expected_key = f"{expected_prefix}/{expected_relative}"
+    assert list(backend.blobs) == [expected_key]
+    saved_record = store.saved_records[("agent_app", "user-1", "sess-1", "report.txt")][0]
+    assert saved_record["canonical_uri"] == f"{expected_base_uri}/{expected_relative}"
+
+    loaded = await service.load_artifact(
+        app_name="agent_app", user_id="user-1", filename="report.txt", session_id="sess-1"
+    )
+    assert loaded is not None
+    assert loaded.text == "scoped payload"
+
+    store.batches = [[saved_record]]
+    await service.delete_artifact(app_name="agent_app", user_id="user-1", filename="report.txt", session_id="sess-1")
+    assert backend.deleted == [expected_key]
+    assert registry.resolved == [expected_base_uri, expected_base_uri, expected_base_uri]
+
+
+@pytest.mark.parametrize("uri", ["s3://bucket", "s3://bucket/", "file:///artifacts", "artifact-alias"])
+async def test_root_cloud_file_and_alias_uris_keep_unprefixed_keys(uri: str) -> None:
+    """Root cloud bucket URIs, file:// URIs, and aliases keep keys relative to apps/."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend, uri)
+
+    await service.save_artifact(
+        app_name="agent_app",
+        user_id="user-1",
+        filename="report.txt",
+        artifact=types.Part.from_text(text="root payload"),
+        session_id="sess-1",
+    )
+
+    assert list(backend.blobs) == ["apps/agent_app/users/user-1/sessions/sess-1/artifacts/report.txt/v0"]
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "filename"),
+    [
+        ("agent_app/", "user-1", "report.txt"),
+        ("agent_app", "bob/", "report.txt"),
+        ("agent_app", "/bob", "report.txt"),
+        ("agent_app", ".", "report.txt"),
+        ("agent_app", "user-1", "*.txt"),
+        ("agent_app", "user-1", "report?.txt"),
+        ("agent_app", "user-1", "report[1].txt"),
+    ],
+)
+async def test_save_artifact_rejects_unsafe_path_components(app_name: str, user_id: str, filename: str) -> None:
+    """save_artifact rejects slash-padded, dot, and glob path components before writing bytes."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend)
+
+    with pytest.raises(ValueError, match="Unsafe path component"):
+        await service.save_artifact(
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            artifact=types.Part.from_text(text="rejected"),
+            session_id="sess-1",
+        )
+    assert backend.blobs == {}

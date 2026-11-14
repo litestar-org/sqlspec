@@ -194,16 +194,32 @@ def test_paginate_honors_pre_attached_limit_offset_and_cursor_rejects_count_with
     asyncio.run(_run_async())
 
 
-def test_adk_sanitize_path_component_rejects_slashes_and_empty() -> None:
+@pytest.mark.parametrize(
+    "bad_component",
+    [
+        "",
+        ".",
+        "..",
+        "/",
+        "bob/",
+        "/bob",
+        "foo/bar",
+        "foo\\bar",
+        "foo\x00bar",
+        "*.pdf",
+        "report?.pdf",
+        "report[0].pdf",
+        "report]0.pdf",
+    ],
+)
+def test_adk_sanitize_path_component_rejects_unsafe_components(bad_component: str) -> None:
     with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("..")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("foo/bar")
-    with pytest.raises(ValueError, match="Unsafe path component"):
-        _sanitize_path_component("foo\\bar")
+        _sanitize_path_component(bad_component)
+
+
+def test_adk_sanitize_path_component_allows_normal_filenames() -> None:
     assert _sanitize_path_component("report.v2.pdf") == "report.v2.pdf"
+    assert _sanitize_path_component("user:profile.txt") == "user:profile.txt"
 
 
 def test_adk_base_async_store_abstract_methods() -> None:
