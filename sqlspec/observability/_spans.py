@@ -112,8 +112,13 @@ class SpanManager:
                 logger.debug("Failed to detach span context: %s", exc)
         try:
             if error and self._status_cls and self._status_code_cls:
-                span.record_exception(error)
-                status = self._status_cls(self._status_code_cls.ERROR, redact_sql_literals(str(error)))
+                sanitized_message = redact_sql_literals(str(error))
+                sanitized_error, err_type_name = _sanitize_span_error(error, sanitized_message)
+                try:
+                    span.record_exception(sanitized_error, attributes={"exception.type": err_type_name})
+                except TypeError:
+                    span.record_exception(sanitized_error)
+                status = self._status_cls(self._status_code_cls.ERROR, sanitized_message)
                 span.set_status(status)
             span.end()
         except Exception as exc:  # pragma: no cover
@@ -187,3 +192,15 @@ class SpanManager:
         self._status_cls = status_cls
         self._status_code_cls = status_code_cls
         self._span_kind = span_kind_cls.CLIENT
+
+
+def _sanitize_span_error(error: Exception, message: str) -> tuple[Exception, str]:
+    """Return a cause-free exception holding only redacted message text and its original type name."""
+    err_type = type(error)
+    type_name = (
+        err_type.__qualname__ if err_type.__module__ == "builtins" else f"{err_type.__module__}.{err_type.__qualname__}"
+    )
+    sanitized = Exception(message).with_traceback(error.__traceback__)
+    sanitized.__cause__ = None
+    sanitized.__suppress_context__ = True
+    return sanitized, type_name

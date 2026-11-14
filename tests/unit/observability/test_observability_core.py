@@ -37,6 +37,7 @@ from sqlspec.observability import (
 from sqlspec.observability._common import redact_sql_literals, resolve_effective_db_system
 from sqlspec.observability._diagnostics import collect_diagnostics
 from sqlspec.observability._observer import _maybe_truncate_parameters
+from sqlspec.observability._spans import SpanManager
 from sqlspec.storage import StorageTelemetry
 from sqlspec.storage.pipeline import (
     record_storage_diagnostic_event,
@@ -1388,10 +1389,32 @@ def test_w3c_trace_context_sqlcommenter_fallback() -> None:
         ("SELECT 'secret\\\\", "SELECT '***'"),
         ("SELECT * FROM t WHERE token = 'unclosed", "SELECT * FROM t WHERE token = '***'"),
         ("SELECT $tag$unclosed payload", "SELECT '***'"),
+        ("SELECT 'C:\\', 'secret'", "SELECT '***', '***'"),
+        ("SELECT 'C:\\', 'secret', 'unclosed", "SELECT '***', '***', '***'"),
+        ("SELECT 'C:\\' WHERE id = 42 AND name = 'alice'", "SELECT '***' WHERE id = *** AND name = '***'"),
+        ("SELECT 'C:\\\\', 'secret'", "SELECT '***', '***'"),
+        ("SELECT 'C:\\\\\\', 'secret'", "SELECT '***', '***'"),
+        (r"SELECT 'foo\', bar'", "SELECT '***'"),
+        (r"SELECT 'admin\'s secret'", "SELECT '***'"),
+        (
+            "SELECT q'[secret ] quote]', NQ'!it!s!', Q'{a}', q'<b/>', q'(c)' FROM t",
+            "SELECT '***', '***', '***', '***', '***' FROM t",
+        ),
+        ("SELECT colq'[1]' FROM t", "SELECT colq'***' FROM t"),
+        ("SELECT q'[unclosed bracket", "SELECT '***'"),
+        ("SELECT q'!unclosed bang", "SELECT '***'"),
+        (
+            "SELECT 42, 3.14, .5, 1., 1e5, 1.5e-10, 0xDEADbeef, $1, :2, ?3, col_42 FROM t1",
+            "SELECT ***, ***, ***, ***, ***, ***, ***, $1, :2, ?3, col_42 FROM t1",
+        ),
+        (
+            '-- keep 42\n/* keep 99 */\nSELECT "col 42", `col 7` FROM t WHERE a = -42 AND b = 1_000',
+            '-- keep 42\n/* keep 99 */\nSELECT "col 42", `col 7` FROM t WHERE a = -*** AND b = ***',
+        ),
     ],
 )
 def test_redact_sql_literals_preserves_comments_and_identifiers(raw_sql: str, expected_sql: str) -> None:
-    """redact_sql_literals masks single and dollar literals without desynchronizing on comments or quotes."""
+    """redact_sql_literals masks single, dollar, alternative-quoted, and numeric literals cleanly."""
     assert redact_sql_literals(raw_sql) == expected_sql
 
 
@@ -1402,6 +1425,8 @@ def test_redact_sql_literals_preserves_comments_and_identifiers(raw_sql: str, ex
         ("SELECT $tag$" + ("a" * 50_000), "SELECT '***'"),
         ("SELECT '" + ("a\\'" * 15_000) + "tail\\", "SELECT '***'"),
         ("SELECT `" + ("a``" * 20_000), "SELECT `" + ("a``" * 20_000)),
+        ("SELECT q'[" + ("a]" * 25_000), "SELECT '***'"),
+        ("SELECT q'!" + ("a" * 50_000), "SELECT '***'"),
     ],
 )
 def test_redact_sql_literals_linear_time_on_large_unclosed_literals(payload: str, expected: str) -> None:
@@ -1411,3 +1436,106 @@ def test_redact_sql_literals_linear_time_on_large_unclosed_literals(payload: str
     elapsed = time.perf_counter() - start
     assert result == expected
     assert elapsed < 0.5
+
+
+def test_span_manager_end_span_redacts_recorded_exception() -> None:
+    """SpanManager.end_span masks SQL literals in recorded span exception events and preserves exception type."""
+    pytest.importorskip("opentelemetry.sdk.trace")
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    manager = SpanManager(TelemetryConfig(enable_spans=True, provider_factory=lambda: provider))
+
+    span = manager.start_query_span(
+        driver="SqliteDriver", adapter="SqliteConfig", bind_key="primary", sql="SELECT '***'", operation="SELECT"
+    )
+    inner_msg = f"inner raw literal '{'cause'}-{'secret'}' {99}"
+    outer_msg = f"failed executing INSERT INTO t VALUES ('{'row'}-{'secret'}', {12345})"
+    try:
+        try:
+            raise RuntimeError(inner_msg)
+        except RuntimeError as inner:
+            raise SQLSpecError(outer_msg) from inner
+    except SQLSpecError as outer:
+        manager.end_span(span, error=outer)
+
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 1
+    recorded = finished[0]
+    assert recorded.status.description is not None
+    assert "row-secret" not in recorded.status.description
+    assert "12345" not in recorded.status.description
+    assert "'***'" in recorded.status.description
+    assert recorded.events
+    exc_event = recorded.events[0]
+    assert exc_event.name == "exception"
+    attrs = exc_event.attributes or {}
+    assert attrs.get("exception.type") == "sqlspec.exceptions.SQLSpecError"
+    exc_message = str(attrs.get("exception.message", ""))
+    exc_trace = str(attrs.get("exception.stacktrace", ""))
+    assert "row-secret" not in exc_message
+    assert "12345" not in exc_message
+    assert "row-secret" not in exc_trace
+    assert "cause-secret" not in exc_trace
+    assert "'***'" in exc_message
+
+
+@pytest.mark.parametrize("redaction", [RedactionConfig(mask_literals=True), RedactionConfig(mask_parameters=True)])
+def test_create_statement_event_redacts_profile_strings_without_mutating_input(redaction: RedactionConfig) -> None:
+    """create_statement_event masks string values inside nested profile dicts without mutating caller data."""
+    runtime = ObservabilityRuntime(ObservabilityConfig(redaction=redaction), config_name="DuckDBConfig")
+    original_profile = {
+        "query_name": "SELECT * FROM t WHERE token = 'secret-val'",
+        "operator_name": "SEQ_SCAN",
+        "extra_info": ["filter: x = 999 AND y = 'nested-secret'", ("k", "SELECT q'[alt]'")],
+        "timing": 0.01,
+        "children": [{"extra_info": {"sql": "SELECT 42 WHERE name = 'child-secret'"}, "children": []}],
+    }
+
+    event = runtime.create_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="DuckDBDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+        profile=original_profile,
+    )
+
+    assert event.profile is not None
+    assert event.profile["query_name"] == "SELECT * FROM t WHERE token = '***'"
+    assert event.profile["extra_info"] == ["filter: x = *** AND y = '***'", ("k", "SELECT '***'")]
+    assert event.profile["children"][0]["extra_info"]["sql"] == "SELECT *** WHERE name = '***'"
+    assert event.profile["timing"] == 0.01
+    assert original_profile["query_name"] == "SELECT * FROM t WHERE token = 'secret-val'"
+    assert original_profile["children"][0]["extra_info"]["sql"] == "SELECT 42 WHERE name = 'child-secret'"
+
+
+def test_create_statement_event_preserves_profile_when_redaction_disabled() -> None:
+    """create_statement_event leaves profile strings unchanged when literal and parameter masking are off."""
+    runtime = ObservabilityRuntime(ObservabilityConfig(), config_name="DuckDBConfig")
+    original_profile = {"query_name": "SELECT 'raw' WHERE id = 7"}
+
+    event = runtime.create_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="DuckDBDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+        profile=original_profile,
+    )
+
+    assert event.profile == {"query_name": "SELECT 'raw' WHERE id = 7"}

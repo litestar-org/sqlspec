@@ -381,6 +381,7 @@ class ObservabilityRuntime:
         correlation_id = CorrelationContext.get()
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
+        sanitized_profile = self._redact_profile(profile)
         logging_config = self.config.logging
         resolved_db_system = resolve_effective_db_system(self.config_name, driver, db_system)
         sql_hash = None
@@ -423,7 +424,7 @@ class ObservabilityRuntime:
             trace_id=trace_id,
             span_id=span_id,
             sampled=sampled,
-            profile=profile,
+            profile=sanitized_profile,
             script_ordinal=script_ordinal,
             script_statement_index=script_statement_index,
             script_statement_count=script_statement_count,
@@ -646,6 +647,27 @@ class ObservabilityRuntime:
             return parameters
         allow_list = set(config.parameter_allow_list or ())
         return _mask_parameters(parameters, allow_list)
+
+    def _redact_profile(self, profile: dict[str, Any] | None) -> dict[str, Any] | None:
+        if profile is None:
+            return None
+        config = self._redaction
+        if config is None or (not config.mask_literals and not config.mask_parameters):
+            return profile
+        return cast("dict[str, Any]", _redact_profile_value(profile))
+
+
+def _redact_profile_value(value: Any) -> Any:
+    """Recursively mask SQL literals inside nested statement profile dictionaries without mutating inputs."""
+    if isinstance(value, str):
+        return redact_sql_literals(value)
+    if isinstance(value, Mapping):
+        return {key: _redact_profile_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_profile_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple([_redact_profile_value(item) for item in value])
+    return value
 
 
 def _mask_parameters(value: Any, allow_list: set[str], *, is_allowed: bool = False) -> Any:
