@@ -1,6 +1,9 @@
 """Tests for config discovery functionality."""
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -257,3 +260,84 @@ def test_find_pyproject_filesystem_root(tmp_path: "Path", monkeypatch: "pytest.M
 
     # Should return None, not hang or error
     assert result is None
+
+
+def test_find_pyproject_stops_at_directory_owned_by_other_uid(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Discovery stops before traversing directories owned by another non-root UID."""
+    parent_pyproject = tmp_path / "pyproject.toml"
+    parent_pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n')
+
+    foreign_dir = tmp_path / "shared"
+    work_dir = foreign_dir / "project"
+    work_dir.mkdir(parents=True)
+    monkeypatch.chdir(work_dir)
+
+    real_stat = os.stat
+    uid = 1000
+    if hasattr(os, "getuid"):
+        monkeypatch.setattr(os, "getuid", lambda: uid)
+
+    def _fake_stat(path: "str | os.PathLike[str]", *args: Any, **kwargs: Any) -> Any:
+        if Path(path) == foreign_dir:
+            return SimpleNamespace(st_uid=2000)
+        if Path(path) in {work_dir, tmp_path, parent_pyproject}:
+            return SimpleNamespace(st_uid=uid)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", _fake_stat)
+    assert find_pyproject_toml() is None
+
+
+def test_find_pyproject_refuses_file_owned_by_other_uid(tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch") -> None:
+    """Discovery refuses pyproject.toml owned by another non-root UID."""
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    foreign_pyproject = work_dir / "pyproject.toml"
+    foreign_pyproject.write_text('[tool.sqlspec]\nconfig = "evil.config:load"\n')
+    monkeypatch.chdir(work_dir)
+
+    real_stat = os.stat
+    uid = 1000
+    if hasattr(os, "getuid"):
+        monkeypatch.setattr(os, "getuid", lambda: uid)
+
+    def _fake_stat(path: "str | os.PathLike[str]", *args: Any, **kwargs: Any) -> Any:
+        resolved = Path(path)
+        if resolved == foreign_pyproject:
+            return SimpleNamespace(st_uid=2000)
+        if resolved == work_dir:
+            return SimpleNamespace(st_uid=uid)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", _fake_stat)
+    assert find_pyproject_toml() is None
+
+
+def test_find_pyproject_allows_root_owned_ancestor_directory(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Discovery continues across root-owned parent directories to user config."""
+    root_pyproject = tmp_path / "pyproject.toml"
+    root_pyproject.write_text('[tool.sqlspec]\nconfig = "myapp.config:get_configs"\n')
+    shared_parent = tmp_path / "container"
+    work_dir = shared_parent / "app"
+    work_dir.mkdir(parents=True)
+    monkeypatch.chdir(work_dir)
+
+    real_stat = os.stat
+    uid = 1000
+    if hasattr(os, "getuid"):
+        monkeypatch.setattr(os, "getuid", lambda: uid)
+
+    def _fake_stat(path: "str | os.PathLike[str]", *args: Any, **kwargs: Any) -> Any:
+        resolved = Path(path)
+        if resolved == shared_parent:
+            return SimpleNamespace(st_uid=0)
+        if resolved in {work_dir, tmp_path, root_pyproject}:
+            return SimpleNamespace(st_uid=uid)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", _fake_stat)
+    assert find_pyproject_toml() == root_pyproject

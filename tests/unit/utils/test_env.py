@@ -21,11 +21,12 @@ def test_get_env_parses_override_from_environment(monkeypatch: pytest.MonkeyPatc
     assert get_env("SQLSPEC_TEST_VALUE", 1)() == 42
 
 
-def test_get_env_expands_environment_references(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_env_does_not_expand_environment_references(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SQLSPEC_ROOT", "/tmp/sqlspec")
     monkeypatch.setenv("SQLSPEC_PATH", "$SQLSPEC_ROOT/data")
 
-    assert get_env("SQLSPEC_PATH", "")() == "/tmp/sqlspec/data"
+    assert get_env("SQLSPEC_PATH", "")() == "$SQLSPEC_ROOT/data"
+    assert get_env("SQLSPEC_PATH", Path("."))() == Path("$SQLSPEC_ROOT/data")
 
 
 def test_get_env_with_aliases_prefers_canonical_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,3 +181,28 @@ def test_get_env_parses_dict_type_hint_with_none_default(monkeypatch: pytest.Mon
     monkeypatch.setenv("SQLSPEC_DICT_VALUE", "a=1")
 
     assert get_env("SQLSPEC_DICT_VALUE", None, dict[str, Any])() == {"a": "1"}
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "default", "type_hint"),
+    [
+        ("secret-bool-val", False, None),
+        ("secret-int-val", 1, None),
+        ("secret-float-val", 1.5, None),
+        ("secret-list-item", [], list[int]),
+        ("secret-dict-entry", {}, None),
+    ],
+)
+def test_get_env_parse_errors_omit_raw_values(
+    monkeypatch: pytest.MonkeyPatch, raw_value: str, default: Any, type_hint: Any
+) -> None:
+    key = "SQLSPEC_SECRET_TEST_KEY"
+    monkeypatch.setenv(key, raw_value)
+
+    with pytest.raises(ValueError, match=key) as exc_info:
+        if type_hint is None:
+            get_env(key, default)()
+        else:
+            get_env(key, default, type_hint)()
+
+    assert raw_value not in str(exc_info.value)
