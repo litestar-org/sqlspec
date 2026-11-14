@@ -123,7 +123,6 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     """,
                     (app_name, user_id, session_id),
                     commit=True,
-                    read=renew_for is None,
                 )
             row = self._execute_fetchone(
                 f"""
