@@ -388,6 +388,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """
         return bool(self.connection.in_transaction)
 
+    async def _transaction_open(self) -> bool:
+        """Return whether the driver or underlying connection holds an open transaction."""
+        return await _check_in_transaction(self.connection)
+
 
 def _read_in_transaction_on_worker(raw_conn: Any) -> bool:
     return bool(getattr(raw_conn, "in_transaction", False))

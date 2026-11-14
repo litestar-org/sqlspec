@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from threading import Thread
@@ -11,6 +12,7 @@ import pytest
 from sqlglot import parse_one
 
 import sqlspec.adapters.aiosqlite as aiosqlite_adapter
+import sqlspec.adapters.aiosqlite.driver as aiosqlite_driver_module
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor
 from sqlspec.adapters.aiosqlite.core import (
     build_profile,
@@ -522,3 +524,27 @@ def test_lastrowid_resolution_reaches_metadata_for_successful_insert() -> None:
 
     with pytest.raises(AttributeError):
         resolve_lastrowid(connection, cursor, "INSERT", 1, expression, cache)
+
+
+async def test_aiosqlite_transaction_open_checks_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async _transaction_open dispatches through _check_in_transaction on the worker thread."""
+    conn = await aiosqlite.connect(":memory:")
+    try:
+        driver = AiosqliteDriver(connection=conn)
+        observed_threads: list[int] = []
+        original_read = aiosqlite_driver_module._read_in_transaction_on_worker  # pyright: ignore[reportPrivateUsage]
+
+        def _spy_read(raw_conn: Any) -> bool:
+            observed_threads.append(threading.get_ident())
+            return original_read(raw_conn)
+
+        monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver._read_in_transaction_on_worker", _spy_read)
+        assert await driver._transaction_open() is False
+        await driver.begin()
+        assert await driver._transaction_open() is True
+        await driver.rollback()
+        assert await driver._transaction_open() is False
+        assert observed_threads
+        assert all(tid != threading.get_ident() for tid in observed_threads)
+    finally:
+        await conn.close()
