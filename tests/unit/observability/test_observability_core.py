@@ -1381,6 +1381,7 @@ def test_w3c_trace_context_sqlcommenter_fallback() -> None:
         ("SELECT $$dollar$$ FROM t", "SELECT '***' FROM t"),
         ("SELECT $1, $2 FROM t WHERE name = 'alice'", "SELECT $1, $2 FROM t WHERE name = '***'"),
         ("SELECT * FROM t WHERE name LIKE'a%'", "SELECT * FROM t WHERE name LIKE'***'"),
+        ("SELECT `col's_name`, `esc``'col`, 'secret' FROM `t`", "SELECT `col's_name`, `esc``'col`, '***' FROM `t`"),
         ("SELECT E'it\\'s', N'uni', B'101', X'ff'", "SELECT '***', '***', '***', '***'"),
         ("SELECT 'line1\\\nline2', 'secret'", "SELECT '***', '***'"),
         ("SELECT 'secret\\", "SELECT '***'"),
@@ -1395,12 +1396,18 @@ def test_redact_sql_literals_preserves_comments_and_identifiers(raw_sql: str, ex
 
 
 @pytest.mark.parametrize(
-    "payload", ["SELECT '" + ("a" * 50_000), "SELECT $tag$" + ("a" * 50_000), "SELECT '" + ("a\\'" * 15_000) + "tail\\"]
+    ("payload", "expected"),
+    [
+        ("SELECT '" + ("a" * 50_000), "SELECT '***'"),
+        ("SELECT $tag$" + ("a" * 50_000), "SELECT '***'"),
+        ("SELECT '" + ("a\\'" * 15_000) + "tail\\", "SELECT '***'"),
+        ("SELECT `" + ("a``" * 20_000), "SELECT `" + ("a``" * 20_000)),
+    ],
 )
-def test_redact_sql_literals_linear_time_on_large_unclosed_literals(payload: str) -> None:
+def test_redact_sql_literals_linear_time_on_large_unclosed_literals(payload: str, expected: str) -> None:
     """redact_sql_literals finishes in linear time on large unclosed and backslash-heavy literals."""
     start = time.perf_counter()
     result = redact_sql_literals(payload)
     elapsed = time.perf_counter() - start
-    assert result == "SELECT '***'"
+    assert result == expected
     assert elapsed < 0.5

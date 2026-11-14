@@ -17,6 +17,7 @@ __all__ = (
 _SQL_REDACT_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
     r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
+    r"|(?P<bquote>`(?>[^`]+|``)*(?:`|\Z))"
     r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
     r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
 )
@@ -175,7 +176,7 @@ def _get_sqlcommenter_context() -> Any:
 
 
 def _replace_sql_token(match: re.Match[str]) -> str:
-    """Preserve comments and double-quoted identifiers while masking SQL literals."""
-    if match.lastgroup in {"comment", "dquote"}:
+    """Preserve comments and quoted identifiers while masking SQL literals."""
+    if match.lastgroup in {"comment", "dquote", "bquote"}:
         return match.group(0)
     return "'***'"
