@@ -736,3 +736,44 @@ async def test_async_provide_session_detaches_driver_on_exit() -> None:
     assert session.connection is _DETACHED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await session.execute("SELECT 1")
+
+
+def test_sync_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False)
+    fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
+    config = MysqlConnectorSyncConfig(connection_instance=fake_pool)
+    seen: list[Any] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+
+    with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+        pass
+
+    pooled_conn.close.assert_called_once()
+    assert seen[0].connection is _DETACHED_CONNECTION
+
+
+async def test_async_provide_session_releases_and_detaches_when_prepare_driver_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False, close=AsyncMock(), rollback=AsyncMock())
+    fake_pool = MagicMock(get_connection=AsyncMock(return_value=pooled_conn))
+    config = MysqlConnectorAsyncConfig(connection_instance=fake_pool)
+    seen: list[Any] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with config.provide_session():
+            pass
+
+    pooled_conn.close.assert_awaited_once()
+    assert seen[0].connection is _DETACHED_CONNECTION

@@ -111,11 +111,18 @@ class SybaseSessionContext:
             _DRIVER_CLS = module.SybaseDriver
         assert _DRIVER_CLS is not None
         self._connection = self._acquire_connection()
-        self._driver = _DRIVER_CLS(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        assert self._driver is not None
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = _DRIVER_CLS(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            assert self._driver is not None
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

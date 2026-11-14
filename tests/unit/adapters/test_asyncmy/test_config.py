@@ -473,3 +473,24 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     assert session.connection is _DETACHED_CONNECTION
     with pytest.raises(ImproperConfigurationError, match="already closed"):
         await session.execute("SELECT 1")
+
+
+async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx))
+    config = AsyncmyConfig(connection_instance=pool)
+    seen: list[Any] = []
+
+    def fail_prepare(_self: Any, driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(AsyncmyConfig, "_prepare_driver", fail_prepare)
+
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with config.provide_session():
+            pass
+
+    acquire_ctx.__aexit__.assert_awaited_once()
+    assert seen[0].connection is _DETACHED_CONNECTION

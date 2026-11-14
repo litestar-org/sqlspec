@@ -284,14 +284,13 @@ class PymssqlDriver(SyncDriverAdapterBase):
             if self._migration_schema_restore is None:
                 cursor.execute("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;")
                 row: Any = cursor.fetchone()
-                if row is None:
-                    return
-                user_name, current_schema = (
-                    (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
-                )
-                resolved_schema = str(current_schema or "dbo")
-                cursor.execute(_alter_default_schema_sql(str(user_name), schema))
-                self._migration_schema_restore = (str(user_name), resolved_schema)
+                if row is not None:
+                    user_name, current_schema = (
+                        (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
+                    )
+                    resolved_schema = str(current_schema or "dbo")
+                    cursor.execute(_alter_default_schema_sql(str(user_name), schema))
+                    self._migration_schema_restore = (str(user_name), resolved_schema)
             else:
                 cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
         self._check_pending_exception(exc_handler)

@@ -127,11 +127,18 @@ class PyMysqlSessionContext:
     def __enter__(self) -> "PyMysqlDriver":
         driver_cls = _get_pymysql_driver_type()
         self._connection = self._acquire_connection()
-        driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        self._driver = driver
-        return self._prepare_driver(driver)
+        try:
+            driver = driver_cls(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            self._driver = driver
+            return self._prepare_driver(driver)
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

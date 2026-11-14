@@ -1681,3 +1681,24 @@ def test_sybase_adk_memory_dedup_and_scoped_delete_entries_by_session(
         == 1
     )
     assert delete_calls == [(expected_sql, expected_params)]
+
+
+def test_sybase_provide_session_releases_and_detaches_when_prepare_driver_fails(
+    monkeypatch: pytest.MonkeyPatch, recording_sybase_config: tuple[SybaseConfig, FakeCursor]
+) -> None:
+    """SybaseConfig.provide_session releases the pool checkout and detaches the driver if setup raises."""
+    config, _cursor = recording_sybase_config
+    pool = config.provide_pool()
+    seen: list[Any] = []
+
+    def fail_prepare(_self: Any, driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(SybaseConfig, "_prepare_driver", fail_prepare)
+
+    with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+        pass
+
+    assert pool.checked_out() == 0
+    assert seen[0].connection is _DETACHED_CONNECTION

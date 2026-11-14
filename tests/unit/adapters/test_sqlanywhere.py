@@ -1373,3 +1373,46 @@ def test_sqlanywhere_adk_memory_delete_entries_by_session_owner_filters(
     config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
     assert SqlanywhereADKMemoryStore(config).delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
     assert calls == [(expected_sql, expected_params)]
+
+
+def test_sqlanywhere_session_context_cleans_up_on_prepare_and_exit_work_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SqlanywhereSessionContext always releases connections and detaches drivers across setup/exit errors."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    pool = config.provide_pool()
+    seen: list[Any] = []
+
+    def fail_prepare(_self: Any, driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(SqlanywhereConfig, "_prepare_driver", fail_prepare)
+    try:
+        with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+            pass
+
+        assert pool.checked_out() == 0
+        assert seen[0].connection is _DETACHED_CONNECTION
+
+        released: list[object] = []
+        ctx = SqlanywhereSessionContext(
+            acquire_connection=lambda: cast("SqlanywhereConnection", conn),
+            release_connection=lambda c, **_kw: released.append(c),
+            statement_config=config.statement_config,
+            driver_features={},
+            prepare_driver=lambda d: d,
+        )
+        with pytest.raises(RuntimeError, match="release work boom"), ctx as driver:
+            monkeypatch.setattr(
+                type(driver),
+                "_release_open_work",
+                lambda _self: (_ for _ in ()).throw(RuntimeError("release work boom")),
+            )
+
+        assert released == [conn]
+        assert driver.connection is _DETACHED_CONNECTION
+    finally:
+        config.close_pool()

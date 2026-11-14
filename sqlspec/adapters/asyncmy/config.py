@@ -325,10 +325,17 @@ class AsyncmySessionContext:
 
     async def __aenter__(self) -> "AsyncmyDriver":
         self._connection = await self._acquire_connection()
-        self._driver = AsyncmyDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = AsyncmyDriver(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            with contextlib.suppress(Exception):
+                await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

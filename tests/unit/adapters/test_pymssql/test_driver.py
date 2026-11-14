@@ -425,3 +425,19 @@ def test_session_context_initialization() -> None:
     )
     with context as driver:
         assert isinstance(driver, PymssqlDriver)
+
+
+def test_set_migration_session_schema_raises_pending_exception_when_row_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferred exception checks still run when no identity row is returned."""
+    cursor = FakeCursor()
+    cursor.fetchone_value = None
+    conn = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("Any", conn))
+    handler = driver.handle_database_exceptions()
+    handler.pending_exception = SQLSpecError("deferred migration failure")
+    monkeypatch.setattr(PymssqlDriver, "handle_database_exceptions", lambda _self: handler)
+
+    with pytest.raises(SQLSpecError, match="deferred migration failure"):
+        driver.set_migration_session_schema("audit")

@@ -412,3 +412,24 @@ def test_provide_session_detaches_driver_on_exit() -> None:
             session.execute("SELECT 1")
     finally:
         pool.close()
+
+
+def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    config = PyMysqlConfig(connection_instance=pool)
+    seen: list[Any] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        seen.append(driver)
+        raise RuntimeError("prepare boom")
+
+    monkeypatch.setattr(config, "_prepare_driver", fail_prepare)
+    try:
+        with pytest.raises(RuntimeError, match="prepare boom"), config.provide_session():
+            pass
+
+        assert pool.checked_out() == 0
+        assert seen[0].connection is _DETACHED_CONNECTION
+    finally:
+        pool.close()
