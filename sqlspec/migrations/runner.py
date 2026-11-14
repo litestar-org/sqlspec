@@ -313,9 +313,13 @@ class BaseMigrationRunner:
         entries.append(entry)
 
     def _build_sorted_listing(self, entries: "list[_MigrationFileEntry]") -> "list[tuple[str, Path]]":
-        """Construct sorted migration listing from directory entries."""
+        """Construct sorted migration listing from directory entries.
 
+        Raises:
+            MigrationError: If two migration files resolve to the same version.
+        """
         migrations: list[tuple[str, Path]] = []
+        seen_versions: dict[str, Path] = {}
         ext_order = {name: idx for idx, name in enumerate(self.extension_migrations)}
 
         for entry in entries:
@@ -324,6 +328,11 @@ class BaseMigrationRunner:
                 continue
             if entry.extension_name and not version.startswith("ext_"):
                 version = f"ext_{entry.extension_name}_{version}"
+            previous_path = seen_versions.get(version)
+            if previous_path is not None:
+                msg = f"Duplicate migration version {version!r} found in {previous_path} and {entry.path}"
+                raise MigrationError(msg)
+            seen_versions[version] = entry.path
             migrations.append((version, entry.path))
 
         def version_sort_key(migration_tuple: "tuple[str, Path]") -> "Any":

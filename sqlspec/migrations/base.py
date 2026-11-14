@@ -722,23 +722,33 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         self._last_command_metrics: dict[str, float] | None = None
 
     def init_directory(self, directory: str, package: bool = True) -> None:
-        """Initialize migration directory structure.
+        """Initialize migration directory structure without overwriting existing files.
 
         Args:
             directory: Directory to initialize migrations in.
             package: Whether to create __init__.py file.
+
+        Raises:
+            MigrationError: If target initialization files already exist.
         """
         console = importlib.import_module("rich.console").Console()
 
         migrations_dir = Path(directory)
+        init = migrations_dir / "__init__.py"
+        readme = migrations_dir / "README.md"
+        targets = (init, readme) if package else (readme,)
+        existing = [path for path in targets if path.exists()]
+        if existing:
+            existing_display = ", ".join(str(path) for path in existing)
+            msg = f"Refusing to overwrite existing migration file(s): {existing_display}"
+            raise MigrationError(msg)
+
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
         if package:
-            init = migrations_dir / "__init__.py"
-            init.write_text(self._get_init_init_content())
+            init.write_text(self._get_init_init_content(), encoding="utf-8")
 
-        readme = migrations_dir / "README.md"
-        readme.write_text(self._get_init_readme_content())
+        readme.write_text(self._get_init_readme_content(), encoding="utf-8")
 
         use_logger, echo, summary_only = self._resolve_output_policy(False, None, None)
         if echo and not use_logger:
@@ -1096,8 +1106,7 @@ out-of-order migrations gracefully.
         Returns:
             Python module docstring content for the __init__.py file.
         """
-        return """Migrations.
-"""
+        return '"""Migrations."""\n'
 
     def _record_command_metric(self, name: str, value: float) -> None:
         """Accumulate per-command metrics for decorator flushing."""

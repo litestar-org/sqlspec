@@ -90,7 +90,7 @@ Owned replica pools share the primary's startup, shutdown, and observability set
 
 Service helpers such as `get_one`, `exists`, and pagination use the reader unless an explicit or already-bound session owns the work. `read_config=` can select a separate reader config. `begin_transaction()` keeps all statements on one primary driver.
 
-A routing session sends only parsed, read-only statements to readers. Writes, locking reads, scripts, and transactions pin it to the primary. Parsing failures also choose the primary. The facade owns its physical checkouts; it is not a replacement for every adapter-specific driver method. Request a concrete driver for vendor APIs.
+A routing session sends only parsed, read-only statements to readers. Writes, locking reads, scripts, and transactions pin it to the primary. Parsing failures also choose the primary. `SELECT` statements that invoke write-performing user-defined functions (UDFs) still parse as read-only statements and must run inside `RoutingContext.primary()`. The facade owns its physical checkouts; it is not a replacement for every adapter-specific driver method. Request a concrete driver for vendor APIs.
 
 ## Scope a Consistency Choice
 

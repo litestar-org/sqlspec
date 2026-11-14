@@ -328,18 +328,9 @@ def test_schema_squash_unquotes_dotted_version_table_exclusion(tmp_path: Path) -
             sql_text = "CREATE TABLE users (id INTEGER);" if direction == "create" else "DROP TABLE users;"
             return [DDLResult(ObjectIdentity("users", "table"), MetadataSupport.SUPPORTED, ddl=sql_text)]
 
-    class _FakeDriver(SyncDriverAdapterBase):
-        dialect = "sqlite"
-
-        @property
-        def data_dictionary(self) -> Any:
-            return _FakeDataDictionary()
-
-        def __init__(self) -> None:
-            pass
-
+    driver = Mock(spec=SyncDriverAdapterBase, dialect="sqlite", data_dictionary=_FakeDataDictionary())
     runner = Mock()
-    runner.context = MigrationContext(driver=_FakeDriver(), dialect="sqlite")
+    runner.context = MigrationContext(driver=driver, dialect="sqlite")
     squasher = MigrationSquasher(tmp_path, runner, strategy="schema", version_table='"audit.v1"."ddl.migrations"')
     create_stmts, drop_stmts = squasher._extract_schema_ddl_from_context()  # pyright: ignore[reportPrivateUsage]
     assert seen_exclusions == [("ddl.migrations",), ("ddl.migrations",)]

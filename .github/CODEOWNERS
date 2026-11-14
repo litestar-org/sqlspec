@@ -4,4 +4,10 @@
 # For more info about code owners see https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#codeowners-file-example
 
 # Global Assignment
-*      @litestar-org/maintainers @litestar-org/members
+*                  @litestar-org/maintainers @litestar-org/members
+
+# Maintainer-only release, workflow, lockfile, and build tooling paths
+/.github/          @litestar-org/maintainers
+/pyproject.toml    @litestar-org/maintainers
+/uv.lock           @litestar-org/maintainers
+/tools/scripts/    @litestar-org/maintainers

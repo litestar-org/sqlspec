@@ -381,7 +381,7 @@ def test_verify_migration_checksum_supports_sha256_and_legacy_md5(
         recorded = hashlib.md5(canonical_original.encode("utf-8"), usedforsecurity=False).hexdigest()
         assert len(recorded) == 32
     elif digest_mode == "non-ascii":
-        recorded = "caf\xe9"
+        recorded = "foo\xe9"
     else:
         recorded = "" if digest_mode == "empty" else digest_mode
 

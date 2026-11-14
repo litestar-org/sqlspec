@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -1383,7 +1383,7 @@ async def test_tracker_migrate_schema_cleans_up_savepoint_and_tx_on_cancellation
             tracker_async._sqlite_lock_owners.add(id(driver_async))  # pyright: ignore[reportPrivateUsage]
         monkeypatch.setattr("sqlspec.migrations.tracker.ensure_schema_async", _interrupt_async)
         with pytest.raises(asyncio.CancelledError):
-            await tracker_async._migrate_schema_if_needed(driver_async)  # pyright: ignore[reportPrivateUsage,reportArgumentType]
+            await tracker_async._migrate_schema_if_needed(cast("Any", driver_async))  # pyright: ignore[reportPrivateUsage]
     else:
         tracker_sync = SyncMigrationTracker()
         driver_sync = _Driver()
@@ -1391,7 +1391,7 @@ async def test_tracker_migrate_schema_cleans_up_savepoint_and_tx_on_cancellation
             tracker_sync._sqlite_lock_owners.add(id(driver_sync))  # pyright: ignore[reportPrivateUsage]
         monkeypatch.setattr("sqlspec.migrations.tracker.ensure_schema_sync", _interrupt_sync)
         with pytest.raises(KeyboardInterrupt):
-            tracker_sync._migrate_schema_if_needed(driver_sync)  # pyright: ignore[reportPrivateUsage,reportArgumentType]
+            tracker_sync._migrate_schema_if_needed(cast("Any", driver_sync))  # pyright: ignore[reportPrivateUsage]
 
     if locked:
         assert events == [

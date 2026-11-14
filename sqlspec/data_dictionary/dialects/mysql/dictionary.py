@@ -211,7 +211,10 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return await driver.select(
-                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
@@ -335,7 +338,7 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
             return MetadataResult.unsupported(domain)
         capability = build_mysql_metadata_capability_profile(dialect, type(self).__name__).get(domain)
         params: dict[str, Any] = {"schema_name": schema_name}
-        if table_name is not None:
+        if table_name is not None or domain in {"tables", "constraints"}:
             params["table_name"] = table_name
         if domain == "privileges":
             params["object_name"] = object_name
@@ -507,7 +510,10 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="indexes")
             return driver.select(
-                self.get_query("indexes", "by_schema"), schema_name=schema_name, schema_type=IndexMetadata
+                self.get_query("indexes", "by_schema"),
+                schema_name=schema_name,
+                table_name=None,
+                schema_type=IndexMetadata,
             )
 
         self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="indexes")
@@ -631,7 +637,7 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
             return MetadataResult.unsupported(domain)
         capability = build_mysql_metadata_capability_profile(dialect, type(self).__name__).get(domain)
         params: dict[str, Any] = {"schema_name": schema_name}
-        if table_name is not None:
+        if table_name is not None or domain in {"tables", "constraints"}:
             params["table_name"] = table_name
         if domain == "privileges":
             params["object_name"] = object_name

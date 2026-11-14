@@ -285,6 +285,6 @@ def get_config():
     version = migration_files[0].name.split("_")[0]
 
     # Stamp the database with that version (without running the migration)
-    stamp_result = runner.invoke(add_migration_commands(), ["--config", config_path, "stamp", version])
+    stamp_result = runner.invoke(add_migration_commands(), ["--config", config_path, "stamp", version, "--no-prompt"])
     assert stamp_result.exit_code == 0, f"Stamp failed: {stamp_result.output}"
     assert "await_ cannot be called" not in stamp_result.output

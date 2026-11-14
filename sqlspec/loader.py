@@ -1007,7 +1007,7 @@ class SQLFileLoader:
         statements: dict[str, NamedStatement] = {}
         fragments: dict[str, SQLFragment] = {}
 
-        section_matches = list(SECTION_MARKER_PATTERN.finditer(content))
+        section_matches = _section_markers(content)
         if not section_matches:
             return {}, {}
 
@@ -1655,6 +1655,21 @@ def _scan_sql_comments(text: str) -> "list[tuple[int, int, bool]]":
             end = length if close == -1 else close + len(lexeme)
         position = end
     return comments
+
+
+def _section_markers(text: str) -> "list[re.Match[str]]":
+    """Find ``-- name:`` and ``-- fragment:`` markers outside quoted SQL literals and block comments."""
+    if "--" not in text:
+        return []
+    line_comment_starts = {start for start, _, is_block in _scan_sql_comments(text) if not is_block}
+    if not line_comment_starts:
+        return []
+    markers: list[re.Match[str]] = []
+    for match in SECTION_MARKER_PATTERN.finditer(text):
+        dash_offset = text.find("--", match.start(), match.end())
+        if dash_offset in line_comment_starts:
+            markers.append(match)
+    return markers
 
 
 def _slot_markers(text: str) -> "list[re.Match[str]]":

@@ -525,7 +525,7 @@ def _rejected_config(config_type: type, tmp_path: Path, **migration_options: str
 
 @pytest.mark.parametrize(
     "command",
-    [("stamp", "0001"), ("upgrade", "--no-prompt"), ("show-current-revision",), ("init", "--no-prompt")],
+    [("stamp", "0001", "--no-prompt"), ("upgrade", "--no-prompt"), ("show-current-revision",), ("init", "--no-prompt")],
     ids=["stamp", "upgrade", "current", "init"],
 )
 def test_cli_reports_rejected_schema_option(tmp_path: Path, command: tuple[str, ...]) -> None:
@@ -542,12 +542,12 @@ def test_cli_reports_rejected_version_table_schema(tmp_path: Path) -> None:
     """A rejected tracker schema exits with its message and no traceback."""
     config = _rejected_config(SqliteConfig, tmp_path, version_table_schema="audit")
 
-    result = _invoke(config, "stamp", "0001")
+    result = _invoke(config, "stamp", "0001", "--no-prompt")
 
     _assert_cli_error(result, "does not support migration version table schemas")
 
 
-@pytest.mark.parametrize("command", [("stamp", "0001"), ("init", "--no-prompt")], ids=["stamp", "init"])
+@pytest.mark.parametrize("command", [("stamp", "0001", "--no-prompt"), ("init", "--no-prompt")], ids=["stamp", "init"])
 def test_cli_reports_rejected_schema_option_on_async_config(tmp_path: Path, command: tuple[str, ...]) -> None:
     """An async config reports the same rejection without a traceback."""
     config = _rejected_config(AiosqliteConfig, tmp_path, default_schema="tenant")
@@ -674,7 +674,7 @@ def test_cli_multi_config_head_dry_run_succeeds_and_missing_reconcile_module_exi
     [
         ("upgrade-sql-error", ("upgrade", "--no-prompt"), False),
         ("downgrade-sql-error", ("downgrade", "base", "--no-prompt"), True),
-        ("stamp-unknown-revision", ("stamp", "9999_missing"), False),
+        ("stamp-unknown-revision", ("stamp", "9999_missing", "--no-prompt"), False),
     ],
     ids=["upgrade-sql-error", "downgrade-sql-error", "stamp-unknown-revision"],
 )

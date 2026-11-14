@@ -624,10 +624,8 @@ CREATE TABLE second (id INTEGER);
 
     runner = MockMigrationRunner(migrations_dir)
 
-    files = runner.get_migration_files()
-
-    versions = [version for version, _ in files]
-    assert versions.count("0001") == 2
+    with pytest.raises(MigrationError, match="Duplicate migration version '0001'"):
+        runner.get_migration_files()
 
 
 def test_upgrade_records_migration_returning_no_statements(temp_workspace_with_migrations: Path) -> None:

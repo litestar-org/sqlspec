@@ -2735,3 +2735,23 @@ async def test_outer_lock_isolates_nontransactional_reconciler_with_savepoint(
     assert call.create_savepoint("sqlspec_reconcile_step") in driver.mock_calls
     assert call.rollback_to_savepoint("sqlspec_reconcile_step") in driver.mock_calls
     assert call.release_savepoint("sqlspec_reconcile_step") in driver.mock_calls
+
+
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [("0001_first.sql", "0001_second.sql"), ("0001_first.sql", "0001_first.py")],
+    ids=["two-sql-same-version", "sql-and-py-same-version"],
+)
+def test_duplicate_migration_versions_raise_migration_error(tmp_path: Path, first_name: str, second_name: str) -> None:
+    """Loading migration files raises MigrationError when two files share a version."""
+    (tmp_path / first_name).write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    (tmp_path / second_name).write_text(
+        "def up():\n    return ['SELECT 1;']\n"
+        if second_name.endswith(".py")
+        else "-- name: migrate-0001-up\nSELECT 1;\n",
+        encoding="utf-8",
+    )
+
+    runner = SyncMigrationRunner(tmp_path)
+    with pytest.raises(MigrationError, match="Duplicate migration version '0001'"):
+        runner.get_migration_files()

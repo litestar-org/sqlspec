@@ -3,7 +3,7 @@
 import gzip
 import sqlite3
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -633,7 +633,7 @@ async def test_postgres_rls_guard_blocks_schema_dump_revision_and_squash(tmp_pat
                 def __enter__(self) -> Any:
                     return driver
 
-                def __exit__(self, *_args: Any) -> bool:
+                def __exit__(self, *_args: Any) -> Literal[False]:
                     return False
 
             return _CM()
@@ -661,7 +661,7 @@ async def test_postgres_rls_guard_blocks_schema_dump_revision_and_squash(tmp_pat
                 async def __aenter__(self) -> Any:
                     return driver
 
-                async def __aexit__(self, *_args: Any) -> bool:
+                async def __aexit__(self, *_args: Any) -> Literal[False]:
                     return False
 
             return _ACM()

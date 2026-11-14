@@ -8,6 +8,7 @@ Tests focused on MigrationCommands class behavior including:
 - Command routing and parameter passing
 """
 
+import ast
 import gzip
 import hashlib
 import inspect
@@ -1955,3 +1956,71 @@ async def test_commands_fix_wraps_target_file_collision_value_error_in_migration
             SyncMigrationCommands(cfg_sync).fix(dry_run=True, update_database=False, yes=True)
     finally:
         cfg_sync.close_pool()
+
+
+def test_init_emits_valid_package_and_refuses_overwrite(tmp_path: Path, sync_config: SqliteConfig) -> None:
+    """init creates AST-valid __init__.py and refuses overwriting existing initialization files."""
+    commands = SyncMigrationCommands(sync_config)
+    migration_dir = tmp_path / "migrations"
+    commands.init(str(migration_dir), package=True)
+
+    init_file = migration_dir / "__init__.py"
+    readme_file = migration_dir / "README.md"
+    ast.parse(init_file.read_text(encoding="utf-8"))
+
+    init_file.write_text('"""Custom init."""\n', encoding="utf-8")
+    readme_file.write_text("Custom readme\n", encoding="utf-8")
+
+    with pytest.raises(MigrationError, match="Refusing to overwrite existing migration file"):
+        commands.init(str(migration_dir), package=True)
+    assert init_file.read_text(encoding="utf-8") == '"""Custom init."""\n'
+    assert readme_file.read_text(encoding="utf-8") == "Custom readme\n"
+
+    with pytest.raises(MigrationError, match="Refusing to overwrite existing migration file"):
+        commands.init(str(migration_dir), package=False)
+    assert readme_file.read_text(encoding="utf-8") == "Custom readme\n"
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_dry_run_and_verify_inspect_python_migrations_via_ast_without_executing(
+    tmp_path: Path, is_async: bool
+) -> None:
+    """upgrade(dry_run=True), downgrade(dry_run=True), and verify extract AST metadata without importing module."""
+    migrations_dir = tmp_path / "ast_migrations"
+    migrations_dir.mkdir()
+    marker_file = tmp_path / "side_effect_ran.txt"
+    migration_file = migrations_dir / "0001_ast_safe.py"
+    migration_file.write_text(
+        f'"""Create items table."""\n\n'
+        f"from pathlib import Path\n\n"
+        f"Path({str(marker_file)!r}).write_text('executed', encoding='utf-8')\n"
+        f"raise RuntimeError('module top-level code executed during inspection')\n\n"
+        f"def up() -> list[str]:\n"
+        f"    return ['CREATE TABLE items (id INTEGER PRIMARY KEY)']\n\n"
+        f"def down() -> list[str]:\n"
+        f"    return ['DROP TABLE items']\n",
+        encoding="utf-8",
+    )
+
+    cfg = _build_sqlite_mode_config(tmp_path / "ast.db", migrations_dir, is_async=is_async)
+    cmds = create_migration_commands(cfg)
+    try:
+        if isinstance(cmds, AsyncMigrationCommands):
+            await cmds.upgrade(dry_run=True, echo=False)
+            verify_pending = await cmds.verify(echo=False)
+            await cmds.stamp("0001")
+            await cmds.downgrade("base", dry_run=True, echo=False)
+            verify_stamped = await cmds.verify(strict=True, echo=False)
+        else:
+            cmds.upgrade(dry_run=True, echo=False)
+            verify_pending = cmds.verify(echo=False)
+            cmds.stamp("0001")
+            cmds.downgrade("base", dry_run=True, echo=False)
+            verify_stamped = cmds.verify(strict=True, echo=False)
+    finally:
+        await _close_config_pool(cfg)
+
+    assert not marker_file.exists()
+    assert verify_pending["pending_versions"] == ["0001"]
+    assert verify_stamped["valid"] is True
+    assert verify_stamped["checksum_mismatches"] == []

@@ -846,12 +846,18 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     @database_group.command(help="Stamp the revision table with the given revision")
     @click.argument("revision", type=str)
     @bind_key_option
-    def stamp(bind_key: str | None, revision: str) -> None:  # pyright: ignore[reportUnusedFunction]
+    @no_prompt_option
+    def stamp(bind_key: str | None, revision: str, no_prompt: bool) -> None:  # pyright: ignore[reportUnusedFunction]
         """Stamp the revision table with the given revision."""
         ctx = _ensure_click_context()
-
-        sqlspec_config = get_config_by_bind_key(ctx, bind_key)
-        _dispatch_migration_call(sqlspec_config, "stamp", revision=revision)
+        input_confirmed = (
+            True
+            if no_prompt
+            else Confirm.ask(f"[bold]Are you sure you want to stamp the database to the `{revision}` revision?[/]")
+        )
+        if input_confirmed:
+            sqlspec_config = get_config_by_bind_key(ctx, bind_key)
+            _dispatch_migration_call(sqlspec_config, "stamp", revision=revision)
 
     @database_group.command(name="init", help="Initialize migrations for the project.")
     @bind_key_option

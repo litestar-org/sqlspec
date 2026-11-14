@@ -7,7 +7,7 @@ important operational fixes.
 
 ## Recent Updates
 
-### v0.72.0
+### v0.72.0 - Read replicas, database tenant isolation, Snowflake and Teradata adapters, extension schema reconciliation, and query builder validation
 
 **Added:**
 
@@ -19,7 +19,7 @@ important operational fixes.
 * Starlette, FastAPI, Flask, and Sanic now check out a request's database connection on first access instead of at request start, so routes that never touch the database open no connection. With async configurations, `get_session(request)` returns a session that opens the connection on its first awaited call, so existing `await session.select(...)` code keeps working; Litestar's `provide_request_session(...)` behaves the same way. Flask's `get_session()` on an async configuration now returns a blocking session that runs each call through the plugin's portal. The synchronous `get_connection(request)` returns the request connection once it is open; on async configurations before first use, call `await plugin.get_connection_async(request)` instead.
 * Added the native `SnowflakeConfig` and `SnowflakeDriver` adapter (`sqlspec[snowflake]`) with workload identity, access-token and key-pair authentication, bounded pooling, Arrow batch streaming, Parquet stage loads, catalog reflection, and Litestar, Events, and Google ADK stores. See the [Snowflake guide](databases/snowflake.md). ([#909](https://github.com/litestar-org/sqlspec/issues/909))
 * Fixed Snowflake ADBC connection options and authentication, preserved stage and session variables during parameter compilation, and added Snowflake catalog reflection. ([#908](https://github.com/litestar-org/sqlspec/issues/908))
-* Added the synchronous Teradata Vantage adapter (`sqlspec[teradata]`), a `vantage` SQLGlot dialect with Teradata pagination and type rendering (SQLGlot's built-in `teradata` dialect is left unchanged), Unicode catalog introspection, Arrow and extension store support, plus Columnar `dbc` and Flight SQL Teradata routing through ADBC.
+* Added the synchronous Teradata Vantage adapter (`sqlspec[teradata]`), a `vantage` SQLGlot dialect with Teradata pagination and type rendering (SQLGlot's built-in `teradata` dialect is left unchanged), Unicode catalog introspection, Arrow and extension store support, plus Columnar `dbc` and Flight SQL Teradata routing through ADBC. ([#914](https://github.com/litestar-org/sqlspec/pull/914))
 * Added `sql.func(name, *args, dialect=None)` to `SQLFactory` for building scalar and table-valued SQL function expressions (`from_(sql.func("generate_series", 1, 3), alias="g")`, `sql.func("nullif", sql.c.a, 0)`), converting Python primitives to SQL literals while unwrapping builder column and expression objects.
 * Added `sql.col(name, table=None)` and `sql.c` (`ColumnNamespace` supporting `sql.c("name", table="u")`, `sql.c.name`, `sql.c["first-name"]`, and `sql.c["u.name"]`) alongside `sql.column()`, plus `sql.var(name)` for unquoted SQL keyword/variable tokens such as `sql.var("DEFAULT")` and `sql.var("CURRENT_TIMESTAMP")`.
 * Added `FileExistsInStorageError(StorageOperationFailedError)` (`sqlspec.exceptions`) and normalized `FileExistsError`, `OSError(errno.EEXIST)`, `AlreadyExistsError`, and `ObjectAlreadyExists` across storage backends in `raise_storage_error`.
@@ -48,7 +48,9 @@ important operational fixes.
 
 **Changed:**
 
-* Added root `SECURITY.md` support policy, updated [Litestar Integration](integrations/litestar.md) and [Litestar Multi-Tenancy](learn/recipes/multi-tenancy-litestar.md) for middleware lifecycle ordering, lazy write transactions, detached session behavior, and dedicated session-store pool sizing. Required `opentelemetry-api >= 1.45.1` (constraining `opentelemetry-sdk >= 1.45.1`), added `cibuildwheel` and `hatchling` to `[dependency-groups].build`, removed unused `hatch-cython` hooks, exported `--all-extras --all-groups` build constraints across `.github/workflows/publish.yml`, `.github/workflows/test-build.yml`, and `.github/workflows/pgo-validate.yml` (`astral-sh/setup-uv`), and restricted `publish-release` to release events and `v*` tags.
+* Added root `SECURITY.md` support policy, updated [Litestar Integration](integrations/litestar.md) and [Litestar Multi-Tenancy](learn/recipes/multi-tenancy-litestar.md) for middleware lifecycle ordering, lazy write transactions, detached session behavior, and dedicated session-store pool sizing. Required `opentelemetry-api >= 1.45.2` (constraining `opentelemetry-sdk >= 1.45.2`), added `cibuildwheel` and `hatchling` to `[dependency-groups].build`, removed unused `hatch-cython` hooks, narrowed `.github/CODEOWNERS` for `/.github/`, `/pyproject.toml`, `/uv.lock`, and `/tools/scripts/` to `@litestar-org/maintainers`, added `tools/scripts/export_hashed_requirements.py` (`cli`, `runtime`, `build`, `pgo`, `pgo-validate`, `test`, and `smoke` profiles) to generate hash-pinned requirement subsets with `pip install --require-hashes` and `CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"` across `.github/workflows/publish.yml`, `.github/workflows/test-build.yml`, and `.github/workflows/pgo-validate.yml`, added `--frozen` to release `uv sync` steps, and restricted `publish-release` in `.github/workflows/publish.yml` to `github.event_name == 'release'`.
+* `sqlspec db stamp` now prompts for confirmation before modifying migration tracking records unless `--no-prompt` is passed, matching `upgrade` and `downgrade`.
+* Documented in [Read Replicas](learn/recipes/read-replicas.md) that `SELECT` statements calling write-performing user-defined functions (UDFs) must execute inside `RoutingContext.primary()`.
 * Updated `BaseMigrationRunner.calculate_checksum` to emit 64-character SHA-256 hex digests while retaining 32-character legacy MD5 compatibility in `BaseMigrationRunner.verify_migration_checksum`; `downgrade("-1")` preserves reconciled extension tables while explicit `downgrade("base")` drops them. Stock `SyncMigrationTracker` and `AsyncMigrationTracker` now allocate `execution_sequence` in a single `INSERT ... SELECT` statement on supported dialects and acquire dialect migration locks (`pg_advisory_lock` skipping CockroachDB, MySQL `GET_LOCK`, SQL Server `sp_getapplock`, and SQLite `BEGIN IMMEDIATE`) across mutating commands.
 * Added `redact_sql_literals` (`sqlspec.observability._common`) for single-pass comment-aware SQL literal masking in trace spans, `StackExecutionError` messages, and logs, and normalized header extraction and `latin-1` lowercase header matching across `CorrelationExtractor` and Litestar `CorrelationMiddleware`.
 * Switched `asyncpg`, `cockroach_asyncpg`, `psqlpy`, `duckdb`, `teradata`, `adbc`, and `arrow_odbc` under `"autocommit"` and `"autocommit_include_redirect"` to open write transactions lazily on first mutation, and raised `ImproperConfigurationError` if a session is used after its connection has been detached and released.
@@ -95,6 +97,11 @@ important operational fixes.
 * `OracledbSyncDataDictionary.get_indexes(table=None)` and `OracledbAsyncDataDictionary.get_indexes(table=None)` now bind `table_name=None` when querying schema-wide indexes, fixing an Oracle bind-variable mismatch during `table=None` index introspection.
 * `CreateTable` and `AlterTable` (`build_column_expression`) now emit `DEFAULT <expr>` before `NOT NULL` when `dialect="oracle"`, matching Oracle's required column constraint order, and emit `NOT NULL` before `PRIMARY KEY` for inline primary-key columns when `dialect="db2"`.
 * `SyncMigrationTracker` and `AsyncMigrationTracker` now accept uppercase column keys (such as `VERSION_NUM` on Db2 Arrow ODBC and ADBC drivers) when reading current and applied migration versions.
+* `PythonFileLoader.validate_migration_file()`, `PythonFileLoader.has_downgrade()`, `SyncMigrationRunner.load_migration()`, and `AsyncMigrationRunner.load_migration()` now extract Python migration metadata, callable bindings, and checksums via `ast.parse` during `--dry-run` and `verify()` without importing or executing migration modules.
+* `BaseMigrationCommands.init_directory()` (`sqlspec db init`) now writes a valid Python docstring to `__init__.py` and raises `MigrationError` instead of overwriting existing `__init__.py` or `README.md` files, and `BaseMigrationRunner._build_sorted_listing()` raises `MigrationError` when multiple files map to the same migration version.
+* `SQLFileLoader._parse_statements()` now skips `-- name:` and `-- fragment:` markers inside SQL string literals, quoted identifiers, dollar-quoted blocks, and block comments via `_scan_sql_comments()`.
+* `MySQLSyncDataDictionary` and `MySQLAsyncDataDictionary` (`get_indexes(table=None)` and `get_constraints(table=None)`) now bind `table_name=None` on schema-wide catalog queries, resolving parameter binding errors on MySQL and PyMySQL `--from-schema` and `dump-schema` runs.
+* `MssqlPythonConfig` and `MssqlPythonConnectionPool` now explicitly disable native pyodbc pooling when pooling is disabled or pools close. ([#915](https://github.com/litestar-org/sqlspec/pull/915))
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
@@ -118,7 +125,9 @@ important operational fixes.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 * `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
-* Fixed `Select` query builder lock preservation (`for_update` / `for_share` when `dialect=None`), `ExpressionWrapper` alias delegation in `SQLFactory.select()` and `Select`, `CaseBuilder` parameter propagation in `Select` / `WhereClauseMixin` / `HavingClauseMixin`, `Update.table(...)` clause ordering when called after `.set(...)` / `.where(...)`, `Insert.columns()` clearing when switching to `.from_select(...)`, `Delete` / `Update` CTE `.with_(...)` rendering, `Merge` source alias inference and `USING (<subquery>)` parenthesization, `CreateIndex` expression and `where` clause building, and `SQLFileLoader` hyphenated query name validation and reload cache invalidation.
+* Fixed `Select` query builder lock preservation (`for_update` / `for_share` when `dialect=None`), `ExpressionWrapper` alias delegation in `SQLFactory.select()` and `Select`, `CaseBuilder` parameter propagation in `Select` / `WhereClauseMixin` / `HavingClauseMixin`, `Update.table(...)` clause ordering when called after `.set(...)` / `.where(...)`, `Insert.columns()` clearing when switching to `.from_select(...)`, `Delete` / `Update` CTE `.with_(...)` rendering, `Merge` source alias inference and `USING (<subquery>)` parenthesization, `CreateIndex` expression and `where` clause building, `&`/`|`/`~` column expression grouping, `from_(..., alias=..., as_of=...)` string aliases, lateral `JOIN LATERAL` rendering, verbatim optimizer hints, `sql.bulk_insert()` positional placeholders, `to_sql(show_parameters=True)` parameter substitution, T-SQL vector distance guards, and `SQLFileLoader` hyphenated query name validation, reload cache invalidation, and relative `load_sql()` single-file paths.
+  ([#887](https://github.com/litestar-org/sqlspec/pull/887))
+* Exported `PyMysqlSslParams` from `sqlspec.adapters.pymysql` and aligned `LifecycleConfig` callback type annotations with hook invocation signatures.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 
 ### v0.71.0 - SAP fixes, Arrow schemas, and SQL file guides
@@ -189,6 +198,9 @@ important operational fixes.
 * Added sharded fixture loading (`find_fixture_files`, `load_fixture`, `iter_fixture_records`, `write_fixture_shards`), vector embedding column serialization across PostgreSQL (`pgvector`), Oracle (`VECTOR`), DuckDB, BigQuery, Spanner, and SQLite, and cross-adapter primary key sequence resynchronization (`sync_table_sequences`, `sync_table_sequences_async`) after explicit-ID fixture loads.
   ([#863](https://github.com/litestar-org/sqlspec/pull/863))
 * Added generated Data Dictionary dialect and SQL query reference documentation (`docs/reference/data-dictionary/dialects/` via `tools.docs.generate_data_dictionary_docs`) covering all 13 dialect packs (`bigquery`, `cockroach`, `db2`, `duckdb`, `mssql`, `mysql` / `mariadb`, `oracle`, `postgres`, `spanner`, `sqlanywhere`, `sqlite`, and `sybase`), 214 SQL query files, and 336 named catalog queries.
+  ([#874](https://github.com/litestar-org/sqlspec/pull/874))
+* Added `on_connection_create` session setup callbacks on `SpannerSyncConfig` and `SpannerAsyncConfig`.
+  ([#875](https://github.com/litestar-org/sqlspec/pull/875))
 
 **Changed:**
 
@@ -239,7 +251,7 @@ important operational fixes.
   [#867](https://github.com/litestar-org/sqlspec/pull/867),
   [#869](https://github.com/litestar-org/sqlspec/pull/869))
 
-* Migrated integration test infrastructure to clientless `pytest-databases` fixtures (`#859`).
+* Migrated integration test infrastructure to clientless `pytest-databases` fixtures.
   ([#859](https://github.com/litestar-org/sqlspec/pull/859))
 
 * Upgraded CI GitHub Actions `astral-sh/setup-uv` from `10.3.1` to `10.3.3` and pinned `actions/checkout` (`6.0.2`), `actions/setup-python` (`7.1.0`), `actions/cache` (`6.0.0`), and `actions/upload-pages-artifact` / `actions/deploy-pages` in `.github/workflows/ci.yml` and `.github/workflows/docs.yml`.
