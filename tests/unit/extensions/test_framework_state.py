@@ -71,6 +71,11 @@ def test_starlette_config_state_field_order() -> None:
         "read_pool_key",
         "routing_session_key",
         "default_routing_mode",
+        "enable_routing_middleware",
+        "routing_header",
+        "write_pin_cookie",
+        "routing_secret",
+        "routing_header_bytes",
     ]
 
 
@@ -87,6 +92,10 @@ def test_sanic_config_state_field_order() -> None:
         "read_pool_key",
         "routing_session_key",
         "default_routing_mode",
+        "enable_routing_middleware",
+        "routing_header",
+        "write_pin_cookie",
+        "routing_secret",
     ]
 
 
@@ -113,6 +122,10 @@ def test_flask_config_state_field_order() -> None:
         "read_connection_key",
         "routing_session_key",
         "default_routing_mode",
+        "enable_routing_middleware",
+        "routing_header",
+        "write_pin_cookie",
+        "routing_secret",
     ]
 
 

@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("arrow_odbc")
 
+from arrow_odbc import Error as ArrowOdbcError
 from arrow_odbc import TextEncoding
 
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
@@ -18,6 +19,7 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.core import _extract_sqlstate, create_mapped_exception
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -100,10 +102,56 @@ def test_a_value_needing_quotes_is_braced() -> None:
     assert "Driver={PostgreSQL Unicode(x64)};" in connection_string
 
 
-def test_a_value_carrying_a_closing_brace_is_rejected() -> None:
-    """ODBC defines no escape for it, so quoting would silently truncate the value."""
-    with pytest.raises(ImproperConfigurationError, match="closing brace"):
-        build_connection_config({"driver": "d", "pwd": "p{a}}ss}"})
+def test_closing_brace_in_non_credential_option_uses_ms_odbcstr_doubling() -> None:
+    """Closing braces inside non-credential ODBC attributes escape as doubled braces."""
+    connection_string, _ = build_connection_config({"driver": "d", "extra": {"APP": "my}app;v=1"}})
+
+    assert "APP={my}}app;v=1};" in connection_string
+
+
+@pytest.mark.parametrize(("user_key", "pwd_key"), [("uid", "pwd"), ("user", "password"), ("username", "PWD")])
+def test_credentials_route_to_out_of_band_connect_kwargs(user_key: str, pwd_key: str) -> None:
+    """Discrete user and password aliases normalize into out-of-band connect_kwargs."""
+    connection_string, connect_kwargs = build_connection_config({
+        "driver": "PostgreSQL Unicode",
+        "server": "db.internal",
+        user_key: "svc_user",
+        pwd_key: "p;a}s=s",
+    })
+
+    assert "UID=" not in connection_string
+    assert "PWD=" not in connection_string
+    assert connect_kwargs["user"] == "svc_user"
+    assert connect_kwargs["password"] == "p;a}s=s"
+
+
+def test_discrete_credentials_strip_inline_uid_pwd_from_connection_string() -> None:
+    """Discrete credential overrides remove inline UID/PWD from connection_string."""
+    connection_string, connect_kwargs = build_connection_config({
+        "connection_string": "Driver={PostgreSQL Unicode};Server=db;UID=inline_u;PWD=inline_p;",
+        "uid": "override_u",
+        "pwd": "override_p",
+    })
+
+    assert "UID=" not in connection_string
+    assert "PWD=" not in connection_string
+    assert connect_kwargs["user"] == "override_u"
+    assert connect_kwargs["password"] == "override_p"
+
+
+@pytest.mark.parametrize(
+    "bad_params",
+    [
+        {"driver": "d", "pwd": "bad\x00pwd"},
+        {"driver": "d", "uid": "bad\nuid"},
+        {"driver": "d", "extra": {"Bad;Key": "1"}},
+        {"connection_string": "DSN=analytics;\r\nUID=x;"},
+    ],
+)
+def test_invalid_odbc_keys_and_control_chars_are_rejected(bad_params: dict[str, Any]) -> None:
+    """Invalid ODBC parameter keys and control characters raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_params)
 
 
 def test_connection_string_alone_is_unchanged() -> None:
@@ -395,3 +443,98 @@ def test_replica_derivation_preserves_explicit_statement_and_hook() -> None:
     assert reader.statement_config.dialect == "oracle"
     assert reader.driver_features["chunk_size"] == 123
     assert reader._user_connection_hook is hook
+
+
+@pytest.mark.parametrize("entry", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_arrow_odbc_caller_connection_instance_rolled_back_and_preserved(entry: str, autocommit: bool) -> None:
+    """Caller-supplied connection_instance is rolled back when autocommit=False, never closed, and detached per session."""
+
+    class _CallerConnection:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+            self.closed = False
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    stub = _CallerConnection()
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics", "autocommit": autocommit}, connection_instance=cast("Any", stub)
+    )
+    with getattr(config, entry)() as first:
+        if entry == "provide_session":
+            assert first.connection is stub
+    if entry == "provide_session":
+        assert first.connection is _DETACHED_CONNECTION
+
+    with getattr(config, entry)() as second:
+        if entry == "provide_session":
+            assert second.connection is stub
+    if entry == "provide_session":
+        assert second.connection is _DETACHED_CONNECTION
+
+    assert stub.closed is False
+    assert stub.rollbacks == (0 if autocommit else 2)
+
+
+def test_arrow_odbc_owned_connection_closed_and_session_rolls_back_active_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owned connections close on exit and ArrowOdbcSessionContext rolls back active transactions and detaches."""
+
+    class _OwnedConnection:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+            self.rollbacks = 0
+            self.closed = False
+
+        def execute(self, query: str, parameters: Any = None, **_kwargs: Any) -> None:
+            _ = parameters
+            self.executed.append(query)
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    owned = _OwnedConnection()
+    monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", lambda *_a, **_kw: owned)
+    config = ArrowOdbcConfig(connection_config={"dsn": "analytics", "autocommit": True})
+
+    with config.provide_session() as session:
+        session.begin()
+
+    assert owned.executed == ["BEGIN", "ROLLBACK"]
+    assert owned.closed is True
+    assert session.connection is _DETACHED_CONNECTION
+
+
+def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection_instance() -> None:
+    """Failed driver rollback on a caller connection_instance propagates the mapped error and detaches the driver."""
+
+    class _FakeArrowOdbcError(ArrowOdbcError):
+        def __init__(self, message: str) -> None:
+            Exception.__init__(self, message)
+
+    class _FailingCallerConnection:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+            raise _FakeArrowOdbcError("State: 08003, Native error: 0, Message: connection lost")
+
+    caller = _FailingCallerConnection()
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "analytics", "autocommit": False}, connection_instance=cast("Any", caller)
+    )
+    with pytest.raises(DatabaseConnectionError), config.provide_session() as session:
+        session.begin()
+
+    assert caller.rollbacks == 1
+    assert session.connection is _DETACHED_CONNECTION

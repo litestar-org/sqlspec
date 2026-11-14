@@ -212,14 +212,20 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         if self._tenant_lease is not None:
             await self._tenant_lease.release(_conn, **kwargs)
             return
-        if kwargs.get("exc_type") is not None and _conn is not None:
-            with contextlib.suppress(Exception):
-                await _conn.execute("ROLLBACK")
-        if self._ctx is not None:
-            try:
-                await self._ctx.__aexit__(None, None, None)
-            finally:
-                self._ctx = None
+        exc_type = kwargs.get("exc_type")
+        try:
+            if _conn is not None and (exc_type is not None or await _psqlpy_in_transaction(_conn)):
+                try:
+                    await _rollback_or_terminate(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if self._ctx is not None:
+                try:
+                    await self._ctx.__aexit__(None, None, None)
+                finally:
+                    self._ctx = None
 
 
 class PsqlpyConnectionContext(AsyncPoolConnectionContext):
@@ -260,14 +266,19 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
             return None
         connection = self._connection
         self._connection = None
-        if exc_type is not None and connection is not None:
-            with contextlib.suppress(Exception):
-                await connection.execute("ROLLBACK")
-        if self._ctx is not None:
-            try:
-                await self._ctx.__aexit__(None, None, None)
-            finally:
-                self._ctx = None
+        try:
+            if connection is not None and (exc_type is not None or await _psqlpy_in_transaction(connection)):
+                try:
+                    await _rollback_or_terminate(connection)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+        finally:
+            if self._ctx is not None:
+                try:
+                    await self._ctx.__aexit__(None, None, None)
+                finally:
+                    self._ctx = None
         return None
 
 
@@ -678,3 +689,22 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         self.connection_instance.close()
         self.connection_instance = None
         self._initialized_connection_ids.clear()
+
+
+async def _psqlpy_in_transaction(connection: Any) -> bool:
+    """Return whether a psqlpy connection currently holds an open transaction."""
+    in_transaction = getattr(connection, "in_transaction", None)
+    if callable(in_transaction):
+        res = in_transaction()
+        return bool(await res) if inspect.isawaitable(res) else bool(res)
+    return False
+
+
+async def _rollback_or_terminate(connection: Any) -> None:
+    """Roll back open work on a psqlpy connection or terminate the backend on failure."""
+    try:
+        await connection.execute("ROLLBACK")
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
+        raise

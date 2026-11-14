@@ -18,6 +18,7 @@ from sqlspec.adapters.asyncpg.core import build_connection_config, build_stateme
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
 from sqlspec.core import StatementConfig, StatementStack
 from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -709,3 +710,14 @@ def test_derived_host_allows_explicit_connection_identity_overrides() -> None:
     assert reader.connection_config["user"] == "reporter"
     assert reader.connection_config["password"] == "reader-secret"
     assert reader.connection_config["database"] == "reports"
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    config = AsyncpgConfig(connection_instance=pool)
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _DETACHED_CONNECTION

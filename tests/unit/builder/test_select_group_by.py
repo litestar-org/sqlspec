@@ -60,3 +60,9 @@ def test_group_by_preserves_literal_column_identifiers(column: str, expected: st
     """String group_by inputs are treated as literal column names."""
     query = sql.select("*").from_("t").group_by(column)
     assert " ".join(query.to_sql().split()) == f'SELECT * FROM "t" AS "t" GROUP BY {expected}'
+
+
+def test_rollup_and_grouping_sets_split_qualified_dotted_columns() -> None:
+    """ROLLUP, CUBE, and GROUPING SETS split dotted table.column strings."""
+    query = sql.select("t.a").from_("t").group_by_rollup("t.a", "t.b")
+    assert " ".join(query.to_sql().split()).endswith('GROUP BY ROLLUP ( "t"."a", "t"."b" )')

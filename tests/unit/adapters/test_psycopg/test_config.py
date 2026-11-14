@@ -5,7 +5,8 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from psycopg import AsyncCursor, Connection, Cursor
+from psycopg import AsyncCursor, Connection, Cursor, pq
+from psycopg import Error as PsycopgError
 from psycopg.abc import AdaptContext
 from psycopg.rows import dict_row
 
@@ -23,7 +24,8 @@ from sqlspec.adapters.psycopg.core import build_statement_config, default_statem
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 
 
 class _CapturedSyncPool:
@@ -1154,3 +1156,81 @@ def test_derived_host_allows_explicit_connection_identity_overrides() -> None:
     assert reader.connection_config["user"] == "reporter"
     assert reader.connection_config["password"] == "reader-secret"
     assert reader.connection_config["dbname"] == "reports"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tx_active", "in_tx_probe"), [(True, False), (False, True)], ids=["driver-flag", "connection-probe"]
+)
+async def test_psycopg_session_context_rolls_back_active_transaction_on_clean_exit(
+    asynchronous: bool, tx_active: bool, in_tx_probe: bool
+) -> None:
+    """Session contexts roll back uncommitted driver work before releasing the connection."""
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(
+        transaction_status=pq.TransactionStatus.INTRANS if in_tx_probe else pq.TransactionStatus.IDLE
+    )
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = PsycopgAsyncSessionContext if asynchronous else PsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    if isinstance(ctx, PsycopgAsyncSessionContext):
+        async with ctx as driver:
+            driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_awaited_once()
+        release.assert_awaited_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+    else:
+        with ctx as sync_driver:
+            sync_driver._transaction_active = tx_active  # pyright: ignore[reportPrivateUsage]
+        assert sync_driver.connection is _DETACHED_CONNECTION
+        conn.rollback.assert_called_once()
+        release.assert_called_once_with(conn, exc_type=None, exc_val=None, exc_tb=None)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_psycopg_session_context_propagates_or_preserves_rollback_error_and_informs_pool(
+    asynchronous: bool, body_raises: bool
+) -> None:
+    """Rollback failure propagates on clean exit, preserves body exceptions, and passes error info to release."""
+    rollback_err = PsycopgError("rollback failed")
+    body_err = ValueError("body failed")
+    expected_type: type[BaseException] = ValueError if body_raises else SQLSpecError
+    conn = AsyncMock() if asynchronous else MagicMock()
+    conn.autocommit = False
+    conn.info = SimpleNamespace(transaction_status=pq.TransactionStatus.INTRANS)
+    conn.rollback = AsyncMock(side_effect=rollback_err) if asynchronous else MagicMock(side_effect=rollback_err)
+    release = AsyncMock() if asynchronous else MagicMock()
+    context_cls = PsycopgAsyncSessionContext if asynchronous else PsycopgSyncSessionContext
+    ctx = context_cls(
+        acquire_connection=AsyncMock(return_value=conn) if asynchronous else MagicMock(return_value=conn),
+        release_connection=release,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with pytest.raises(expected_type) as caught:
+        if isinstance(ctx, PsycopgAsyncSessionContext):
+            async with ctx as driver:
+                driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+        else:
+            with ctx as sync_driver:
+                sync_driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+                if body_raises:
+                    raise body_err
+    if body_raises:
+        assert caught.value is body_err
+    else:
+        assert caught.value.__cause__ is rollback_err
+    assert release.call_args.args == (conn,)
+    assert release.call_args.kwargs["exc_type"] is type(caught.value)
+    assert release.call_args.kwargs["exc_val"] is caught.value

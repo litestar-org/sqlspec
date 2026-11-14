@@ -157,6 +157,7 @@ __all__ = (
     "describe_stack_statement",
     "handle_single_row_error",
     "hash_stack_operations",
+    "operation_requires_transaction",
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
     "type_coercion_fallbacks",
@@ -177,6 +178,8 @@ _MAX_NUMERIC_PRECISION: Final[int] = 38
 
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
+_DETACHED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
+_READ_ONLY_OPERATION_TYPES: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA", "COPY_TO"})
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
     ParameterStyle.NAMED_COLON.value,
@@ -729,7 +732,7 @@ class DataDictionaryMixin:
             status=MetadataSupport.SUPPORTED,
             fidelity=result.fidelity,
             source=result.source,
-            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+            ddl=f"{drop_expr.sql(dialect=_sqlglot_dialect(dialect), copy=False)};",
             dependencies=result.dependencies,
             redactions=result.redactions,
             context=result.context,
@@ -830,7 +833,7 @@ class DataDictionaryMixin:
         if is_native_statement:
             ddl_text = f"{definition_text};"
         else:
-            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect))
+            quoted_view = self._quoted_table(view_name, view_schema).sql(dialect=_sqlglot_dialect(dialect), copy=False)
             ddl_text = f"CREATE VIEW {quoted_view} AS {definition_text};"
         source = MetadataSource.CATALOG if is_native_statement else MetadataSource.GENERATED
         return DDLResult(
@@ -901,7 +904,7 @@ class DataDictionaryMixin:
             status=MetadataSupport.SUPPORTED,
             fidelity=MetadataFidelity.GENERATED,
             source=MetadataSource.GENERATED,
-            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect))};",
+            ddl=f"{create_expr.sql(dialect=_sqlglot_dialect(dialect), copy=False)};",
         )
 
     def _build_type_ddl_from_row(
@@ -934,8 +937,10 @@ class DataDictionaryMixin:
                 warnings=(f"{logical_type or 'unknown'} type {identity.name} cannot be rebuilt from catalog rows",),
             )
         render_dialect = _sqlglot_dialect(dialect)
-        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect)
-        rendered_labels = ", ".join(exp.Literal.string(str(label)).sql(dialect=render_dialect) for label in labels)
+        quoted_type = self._quoted_table(identity.name, identity.schema).sql(dialect=render_dialect, copy=False)
+        rendered_labels = ", ".join(
+            exp.Literal.string(str(label)).sql(dialect=render_dialect, copy=False) for label in labels
+        )
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -1438,14 +1443,19 @@ class DataDictionaryMixin:
                     ),
                 ))
 
-        select_expr = exp.select(*projections).from_(self._quoted_table(table, schema))
-        return SQL(select_expr.sql(dialect=sqlglot_dialect))
+        select_expr = exp.select(*projections, copy=False).from_(self._quoted_table(table, schema), copy=False)
+        return SQL(select_expr.sql(dialect=sqlglot_dialect, copy=False))
 
     def _build_table_sample_sql(self, table: str, schema: str | None = None, sample_size: int = 1000) -> SQL:
         """Build a query sampling rows from a table, quoting the exact catalog identifiers."""
         effective_dialect = _ddl_dialect_or_none(type(self).dialect)
-        select_expr = exp.select(exp.Star()).from_(self._quoted_table(table, schema)).limit(max(1, sample_size))
-        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect)))
+        select_expr = (
+            exp
+            .select(exp.Star(), copy=False)
+            .from_(self._quoted_table(table, schema), copy=False)
+            .limit(max(1, sample_size), copy=False)
+        )
+        return SQL(select_expr.sql(dialect=_sqlglot_dialect(effective_dialect), copy=False))
 
     def _infer_column_type_from_sample(
         self, declared_type: str, values: "abc.Sequence[Any]", *, target_dialect: str | None = None
@@ -1463,8 +1473,8 @@ class DataDictionaryMixin:
             if target_dialect and target_dialect != type(self).dialect:
                 src_dialect = _ddl_dialect_or_none(type(self).dialect)
                 with contextlib.suppress(SqlglotError):
-                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect)).sql(
-                        dialect=_sqlglot_dialect(target_dialect)
+                    return exp.DataType.build(clean_declared, dialect=_sqlglot_dialect(src_dialect), copy=False).sql(
+                        dialect=_sqlglot_dialect(target_dialect), copy=False
                     )
             return clean_declared or "TEXT"
 
@@ -1733,11 +1743,38 @@ class DataDictionaryMixin:
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _DetachedConnection:
+    """Sentinel assigned to driver.connection after session exit."""
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "<DetachedConnection>"
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        raise ImproperConfigurationError(_DETACHED_CONNECTION_MESSAGE)
+
+
+_DETACHED_CONNECTION: Final[Any] = _DetachedConnection()
+
+
+def operation_requires_transaction(operation_type: "OperationType", modifies_rows: bool) -> bool:
+    """Return whether a statement must run inside a transaction under lazy write begin."""
+    return modifies_rows or operation_type not in _READ_ONLY_OPERATION_TYPES
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
+        "_auto_begin_on_write",
         "_cache_holder",
         "_observability",
         "_pending_statement_profile",
@@ -1780,6 +1817,7 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._pending_statement_profile: dict[str, Any] | None = None
+        self._auto_begin_on_write = False
         self._transaction_depth = 0
         self._stmt_cache_max_size = self._statement_cache_size()
         shared_holder = self.driver_features.get("_statement_cache_holder")
@@ -1829,12 +1867,6 @@ class CommonDriverAttributesMixin:
         """Attach or replace the observability runtime."""
         self._observability = runtime
         self._refresh_statement_cache_state()
-
-    def _consume_statement_profile(self) -> "dict[str, Any] | None":
-        """Take the profile produced by an execution callback and clear pending ownership."""
-        profile = self._pending_statement_profile
-        self._pending_statement_profile = None
-        return profile
 
     def storage_capabilities(self) -> "StorageCapabilities":
         """Return cached storage capabilities for the active driver.
@@ -2194,6 +2226,19 @@ class CommonDriverAttributesMixin:
             last_inserted_id=last_inserted_id,
         )
 
+    def _detach_connection(self) -> None:
+        """Replace driver.connection with the detached sentinel after session teardown."""
+        self.connection = _DETACHED_CONNECTION
+        self._auto_begin_on_write = False
+        self._stmt_cache_enabled = False
+        self._transaction_depth = 0
+
+    def _consume_statement_profile(self) -> "dict[str, Any] | None":
+        """Take the profile produced by an execution callback and clear pending ownership."""
+        profile = self._pending_statement_profile
+        self._pending_statement_profile = None
+        return profile
+
     def _format_wire_sql(self, sql: str) -> str:
         """Apply wire-level sqlcommenter formatting when enabled on statement_config."""
         if not self.statement_config.enable_sqlcommenter:
@@ -2205,7 +2250,11 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        self._stmt_cache_enabled = bool(self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers)
+        self._stmt_cache_enabled = bool(
+            self.connection is not _DETACHED_CONNECTION
+            and self._stmt_cache_max_size > 0
+            and not self.statement_config._has_transformers
+        )
 
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.
@@ -3061,9 +3110,9 @@ class CommonDriverAttributesMixin:
                 subquery_expr.set("offset", None)
                 subquery_expr.set("fetch", None)
                 subquery = subquery_expr.subquery(alias="grouped_data", copy=False)
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
+                count_expr = exp.select(exp.Count(this=exp.Star()), copy=False).from_(subquery, copy=False)
             else:
-                count_expr = exp.select(exp.Count(this=exp.Star()))
+                count_expr = exp.select(exp.Count(this=exp.Star()), copy=False)
                 count_expr.set("from_", from_clause.copy())
                 if expr.args.get("where"):
                     count_expr = count_expr.where(cast("exp.Expression", expr.args.get("where")).copy(), copy=False)
@@ -3089,7 +3138,7 @@ class CommonDriverAttributesMixin:
         count_source.set("offset", None)
         count_source.set("fetch", None)
         subquery = count_source.subquery(alias="total_query", copy=False)
-        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
+        count_expr = exp.select(exp.Count(this=exp.Star()), copy=False).from_(subquery, copy=False)
         if cte is not None:
             count_expr.set("with_", cte.copy())
         return _build_rewritten_sql(
@@ -3131,16 +3180,16 @@ class CommonDriverAttributesMixin:
             if cte:
                 expr_copy.set("with_", None)
             subquery = expr_copy.subquery(alias="__set_op_subq", copy=False)
-            modified_expr = exp.select(exp.Column(this=exp.Star())).from_(subquery, copy=False)
+            modified_expr = exp.select(exp.Column(this=exp.Star()), copy=False).from_(subquery, copy=False)
             count_window = exp.Window(this=exp.Count(this=exp.Star()))
-            aliased_count = exp.alias_(count_window, alias)
+            aliased_count = exp.alias_(count_window, alias, copy=False)
             modified_expr = modified_expr.select(aliased_count, copy=False)
             if cte:
                 modified_expr.set("with_", cte.copy())
         elif isinstance(expr, exp.Select):
             modified_expr = expr.copy()
             count_window = exp.Window(this=exp.Count(this=exp.Star()))
-            aliased_count = exp.alias_(count_window, alias)
+            aliased_count = exp.alias_(count_window, alias, copy=False)
             modified_expr = modified_expr.select(aliased_count, copy=False)
         else:
             msg = "COUNT(*) OVER() can only be added to SELECT or set operation statements"

@@ -358,7 +358,7 @@ def test_sqlite_litestar_reconcile_mode_end_to_end(tmp_path: object) -> None:
         assert rows[0]["session_id"] == "keep-me"
         assert all(not str(r["version_num"]).startswith("ext_litestar_") for r in ledger)
 
-        commands.downgrade()
+        commands.downgrade("base")
         with config.provide_session() as session:
             remaining_tables = {
                 str(tbl["table_name"]).casefold() for tbl in session.data_dictionary.get_tables(session)

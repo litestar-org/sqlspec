@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Final, NoReturn, Self, cast
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot import optimizer as sqlglot_optimizer
 from sqlglot.dialects.dialect import DialectType
@@ -38,6 +39,7 @@ from sqlspec.core import (
     SQL,
     ParameterStyle,
     ParameterStyleConfig,
+    ParameterValidator,
     StatementConfig,
     get_cache,
     get_cache_config,
@@ -45,6 +47,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
+from sqlspec.core.query_modifiers import sanitize_parameter_name
 from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
@@ -66,6 +69,7 @@ _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 _UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
 SUBQUERY_PARAMETERS_META_KEY: Final[str] = "sqlspec_subquery_parameters"
 _SUBQUERY_FRAGMENTS_ISSUED = False
+_PLACEHOLDER_SCANNER: Final[ParameterValidator] = ParameterValidator()
 
 
 logger = get_logger(__name__)
@@ -400,23 +404,21 @@ class QueryBuilder:
         if not parameters:
             return sql
 
-        sorted_names = sorted(parameters, key=len, reverse=True)
-        names_pattern = "|".join(re.escape(name) for name in sorted_names)
-        pattern = re.compile(rf"%\(({names_pattern})\)s|(?<![:\w])[:@$]({names_pattern})\b")
-
-        def _replace_match(match: "re.Match[str]") -> str:
-            param_name = match.group(1) or match.group(2)
-            param_value = parameters[param_name]
-            if isinstance(param_value, str):
-                escaped = param_value.replace("'", "''")
-                return f"'{escaped}'"
-            if param_value is None:
-                return "NULL"
-            if isinstance(param_value, bool):
-                return "TRUE" if param_value else "FALSE"
-            return str(param_value)
-
-        return pattern.sub(_replace_match, sql)
+        dialect_name = safe_query.dialect if isinstance(safe_query.dialect, str) else None
+        segments: list[str] = []
+        cursor = 0
+        for placeholder in _PLACEHOLDER_SCANNER.extract_parameters(sql, dialect=dialect_name):
+            if placeholder.name is None or placeholder.name not in parameters:
+                continue
+            literal = self._debug_literal(parameters[placeholder.name])
+            if literal.startswith("-") and placeholder.position > 0 and sql[placeholder.position - 1] == "-":
+                literal = f" {literal}"
+            segments.extend((sql[cursor : placeholder.position], literal))
+            cursor = placeholder.position + len(placeholder.placeholder_text)
+        if not segments:
+            return sql
+        segments.append(sql[cursor:])
+        return "".join(segments)
 
     def to_statement(self, config: "StatementConfig | None" = None) -> "SQL":
         """Converts the built query into a SQL statement object.
@@ -755,10 +757,9 @@ class QueryBuilder:
 
         if hasattr(query, "get_expression"):
             raw_query = cast("Any", query)
+            has_build_final = hasattr(raw_query, "_build_final_expression")
             raw_query_expr = (
-                raw_query._build_final_expression(copy=True)
-                if hasattr(raw_query, "_build_final_expression")
-                else raw_query.get_expression()
+                raw_query._build_final_expression(copy=True) if has_build_final else raw_query.get_expression()
             )
             if raw_query_expr is None:
                 self._raise_cte_query_error(alias, "query builder has no expression")
@@ -766,7 +767,7 @@ class QueryBuilder:
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(raw_query_expr).__name__}"
                 )
-            cte_duck_expression: exp.Expr = raw_query_expr.copy()
+            cte_duck_expression: exp.Expr = raw_query_expr if has_build_final else raw_query_expr.copy()
             if isinstance(cte_duck_expression, exp.Values) and cte_duck_expression.args.get("alias"):
                 cte_duck_expression.set("alias", None)
             if hasattr(raw_query, "parameters"):
@@ -796,6 +797,17 @@ class QueryBuilder:
         msg = "Unreachable"
         raise AssertionError(msg)
 
+    def _debug_literal(self, value: Any) -> str:
+        """Render a bound value as display text for ``to_sql(show_parameters=True)``."""
+        if isinstance(value, str):
+            escaped = value.replace("'", "''")
+            return f"'{escaped}'"
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        return str(value)
+
     def _add_parameter(self, value: Any, context: str | None = None) -> str:
         """Adds a parameter to the query and returns its placeholder name.
 
@@ -808,7 +820,11 @@ class QueryBuilder:
         """
         self._parameter_counter += 1
 
-        param_name = f"{context}_param_{self._parameter_counter}" if context else f"param_{self._parameter_counter}"
+        param_name = (
+            f"{sanitize_parameter_name(context)}_param_{self._parameter_counter}"
+            if context
+            else f"param_{self._parameter_counter}"
+        )
 
         self._parameters[param_name] = value
         self._sync_parameter_name_counter(param_name)
@@ -904,6 +920,7 @@ class QueryBuilder:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
+        base_name = sanitize_parameter_name(base_name)
         current_index = self._parameter_name_counters.get(base_name, 0)
 
         if base_name not in self._parameters:
@@ -1054,14 +1071,14 @@ class QueryBuilder:
                 columns = keys or (schema.expressions if isinstance(schema, exp.Schema) else None)
                 if not columns:
                     self._raise_builder_error("MySQL DO NOTHING requires a conflict column or explicit insert columns.")
-                column = exp.column(columns[0].name)
+                column = exp.column(columns[0].name, copy=False)
                 assignments = [exp.EQ(this=column, expression=column.copy())]
             elif not assignments:
                 self._raise_builder_error("ON CONFLICT DO UPDATE requires at least one assignment.")
             for assignment in assignments:
                 for column in list(assignment.find_all(exp.Column)):
                     if column.table.lower() == "excluded":
-                        column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name)]))
+                        column.replace(exp.Anonymous(this="VALUES", expressions=[exp.column(column.name, copy=False)]))
             conflict.replace(exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=assignments))
         return expression
 
@@ -1335,7 +1352,7 @@ class QueryBuilder:
         Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
         removed to keep lookups aligned with how unquoted DDL created the objects.
         """
-        return expression.copy().transform(_unquote_identifier, copy=False)
+        return expression.transform(_unquote_identifier, copy=False)
 
     def _strip_merge_target_quotes(self, sql_string: str) -> str:
         if sql_string.startswith('MERGE INTO "') and not self._merge_target_quoted:
@@ -1372,6 +1389,24 @@ class ExpressionBuilder(QueryBuilder):
         return self._expression
 
 
+def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
+    """Mark a subquery fragment and attach its bound parameters for later merging.
+
+    Args:
+        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
+        parameters: Parameters bound by the fragment's subquery builder.
+
+    Returns:
+        The same expression, carrying ``parameters`` in its metadata when any exist.
+    """
+    global _SUBQUERY_FRAGMENTS_ISSUED
+    _SUBQUERY_FRAGMENTS_ISSUED = True
+    if parameters:
+        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
+    return expression
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _BuilderCacheEntry:
     __slots__ = ("dialect", "expression")
 
@@ -1380,6 +1415,7 @@ class _BuilderCacheEntry:
         self.dialect = dialect
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _ExpressionParameterizer:
     __slots__ = ("_builder",)
 
@@ -1392,7 +1428,10 @@ class _ExpressionParameterizer:
                 return node
 
             parent = node.parent
-            if isinstance(parent, exp.Array) and has_vector_distance_ancestor(node):
+            is_vector_array_element = isinstance(parent, exp.Array) or (
+                isinstance(parent, exp.Neg) and isinstance(parent.parent, exp.Array)
+            )
+            if is_vector_array_element and has_vector_distance_ancestor(node):
                 return node
 
             value = node.this
@@ -1407,6 +1446,7 @@ class _ExpressionParameterizer:
         return node
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _PlaceholderReplacer:
     __slots__ = ("_param_mapping",)
 
@@ -1582,20 +1622,3 @@ def _tsql_target_reference(target: exp.Table) -> exp.Table:
     if target.alias:
         return exp.Table(this=exp.to_identifier(target.alias))
     return target.copy()
-
-
-def register_subquery_fragment(expression: exp.Expr, parameters: "Mapping[str, Any]") -> exp.Expr:
-    """Mark a subquery fragment and attach its bound parameters for later merging.
-
-    Args:
-        expression: The ``EXISTS`` / ``IN`` / ``ANY`` / ``ALL`` fragment.
-        parameters: Parameters bound by the fragment's subquery builder.
-
-    Returns:
-        The same expression, carrying ``parameters`` in its metadata when any exist.
-    """
-    global _SUBQUERY_FRAGMENTS_ISSUED
-    _SUBQUERY_FRAGMENTS_ISSUED = True
-    if parameters:
-        expression.meta[SUBQUERY_PARAMETERS_META_KEY] = dict(parameters)
-    return expression

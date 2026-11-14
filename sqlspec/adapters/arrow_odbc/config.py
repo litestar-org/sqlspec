@@ -140,8 +140,9 @@ class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            _close_arrow_odbc_connection(self._connection)
+            connection = self._connection
             self._connection = None
+            _release_arrow_odbc_connection(self._config, connection, exc_type)
         return None
 
 
@@ -161,8 +162,14 @@ class _ArrowOdbcSessionConnectionHandler(SyncPoolSessionFactory):
     def release_connection(self, _conn: "ArrowOdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
-        _close_arrow_odbc_connection(self._connection)
+        connection = self._connection
         self._connection = None
+        _release_arrow_odbc_connection(
+            self._config,
+            connection,
+            kwargs.get("exc_type"),
+            already_rolled_back=bool(kwargs.get("already_rolled_back", False)),
+        )
 
 
 class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
@@ -367,6 +374,27 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
     """Close connection objects from compatible wrappers when they expose close()."""
     if supports_close(connection):
         connection.close()
+
+
+def _release_arrow_odbc_connection(
+    config: "ArrowOdbcConfig",
+    connection: "ArrowOdbcConnection",
+    exc_type: "type[BaseException] | None",
+    *,
+    already_rolled_back: bool = False,
+) -> None:
+    """Close an owned connection, or roll back and preserve a caller-supplied connection_instance."""
+    if config.connection_instance is None or connection is not config.connection_instance:
+        _close_arrow_odbc_connection(connection)
+        return
+    assert connection is not None
+    if already_rolled_back or config.driver_features.get("connection_autocommit", True):
+        return
+    try:
+        connection.rollback()
+    except BaseException:
+        if exc_type is None:
+            raise
 
 
 def _resolve_connection_dialect_hint(features: "Mapping[str, Any]") -> str | None:

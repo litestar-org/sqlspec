@@ -6,7 +6,7 @@ import socket
 import threading
 from collections.abc import Generator
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
@@ -40,6 +40,7 @@ from sqlspec.adapters.sybase.litestar import SybaseStore
 from sqlspec.adapters.sybase.migrations import SybaseSyncMigrationTracker
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.data_dictionary.dialects.sybase import SybaseVersionInfo
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -58,6 +59,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk.migrations.reconcile import reconcile as adk_reconcile
 from sqlspec.extensions.events.migrations.reconcile import reconcile as events_reconcile
 from sqlspec.extensions.litestar.migrations.reconcile import reconcile as litestar_reconcile
@@ -174,9 +176,26 @@ def test_sybase_tracking_table_guard_uses_native_object_id(
     with config.provide_session() as driver:
         SybaseSyncMigrationTracker(version_table_name="audit.ddl_migrations").ensure_tracking_table(driver)
 
+    assert driver.connection is _DETACHED_CONNECTION
     assert cursor.calls[0][0].startswith(
         "IF OBJECT_ID('[audit].[ddl_migrations]') IS NULL EXECUTE('CREATE TABLE [audit].[ddl_migrations]"
     )
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_sybase_provide_session_detaches_driver_on_exit(
+    recording_sybase_config: tuple[SybaseConfig, FakeCursor], body_raises: bool
+) -> None:
+    """SybaseConfig.provide_session detaches the yielded driver on clean and error exit."""
+    config, _cursor = recording_sybase_config
+    if body_raises:
+        with pytest.raises(RuntimeError, match="sybase body error"), config.provide_session() as session:
+            raise RuntimeError("sybase body error")
+    else:
+        with config.provide_session() as session:
+            pass
+
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_sybase_adk_lifecycle_uses_native_object_id(recording_sybase_config: tuple[SybaseConfig, FakeCursor]) -> None:
@@ -228,15 +247,19 @@ def test_sybase_adk_events_use_top_for_bounded_queries(
 
     statement, parameters = cursor.calls[-1]
     sql = " ".join(statement.split())
-    prefix = "SELECT TOP %s id," if limit is not None else "SELECT id,"
+    prefix = "SELECT TOP %s e.id," if limit is not None else "SELECT e.id,"
     assert sql.startswith(prefix)
-    assert sql.endswith("ORDER BY timestamp ASC")
+    assert (
+        "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in sql
+    )
+    assert "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s" in sql
+    assert sql.endswith("ORDER BY e.timestamp ASC")
     expected: tuple[Any, ...] = ("app", "user", "session")
     if limit is not None:
         expected = (limit, *expected)
     if after is not None:
         expected = (*expected, after)
-        assert "AND timestamp > %s" in sql
+        assert "AND e.timestamp > %s" in sql
     assert parameters == expected
 
 
@@ -1267,7 +1290,7 @@ def test_sybase_reconcile_adk_targets_ddl_unchanged_and_guarded_index_repair() -
         "metadata_json TEXT NULL, "
         "inserted_at BIGDATETIME DEFAULT GETUTCDATE() NOT NULL, "
         "CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), "
-        "CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id)"
+        "CONSTRAINT [uq_adk_memory_event_id] UNIQUE (app_name, user_id, event_id)"
         ")');"
     )
     assert adk_store._sessions_table_ddl() == expected_sessions_ddl
@@ -1374,3 +1397,287 @@ def test_replica_url_override_replaces_freetds_alias() -> None:
 def test_invalid_replica_endpoints_fail_before_pool_creation(endpoint: str) -> None:
     with pytest.raises(ImproperConfigurationError):
         SybaseConfig(connection_config={"server": "writer"}, replicas=[endpoint])
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_sybase_pool_checkin_rolls_back_only_when_autocommit_off(
+    monkeypatch: pytest.MonkeyPatch, autocommit: bool
+) -> None:
+    """SybaseConnectionPool rolls back on outermost checkin only when autocommit_state is False."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    connection = FakeConnection()
+    connection.autocommit(autocommit)
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: connection))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert connection.rollbacks == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()
+
+
+def test_sybase_pool_closes_on_failed_hook_and_failed_checkin_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseConnectionPool closes sockets on failed _on_connection_create and retires on failed rollback."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn))
+    hook_pool = SybaseConnectionPool(
+        {"server": "ase.example.test"},
+        on_connection_create=lambda _c: (_ for _ in ()).throw(RuntimeError("ase hook failed")),
+    )
+    with pytest.raises(RuntimeError, match="ase hook failed"):
+        hook_pool.new_connection()
+    assert hook_conn.closed is True
+
+    first = FakeConnection()
+    first.autocommit(False)
+    second = FakeConnection()
+    conns = [first, second]
+    monkeypatch.setattr(first, "rollback", MagicMock(side_effect=OSError("ase rollback broken")))
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: conns.pop(0)))
+    pool = SybaseConnectionPool({"server": "ase.example.test"}, recycle_seconds=0, health_check_interval=0)
+    try:
+        with pytest.raises(OSError, match="ase rollback broken"), pool.get_connection():
+            pass
+        assert first.closed is True
+        assert pool.checked_out() == 0
+        assert pool.size() == 0
+        with pool.get_connection() as fresh:
+            assert cast("object", fresh) is second
+    finally:
+        pool.close()
+
+
+def _sybase_event_fixture(**overrides: Any) -> StoredEvent:
+    payload: dict[str, Any] = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "event_data": {"text": "hello"},
+    }
+    payload.update(overrides)
+    return cast("StoredEvent", payload)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expect_renew"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_sybase_adk_get_session_renews_only_for_positive_duration(
+    monkeypatch: pytest.MonkeyPatch, renew_for: "int | timedelta | None", expect_renew: bool
+) -> None:
+    """SybaseADKStore.get_session executes UPDATE only when renew_for is positive."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    writes: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_execute(_self: SybaseADKStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        writes.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SybaseADKStore, "_execute", capture_execute)
+    monkeypatch.setattr(
+        SybaseADKStore, "_execute_fetchone", lambda *_a, **_kw: ("s1", "app", "u1", '{"step":1}', now, now)
+    )
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    session = SybaseADKStore(cast("Any", config)).get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    assert session["id"] == "s1"
+    if expect_renew:
+        assert writes == [
+            (
+                (
+                    "UPDATE [dbo].[adk_session] SET update_time = GETUTCDATE() "
+                    "WHERE app_name = %s AND user_id = %s AND id = %s"
+                ),
+                ("app", "u1", "s1"),
+            )
+        ]
+    else:
+        assert writes == []
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-or-unowned"])
+def test_sybase_adk_append_event_verifies_session_ownership(session_exists: bool) -> None:
+    """SybaseADKStore.append_event probes session ownership before inserting and rolls back when unowned."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.fetchone.return_value = (1,) if session_exists else None
+    store = SybaseADKStore(cast("Any", config))
+
+    if session_exists:
+        store.append_event(_sybase_event_fixture())
+        assert cursor.execute.call_count == 2
+        ownership_sql, ownership_params = cursor.execute.call_args_list[0].args
+        insert_sql, _ = cursor.execute.call_args_list[1].args
+        assert " ".join(ownership_sql.split()) == (
+            "SELECT TOP 1 1 FROM [dbo].[adk_session] WHERE id = %s AND app_name = %s AND user_id = %s"
+        )
+        assert ownership_params == ("s1", "app", "u1")
+        assert " ".join(insert_sql.split()).startswith("INSERT INTO [dbo].[adk_event]")
+        conn.commit.assert_called_once()
+        conn.rollback.assert_not_called()
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            store.append_event(_sybase_event_fixture())
+        assert cursor.execute.call_count == 1
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"app_name": "other"}, id="app-mismatch"),
+        pytest.param({"user_id": "other"}, id="user-mismatch"),
+        pytest.param({"session_id": "other"}, id="session-mismatch"),
+    ],
+)
+def test_sybase_adk_append_event_and_update_state_rejects_mismatched_scope(overrides: "dict[str, str]") -> None:
+    """Mismatched event scope fails before acquiring a Sybase connection."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    store = SybaseADKStore(cast("Any", config))
+
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state(_sybase_event_fixture(**overrides), "app", "u1", "s1", {"step": 2})
+
+    config.provide_connection.assert_not_called()
+
+
+@pytest.mark.parametrize("session_exists", [True, False], ids=["owned-session", "missing-session"])
+def test_sybase_adk_append_event_and_update_state_orders_update_before_insert(session_exists: bool) -> None:
+    """SybaseADKStore.append_event_and_update_state updates and checks session row before inserting event."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.fetchone.return_value = ("s1", "app", "u1", '{"step":2}', now, now) if session_exists else None
+    store = SybaseADKStore(cast("Any", config))
+
+    if session_exists:
+        session = store.append_event_and_update_state(_sybase_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert session["state"] == {"step": 2}
+        executed_sql = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
+        assert len(executed_sql) == 3
+        assert executed_sql[0].startswith("UPDATE [dbo].[adk_session]")
+        assert executed_sql[1].startswith("SELECT TOP 1 id, app_name")
+        assert executed_sql[2].startswith("INSERT INTO [dbo].[adk_event]")
+        conn.commit.assert_called_once()
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            store.append_event_and_update_state(_sybase_event_fixture(), "app", "u1", "s1", {"step": 2})
+        assert cursor.execute.call_count == 2
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+def test_sybase_adk_delete_session_deletes_scoped_events_before_session() -> None:
+    """SybaseADKStore.delete_session removes scoped events before deleting the session row."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    SybaseADKStore(cast("Any", config)).delete_session("app", "u1", "s1")
+
+    executed = [(" ".join(c.args[0].split()), c.args[1]) for c in cursor.execute.call_args_list]
+    assert executed == [
+        ("DELETE FROM [dbo].[adk_event] WHERE app_name = %s AND user_id = %s AND session_id = %s", ("app", "u1", "s1")),
+        ("DELETE FROM [dbo].[adk_session] WHERE app_name = %s AND user_id = %s AND id = %s", ("app", "u1", "s1")),
+    ]
+    conn.commit.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(None, None, "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s", ("s1",), id="session-only"),
+        pytest.param(
+            "app",
+            None,
+            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND app_name = %s",
+            ("s1", "app"),
+            id="session-and-app",
+        ),
+        pytest.param(
+            None,
+            "u1",
+            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND user_id = %s",
+            ("s1", "u1"),
+            id="session-and-user",
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND app_name = %s AND user_id = %s",
+            ("s1", "app", "u1"),
+            id="session-app-and-user",
+        ),
+    ],
+)
+def test_sybase_adk_memory_dedup_and_scoped_delete_entries_by_session(
+    monkeypatch: pytest.MonkeyPatch,
+    app_name: "str | None",
+    user_id: "str | None",
+    expected_sql: str,
+    expected_params: "tuple[str, ...]",
+) -> None:
+    """SybaseADKMemoryStore deduplicates on (app_name, user_id, event_id) and scopes session deletes."""
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.rowcount = 1
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "u1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+    SybaseADKMemoryStore(cast("Any", config)).insert_memory_entries([entry])
+    insert_sql, insert_params = cursor.execute.call_args.args
+    assert (
+        "WHERE NOT EXISTS ( SELECT 1 FROM [dbo].[adk_memory] HOLDLOCK "
+        "WHERE app_name = %s AND user_id = %s AND event_id = %s )"
+    ) in " ".join(insert_sql.split())
+    assert insert_params[-3:] == ("app", "u1", "evt-1")
+
+    delete_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture_delete(_self: SybaseADKMemoryStore, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        delete_calls.append((" ".join(sql.split()), tuple(params)))
+        return 1
+
+    monkeypatch.setattr(SybaseADKMemoryStore, "_execute", capture_delete)
+    assert (
+        SybaseADKMemoryStore(cast("Any", config)).delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+        == 1
+    )
+    assert delete_calls == [(expected_sql, expected_params)]

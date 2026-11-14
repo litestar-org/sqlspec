@@ -4,11 +4,16 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 from unittest.mock import MagicMock, call
 
 import pytest
 
+from sqlspec.adapters.adbc._typing import AdbcSessionContext
+from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
+from sqlspec.core import StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 
@@ -482,3 +487,89 @@ def test_adbc_pool_rejects_fork_before_inherited_locks(monkeypatch: pytest.Monke
             operation()
     create.assert_not_called()
     lease.close.assert_not_called()
+
+
+@pytest.mark.parametrize("entry", ["provide_connection", "provide_session"])
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_adbc_caller_connection_instance_rolled_back_and_not_closed(entry: str, autocommit: bool) -> None:
+    """Caller-supplied connection_instance is rolled back when autocommit=False, kept open, and detached per session."""
+    conn = MagicMock()
+    conn.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "autocommit": autocommit}, connection_instance=conn)
+    with getattr(config, entry)() as first:
+        if entry == "provide_session":
+            assert first.connection is conn
+    if entry == "provide_session":
+        assert first.connection is _DETACHED_CONNECTION
+
+    with getattr(config, entry)() as second:
+        if entry == "provide_session":
+            assert second.connection is conn
+    if entry == "provide_session":
+        assert second.connection is _DETACHED_CONNECTION
+
+    conn.close.assert_not_called()
+    assert conn.rollback.call_count == (0 if autocommit else 2)
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+def test_adbc_session_context_rolls_back_active_driver_transaction(body_raises: bool) -> None:
+    """AdbcSessionContext rolls back an active driver transaction before release, detaches, and propagates clean-exit errors."""
+    conn = MagicMock()
+    release = MagicMock()
+    rollback_err = RuntimeError("adbc rollback failed")
+    fake_driver = MagicMock()
+    fake_driver.has_streams = False
+    fake_driver._connection_in_transaction.return_value = True
+    fake_driver.rollback.side_effect = rollback_err
+
+    ctx = AdbcSessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=release,
+        statement_config=StatementConfig(dialect="sqlite"),
+        driver_features={},
+        prepare_driver=lambda d: d,
+        driver_class=cast("Any", MagicMock(return_value=fake_driver)),
+    )
+    expected_exc = ValueError if body_raises else RuntimeError
+    with pytest.raises(expected_exc) as caught, ctx:
+        if body_raises:
+            raise ValueError("adbc body failed")
+
+    if not body_raises:
+        assert caught.value is rollback_err
+    fake_driver.rollback.assert_called_once_with()
+    release.assert_called_once()
+    fake_driver._detach_connection.assert_called_once_with()
+    assert release.call_args.kwargs["exc_type"] is (ValueError if body_raises else RuntimeError)
+    assert release.call_args.kwargs["already_rolled_back"] is True
+
+
+def test_adbc_session_context_enter_failure_detaches_constructed_driver() -> None:
+    """AdbcSessionContext.__enter__ detaches a constructed driver when prepare_driver raises."""
+    conn = MagicMock()
+    conn.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    captured: list[Any] = []
+    released_while_attached: list[bool] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("adbc prepare failed")
+
+    def release(released_conn: Any, **kwargs: Any) -> None:
+        assert released_conn is conn
+        assert kwargs["driver"] is captured[0]
+        released_while_attached.append(captured[0].connection is conn)
+
+    ctx = AdbcSessionContext(
+        acquire_connection=lambda: conn,
+        release_connection=release,
+        statement_config=StatementConfig(dialect="sqlite"),
+        driver_features={},
+        prepare_driver=fail_prepare,
+    )
+    with pytest.raises(RuntimeError, match="adbc prepare failed"), ctx:
+        pytest.fail("prepare failure must abort __enter__")
+
+    assert released_while_attached == [True]
+    assert captured[0].connection is _DETACHED_CONNECTION

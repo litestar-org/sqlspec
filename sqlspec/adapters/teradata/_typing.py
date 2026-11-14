@@ -97,14 +97,20 @@ class TeradataSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
-            self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
-            self._connection = None
-            self._driver = None
+            driver = self._driver
+            try:
+                self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            finally:
+                self._connection = None
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
             raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        driver = self._driver
         try:
             if self._driver is not None:
                 self._driver._release_open_work()
@@ -118,4 +124,6 @@ class TeradataSessionContext:
         finally:
             self._connection = None
             self._driver = None
+            if driver is not None:
+                driver._detach_connection()
         return None

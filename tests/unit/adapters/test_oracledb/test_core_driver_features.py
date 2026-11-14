@@ -27,10 +27,13 @@ from sqlspec.adapters.oracledb.core import (
     apply_driver_features,
     apply_wallet_ssl_context,
     build_duality_etag_update_sql,
+    build_insert_statement,
     build_tns_description,
+    build_truncate_statement,
     extract_duality_etag,
     extract_duality_view_etag,
     extract_oracle_wallet_zip,
+    format_oracle_table_identifier,
     inject_duality_view_etag,
     sanitize_oracle_text_query,
 )
@@ -789,3 +792,38 @@ def test_unchanged_transaction_priority_does_not_assign_native_property() -> Non
             raise RuntimeError("priority assignment rejected during active transaction")
 
     apply_oracle_transaction_priority(Connection(), TransactionPriority.HIGH)
+
+
+@pytest.mark.parametrize(
+    ("raw_table", "expected_table"),
+    [
+        ("users", "users"),
+        ("hr.employees", "hr.employees"),
+        ('"HR"."emp""1"', '"HR"."emp""1"'),
+        ('"mig\'versions"', '"mig\'versions"'),
+    ],
+)
+def test_format_oracle_table_identifier_and_statement_builders(raw_table: str, expected_table: str) -> None:
+    """Oracle table identifier formatter preserves valid unquoted and quoted identifiers."""
+    assert format_oracle_table_identifier(raw_table) == expected_table
+    assert build_truncate_statement(raw_table) == f"TRUNCATE TABLE {expected_table}"
+    assert (
+        build_insert_statement(raw_table, ["id", "user"])
+        == f'INSERT INTO {expected_table} (id, "user") VALUES (:1, :2)'
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_table", ["", "   ", "bad;table", "a.b.c", "hr.", ".emp", '"unclosed', '"bad"inner"', "tbl\x00"]
+)
+def test_format_oracle_table_identifier_rejects_malformed_identifiers(bad_table: str) -> None:
+    """Malformed Oracle table identifiers raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        format_oracle_table_identifier(bad_table)
+
+
+@pytest.mark.parametrize("bad_col", ["", "col\x00", "col\nname"])
+def test_build_insert_statement_rejects_control_column_names(bad_col: str) -> None:
+    """Empty or control-bearing column names in Oracle INSERT statements raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_insert_statement("users", [bad_col])

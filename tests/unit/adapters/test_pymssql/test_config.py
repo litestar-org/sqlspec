@@ -1,19 +1,22 @@
 """pymssql configuration tests."""
 
 from dataclasses import dataclass
-from typing import Any, get_type_hints
+from typing import Any, cast, get_type_hints
 
 import pytest
 
 import sqlspec.adapters.pymssql.pool as _pymssql_pool
 from sqlspec.adapters.pymssql import build_connection_config
+from sqlspec.adapters.pymssql._typing import PymssqlSessionContext
 from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams, PymssqlDriverFeatures
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
+from tests.unit.adapters.test_pymssql._fakes import FakeConnection
 
 
 def test_connection_params_cover_common_pymssql_keywords() -> None:
@@ -141,12 +144,7 @@ def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
 
 
 def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
-    """PymssqlSessionContext rolls back an active transaction even when exiting without an exception."""
-    from typing import cast
-
-    from sqlspec.adapters.pymssql._typing import PymssqlSessionContext
-    from tests.unit.adapters.test_pymssql._fakes import FakeConnection
-
+    """PymssqlSessionContext rolls back an active transaction and detaches the driver on exit."""
     calls: list[str] = []
     conn = FakeConnection()
     conn.autocommit(False)
@@ -164,6 +162,7 @@ def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
 
     assert conn.rollbacks == 1
     assert calls == ["release"]
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_use_datetime2_default() -> None:
@@ -295,6 +294,8 @@ def test_tenant_config_nested_sessions_have_distinct_connections(monkeypatch: py
         assert first.connection is connections[0]
         assert second.connection is connections[1]
         assert first.connection is not second.connection
+    assert first.connection is _DETACHED_CONNECTION
+    assert second.connection is _DETACHED_CONNECTION
     assert calls == ["checkout:a", "checkout:a", "rollback", "checkin:a", "close", "rollback", "checkin:a", "close"]
 
 

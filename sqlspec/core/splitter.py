@@ -28,6 +28,7 @@ from sqlspec.core.cache import CacheKey, LRUCache
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
+    "MAX_CACHEABLE_SCRIPT_BYTES",
     "DialectConfig",
     "OracleDialectConfig",
     "PostgreSQLDialectConfig",
@@ -36,6 +37,7 @@ __all__ = (
     "TSQLDialectConfig",
     "Token",
     "TokenType",
+    "contains_statement_terminator",
     "split_sql_script",
 )
 
@@ -50,6 +52,19 @@ _DOLLAR_QUOTE_START_PATTERN: Final[Pattern[str]] = re.compile(r"\$([a-zA-Z_][a-z
 DEFAULT_PATTERN_CACHE_SIZE: Final = 1000
 DEFAULT_RESULT_CACHE_SIZE: Final = 5000
 DEFAULT_CACHE_TTL: Final = 3600
+MAX_CACHEABLE_SCRIPT_BYTES: Final[int] = 8192
+
+_TRANSACTION_BEGIN_PATTERN: Final[str] = (
+    r"\bBEGIN\b(?=\s*(?:;|\Z|(?:TRANSACTION|TRAN|WORK|DEFERRED|IMMEDIATE|EXCLUSIVE|DISTRIBUTED)\b(?!\s*(?:\.|:=|\())))"
+)
+_WORD_PATTERN: Final[str] = r"[A-Za-z_][A-Za-z0-9_$]*"
+_BACKSLASH_STRING_PATTERN: Final[str] = r"'(?:''|\\.|[^'\\])*'"
+_BACKSLASH_DOUBLE_QUOTED_PATTERN: Final[str] = r'"(?:""|\\.|[^"\\])*"'
+_ESCAPE_STRING_PATTERN: Final[str] = r"(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*'"
+_BRACKET_IDENTIFIER_PATTERN: Final[str] = r"\[(?:\]\]|[^\]])*\]"
+_ORACLE_Q_STRING_PATTERN: Final[str] = (
+    r"(?<![A-Za-z0-9_])N?Q'(?:\[[\s\S]*?\]'|\{[\s\S]*?\}'|\([\s\S]*?\)'|<[\s\S]*?>'|([^\s\[{(<'])[\s\S]*?\1')"
+)
 
 DIALECT_CONFIG_SLOTS: Final = (
     "_block_starters",
@@ -191,14 +206,15 @@ class DialectConfig:
         Returns:
             List of tuples containing token types and their regex patterns
         """
-        patterns: list[tuple[TokenType, TokenPattern]] = [
+        patterns: list[tuple[TokenType, TokenPattern]] = list(self._get_dialect_specific_patterns())
+        patterns.extend([
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
-            (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
+            (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?(?:\*/|\Z)"),
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
             (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]|`(?:[^`]|``)*`'),
-        ]
-
-        patterns.extend(self._get_dialect_specific_patterns())
+        ])
+        if _BEGIN_BLOCK_KEYWORD in self.block_starters and self.name != "oracle":
+            patterns.append((TokenType.OTHER, _TRANSACTION_BEGIN_PATTERN))
 
         all_keywords = self.block_starters | self.block_enders | self.batch_separators
         if all_keywords:
@@ -209,7 +225,7 @@ class DialectConfig:
         if all_terminators:
             patterns.append((TokenType.TERMINATOR, "|".join(re.escape(t) for t in all_terminators)))
 
-        patterns.extend([(TokenType.WHITESPACE, r"\s+"), (TokenType.OTHER, r".")])
+        patterns.extend([(TokenType.WHITESPACE, r"\s+"), (TokenType.OTHER, _WORD_PATTERN), (TokenType.OTHER, r".")])
 
         return patterns
 
@@ -369,6 +385,14 @@ class OracleDialectConfig(_EagerDialectConfig):
             break
         return True
 
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get Oracle-specific token patterns.
+
+        Returns:
+            Alternative-quoting string literal pattern
+        """
+        return [(TokenType.STRING_LITERAL, _ORACLE_Q_STRING_PATTERN)]
+
     def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
         """Create Oracle special terminator handlers."""
         return {"/": self._handle_slash_terminator}
@@ -439,12 +463,20 @@ class TSQLDialectConfig(_EagerDialectConfig):
     _BLOCK_ENDERS = frozenset({"END", "CATCH"})
     _BATCH_SEPARATORS = frozenset({"GO"})
 
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get T-SQL-specific token patterns.
+
+        Returns:
+            Bracketed identifier pattern honoring doubled closing brackets
+        """
+        return [(TokenType.QUOTED_IDENTIFIER, _BRACKET_IDENTIFIER_PATTERN)]
+
 
 class PostgreSQLDialectConfig(_EagerDialectConfig):
     """Configuration for PostgreSQL dialect with dollar-quoted strings."""
 
     _DIALECT_NAME = "postgresql"
-    _BLOCK_STARTERS = frozenset({"DECLARE", "CASE", "DO"})
+    _BLOCK_STARTERS = frozenset({"CASE", "BEGIN ATOMIC"})
 
     def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
         """Get PostgreSQL-specific token patterns.
@@ -452,7 +484,11 @@ class PostgreSQLDialectConfig(_EagerDialectConfig):
         Returns:
             List of dialect-specific token patterns
         """
-        return [(TokenType.STRING_LITERAL, self._handle_dollar_quoted_string)]
+        return [
+            (TokenType.STRING_LITERAL, self._handle_dollar_quoted_string),
+            (TokenType.STRING_LITERAL, _ESCAPE_STRING_PATTERN),
+            (TokenType.KEYWORD, r"\bBEGIN\s+ATOMIC\b"),
+        ]
 
     @staticmethod
     def _handle_dollar_quoted_string(text: str, position: int, line: int, column: int) -> Token | None:
@@ -470,20 +506,7 @@ class PostgreSQLDialectConfig(_EagerDialectConfig):
         Returns:
             Token representing the dollar-quoted string, or None if no match
         """
-        start_match = _DOLLAR_QUOTE_START_PATTERN.match(text, position)
-        if not start_match:
-            return None
-
-        tag = start_match.group(0)
-        content_start = position + len(tag)
-
-        try:
-            content_end = text.index(tag, content_start)
-            full_value = text[position : content_end + len(tag)]
-
-            return Token(type=TokenType.STRING_LITERAL, value=full_value, line=line, column=column, position=position)
-        except ValueError:
-            return None
+        return _dollar_quoted_token(text, position, line, column)
 
 
 @final
@@ -492,6 +515,15 @@ class GenericDialectConfig(_EagerDialectConfig):
 
     _DIALECT_NAME = "generic"
     _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
+
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get generic token patterns covering common quote extensions."""
+        return [
+            (TokenType.STRING_LITERAL, _dollar_quoted_token),
+            (TokenType.STRING_LITERAL, _ESCAPE_STRING_PATTERN),
+            (TokenType.STRING_LITERAL, _BACKSLASH_STRING_PATTERN),
+            (TokenType.STRING_LITERAL, _BACKSLASH_DOUBLE_QUOTED_PATTERN),
+        ]
 
 
 @final
@@ -504,6 +536,18 @@ class MySQLDialectConfig(_EagerDialectConfig):
         ("\\g", _special_terminator_true),
         ("\\G", _special_terminator_true),
     )
+
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get MySQL-specific token patterns.
+
+        Returns:
+            Hash comment and backslash-escaped string patterns
+        """
+        return [
+            (TokenType.COMMENT_LINE, r"#[^\n]*"),
+            (TokenType.STRING_LITERAL, _BACKSLASH_STRING_PATTERN),
+            (TokenType.STRING_LITERAL, _BACKSLASH_DOUBLE_QUOTED_PATTERN),
+        ]
 
 
 @final
@@ -520,6 +564,14 @@ class DuckDBDialectConfig(_EagerDialectConfig):
 
     _DIALECT_NAME = "duckdb"
     _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get DuckDB-specific token patterns.
+
+        Returns:
+            Dollar-quoted string literal handler
+        """
+        return [(TokenType.STRING_LITERAL, _dollar_quoted_token)]
 
 
 @final
@@ -580,6 +632,14 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "pgtextsearch": PostgreSQLDialectConfig,
     "pgvector": PostgreSQLDialectConfig,
     "mysql": MySQLDialectConfig,
+    "mariadb": MySQLDialectConfig,
+    "cockroach": PostgreSQLDialectConfig,
+    "cockroachdb": PostgreSQLDialectConfig,
+    "sybase": TSQLDialectConfig,
+    "ase": TSQLDialectConfig,
+    "sqlanywhere": TSQLDialectConfig,
+    "teradata": GenericDialectConfig,
+    "vantage": GenericDialectConfig,
     "sqlite": SQLiteDialectConfig,
     "duckdb": DuckDBDialectConfig,
     "bigquery": BigQueryDialectConfig,
@@ -632,6 +692,8 @@ class StatementSplitter:
         Returns:
             List of individual SQL statements
         """
+        if len(sql) > MAX_CACHEABLE_SCRIPT_BYTES:
+            return self._do_split(sql)
         cache_key = CacheKey(("split", self._dialect.name, sql, self._strip_trailing_semicolon))
 
         cached_result = self._result_cache.get(cache_key)
@@ -753,15 +815,14 @@ class StatementSplitter:
         current_statement_chars: list[str] = []
         current_statement_fragment_count = 0
         block_stack: list[str] = []
+        paren_depth = 0
         dialect = self._dialect
         block_starters = dialect.block_starters
         block_enders = dialect.block_enders
-        statement_terminators = dialect.statement_terminators
         special_terminators = dialect.special_terminators
         batch_separators = dialect.batch_separators
         max_nesting_depth = dialect.max_nesting_depth
         is_real_block_ender = dialect.is_real_block_ender
-        should_delay_semicolon_termination = dialect.should_delay_semicolon_termination
         is_snowflake = dialect.name == "snowflake"
 
         all_tokens = self._tokenize(sql)
@@ -780,6 +841,8 @@ class StatementSplitter:
             token_upper = token.value.upper()
 
             if token.type == TokenType.KEYWORD:
+                if token_upper not in block_starters and token_upper not in block_enders:
+                    token_upper = " ".join(token_upper.split())
                 if token_upper in block_starters:
                     if (
                         is_snowflake
@@ -797,22 +860,17 @@ class StatementSplitter:
                     token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)
                 ):
                     block_stack.pop()
+            elif token.type == TokenType.OTHER:
+                if token.value == "(":
+                    paren_depth += 1
+                elif token.value == ")" and paren_depth > 0:
+                    paren_depth -= 1
 
-            is_terminator = False
-            if not block_stack:
-                if token.type == TokenType.TERMINATOR:
-                    if token.value in statement_terminators:
-                        should_delay = should_delay_semicolon_termination(all_tokens, token_idx)
-
-                        if not should_delay:
-                            is_terminator = True
-                    elif token.value in special_terminators:
-                        handler = special_terminators[token.value]
-                        if handler(all_tokens, token_idx):
-                            is_terminator = True
-
-                elif token.type == TokenType.KEYWORD and token_upper in batch_separators:
-                    is_terminator = True
+            is_terminator = (
+                not block_stack
+                and paren_depth == 0
+                and self._is_top_level_terminator(token, token_upper, all_tokens, token_idx)
+            )
 
             if is_terminator:
                 if token.type == TokenType.KEYWORD and token_upper in batch_separators:
@@ -839,6 +897,7 @@ class StatementSplitter:
                 current_statement_writer = string_writer_type() if string_writer_type is not None else None
                 current_statement_chars = []
                 current_statement_fragment_count = 0
+                paren_depth = 0
 
         if current_statement_fragment_count:
             if current_statement_writer is None:
@@ -849,6 +908,18 @@ class StatementSplitter:
                 statements.append(statement)
 
         return statements
+
+    def _is_top_level_terminator(
+        self, token: Token, token_upper: str, all_tokens: "list[Token]", token_idx: int
+    ) -> bool:
+        """Return whether ``token`` ends the current statement at top level."""
+        dialect = self._dialect
+        if token.type == TokenType.TERMINATOR:
+            if token.value in dialect.statement_terminators:
+                return not dialect.should_delay_semicolon_termination(all_tokens, token_idx)
+            handler = dialect.special_terminators.get(token.value)
+            return bool(handler and handler(all_tokens, token_idx))
+        return token.type == TokenType.KEYWORD and token_upper in dialect.batch_separators
 
     @staticmethod
     def _is_plsql_block(tokens: "list[Token]") -> bool:
@@ -895,22 +966,16 @@ def split_sql_script(script: str, dialect: str | None = None, strip_trailing_ter
     Returns:
         List of individual SQL statements
     """
-    dialect_key = "generic" if dialect is None else dialect.lower()
-
-    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
-    if config_class is None:
-        _warn_unknown_dialect_once(dialect)
-        config_class = GenericDialectConfig
-
-    cache_key = (dialect_key, strip_trailing_terminator)
-    splitter = _splitter_cache.get(cache_key)
-    if splitter is None:
-        with _splitter_cache_lock:
-            splitter = _splitter_cache.get(cache_key)
-            if splitter is None:
-                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
-                _splitter_cache[cache_key] = splitter
+    splitter = _get_cached_splitter(dialect, strip_trailing_terminator=strip_trailing_terminator)
     return splitter.split(script)
+
+
+def contains_statement_terminator(fragment: str, dialect: str | None = None) -> bool:
+    """Return whether a SQL fragment contains a semicolon terminator outside comments, strings, and quoted identifiers."""
+    if ";" not in fragment:
+        return False
+    splitter = _get_cached_splitter(dialect, strip_trailing_terminator=False)
+    return any(token.type == TokenType.TERMINATOR and token.value == ";" for token in splitter._tokenize(fragment))
 
 
 def clear_splitter_caches() -> None:
@@ -926,6 +991,26 @@ def clear_splitter_caches() -> None:
         _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
+
+
+def _get_cached_splitter(dialect: str | None, *, strip_trailing_terminator: bool) -> StatementSplitter:
+    """Return a cached StatementSplitter for a dialect and semicolon-stripping mode."""
+    dialect_key = "generic" if dialect is None else dialect.lower()
+
+    config_class = _DIALECT_CLASS_MAP.get(dialect_key)
+    if config_class is None:
+        _warn_unknown_dialect_once(dialect)
+        config_class = GenericDialectConfig
+
+    cache_key = (dialect_key, strip_trailing_terminator)
+    splitter = _splitter_cache.get(cache_key)
+    if splitter is None:
+        with _splitter_cache_lock:
+            splitter = _splitter_cache.get(cache_key)
+            if splitter is None:
+                splitter = StatementSplitter(config_class(), strip_trailing_semicolon=strip_trailing_terminator)
+                _splitter_cache[cache_key] = splitter
+    return splitter
 
 
 def _librt_string_writer_type() -> "type[Any] | None":
@@ -979,3 +1064,21 @@ def _warn_unknown_dialect_once(dialect: "str | None") -> None:
             return
         _warned_unknown_dialects.add(key)
     logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
+
+
+def _dollar_quoted_token(text: str, position: int, line: int, column: int) -> Token | None:
+    """Match a dollar-quoted string literal in the format ``$tag$content$tag$``.
+
+    An unterminated literal extends to the end of the text, matching how the
+    server reads it and keeping the scan linear.
+    """
+    start_match = _DOLLAR_QUOTE_START_PATTERN.match(text, position)
+    if not start_match:
+        return None
+    if position and (text[position - 1].isalnum() or text[position - 1] in "_$"):
+        return None
+
+    tag = start_match.group(0)
+    content_end = text.find(tag, position + len(tag))
+    full_value = text[position:] if content_end < 0 else text[position : content_end + len(tag)]
+    return Token(type=TokenType.STRING_LITERAL, value=full_value, line=line, column=column, position=position)

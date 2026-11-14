@@ -12,7 +12,8 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import resolve_value_expression
-from sqlspec.exceptions import SQLBuilderError
+from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 from sqlspec.utils.serializers import schema_dump, serialize_collection
 
 if TYPE_CHECKING:
@@ -236,7 +237,7 @@ class ConflictBuilder:
         """
         insert_expr = self._insert_builder.get_insert_expression()
 
-        conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
+        conflict_keys = self._build_conflict_keys()
         on_conflict = exp.OnConflict(conflict_keys=conflict_keys, action=exp.var("DO NOTHING"))
 
         insert_expr.set("conflict", on_conflict)
@@ -255,7 +256,7 @@ class ConflictBuilder:
 
         set_expressions = _build_conflict_set_expressions(self._insert_builder, kwargs)
 
-        conflict_keys = [exp.to_identifier(col) for col in self._columns] if self._columns else None
+        conflict_keys = self._build_conflict_keys()
         on_conflict = exp.OnConflict(
             conflict_keys=conflict_keys, action=exp.var("DO UPDATE"), expressions=set_expressions or None
         )
@@ -263,15 +264,43 @@ class ConflictBuilder:
         insert_expr.set("conflict", on_conflict)
         return self._insert_builder
 
+    def _build_conflict_keys(self) -> list[exp.Expr] | None:
+        """Build conflict key expressions, splitting dotted column names."""
+        if not self._columns:
+            return None
+        keys: list[exp.Expr] = []
+        for col in self._columns:
+            if not isinstance(col, str) or not col.strip() or "\x00" in col:
+                msg = f"Invalid conflict column name: {col!r}"
+                raise SQLBuilderError(msg)
+            if "." in col:
+                try:
+                    keys.append(parse_column_for_condition(col))
+                except SQLSpecError as exc:
+                    raise SQLBuilderError(str(exc)) from exc
+            else:
+                keys.append(exp.to_identifier(col))
+        return keys
+
 
 def _build_conflict_set_expressions(builder: "Insert", kwargs: dict[str, Any]) -> list[exp.Expr]:
+    """Build ``column = value`` assignments for a conflict update clause.
+
+    Dotted column names are split into qualifier and column, and the bound
+    parameter is named after the unqualified column.
+    """
     set_expressions: list[exp.Expr] = []
     for col, val in kwargs.items():
-        value_expr = resolve_value_expression(val, builder, col)
+        try:
+            target = parse_column_for_condition(col)
+        except SQLSpecError as exc:
+            raise SQLBuilderError(str(exc)) from exc
+        leaf_name = col.rsplit(".", maxsplit=1)[-1]
+        value_expr = resolve_value_expression(val, builder, leaf_name)
         if value_expr is None:
-            param_name = builder.generate_unique_parameter_name(col)
+            param_name = builder.generate_unique_parameter_name(leaf_name)
             _, param_name = builder.add_parameter(val, name=param_name)
             value_expr = exp.Placeholder(this=param_name)
 
-        set_expressions.append(exp.EQ(this=exp.column(col), expression=value_expr))
+        set_expressions.append(exp.EQ(this=target, expression=value_expr))
     return set_expressions

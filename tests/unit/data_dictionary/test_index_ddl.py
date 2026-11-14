@@ -134,7 +134,7 @@ def test_sap_indexes_quote_owner_table_and_index_separately(
     metadata = {"index_name": 'idx"value', "columns": ["value"]}
     assert build_drop_index_sql(dialect, metadata, table, schema) == f'DROP INDEX {qualified}."idx""value"'
     assert build_create_index_sql(dialect, metadata, table, schema=schema) == (
-        f'CREATE INDEX "idx""value" ON {qualified} (value)'
+        f'CREATE INDEX "idx""value" ON {qualified} ("value")'
     )
 
 
@@ -154,14 +154,14 @@ def test_index_ddl_edge_cases_and_constraint_matching() -> None:
     assert build_drop_index_sql("bigquery", {"index_name": "idx_x"}, "users") is None
     assert build_drop_index_sql("snowflake", {"index_name": "idx_x"}, "users") is None
     assert build_drop_index_sql("postgres", {"index_name": ""}, "users") is None
-    assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX idx_x"
+    assert build_drop_index_sql("spanner", {"index_name": "idx_x"}, "users") == "DROP INDEX `idx_x`"
     assert build_create_index_sql("bigquery", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
     assert build_create_index_sql("snowflake", {"index_name": "idx_x", "columns": ["a"]}, "users") is None
     assert build_create_index_sql("postgres", {"index_name": "idx_x", "columns": []}, "users") is None
     unique_concurrent = build_create_index_sql(
         "postgres", {"index_name": "idx_u", "columns": "email, tenant_id", "is_unique": True}, "users", concurrent=True
     )
-    assert unique_concurrent == 'CREATE UNIQUE INDEX CONCURRENTLY "idx_u" ON users (email, tenant_id)'
+    assert unique_concurrent == 'CREATE UNIQUE INDEX CONCURRENTLY "idx_u" ON "users" ("email", "tenant_id")'
 
 
 @pytest.mark.anyio
@@ -278,10 +278,10 @@ def test_teradata_without_indexes_keeps_primary_index_and_addresses_unnamed_inde
     with SyncWithoutIndexesContext(_Driver(), "mart.orders"):
         pass
     assert executed == [
-        'DROP INDEX (region, status) ON "mart"."orders"',
+        'DROP INDEX ("region", "status") ON "mart"."orders"',
         'DROP INDEX "idx_orders_customer" ON "mart"."orders"',
-        'CREATE INDEX (region, status) ON "mart"."orders"',
-        'CREATE UNIQUE INDEX "idx_orders_customer" (cust) ON "mart"."orders"',
+        'CREATE INDEX ("region", "status") ON "mart"."orders"',
+        'CREATE UNIQUE INDEX "idx_orders_customer" ("cust") ON "mart"."orders"',
     ]
 
 
@@ -343,3 +343,68 @@ async def test_without_indexes_restores_dropped_indexes_when_a_later_drop_fails(
         pass
     async with AsyncWithoutIndexesContext(_SnowflakeNoopDriver(), "ANALYTICS.ORDERS"):
         pass
+
+
+@pytest.mark.parametrize(
+    ("dialect", "index_name", "table", "schema", "columns", "expected_drop", "expected_create"),
+    [
+        (
+            "postgres",
+            'idx"cust',
+            'ord"ers',
+            'pub"lic',
+            ['col"a DESC', "col_b ASC"],
+            'DROP INDEX IF EXISTS "pub""lic"."idx""cust"',
+            'CREATE INDEX "idx""cust" ON "pub""lic"."ord""ers" ("col""a" DESC, "col_b" ASC)',
+        ),
+        (
+            "mssql",
+            "idx]cust",
+            "ord]ers",
+            "dbo",
+            ["col]a DESC", "col_b"],
+            "DROP INDEX [idx]]cust] ON [dbo].[ord]]ers]",
+            "CREATE INDEX [idx]]cust] ON [dbo].[ord]]ers] ([col]]a] DESC, [col_b])",
+        ),
+        (
+            "mysql",
+            "idx`cust",
+            "ord`ers",
+            "app",
+            ["col`a ASC"],
+            "DROP INDEX `idx``cust` ON `app`.`ord``ers`",
+            "CREATE INDEX `idx``cust` ON `app`.`ord``ers` (`col``a` ASC)",
+        ),
+        (
+            "spanner",
+            "idx`cust",
+            "orders",
+            None,
+            ["customer_id DESC"],
+            "DROP INDEX `idx``cust`",
+            "CREATE INDEX `idx``cust` ON `orders` (`customer_id` DESC)",
+        ),
+        (
+            "oracle",
+            'idx"cust',
+            "orders",
+            "APP",
+            ["customer_id DESC"],
+            'DROP INDEX "APP"."idx""cust"',
+            'CREATE INDEX "idx""cust" ON "APP"."orders" ("customer_id" DESC)',
+        ),
+    ],
+)
+def test_index_ddl_quotes_delimiters_and_preserves_sort_direction(
+    dialect: str,
+    index_name: str,
+    table: str,
+    schema: str | None,
+    columns: list[str],
+    expected_drop: str,
+    expected_create: str,
+) -> None:
+    """Index DDL builders quote embedded delimiters and preserve ASC/DESC modifiers per dialect."""
+    meta = {"index_name": index_name, "columns": columns}
+    assert build_drop_index_sql(dialect, meta, table, schema=schema) == expected_drop
+    assert build_create_index_sql(dialect, meta, table, schema=schema) == expected_create

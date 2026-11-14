@@ -1,13 +1,14 @@
 """SQL statement and configuration management."""
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
@@ -52,8 +53,10 @@ from sqlspec.core.query_modifiers import (
     expr_neq,
     extract_column_name,
     safe_modify_with_cte,
+    sanitize_parameter_name,
     wrap_as_subquery,
 )
+from sqlspec.core.splitter import contains_statement_terminator
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
 from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
@@ -85,6 +88,10 @@ RETURNS_ROWS_OPERATIONS: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA"})
 MODIFYING_OPERATIONS: Final[frozenset[str]] = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT"})
 _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
+_STATEMENT_START_RE: Final = re.compile(
+    r"^\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COMMIT|ROLLBACK|EXEC|EXECUTE|CALL|COPY|MERGE)\b",
+    re.IGNORECASE,
+)
 
 
 SQL_CONFIG_SLOTS: Final = (
@@ -759,20 +766,34 @@ class SQL:
 
         Returns:
             New SQL instance with the WHERE condition applied
+
+        Raises:
+            SQLParsingError: If the condition is empty, contains a NUL character,
+                contains a statement separator outside quoted text, or is a
+                statement rather than a condition.
         """
         current_expr = self._current_expression()
 
         condition_expr: exp.Expr
         if isinstance(condition, str):
+            if not condition.strip() or "\x00" in condition or _has_unquoted_semicolon(condition, self._dialect):
+                msg = "WHERE condition must be a single expression without NUL characters or statement separators"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             if not self._statement_config.enable_parsing:
-                condition_expr = exp.Paren(this=exp.Var(this=condition))
+                condition_expr = _raw_condition(condition, self._dialect)
             else:
                 try:
-                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect, into=exp.Condition)
-                except ParseError:
-                    condition_expr = exp.Paren(this=exp.Var(this=condition))
+                    condition_expr = sqlglot.parse_one(condition, dialect=self._dialect)
+                except (ParseError, TokenError):
+                    condition_expr = _raw_condition(condition, self._dialect)
         else:
             condition_expr = condition
+        if (
+            not isinstance(condition_expr, exp.Condition)
+            or condition_expr.find(exp.Command, exp.DDL, exp.DML, exp.Drop, exp.Alter, exp.TruncateTable) is not None
+        ):
+            msg = f"WHERE condition must be an expression, got {type(condition_expr).__name__}"
+            raise sqlspec.exceptions.SQLParsingError(msg)
 
         if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) or (
             not isinstance(current_expr, (exp.Query, exp.Values)) and supports_where(current_expr)
@@ -1568,7 +1589,7 @@ class SQL:
         Returns:
             A unique parameter name that doesn't exist in current parameters
         """
-        prefixed_base = f"param_{base_name}"
+        prefixed_base = f"param_{sanitize_parameter_name(base_name)}"
         current_index = self._sql_param_counters.get(prefixed_base, 0)
 
         if prefixed_base not in self._named_parameters:
@@ -1961,31 +1982,6 @@ class StatementConfig:
         """Mark the configuration as immutable to enable caching."""
         self._is_frozen = True
 
-    def _with_dialect(self, dialect: str) -> "StatementConfig":
-        """Return this configuration with ``dialect`` set.
-
-        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
-        processing caches carry over between statements.
-
-        Args:
-            dialect: SQLGlot dialect name.
-
-        Returns:
-            Configuration whose ``dialect`` is ``dialect``.
-        """
-        if not self._is_frozen:
-            return self.replace(dialect=dialect)
-        variants = self._dialect_variants
-        if variants is None:
-            variants = {}
-            self._dialect_variants = variants
-        derived = variants.get(dialect)
-        if derived is None:
-            derived = self.replace(dialect=dialect)
-            derived.freeze()
-            variants[dialect] = derived
-        return derived
-
     def replace(self, **kwargs: Any) -> "StatementConfig":
         """Immutable update pattern.
 
@@ -2024,6 +2020,31 @@ class StatementConfig:
         }
         current_kwargs.update(kwargs)
         return type(self)(**current_kwargs)
+
+    def _with_dialect(self, dialect: str) -> "StatementConfig":
+        """Return this configuration with ``dialect`` set.
+
+        Frozen configurations reuse one derived configuration per dialect, so its cached fingerprint and
+        processing caches carry over between statements.
+
+        Args:
+            dialect: SQLGlot dialect name.
+
+        Returns:
+            Configuration whose ``dialect`` is ``dialect``.
+        """
+        if not self._is_frozen:
+            return self.replace(dialect=dialect)
+        variants = self._dialect_variants
+        if variants is None:
+            variants = {}
+            self._dialect_variants = variants
+        derived = variants.get(dialect)
+        if derived is None:
+            derived = self.replace(dialect=dialect)
+            derived.freeze()
+            variants[dialect] = derived
+        return derived
 
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs."""
@@ -2122,21 +2143,40 @@ def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
     """Parse a single ORDER BY item string into a SQLGlot expression."""
+    if "\x00" in order_item or _has_unquoted_semicolon(order_item, dialect):
+        msg = "ORDER BY item must not contain NUL characters or statement separators"
+        raise sqlspec.exceptions.SQLParsingError(msg)
     normalized = order_item.strip()
     if not normalized:
-        return exp.column(order_item)
+        return exp.column(order_item, copy=False)
 
     if enable_parsing:
         try:
             parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
-        except ParseError:
+        except (ParseError, TokenError):
             parsed = None
         if parsed is not None:
+            if parsed.find(exp.Command, exp.DDL, exp.DML, exp.Transaction) is not None:
+                msg = "ORDER BY item must be an ordering expression"
+                raise sqlspec.exceptions.SQLParsingError(msg)
             return default_nulls(parsed, normalized, dialect)
 
     parts = normalized.rsplit(None, 1)
     if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
-        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+        base_expr = exp.column(parts[0], copy=False) if parts[0] else exp.column(normalized, copy=False)
         return ordered(base_expr, desc=True if parts[1].lower() == "desc" else None)
 
-    return exp.column(normalized)
+    return exp.column(normalized, copy=False)
+
+
+def _raw_condition(condition: str, dialect: "str | None" = None) -> exp.Expr:
+    """Wrap an unparsed condition fragment, requiring it to be a single expression."""
+    if _has_unquoted_semicolon(condition, dialect) or _STATEMENT_START_RE.match(condition) is not None:
+        msg = "WHERE condition must be a single expression without statement separators"
+        raise sqlspec.exceptions.SQLParsingError(msg)
+    return exp.Paren(this=exp.Var(this=condition))
+
+
+def _has_unquoted_semicolon(fragment: str, dialect: "str | None" = None) -> bool:
+    """Return whether a SQL fragment contains a statement separator outside comments and quoted literals."""
+    return contains_statement_terminator(fragment, dialect)

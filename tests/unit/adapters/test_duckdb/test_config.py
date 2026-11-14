@@ -1,5 +1,6 @@
 """DuckDB configuration tests covering statement config builders."""
 
+from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
 from uuid import UUID
@@ -22,6 +23,8 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_build_default_statement_config_custom_serializer() -> None:
@@ -280,3 +283,55 @@ def test_duckdb_snapshot_reader_enforces_native_read_only(tmp_path) -> None:
         with pytest.raises(ReadOnlyTransactionError):
             reader.execute("INSERT INTO entries VALUES (2)")
     primary.close_pool()
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "error-exit"])
+def test_provide_session_rolls_back_open_transaction_on_exit(body_raises: bool) -> None:
+    """DuckDB provide_session rolls back uncommitted work and detaches the driver on clean and error exit."""
+    config = DuckDBConfig(connection_config={"database": ":memory:session_rollback_test"})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE IF NOT EXISTS items (id INTEGER); DELETE FROM items;")
+        if body_raises:
+            with pytest.raises(ValueError, match="abort"), config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+                raise ValueError("abort")
+        else:
+            with config.provide_session() as session:
+                session.begin()
+                session.execute("INSERT INTO items VALUES (1)")
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()
+
+
+def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clean-exit rollback failure forwards error metadata to pool release, detaches the driver, and avoids commit."""
+    db_file = tmp_path / "failed_rollback.duckdb"
+    config = DuckDBConfig(connection_config={"database": str(db_file)})
+    try:
+        with config.provide_session() as setup_session:
+            setup_session.execute("CREATE TABLE items (id INTEGER)")
+
+        def fail_rollback(_self: DuckDBDriver) -> None:
+            raise RuntimeError("duckdb rollback failed")
+
+        monkeypatch.setattr(DuckDBDriver, "rollback", fail_rollback)
+        with pytest.raises(RuntimeError, match="duckdb rollback failed"), config.provide_session() as session:
+            session.begin()
+            session.execute("INSERT INTO items VALUES (42)")
+
+        assert session.connection is _DETACHED_CONNECTION
+        assert config.provide_pool().size() == 0
+        monkeypatch.undo()
+        with config.provide_session() as check_session:
+            assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
+    finally:
+        config.close_pool()

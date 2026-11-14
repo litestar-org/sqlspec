@@ -237,6 +237,8 @@ def test_normalize_identifier_preserves_explicitly_quoted_identifiers(
         ("[schema.with.dot].[table]]name]", ("schema.with.dot", "table]name")),
         ("`project.dataset.table`", ("project.dataset.table",)),
         ("dataset.`table.with.dot`", ("dataset", "table.with.dot")),
+        ('ord"ers', ('ord"ers',)),
+        ("app.ord`ers", ("app", "ord`ers")),
     ],
 )
 def test_split_qualified_identifier_respects_quoted_dots(identifier: str, expected: tuple[str, ...]) -> None:

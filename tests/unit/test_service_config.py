@@ -824,7 +824,8 @@ def test_sync_transactions_are_independent_between_threads(
             barrier.wait(timeout=10)
             assert service.session is session
             assert service.exists(sql.select("value").from_("service_values"))
-        session.connection.close()
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = session.connection.close()
         return session
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1068,7 +1069,8 @@ def test_sync_nested_transactions_are_independent_between_threads(
                 barrier.wait(timeout=10)
                 assert service.session is session
                 assert service.exists(sql.select("value").from_("service_values"))
-        session.connection.close()
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = session.connection.close()
         return session
 
     with ThreadPoolExecutor(max_workers=2) as executor:

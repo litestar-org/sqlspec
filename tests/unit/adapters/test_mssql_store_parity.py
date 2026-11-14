@@ -1,6 +1,8 @@
 """Cross-driver SQL parity between the mssql-python and pymssql extension stores."""
 
-from typing import Any
+from contextlib import nullcontext
+from datetime import UTC, datetime
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,6 +19,7 @@ from sqlspec.adapters.pymssql.adk import PymssqlADKMemoryStore, PymssqlADKStore
 from sqlspec.adapters.pymssql.events import PymssqlEventQueueStore
 from sqlspec.adapters.pymssql.litestar import PymssqlStore
 from sqlspec.data_dictionary.dialects.mssql import MssqlVersionInfo
+from sqlspec.extensions.adk import StoredEvent
 from sqlspec.migrations.schema import ensure_schema_sync
 
 
@@ -589,3 +592,154 @@ def test_adk_companions_propagate_ddl_failure(store_cls: type[Any], config_cls: 
 
     assert driver.execute.call_count == 2
     assert driver.commit.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("after_timestamp", "limit"),
+    [pytest.param(None, None, id="unbounded"), pytest.param(datetime(2026, 1, 1, tzinfo=UTC), 5, id="bounded-after")],
+)
+def test_adk_events_query_matches_modulo_placeholder(after_timestamp: "datetime | None", limit: "int | None") -> None:
+    """Scoped event queries match across mssql-python and pymssql modulo placeholder style."""
+    mssql_store = MssqlPythonADKStore(MssqlPythonConfig(extension_config={"adk": {"native_json": False}}))
+    pymssql_store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {}}))
+
+    mssql_sql, mssql_params = mssql_store._events_query("app", "u1", "s1", after_timestamp=after_timestamp, limit=limit)
+    pymssql_sql, pymssql_params = pymssql_store._events_query(
+        "app", "u1", "s1", after_timestamp=after_timestamp, limit=limit
+    )
+
+    assert _normalized(mssql_sql) == _normalized(_qmark(pymssql_sql))
+    assert mssql_params == pymssql_params
+
+
+def test_adk_append_event_and_delete_session_sql_match_modulo_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Event ownership probes, event inserts, and scoped session deletes match across SQL Server drivers."""
+    mssql_conn = MagicMock()
+    mssql_cursor = mssql_conn.cursor.return_value
+    mssql_cursor.fetchone.return_value = (1,)
+    pymssql_conn = MagicMock()
+    pymssql_cursor = pymssql_conn.cursor.return_value
+    pymssql_cursor.fetchone.return_value = (1,)
+
+    monkeypatch.setattr(MssqlPythonConfig, "provide_connection", lambda _self: nullcontext(mssql_conn))
+    monkeypatch.setattr(PymssqlConfig, "provide_connection", lambda _self: nullcontext(pymssql_conn))
+
+    mssql_store = MssqlPythonADKStore(MssqlPythonConfig(extension_config={"adk": {"native_json": False}}))
+    pymssql_store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {}}))
+    event = cast(
+        "StoredEvent",
+        {
+            "id": "evt-1",
+            "app_name": "app",
+            "user_id": "u1",
+            "session_id": "s1",
+            "invocation_id": "inv-1",
+            "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+            "event_data": {"text": "hello"},
+        },
+    )
+
+    mssql_store.append_event(event)
+    pymssql_store.append_event(event)
+    mssql_store.delete_session("app", "u1", "s1")
+    pymssql_store.delete_session("app", "u1", "s1")
+
+    mssql_calls = [(_normalized(c.args[0]), c.args[1]) for c in mssql_cursor.execute.call_args_list]
+    pymssql_calls = [(_normalized(_qmark(c.args[0])), c.args[1]) for c in pymssql_cursor.execute.call_args_list]
+    assert mssql_calls == pymssql_calls
+    assert len(mssql_calls) == 4
+
+
+@pytest.mark.parametrize(
+    ("owner_ddl", "owner_id"),
+    [
+        pytest.param(None, None, id="without-owner-column"),
+        pytest.param("tenant_id INT NOT NULL", 7, id="with-owner-column"),
+    ],
+)
+def test_adk_memory_duplicate_predicate_matches_modulo_placeholder(
+    monkeypatch: pytest.MonkeyPatch, owner_ddl: "str | None", owner_id: "int | None"
+) -> None:
+    """Memory duplicate predicates and parameter tuples match across SQL Server drivers."""
+    mssql_conn = MagicMock()
+    mssql_cursor = mssql_conn.cursor.return_value
+    mssql_cursor.rowcount = 1
+    pymssql_conn = MagicMock()
+    pymssql_cursor = pymssql_conn.cursor.return_value
+    pymssql_cursor.rowcount = 1
+
+    monkeypatch.setattr(MssqlPythonConfig, "provide_connection", lambda _self: nullcontext(mssql_conn))
+    monkeypatch.setattr(PymssqlConfig, "provide_connection", lambda _self: nullcontext(pymssql_conn))
+
+    adk_ext: dict[str, Any] = {"native_json": False, "enable_memory": True}
+    if owner_ddl is not None:
+        adk_ext["owner_id_column"] = owner_ddl
+    pymssql_ext: dict[str, Any] = {"enable_memory": True}
+    if owner_ddl is not None:
+        pymssql_ext["owner_id_column"] = owner_ddl
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "u1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+
+    MssqlPythonADKMemoryStore(MssqlPythonConfig(extension_config={"adk": adk_ext})).insert_memory_entries(
+        [entry], owner_id=owner_id
+    )
+    PymssqlADKMemoryStore(PymssqlConfig(extension_config={"adk": pymssql_ext})).insert_memory_entries(
+        [entry], owner_id=owner_id
+    )
+
+    mssql_sql, mssql_batch = mssql_cursor.executemany.call_args.args
+    pymssql_sql, pymssql_params = pymssql_cursor.execute.call_args.args
+    assert _normalized(mssql_sql) == _normalized(_qmark(pymssql_sql))
+    assert mssql_batch[0] == pymssql_params
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id"),
+    [
+        pytest.param(None, None, id="session-only"),
+        pytest.param("app", None, id="session-and-app"),
+        pytest.param(None, "u1", id="session-and-user"),
+        pytest.param("app", "u1", id="session-app-and-user"),
+    ],
+)
+def test_adk_memory_delete_entries_by_session_matches_modulo_placeholder(
+    monkeypatch: pytest.MonkeyPatch, app_name: "str | None", user_id: "str | None"
+) -> None:
+    """Scoped delete_entries_by_session SQL and bindings match across SQL Server drivers."""
+    calls: dict[str, tuple[str, tuple[Any, ...]]] = {}
+
+    def capture_mssql(_self: Any, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        calls["mssql"] = (sql, tuple(params))
+        return 1
+
+    def capture_pymssql(_self: Any, sql: str, params: "tuple[Any, ...]" = (), **_kw: Any) -> int:
+        calls["pymssql"] = (sql, tuple(params))
+        return 1
+
+    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute", capture_mssql)
+    monkeypatch.setattr(PymssqlADKMemoryStore, "_execute", capture_pymssql)
+
+    MssqlPythonADKMemoryStore(
+        MssqlPythonConfig(extension_config={"adk": {"native_json": False}})
+    ).delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+    PymssqlADKMemoryStore(PymssqlConfig(extension_config={"adk": {}})).delete_entries_by_session(
+        "s1", app_name=app_name, user_id=user_id
+    )
+
+    assert _normalized(calls["mssql"][0]) == _normalized(_qmark(calls["pymssql"][0]))
+    assert calls["mssql"][1] == calls["pymssql"][1]

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.exceptions import EventChannelError
+from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -79,7 +80,9 @@ class OracleSyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(
+                queue, self._visibility, self._default_visibility, wait_seconds, normalize_event_channel_name(channel)
+            )
             try:
                 message = queue.deqone()
             except Exception as error:
@@ -213,7 +216,9 @@ class OracleAsyncAQHub:
             if driver is None:
                 return None
             wait_seconds = _resolve_wait_seconds(poll_interval, self._wait_ceiling)
-            _apply_deq_options(queue, self._visibility, self._default_visibility, wait_seconds)
+            _apply_deq_options(
+                queue, self._visibility, self._default_visibility, wait_seconds, normalize_event_channel_name(channel)
+            )
             try:
                 message = await queue.deqone()
             except Exception as error:
@@ -309,11 +314,12 @@ class OracleAsyncAQHub:
 
 
 def _apply_deq_options(
-    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float
+    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float, correlation: str
 ) -> None:
     """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
+    options.correlation = correlation
     if visibility is not None:
         options.visibility = visibility
     elif default_visibility is not None:

@@ -1,7 +1,7 @@
 """Unit tests for psycopg ADK store sync wrappers."""
 
 import inspect
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -54,6 +54,7 @@ class _DummyConnection:
     def __init__(self, cursor: _DummyCursor) -> None:
         self._cursor = cursor
         self.commit_called = False
+        self.rollback_called = False
 
     def __enter__(self) -> Self:
         return self
@@ -66,6 +67,9 @@ class _DummyConnection:
 
     def commit(self) -> None:
         self.commit_called = True
+
+    def rollback(self) -> None:
+        self.rollback_called = True
 
 
 class _DummyAsyncCursor:
@@ -127,6 +131,7 @@ def _build_store(
     store._config = config
     store._read_config = None
     store._read_config_enabled = False
+    store._read_bind_group = None
     store._events_table = "test_events"
     store._session_table = "test_sessions"
     store._app_state_table = "test_app_state"
@@ -388,8 +393,8 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
 
     assert result["id"] == "session-1"
     assert len(cursor.execute_calls) == 4
-    _, insert_params = cursor.execute_calls[0]
-    _, update_params = cursor.execute_calls[1]
+    _, update_params = cursor.execute_calls[0]
+    _, insert_params = cursor.execute_calls[1]
     _, app_state_params = cursor.execute_calls[2]
     _, user_state_params = cursor.execute_calls[3]
     assert insert_params[0] == "event-1"
@@ -430,6 +435,7 @@ class _AsyncDummyConnection:
     def __init__(self, cursor: _AsyncDummyCursor) -> None:
         self._cursor = cursor
         self.commit_called = False
+        self.rollback_called = False
 
     async def __aenter__(self) -> Self:
         return self
@@ -442,6 +448,9 @@ class _AsyncDummyConnection:
 
     async def commit(self) -> None:
         self.commit_called = True
+
+    async def rollback(self) -> None:
+        self.rollback_called = True
 
 
 def _rendered(query: Any) -> str:
@@ -967,3 +976,246 @@ async def test_psycopg_reconcile_prepares_before_targets_and_companions(
     assert statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
     assert statements[1].startswith("CREATE TABLE IF NOT EXISTS adk_memory")
     assert all(sql.startswith("CREATE INDEX IF NOT EXISTS") for sql in statements[2:])
+
+
+def _build_psycopg_session_store(
+    store_cls: Any, *, is_async: bool, rows: "list[dict[str, Any]] | None" = None, rowcount: int = 1
+) -> "tuple[Any, Any, Any]":
+    cursor: Any = _AsyncDummyCursor(rows) if is_async else _DummyCursor(rows)
+    cursor.rowcount = rowcount
+    connection: Any = _AsyncDummyConnection(cursor) if is_async else _DummyConnection(cursor)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: connection
+    return store_cls(config), cursor, connection
+
+
+def _build_psycopg_memory_store(
+    store_cls: Any, *, is_async: bool, adk_config: "dict[str, object] | None" = None, rowcount: int = 1
+) -> "tuple[Any, Any, Any]":
+    cursor: Any = _AsyncDummyCursor() if is_async else _DummyCursor()
+    cursor.rowcount = rowcount
+    connection: Any = _AsyncDummyConnection(cursor) if is_async else _DummyConnection(cursor)
+    config = _mock_config(adk_config)
+    config.provide_connection = lambda *_a, **_k: connection
+    return store_cls(config), cursor, connection
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+@pytest.mark.parametrize(
+    ("renew_for", "expect_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero"),
+        pytest.param(-1, False, id="negative"),
+        pytest.param(timedelta(milliseconds=500), True, id="subsecond"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_psycopg_get_session_renews_only_for_positive_durations(
+    store_cls: Any, is_async: bool, _companion: str, renew_for: "int | timedelta | None", expect_update: bool
+) -> None:
+    now = datetime.now(UTC)
+    store, cursor, connection = _build_psycopg_session_store(
+        store_cls,
+        is_async=is_async,
+        rows=[{"id": "s1", "app_name": "app", "user_id": "u1", "state": {}, "create_time": now, "update_time": now}],
+    )
+
+    result = await _await_if_needed(store.get_session("app", "u1", "s1", renew_for=renew_for))
+
+    assert result is not None
+    query, params = cursor.execute_calls[0]
+    rendered = _rendered(query)
+    if expect_update:
+        assert rendered.startswith('UPDATE "adk_session" SET update_time = CURRENT_TIMESTAMP')
+        assert connection.commit_called is True
+    else:
+        assert rendered.startswith("SELECT id, app_name, user_id, state, create_time, update_time")
+        assert connection.commit_called is False
+    assert params == ("app", "u1", "s1")
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+@pytest.mark.parametrize(("rowcount", "should_raise"), [(1, False), (0, True)])
+async def test_psycopg_append_event_checks_session_ownership(
+    store_cls: Any, is_async: bool, _companion: str, rowcount: int, should_raise: bool
+) -> None:
+    store, cursor, connection = _build_psycopg_session_store(store_cls, is_async=is_async, rowcount=rowcount)
+    now = datetime.now(UTC)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+    }
+
+    if should_raise:
+        with pytest.raises(ValueError, match="Session s1 not found"):
+            await _await_if_needed(store.append_event(cast("Any", event_record)))
+        assert connection.commit_called is False
+    else:
+        await _await_if_needed(store.append_event(cast("Any", event_record)))
+        assert connection.commit_called is True
+
+    query, params = cursor.execute_calls[0]
+    rendered = _rendered(query)
+    assert 'WHERE EXISTS ( SELECT 1 FROM "adk_session" WHERE id = %s AND app_name = %s AND user_id = %s )' in rendered
+    assert params[-3:] == ("s1", "app", "u1")
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+@pytest.mark.parametrize(
+    ("record_overrides", "expect_mismatch"),
+    [
+        pytest.param({}, False, id="matching"),
+        pytest.param({"app_name": "other-app"}, True, id="mismatched-app"),
+        pytest.param({"user_id": "other-user"}, True, id="mismatched-user"),
+        pytest.param({"session_id": "other-session"}, True, id="mismatched-session"),
+    ],
+)
+async def test_psycopg_append_event_and_update_state_validates_scope_and_updates_first(
+    store_cls: Any, is_async: bool, _companion: str, record_overrides: dict[str, str], expect_mismatch: bool
+) -> None:
+    now = datetime.now(UTC)
+    store, cursor, _ = _build_psycopg_session_store(
+        store_cls,
+        is_async=is_async,
+        rows=[
+            {
+                "id": "s1",
+                "app_name": "app",
+                "user_id": "u1",
+                "state": {"k": "v"},
+                "create_time": now,
+                "update_time": now,
+            }
+        ],
+    )
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+        **record_overrides,
+    }
+
+    if expect_mismatch:
+        with pytest.raises(ValueError, match="event_record scope"):
+            await _await_if_needed(
+                store.append_event_and_update_state(cast("Any", event_record), "app", "u1", "s1", {"k": "v"})
+            )
+        assert cursor.execute_calls == []
+        return
+
+    updated = await _await_if_needed(
+        store.append_event_and_update_state(cast("Any", event_record), "app", "u1", "s1", {"k": "v"})
+    )
+    assert updated["id"] == "s1"
+    assert _rendered(cursor.execute_calls[0][0]).startswith('UPDATE "adk_session"')
+    assert _rendered(cursor.execute_calls[1][0]).startswith('INSERT INTO "adk_event"')
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+async def test_psycopg_get_events_joins_on_session_and_owner_columns(
+    store_cls: Any, is_async: bool, _companion: str
+) -> None:
+    store, cursor, _ = _build_psycopg_session_store(store_cls, is_async=is_async)
+
+    await _await_if_needed(store.get_events("app", "u1", "s1"))
+
+    query, params = cursor.execute_calls[0]
+    rendered = _rendered(query)
+    assert (
+        'JOIN "adk_session" s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id' in rendered
+    )
+    assert "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s" in rendered
+    assert params == ("app", "u1", "s1")
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_s", "_prep_r", "_companion", "_finalize"), _MEMORY_STORE_MODES
+)
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(None, None, "WHERE session_id = %s", ("s1",), id="session-only"),
+        pytest.param("app", None, "WHERE session_id = %s AND app_name = %s", ("s1", "app"), id="session-and-app"),
+        pytest.param(None, "u1", "WHERE session_id = %s AND user_id = %s", ("s1", "u1"), id="session-and-user"),
+        pytest.param(
+            "app",
+            "u1",
+            "WHERE session_id = %s AND app_name = %s AND user_id = %s",
+            ("s1", "app", "u1"),
+            id="session-app-user",
+        ),
+    ],
+)
+async def test_psycopg_delete_entries_by_session_scopes_predicates(
+    store_cls: Any,
+    is_async: bool,
+    _prep_s: str,
+    _prep_r: str,
+    _companion: str,
+    _finalize: str,
+    app_name: "str | None",
+    user_id: "str | None",
+    expected_where: str,
+    expected_params: tuple[str, ...],
+) -> None:
+    store, cursor, connection = _build_psycopg_memory_store(store_cls, is_async=is_async, rowcount=2)
+
+    deleted = await _await_if_needed(store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id))
+
+    assert deleted == 2
+    assert connection.commit_called is True
+    query, params = cursor.execute_calls[0]
+    assert _rendered(query) == f'DELETE FROM "adk_memory" {expected_where}'
+    assert params == expected_params
+
+
+@pytest.mark.parametrize(
+    ("store_cls", "is_async", "_prep_s", "_prep_r", "_companion", "_finalize"), _MEMORY_STORE_MODES
+)
+@pytest.mark.parametrize("owner_column", [None, "tenant_id UUID"])
+async def test_psycopg_memory_ddl_and_insert_use_composite_dedup_and_targetless_conflict(
+    store_cls: Any,
+    is_async: bool,
+    _prep_s: str,
+    _prep_r: str,
+    _companion: str,
+    _finalize: str,
+    owner_column: "str | None",
+) -> None:
+    adk_cfg: dict[str, object] = {"owner_id_column": owner_column} if owner_column else {}
+    store, cursor, _ = _build_psycopg_memory_store(store_cls, is_async=is_async, adk_config=adk_cfg)
+    ddl = await _await_if_needed(store._memory_table_ddl())
+    assert "event_id VARCHAR(128) NOT NULL," in ddl
+    assert "event_id VARCHAR(128) NOT NULL UNIQUE" not in ddl
+    assert "UNIQUE (app_name, user_id, event_id)" in ddl
+
+    now = datetime.now(UTC)
+    entry = {
+        "id": "mem-1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "evt-1",
+        "author": "user",
+        "timestamp": now,
+        "embedding": None,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+    }
+    await _await_if_needed(store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1"))
+    rendered = _rendered(cursor.execute_calls[0][0])
+    assert "ON CONFLICT DO NOTHING" in rendered
+    assert "ON CONFLICT (event_id)" not in rendered

@@ -11,7 +11,12 @@ import duckdb
 import pytest
 
 from sqlspec.adapters.duckdb import DuckDBConfig
-from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _validate_sql_identifier
+from sqlspec.adapters.duckdb.pool import (
+    DuckDBConnectionPool,
+    _format_secret_literal,
+    _secret_sql,
+    _validate_sql_identifier,
+)
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
@@ -656,3 +661,15 @@ def test_duckdb_nested_cancelled_error_handled_by_outer_commit(tmp_path: Path) -
             assert connection.execute("SELECT COUNT(*) FROM items").fetchone() == (1,)
     finally:
         pool.close()
+
+
+@pytest.mark.parametrize("bad_float", [float("nan"), float("inf"), float("-inf")])
+def test_format_secret_literal_rejects_non_finite_floats(bad_float: float) -> None:
+    """_format_secret_literal rejects NaN and infinity while preserving finite numbers and booleans."""
+    with pytest.raises(ValueError, match="finite"):
+        _format_secret_literal(bad_float)
+
+    assert _format_secret_literal(1.5) == "1.5"
+    assert _format_secret_literal(42) == "42"
+    assert _format_secret_literal(True) == "true"
+    assert _format_secret_literal(False) == "false"

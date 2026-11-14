@@ -144,10 +144,33 @@ class DuckDBSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._driver is not None:
-            self._driver.close()
-            self._driver = None
-        if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        driver = self._driver
+        rollback_exc: BaseException | None = None
+        try:
+            if self._driver is not None and self._driver._connection_in_transaction():
+                try:
+                    self._driver.rollback()
+                except BaseException as exc:
+                    rollback_exc = exc
+                    if exc_type is None:
+                        raise
+        finally:
+            try:
+                if self._driver is not None:
+                    self._driver.close()
+                    self._driver = None
+                if self._connection is not None:
+                    release_type = exc_type if exc_type is not None else (type(rollback_exc) if rollback_exc else None)
+                    release_val = exc_val if exc_val is not None else rollback_exc
+                    release_tb = (
+                        exc_tb if exc_tb is not None else (rollback_exc.__traceback__ if rollback_exc else None)
+                    )
+                    self._release_connection(
+                        self._connection, exc_type=release_type, exc_val=release_val, exc_tb=release_tb
+                    )
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._detach_connection()
         return None

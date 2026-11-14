@@ -11,6 +11,7 @@ The utilities are organized in layers:
     - CTE utilities: Safe CTE extraction and reattachment
 """
 
+import re
 from collections.abc import Callable
 from typing import Any, Final
 
@@ -46,6 +47,7 @@ __all__ = (
     "extract_column_name",
     "parse_column_for_condition",
     "safe_modify_with_cte",
+    "sanitize_parameter_name",
     "wrap_as_subquery",
 )
 
@@ -54,6 +56,7 @@ ConditionFactory = Callable[[exp.Expr, exp.Expr], exp.Expr]
 _TABLE_QUALIFIED_PARTS: Final[int] = 2
 _DATABASE_QUALIFIED_PARTS: Final[int] = 3
 _CATALOG_QUALIFIED_PARTS: Final[int] = 4
+_NON_PARAM_IDENT_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def expr_eq(col: exp.Expr, operand: exp.Expr) -> exp.Expr:
@@ -117,6 +120,29 @@ def expr_is_not_null(col: exp.Expr, _operand: exp.Expr) -> exp.Expr:
     return exp.Not(this=exp.Is(this=col, expression=exp.null()))
 
 
+def sanitize_parameter_name(name: str) -> str:
+    """Normalize a column or key label into an ASCII identifier usable as a bind parameter name.
+
+    Labels that are already ASCII identifiers are returned unchanged. Other
+    labels have each run of non-word characters collapsed to an underscore so
+    the generated placeholder matches named-parameter grammar on every dialect.
+
+    Args:
+        name: Column name, mapping key, or other label.
+
+    Returns:
+        A nonempty ASCII identifier.
+    """
+    if name and name.isascii() and name.isidentifier():
+        return name
+    cleaned = _NON_PARAM_IDENT_RE.sub("_", name).strip("_")
+    if not cleaned:
+        return "p_param"
+    if cleaned[0].isdigit():
+        return f"p_{cleaned}"
+    return cleaned
+
+
 def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
     """Parse column specification for use in conditions.
 
@@ -131,22 +157,31 @@ def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
 
     Returns:
         SQLGlot column expression
+
+    Raises:
+        SQLSpecError: If a column name is empty, contains a NUL character, has an
+            empty qualifier segment, or has more than four dotted parts.
     """
     if isinstance(column, exp.Expr):
         return column
 
     if isinstance(column, str):
+        if not column.strip() or "\x00" in column:
+            msg = "Column name must be nonempty and must not contain NUL characters"
+            raise SQLSpecError(msg)
         if "." in column:
             parts = column.split(".")
+            if len(parts) > _CATALOG_QUALIFIED_PARTS or not all(part.strip() for part in parts):
+                msg = f"Invalid qualified column name: {column!r}"
+                raise SQLSpecError(msg)
             if len(parts) == _TABLE_QUALIFIED_PARTS:
-                return exp.column(parts[1], table=parts[0])
+                return exp.column(parts[1], table=parts[0], copy=False)
             if len(parts) == _DATABASE_QUALIFIED_PARTS:
-                return exp.column(parts[2], table=parts[1], db=parts[0])
-            if len(parts) == _CATALOG_QUALIFIED_PARTS:
-                return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0])
-        return exp.column(column)
+                return exp.column(parts[2], table=parts[1], db=parts[0], copy=False)
+            return exp.column(parts[3], table=parts[2], db=parts[1], catalog=parts[0], copy=False)
+        return exp.column(column, copy=False)
 
-    return exp.column(str(column))
+    return exp.column(str(column), copy=False)
 
 
 def extract_column_name(column: str | exp.Column | exp.Expr) -> str:
@@ -156,16 +191,16 @@ def extract_column_name(column: str | exp.Column | exp.Expr) -> str:
         column: Column expression (string or SQLGlot Column)
 
     Returns:
-        Column name as string for use as parameter name base
+        Column name normalized for use as parameter name base
     """
     if isinstance(column, str):
-        return column.split(".")[-1] if "." in column else column
+        return sanitize_parameter_name(column.split(".")[-1] if "." in column else column)
 
     if isinstance(column, exp.Column):
-        return column.name
+        return sanitize_parameter_name(column.name)
 
     if isinstance(column, exp.Expr) and hasattr(column, "name") and column.name:
-        return str(column.name)
+        return sanitize_parameter_name(str(column.name))
 
     return "column"
 

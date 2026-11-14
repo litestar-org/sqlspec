@@ -10,7 +10,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Self, Union, cast
 
-from mypy_extensions import trait
+from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder, register_subquery_fragment
@@ -24,6 +24,7 @@ from sqlspec.builder._parsing_utils import (
     _cube_expression,
     _grouping_sets_expression,
     _normalize_dialect,
+    _parse_alias_identifier,
     _rollup_expression,
     extract_column_name,
     extract_expression,
@@ -195,7 +196,7 @@ class WindowFunctionBuilder:
             if isinstance(column, exp.Ordered):
                 ordered_columns.append(column)
             else:
-                ordered_columns.append(ordered(exp.column(column) if isinstance(column, str) else column))
+                ordered_columns.append(ordered(exp.column(column, copy=False) if isinstance(column, str) else column))
         self._order_by = ordered_columns
         return self
 
@@ -208,7 +209,7 @@ class WindowFunctionBuilder:
         return exp.Window(this=self._build_function_expression(), **over_args)
 
     def as_(self, alias: str) -> exp.Alias:
-        return cast("exp.Alias", exp.alias_(self.build(), alias))
+        return cast("exp.Alias", exp.alias_(self.build(), alias, copy=False))
 
     def _build_function_expression(self) -> exp.Expr:
         expressions = self._function_args or []
@@ -291,7 +292,9 @@ class SelectClauseMixin:
         if isinstance(table, str):
             from_expr = parse_table_expression(table, alias, dialect=builder.dialect)
         elif unwrapped_source is not None:
-            from_expr = exp.alias_(unwrapped_source, alias) if alias else unwrapped_source
+            from_expr = (
+                exp.alias_(unwrapped_source, alias, copy=isinstance(table, exp.Expr)) if alias else unwrapped_source
+            )
         elif has_parameter_builder(table):
             subquery_expression = (
                 cast("QueryBuilder", table)._build_final_expression(copy=True)
@@ -311,14 +314,14 @@ class SelectClauseMixin:
             if isinstance(subquery_copy, exp.Values):
                 if alias:
                     columns = getattr(table, "columns", None)
-                    subquery_copy = exp.alias_(subquery_copy, alias, table=columns or True)
+                    subquery_copy = exp.alias_(subquery_copy, alias, table=columns or True, copy=False)
                 from_expr = subquery_copy
             else:
-                wrapped_subquery = exp.paren(subquery_copy)
-                from_expr = exp.alias_(wrapped_subquery, alias) if alias else wrapped_subquery
+                wrapped_subquery = exp.paren(subquery_copy, copy=False)
+                from_expr = exp.alias_(wrapped_subquery, alias, copy=False) if alias else wrapped_subquery
         elif isinstance(table, SQL):
             sql_expression = extract_sql_object_expression(table, builder=builder)
-            from_expr = exp.alias_(sql_expression, alias) if alias else sql_expression
+            from_expr = exp.alias_(sql_expression, alias, copy=False) if alias else sql_expression
         else:
             from_expr = table
 
@@ -597,12 +600,18 @@ class WhereClauseMixin:
             return self._build_is_not_null_condition(column) if negate else self._build_is_null_condition(column)
         return self._create_parameterized_condition(column, value, expr_neq if negate else expr_eq)
 
+    def _parse_predicate_column(self, column: Any) -> exp.Expr:
+        if type(column) is exp.Column:
+            return column
+        builder = cast("SQLBuilderProtocol", self)
+        return parse_column_expression(column, builder, dialect=builder.dialect, allow_alias=False)
+
     def _create_parameterized_condition(
         self, column: str | exp.Column, value: Any, condition_factory: "Callable[[exp.Expr, exp.Expr], exp.Expr]"
     ) -> exp.Expr:
         builder = cast("SQLBuilderProtocol", self)
         column_name = extract_column_name(column)
-        col_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        col_expr = self._parse_predicate_column(column)
         resolved = resolve_value_expression(value, self, column_name)
         if resolved is not None:
             return condition_factory(col_expr, resolved)
@@ -767,7 +776,6 @@ class WhereClauseMixin:
         if isinstance(subquery, QueryBuilder):
             subquery_builder = subquery
             parsed_subquery = subquery_builder._build_final_expression(copy=True)
-            subquery_expr = exp.paren(parsed_subquery)
             parameters: Any = subquery_builder.parameters
             if isinstance(parameters, dict):
                 param_mapping: dict[str, str] = {}
@@ -777,14 +785,13 @@ class WhereClauseMixin:
                     param_mapping[param_name] = unique_name
                     query_builder.add_parameter(param_value, name=unique_name)
                 if param_mapping:
-                    updated = query_builder._update_placeholders(parsed_subquery, param_mapping)
-                    subquery_expr = exp.paren(updated)
+                    parsed_subquery = query_builder._update_placeholders(parsed_subquery, param_mapping)
             elif isinstance(parameters, (list, tuple)):
                 for param_value in parameters:
                     builder.add_parameter(param_value)
             elif parameters is not None:
                 builder.add_parameter(parameters)
-            return subquery_expr
+            return exp.paren(parsed_subquery, copy=False)
 
         if isinstance(subquery, SQL):
 
@@ -808,7 +815,7 @@ class WhereClauseMixin:
             msg = "OR expression requires at least one condition"
             raise SQLBuilderError(msg)
 
-        return exp.or_(*conditions)
+        return exp.or_(*conditions, copy=False)
 
     def _process_tuple_condition(self, condition: "tuple[Any, ...]") -> exp.Expr:
         if len(condition) == PAIR_LENGTH:
@@ -822,7 +829,7 @@ class WhereClauseMixin:
         operator: Any = condition[1]
         value: Any = condition[2]
         operator_upper = str(operator).upper()
-        column_expr = parse_column_expression(column_raw)
+        column_expr = self._parse_predicate_column(column_raw)
         column_name = extract_column_name(column_raw)
 
         if value is None and operator_upper in _EQUALITY_OPERATORS:
@@ -858,12 +865,20 @@ class WhereClauseMixin:
                 return expression.this
             return expression
 
+        builder = cast("SQLBuilderProtocol", self)
+        query_builder = cast("QueryBuilder", self)
+
         if values or kwargs:
             if not isinstance(condition, str):
                 msg = "When values are provided, condition must be a string"
                 raise SQLBuilderError(msg)
 
-            param_info = _PARAMETER_VALIDATOR.extract_parameters(condition)
+            resolved_dialect = _normalize_dialect(builder.dialect)
+            param_info = (
+                _PARAMETER_VALIDATOR.extract_parameters(condition, dialect=resolved_dialect)
+                if resolved_dialect is not None
+                else _PARAMETER_VALIDATOR.extract_parameters(condition)
+            )
 
             if param_info:
                 param_dict = dict(kwargs)
@@ -892,13 +907,12 @@ class WhereClauseMixin:
                 msg = f"Cannot bind parameters to condition without placeholders: {condition}"
                 raise SQLBuilderError(msg)
 
-        builder = cast("SQLBuilderProtocol", self)
-        query_builder = cast("QueryBuilder", self)
-
         if isinstance(condition, str):
-            return parse_condition_expression(condition)
+            return parse_condition_expression(condition, builder)
         if isinstance(condition, exp.Expr):
-            return query_builder._merge_subquery_fragments(_normalize_condition_expression(condition))
+            return query_builder._merge_subquery_fragments(
+                _normalize_condition_expression(parse_condition_expression(condition, builder))
+            )
         if isinstance(condition, tuple):
             return self._process_tuple_condition(condition)
         if isinstance(condition, QueryBuilder):
@@ -921,7 +935,7 @@ class WhereClauseMixin:
         raise SQLBuilderError(msg)
 
     def _build_between_condition(self, column: str | exp.Column, low: Any, high: Any) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return self._handle_between_operator(column_expr, (low, high), extract_column_name(column))
 
     def _build_like_condition(self, column: str | exp.Column, pattern: str, escape: str | None) -> exp.Expr:
@@ -929,7 +943,7 @@ class WhereClauseMixin:
         column_name = extract_column_name(column)
         param_name = builder._next_parameter_name(column_name)
         _, param_name = builder.add_parameter(pattern, name=param_name)
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         placeholder = exp.Placeholder(this=param_name)
         if escape is not None:
             return exp.Escape(
@@ -938,27 +952,27 @@ class WhereClauseMixin:
         return column_expr.like(placeholder)
 
     def _build_is_null_condition(self, column: str | exp.Column) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return column_expr.is_(exp.null())
 
     def _build_is_not_null_condition(self, column: str | exp.Column) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return column_expr.is_(exp.null()).not_()
 
     def _build_in_condition(self, column: str | exp.Column, values: Any) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return self._handle_in_operator(column_expr, values, extract_column_name(column))
 
     def _build_not_in_condition(self, column: str | exp.Column, values: Any) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return self._handle_not_in_operator(column_expr, values, extract_column_name(column))
 
     def _build_any_condition(self, column: str | exp.Column, subquery: Any) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return self._create_any_condition(column_expr, subquery, extract_column_name(column))
 
     def _build_not_any_condition(self, column: str | exp.Column, subquery: Any) -> exp.Expr:
-        column_expr = parse_column_expression(column) if not isinstance(column, exp.Column) else column
+        column_expr = self._parse_predicate_column(column)
         return self._create_not_any_condition(column_expr, subquery, extract_column_name(column))
 
     def _build_exists_condition(self, subquery: Any) -> exp.Expr:
@@ -983,7 +997,9 @@ class HavingClauseMixin:
             where_mixin = cast("WhereClauseMixin", self)
             having_expr = where_mixin._process_tuple_condition(condition)
         else:
-            having_expr = cast("QueryBuilder", self)._merge_subquery_fragments(parse_condition_expression(condition))
+            having_expr = cast("QueryBuilder", self)._merge_subquery_fragments(
+                parse_condition_expression(condition, builder)
+            )
 
         builder.set_expression(current_expr.having(having_expr, copy=False))
         return cast("Self", builder)
@@ -1011,7 +1027,7 @@ class PivotClauseMixin:
         agg_column = _coerce_column(aggregate_column)
         pivot_col_expr = _coerce_column(pivot_column)
 
-        pivot_agg_expr = exp.func(agg_name, agg_column)
+        pivot_agg_expr = exp.func(agg_name, agg_column, copy=not isinstance(aggregate_column, exp.Expr))
 
         pivot_value_exprs: list[exp.Expr] = []
         for raw_value in pivot_values:
@@ -1064,9 +1080,9 @@ class UnpivotClauseMixin:
             if isinstance(column, exp.Expr):
                 unpivot_columns.append(column)
             elif isinstance(column, str):
-                unpivot_columns.append(exp.column(column))
+                unpivot_columns.append(exp.column(column, copy=False))
             else:
-                unpivot_columns.append(exp.column(str(column)))
+                unpivot_columns.append(exp.column(str(column), copy=False))
 
         in_expr = exp.In(this=name_identifier, expressions=unpivot_columns)
         unpivot_node = exp.Pivot(expressions=[value_identifier], fields=[in_expr], unpivot=True)
@@ -1146,11 +1162,11 @@ class SetOperationMixin:
 
         combined: exp.Expr
         if operator == "union":
-            combined = exp.union(left_expr, right_expr, distinct=distinct)
+            combined = exp.union(left_expr, right_expr, distinct=distinct, copy=False)
         elif operator == "intersect":
-            combined = exp.intersect(left_expr, right_expr, distinct=distinct)
+            combined = exp.intersect(left_expr, right_expr, distinct=distinct, copy=False)
         elif operator == "except":
-            combined = exp.except_(left_expr, right_expr)
+            combined = exp.except_(left_expr, right_expr, copy=False)
         else:  # pragma: no cover
             msg = f"Unsupported set operation: {operator}"
             raise SQLBuilderError(msg)
@@ -1217,7 +1233,10 @@ class Select(
         Returns:
             The current builder instance for method chaining.
         """
-        self._hints.append({"hint": hint, "location": location, "table": table, "dialect": dialect})
+        validated_hint = _validate_hint_text(hint)
+        if table is not None:
+            _parse_alias_identifier(table)
+        self._hints.append({"hint": validated_hint, "location": location, "table": table, "dialect": dialect})
         return self
 
     def for_update(
@@ -1406,11 +1425,13 @@ class Select(
         return self
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _TableHintReplacer:
     __slots__ = ("_hint", "_table")
 
     def __init__(self, hint: str, table: str) -> None:
-        self._hint = hint
+        self._hint = _validate_hint_text(hint)
+        _parse_alias_identifier(table)
         self._table = table
 
     def __call__(self, match: "re.Match[str]") -> str:
@@ -1455,6 +1476,13 @@ def _ensure_select_expression(
     return expression
 
 
+def _validate_hint_text(hint: Any) -> str:
+    if not isinstance(hint, str) or not hint.strip() or "\x00" in hint or "*/" in hint:
+        msg = f"Invalid SQL hint: {hint!r}"
+        raise SQLBuilderError(msg)
+    return hint
+
+
 def _hint_expression(hint: Any) -> exp.Expr:
     """Wrap a statement hint as verbatim text.
 
@@ -1462,4 +1490,4 @@ def _hint_expression(hint: Any) -> exp.Expr:
     parsing them fails or rewrites identifiers, so the text is emitted unchanged
     inside ``/*+ ... */``.
     """
-    return exp.Var(this=str(hint))
+    return exp.Var(this=_validate_hint_text(hint))

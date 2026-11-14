@@ -46,64 +46,6 @@ def teradata_datatype_sql(gen: generator.Generator, expression: exp.DataType) ->
     return f"{rendered} COLLATE {collate}" if collate else rendered
 
 
-def _strip_order_table_qualifiers(query: exp.Query, order: exp.Expr | None) -> None:
-    """Strip inner table qualifiers from outer ORDER BY columns on wrapped queries."""
-    if order is None:
-        return
-    projected = {item.alias_or_name for item in query.selects}
-    inner_tables = (
-        {table.alias_or_name for table in query.find_all(exp.Table)}
-        if any(item.is_star for item in query.selects)
-        else set()
-    )
-    for column in order.find_all(exp.Column):
-        if column.name in projected or (column.table and column.table in inner_tables):
-            column.set("table", None)
-            column.set("db", None)
-            column.set("catalog", None)
-
-
-def _page_query(expression: exp.Query) -> exp.Select:
-    query = expression.copy()
-    offset = query.args.pop("offset")
-    limit = query.args.pop("limit", None)
-    order = query.args.pop("order", None)
-    start = simplify(exp.Add(this=offset.expression.copy(), expression=exp.Literal.number(1)))
-    count: exp.Expr | None
-    if isinstance(limit, exp.Limit):
-        count = limit.expression
-    elif isinstance(limit, exp.Fetch):
-        fetch_count = cast("exp.Expr | None", limit.args.get("count"))
-        count = fetch_count if fetch_count is not None else exp.Literal.number(1)
-    else:
-        count = None
-    wrap = isinstance(query, exp.SetOperation) or any(
-        query.args.get(key) for key in ("distinct", "group", "having", "qualify")
-    )
-    cte = query.args.pop("with_", None) if wrap else None
-    if wrap:
-        _strip_order_table_qualifiers(query, order)
-        result = exp.select("*").from_(
-            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
-        )
-        result.set("with_", cte)
-    else:
-        result = cast("exp.Select", query)
-    window = exp.Window(
-        this=exp.RowNumber(),
-        order=order or exp.Order(expressions=[exp.Ordered(this=exp.Literal.number(1), nulls_first=True)]),
-    )
-    condition = (
-        exp.Between(
-            this=window, low=start, high=simplify(exp.Add(this=offset.expression.copy(), expression=count.copy()))
-        )
-        if count is not None
-        else exp.GTE(this=window, expression=start)
-    )
-    result.set("qualify", exp.Qualify(this=condition))
-    return result
-
-
 def teradata_select_sql(gen: generator.Generator, expression: exp.Select) -> str:
     """Render TOP limits or QUALIFY offset pagination without mutating input."""
     working = expression.copy()
@@ -111,7 +53,7 @@ def teradata_select_sql(gen: generator.Generator, expression: exp.Select) -> str
     if isinstance(limit, exp.Fetch):
         working.set("limit", exp.Limit(expression=limit.args.get("count") or exp.Literal.number(1)))
     if working.args.get("offset") is not None:
-        return _BASE_SELECT_TRANSFORM(gen, _page_query(working))
+        return _BASE_SELECT_TRANSFORM(gen, _page_query(working, copy=False))
     return _BASE_SELECT_TRANSFORM(gen, working)
 
 
@@ -125,8 +67,8 @@ def teradata_set_operation_sql(gen: generator.Generator, expression: exp.SetOper
         order = query.args.pop("order", None)
         cte = query.args.pop("with_", None)
         _strip_order_table_qualifiers(query, order)
-        result = exp.select("*").from_(
-            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged")))
+        result = exp.select("*", copy=False).from_(
+            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged"))), copy=False
         )
         result.set("limit", limit)
         result.set("order", order)
@@ -149,3 +91,61 @@ def teradata_dispatch(
 ) -> dict[type[exp.Expr], Callable[..., str]]:
     """Overlay Vantage handlers without changing shared SQLGlot tables."""
     return {**base_dispatch, **TERADATA_TRANSFORMS}
+
+
+def _strip_order_table_qualifiers(query: exp.Query, order: exp.Expr | None) -> None:
+    """Strip inner table qualifiers from outer ORDER BY columns on wrapped queries."""
+    if order is None:
+        return
+    projected = {item.alias_or_name for item in query.selects}
+    inner_tables = (
+        {table.alias_or_name for table in query.find_all(exp.Table)}
+        if any(item.is_star for item in query.selects)
+        else set()
+    )
+    for column in order.find_all(exp.Column):
+        if column.name in projected or (column.table and column.table in inner_tables):
+            column.set("table", None)
+            column.set("db", None)
+            column.set("catalog", None)
+
+
+def _page_query(expression: exp.Query, *, copy: bool = True) -> exp.Select:
+    query = expression.copy() if copy else expression
+    offset = query.args.pop("offset")
+    limit = query.args.pop("limit", None)
+    order = query.args.pop("order", None)
+    start = simplify(exp.Add(this=offset.expression.copy(), expression=exp.Literal.number(1)))
+    count: exp.Expr | None
+    if isinstance(limit, exp.Limit):
+        count = limit.expression
+    elif isinstance(limit, exp.Fetch):
+        fetch_count = cast("exp.Expr | None", limit.args.get("count"))
+        count = fetch_count if fetch_count is not None else exp.Literal.number(1)
+    else:
+        count = None
+    wrap = isinstance(query, exp.SetOperation) or any(
+        query.args.get(key) for key in ("distinct", "group", "having", "qualify")
+    )
+    cte = query.args.pop("with_", None) if wrap else None
+    if wrap:
+        _strip_order_table_qualifiers(query, order)
+        result = exp.select("*", copy=False).from_(
+            exp.Subquery(this=query, alias=exp.TableAlias(this=exp.to_identifier("_sqlspec_paged"))), copy=False
+        )
+        result.set("with_", cte)
+    else:
+        result = cast("exp.Select", query)
+    window = exp.Window(
+        this=exp.RowNumber(),
+        order=order or exp.Order(expressions=[exp.Ordered(this=exp.Literal.number(1), nulls_first=True)]),
+    )
+    condition = (
+        exp.Between(
+            this=window, low=start, high=simplify(exp.Add(this=offset.expression.copy(), expression=count.copy()))
+        )
+        if count is not None
+        else exp.GTE(this=window, expression=start)
+    )
+    result.set("qualify", exp.Qualify(this=condition))
+    return result

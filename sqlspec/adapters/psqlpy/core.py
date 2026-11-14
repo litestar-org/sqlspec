@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import sqlglot
+from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
@@ -305,6 +306,7 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     return dict_rows, list(dict_rows[0])
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PsqlpyStreamSource:
     """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
 
@@ -435,7 +437,7 @@ def coerce_json_columns(
     for record in records:
         row = list(record)
         for index in indexes:
-            row[index] = _coerce_json_text_for_execute_many(row[index], deserializer=deserializer)
+            row[index] = _decode_arrow_json_column_value(row[index], deserializer=deserializer)
         coerced.append(tuple(row))
     return coerced
 
@@ -678,20 +680,11 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
                 return jsonb_type(value)
             if isinstance(value, (list, tuple)):
                 return jsonb_type(list(value))
-            if isinstance(value, str):
-                stripped = value.strip()
-                if stripped.startswith(("{", "[")):
-                    with contextlib.suppress(Exception):
-                        parsed = from_json(value)
-                        if isinstance(parsed, dict):
-                            return jsonb_type(parsed)
-                        if isinstance(parsed, (list, tuple)):
-                            return jsonb_type(list(parsed))
     if isinstance(value, tuple):
         return list(value)
     if jsonb_type is not None and isinstance(value, jsonb_type):
         return value
-    if isinstance(value, (dict, list, str)):
+    if isinstance(value, (dict, list)):
         return value
     try:
         serialized_value = serializer(value)
@@ -828,8 +821,8 @@ def _dml_count_query(sql: str) -> str | None:
         expression.set("with_", None)
 
     expression = expression.returning("1", dialect="postgres", copy=False)
-    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
-    count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN, copy=False)
+    count_query = exp.select(count_expression, copy=False).from_(cte_alias, copy=False)
     if existing_with is not None:
         count_query.set("with_", existing_with)
     count_query.with_(cte_alias, as_=expression, copy=False)
@@ -891,7 +884,8 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+def _decode_arrow_json_column_value(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
+    """Decode Arrow UTF-8 JSON document cells into dict/list values for psqlpy binary COPY."""
     if not isinstance(value, str):
         return value
     stripped = value.lstrip()

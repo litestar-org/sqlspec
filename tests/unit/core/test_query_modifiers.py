@@ -39,6 +39,7 @@ from sqlspec.core.query_modifiers import (
     extract_column_name,
     parse_column_for_condition,
     safe_modify_with_cte,
+    sanitize_parameter_name,
 )
 from sqlspec.exceptions import SQLSpecError
 
@@ -697,3 +698,49 @@ def test_column_pruning_cache_isolates_returned_expression(dialect: str) -> None
 def test_condition_factories_accept_expression_operand(factory: Any, expected: str) -> None:
     """Comparison factories accept any expression as the right operand."""
     assert factory(exp.column("a"), exp.column("b")).sql() == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("user_id", "user_id"),
+        ("first-name", "first_name"),
+        ("2fa_code", "p_2fa_code"),
+        ("---", "p_param"),
+        ("", "p_param"),
+        ("order total ($)", "order_total"),
+        ("caf\u00e9", "caf"),
+    ],
+)
+def test_sanitize_parameter_name(name: str, expected: str) -> None:
+    """Labels normalize to ASCII identifiers usable as bind parameter names."""
+    assert sanitize_parameter_name(name) == expected
+
+
+def test_sanitize_parameter_name_returns_identifiers_unchanged() -> None:
+    """ASCII identifiers take the allocation-free path."""
+    name = "tenant_id"
+    assert sanitize_parameter_name(name) is name
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"), [("first-name", "first_name"), ("u.first-name", "first_name"), ("t.col", "col")]
+)
+def test_extract_column_name_normalizes_parameter_base(column: str, expected: str) -> None:
+    """Parameter name bases derived from columns are valid identifiers."""
+    assert extract_column_name(column) == expected
+
+
+@pytest.mark.parametrize("column", ["", "   ", "col\x00", ".col", "t.", "t..col", "a.b.c.d.e"])
+def test_parse_column_for_condition_rejects_malformed_names(column: str) -> None:
+    """Empty names, empty qualifier segments, and overlong qualifiers are rejected."""
+    with pytest.raises(SQLSpecError):
+        parse_column_for_condition(column)
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"), [("col", "col"), ("t.col", "t.col"), ("s.t.col", "s.t.col"), ("c.s.t.col", "c.s.t.col")]
+)
+def test_parse_column_for_condition_accepts_qualified_names(column: str, expected: str) -> None:
+    """One to four dotted parts build a qualified column."""
+    assert parse_column_for_condition(column).sql() == expected

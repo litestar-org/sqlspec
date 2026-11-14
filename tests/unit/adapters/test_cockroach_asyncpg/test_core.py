@@ -1,8 +1,11 @@
 # pyright: reportArgumentType=false
 """Unit tests for CockroachDB AsyncPG retry helpers."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from sqlspec.adapters.asyncpg.core import register_json_codecs
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgRetryConfig
 from sqlspec.adapters.cockroach_asyncpg.core import (
     calculate_backoff_seconds,
@@ -12,6 +15,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 )
 from sqlspec.exceptions import ReadOnlyTransactionError
 from sqlspec.utils.routing import RoutingContext
+from sqlspec.utils.serializers import from_json, to_json
 
 
 def test_cockroach_asyncpg_retry_config_default_values() -> None:
@@ -182,3 +186,15 @@ def test_native_read_only_exception_keeps_cause() -> None:
     mapped = create_mapped_exception(native)
     assert isinstance(mapped, ReadOnlyTransactionError)
     assert mapped.__cause__ is native
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scalar", ["123", "null", "true", '{"a":1}', "[1, 2]", ""])
+async def test_cockroach_asyncpg_json_codecs_encode_string_scalars_as_json_strings(scalar: str) -> None:
+    """CockroachDB AsyncPG shared JSON codecs encode string scalars via the configured serializer."""
+    connection = AsyncMock()
+    await register_json_codecs(connection, to_json, from_json)
+    json_encoder = connection.set_type_codec.call_args_list[0].kwargs["encoder"]
+    jsonb_encoder = connection.set_type_codec.call_args_list[1].kwargs["encoder"]
+    assert json_encoder(scalar) == to_json(scalar).encode("utf-8")
+    assert jsonb_encoder(scalar) == b"\x01" + to_json(scalar).encode("utf-8")

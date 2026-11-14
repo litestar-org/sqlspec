@@ -8,6 +8,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sybase._typing import PYMSSQL_MODULE, SybaseConnection
 from sqlspec.adapters.sybase.core import DEFAULT_SYBASE_TDS_VERSION, build_connection_config
 from sqlspec.exceptions import ImproperConfigurationError
@@ -23,6 +25,7 @@ logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sybase"
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SybaseConnectionPool:
     """Thread-local connection manager for Sybase ASE over pymssql (FreeTDS TDS 5.0)."""
 
@@ -101,7 +104,12 @@ class SybaseConnectionPool:
         connection = PYMSSQL_MODULE.connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            try:
+                self._on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
 
         return cast("SybaseConnection", connection)
 
@@ -115,16 +123,22 @@ class SybaseConnectionPool:
         depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
         self._thread_local.depth = depth + 1
+        body_failed = False
         try:
             yield connection
         except BaseException:
+            body_failed = True
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
             self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
-            self.release(connection)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -146,10 +160,12 @@ class SybaseConnectionPool:
         return connection
 
     def release(self, connection: SybaseConnection) -> None:
-        _ = connection
-        with self._registry_lock:
-            if self._checked_out > 0:
-                self._checked_out -= 1
+        try:
+            self._rollback_on_checkin(connection)
+        finally:
+            with self._registry_lock:
+                if self._checked_out > 0:
+                    self._checked_out -= 1
 
     def size(self) -> int:
         self._prune_dead_thread_connections()
@@ -256,6 +272,20 @@ class SybaseConnectionPool:
             self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
+
+    def _rollback_on_checkin(self, connection: SybaseConnection) -> None:
+        """Roll back uncommitted work on the outermost checkin and retire the connection when rollback fails."""
+        if getattr(self._thread_local, "depth", 0) > 0:
+            return
+        if getattr(self._thread_local, "connection", None) is not connection:
+            return
+        if bool(getattr(connection, "autocommit_state", True)):
+            return
+        try:
+            connection.rollback()
+        except BaseException:
+            self._close_thread_connection()
+            raise
 
     def _close_thread_connection(self) -> None:
         thread_state = self._thread_local.__dict__

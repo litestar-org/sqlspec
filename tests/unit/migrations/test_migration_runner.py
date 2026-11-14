@@ -527,7 +527,7 @@ DROP TABLE users;
         assert metadata["has_upgrade"] is True
         assert metadata["has_downgrade"] is True
         assert isinstance(metadata["checksum"], str)
-        assert len(metadata["checksum"]) == 32
+        assert len(metadata["checksum"]) == 64
         assert "loader" in metadata
 
 
@@ -1021,7 +1021,7 @@ DROP TABLE large_table;
 
             assert metadata["version"] == "0001"
             assert metadata["description"] == "large_migration"
-            assert len(metadata["checksum"]) == 32
+            assert len(metadata["checksum"]) == 64
 
 
 def test_many_migration_files_performance(tmp_path: Path) -> None:

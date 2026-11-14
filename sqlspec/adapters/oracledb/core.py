@@ -18,6 +18,8 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson, is_json_payload
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
 from sqlspec.core import (
@@ -151,6 +153,7 @@ __all__ = (
     "extract_pipeline_single_row",
     "extract_static_alter_session_config",
     "forget_oracle_session_state",
+    "format_oracle_table_identifier",
     "has_callable_alter_session_fields",
     "inject_duality_view_etag",
     "is_oracle_standby_failover_error",
@@ -191,6 +194,7 @@ __all__ = (
 )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class OracleVersionCache:
     """Pool-scoped cache for the resolved Oracle server version.
 
@@ -1498,14 +1502,57 @@ async def coerce_many_parameters_async(
     return normalized if coerced_rows is None else coerced_rows
 
 
+def format_oracle_table_identifier(table: str) -> str:
+    """Validate and format a single or schema-qualified Oracle table identifier."""
+    if not isinstance(table, str) or "\x00" in table or "\r" in table or "\n" in table:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    cleaned = table.strip()
+    if not cleaned:
+        msg = "Oracle table identifier must not be empty"
+        raise ImproperConfigurationError(msg)
+    parts: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    idx = 0
+    length = len(cleaned)
+    while idx < length:
+        ch = cleaned[idx]
+        if ch == '"':
+            if in_quotes and idx + 1 < length and cleaned[idx + 1] == '"':
+                buf.append('""')
+                idx += 2
+                continue
+            in_quotes = not in_quotes
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == "." and not in_quotes:
+            parts.append("".join(buf))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if in_quotes:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    parts.append("".join(buf))
+    if not parts or len(parts) > _QUALIFIED_TABLE_PARTS:
+        msg = f"Invalid Oracle table identifier: {table!r}"
+        raise ImproperConfigurationError(msg)
+    return ".".join(_format_oracle_table_part(part, full_identifier=table) for part in parts)
+
+
 def build_insert_statement(table: str, columns: "list[str]") -> str:
+    formatted_table = format_oracle_table_identifier(table)
     column_list = ", ".join(_format_insert_column(col) for col in columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
-    return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
+    return f"INSERT INTO {formatted_table} ({column_list}) VALUES ({placeholders})"
 
 
 def build_truncate_statement(table: str) -> str:
-    return f"TRUNCATE TABLE {table}"
+    return f"TRUNCATE TABLE {format_oracle_table_identifier(table)}"
 
 
 def build_pipeline_stack_result(
@@ -1897,6 +1944,7 @@ def resolve_row_metadata(
     return normalized_column_names, requires_lob_coercion
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class OracleSyncStreamSource:
     """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
@@ -2005,6 +2053,7 @@ class OracleSyncStreamSource:
         return bool(fetch_lobs)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class OracleAsyncStreamSource:
     """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
@@ -2850,12 +2899,13 @@ def validate_oracle_drcp_and_mode_constraints(
             values[key] = match.group(1)
     boundary = values.get("pool_boundary")
     if boundary is not None:
-        if not isinstance(boundary, str) or boundary.lower() not in {"statement", "transaction"}:
+        normalized_boundary = boundary.strip().lower() if isinstance(boundary, str) else ""
+        if not isinstance(boundary, str) or normalized_boundary not in {"statement", "transaction"}:
             msg = "Oracle pool_boundary must be 'statement' or 'transaction'"
             raise ImproperConfigurationError(msg)
         if "pool_boundary" in config:
-            config["pool_boundary"] = boundary.lower()
-        if boundary.lower() == "statement" and (
+            config["pool_boundary"] = normalized_boundary
+        if normalized_boundary == "statement" and (
             features.get("tenant_strategy")
             or is_stateful_oracle_session_context(features.get("session_context_hook"))
             or values.get("transaction_priority")
@@ -3530,6 +3580,59 @@ def _session_release_needs_priority_rollback(
 
 def _oracle_context_value(config: Any, field: str) -> Any:
     return config.get(field) if isinstance(config, Mapping) else getattr(config, field, None)
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
+            return True
+    return False
+
+
+def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
+    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, value, arraysize)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, value, arraysize)
+    return None
+
+
+def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
+    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
+    result = inner(cursor, metadata)
+    if result is not None:
+        return result
+    if fallback is not None:
+        return fallback(cursor, metadata)
+    return None
+
+
+def _format_oracle_table_part(raw_part: str, *, full_identifier: str) -> str:
+    cleaned = raw_part.strip()
+    if not cleaned:
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise ImproperConfigurationError(msg)
+    if cleaned.startswith('"') or cleaned.endswith('"'):
+        if len(cleaned) < _MIN_QUOTED_IDENTIFIER_LEN or not (cleaned.startswith('"') and cleaned.endswith('"')):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise ImproperConfigurationError(msg)
+        raw_inner = cleaned[1:-1]
+        if not raw_inner or '"' in raw_inner.replace('""', ""):
+            msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+            raise ImproperConfigurationError(msg)
+        return f'"{raw_inner}"'
+    if not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(cleaned):
+        msg = f"Invalid Oracle table identifier: {full_identifier!r}"
+        raise ImproperConfigurationError(msg)
+    return cleaned
 
 
 def _build_session_checkout_plan(
@@ -4255,6 +4358,7 @@ class _OracleAsyncStreamDriver(Protocol):
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _OracleJsonBindingState:
     """Lazily resolve whether JSON-shaped values require BLOB locators."""
 
@@ -4601,6 +4705,9 @@ def _description_requires_lob_coercion(description: "list[Any]") -> bool:
 
 def _format_insert_column(column: str) -> str:
     """Format a column identifier for INSERT statements, quoting special names."""
+    if not column or "\x00" in column or "\r" in column or "\n" in column:
+        msg = f"Invalid Oracle column identifier: {column!r}"
+        raise ImproperConfigurationError(msg)
     if _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(column) and column.upper() not in _ORACLE_RESERVED_COLUMN_NAMES:
         return column
     escaped = column.replace('"', '""')
@@ -4710,36 +4817,3 @@ def _create_oracle_error(
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
-
-
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
-def _chained_input_handler(inner: Any, fallback: "Any | None", cursor: Any, value: Any, arraysize: int) -> Any:
-    """Run ``inner`` input handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, value, arraysize)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, value, arraysize)
-    return None
-
-
-def _chained_output_handler(inner: Any, fallback: "Any | None", cursor: Any, metadata: Any) -> Any:
-    """Run ``inner`` output handler, falling back to ``fallback`` when it abstains."""
-    result = inner(cursor, metadata)
-    if result is not None:
-        return result
-    if fallback is not None:
-        return fallback(cursor, metadata)
-    return None

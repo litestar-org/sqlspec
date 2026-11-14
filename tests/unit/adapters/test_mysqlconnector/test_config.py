@@ -22,6 +22,8 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorSyncConnectionParams,
     build_connection_config,
 )
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import ImproperConfigurationError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
@@ -542,10 +544,13 @@ def test_sync_close_pool_drains_cnx_queue() -> None:
     assert config.connection_instance is None
 
 
-def test_sync_connection_context_rolls_back_when_pool_reset_session_disabled() -> None:
-    pooled_conn = MagicMock(in_transaction=True)
+@pytest.mark.parametrize("pool_reset_session", [False, True])
+def test_sync_connection_context_rolls_back_when_autocommit_disabled(pool_reset_session: bool) -> None:
+    pooled_conn = MagicMock(autocommit=False, in_transaction=False)
     fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
-    config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": False}, connection_instance=fake_pool)
+    config = MysqlConnectorSyncConfig(
+        connection_config={"pool_reset_session": pool_reset_session}, connection_instance=fake_pool
+    )
 
     with config.provide_connection() as conn:
         assert conn is pooled_conn
@@ -705,3 +710,29 @@ def test_mysqlconnectorasyncconfig_replica_readonly_is_idempotent_and_validates_
         MysqlConnectorAsyncConfig(replicas=["postgres://replica"])
     with pytest.raises(ImproperConfigurationError):
         MysqlConnectorAsyncConfig(replicas=[""])
+
+
+def test_sync_provide_session_detaches_driver_on_exit() -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False)
+    fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
+    config = MysqlConnectorSyncConfig(connection_instance=fake_pool)
+
+    with config.provide_session() as session:
+        assert session.connection is pooled_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        session.execute("SELECT 1")
+
+
+async def test_async_provide_session_detaches_driver_on_exit() -> None:
+    pooled_conn = MagicMock(autocommit=True, in_transaction=False, close=AsyncMock(), rollback=AsyncMock())
+    fake_pool = MagicMock(get_connection=AsyncMock(return_value=pooled_conn))
+    config = MysqlConnectorAsyncConfig(connection_instance=fake_pool)
+
+    async with config.provide_session() as session:
+        assert session.connection is pooled_conn
+
+    assert session.connection is _DETACHED_CONNECTION
+    with pytest.raises(ImproperConfigurationError, match="already closed"):
+        await session.execute("SELECT 1")

@@ -2,6 +2,7 @@
 
 import contextlib
 from collections.abc import Callable, Mapping
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
 
@@ -327,12 +328,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-                conn, "in_transaction", False
-            ):
-                with contextlib.suppress(Exception):
-                    conn.rollback()
-            conn.close()
+            _rollback_and_close_sync(conn, exc_type)
         return None
 
 
@@ -352,12 +348,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-            conn, "in_transaction", False
-        ):
-            with contextlib.suppress(Exception):
-                conn.rollback()
-        conn.close()
+        _rollback_and_close_sync(conn, kwargs.get("exc_type"))
 
 
 class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -375,12 +366,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
         if self._connection is not None:
             conn = self._connection
             self._connection = None
-            if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-                conn, "in_transaction", False
-            ):
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-            await conn.close()
+            await _rollback_and_close_async(conn, exc_type)
         return None
 
 
@@ -396,12 +382,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
             return
         conn = self._connection
         self._connection = None
-        if not self._config.connection_config.get("pool_reset_session", True) and getattr(
-            conn, "in_transaction", False
-        ):
-            with contextlib.suppress(Exception):
-                await conn.rollback()
-        await conn.close()
+        await _rollback_and_close_async(conn, kwargs.get("exc_type"))
 
 
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"pool_name", "pool_size", "pool_reset_session"})
@@ -769,3 +750,61 @@ class MysqlConnectorAsyncConfig(
                 await connection.close()
             raise
         return connection
+
+
+def _disconnect_raw_sync(raw_cnx: Any) -> None:
+    """Close the underlying synchronous socket when a pooled wrapper reset or rollback fails."""
+    close = getattr(raw_cnx, "close", None) if raw_cnx is not None else None
+    if callable(close):
+        with contextlib.suppress(Exception):
+            close()
+
+
+async def _disconnect_raw_async(raw_cnx: Any) -> None:
+    """Close the underlying asynchronous socket when a pooled wrapper reset or rollback fails."""
+    close = getattr(raw_cnx, "close", None) if raw_cnx is not None else None
+    if callable(close):
+        with contextlib.suppress(Exception):
+            close_res = close()
+            if isawaitable(close_res):
+                await close_res
+
+
+def _rollback_and_close_sync(conn: Any, exc_type: "type[BaseException] | None") -> None:
+    """Roll back open work, return the pooled wrapper, and disconnect the socket when either step fails."""
+    raw_cnx = getattr(conn, "_cnx", None)
+    failure: BaseException | None = None
+    try:
+        if not getattr(conn, "autocommit", False):
+            conn.rollback()
+    except BaseException as exc:
+        failure = exc
+        _disconnect_raw_sync(raw_cnx)
+    try:
+        conn.close()
+    except BaseException as exc:
+        if failure is None:
+            failure = exc
+        _disconnect_raw_sync(raw_cnx)
+    if failure is not None and exc_type is None:
+        raise failure
+
+
+async def _rollback_and_close_async(conn: Any, exc_type: "type[BaseException] | None") -> None:
+    """Roll back open async work, return the pooled wrapper, and disconnect the socket when either step fails."""
+    raw_cnx = getattr(conn, "_cnx", None)
+    failure: BaseException | None = None
+    try:
+        if not getattr(conn, "autocommit", False):
+            await conn.rollback()
+    except BaseException as exc:
+        failure = exc
+        await _disconnect_raw_async(raw_cnx)
+    try:
+        await conn.close()
+    except BaseException as exc:
+        if failure is None:
+            failure = exc
+        await _disconnect_raw_async(raw_cnx)
+    if failure is not None and exc_type is None:
+        raise failure

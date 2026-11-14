@@ -2,13 +2,14 @@
 
 import asyncio
 from contextlib import suppress
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, await_owned_disposal
-from sqlspec.exceptions import TenantCleanupError
+from sqlspec.exceptions import TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant._postgres import PostgresTenantSettings
 
 if TYPE_CHECKING:
@@ -30,33 +31,34 @@ class PsqlpyRLSStrategy(PostgresTenantSettings):
 
     async def checkout(self, connection: "PsqlpyConnection", payload: "TenantContextPayload") -> TenantLeaseState:
         """Capture the previous session state before applying tenant identity."""
+        if await _in_transaction(connection):
+            msg = "Connection entered tenant checkout with an open transaction."
+            raise TenantContextError(msg)
         sql, params = self.prepare_checkout(payload)
         result = await connection.fetch_row(sql, list(params))
         return self.capture(payload, params, result.result(as_tuple=True))
 
     async def checkin(self, connection: "PsqlpyConnection", state: TenantLeaseState) -> None:
         """Restore and verify the captured session state before pool release."""
-        if not state.baseline:
-            return
-        sql, params = self.prepare_checkin(state)
-        try:
-            result = await connection.fetch_row(sql, list(params))
-            self.verify_checkin(params, result.result(as_tuple=True))
-        except TenantCleanupError:
-            raise
-        except Exception as exc:
-            msg = "Tenant session restoration failed"
-            raise with_cause(TenantCleanupError(msg), exc)
-
-
-async def _terminate_and_confirm(connection: Any) -> bool:
-    with suppress(Exception):
-        await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
-    try:
-        await connection.execute("SELECT 1")
-    except Exception:
-        return bool(connection.is_closed())
-    return False
+        if state.baseline:
+            sql, params = self.prepare_checkin(state)
+            try:
+                result = await connection.fetch_row(sql, list(params))
+                self.verify_checkin(params, result.result(as_tuple=True))
+            except TenantCleanupError:
+                raise
+            except Exception as exc:
+                msg = "Tenant session restoration failed"
+                raise with_cause(TenantCleanupError(msg), exc)
+        if await _in_transaction(connection):
+            try:
+                await connection.execute("ROLLBACK")
+            except Exception as exc:
+                msg = "Tenant connection kept an open transaction after checkin"
+                raise with_cause(TenantCleanupError(msg), exc)
+            if await _in_transaction(connection):
+                msg = "Tenant connection kept an open transaction after checkin"
+                raise TenantCleanupError(msg)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -114,3 +116,22 @@ class PsqlpyTenantLease(AsyncTenantLease):
             idle = False
         if idle is not True:
             await connection.execute("ROLLBACK")
+
+
+async def _in_transaction(connection: Any) -> bool:
+    """Return whether a psqlpy connection currently holds an open transaction."""
+    in_transaction = getattr(connection, "in_transaction", None)
+    if callable(in_transaction):
+        res = in_transaction()
+        return bool(await res) if isawaitable(res) else bool(res)
+    return False
+
+
+async def _terminate_and_confirm(connection: Any) -> bool:
+    with suppress(Exception):
+        await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
+    try:
+        await connection.execute("SELECT 1")
+    except Exception:
+        return bool(connection.is_closed())
+    return False

@@ -1,5 +1,8 @@
 """Teradata extension schema contracts."""
 
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 import pytest
 
 from sqlspec.adapters.teradata import TeradataConfig
@@ -149,6 +152,9 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
     cursor.fetchall.return_value = [("event", "app", "user", "session", "invoke", now, '{"text":"hello"}')]
     assert store.get_events("app", "user", "session", limit=2)[0]["event_data"] == {"text": "hello"}
     assert "TOP 2" in cursor.execute.call_args.args[0]
+    assert 'JOIN "ADK_SESSION" s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id' in (
+        " ".join(cursor.execute.call_args.args[0].split())
+    )
     assert store.get_events("app", "user", "session", limit=0) == []
     assert store.delete_expired_events(now, "app") == 1
     assert store.delete_idle_user_states(now, "app") == 1
@@ -354,8 +360,9 @@ def test_teradata_adk_atomic_event_state_and_owner(teradata_connection) -> None:
     assert result["state"] == {"count": 2}
     assert conn.autocommit is True
     cursor.fetchone.return_value = None
+    missing_event: StoredEvent = {**event, "session_id": "missing"}
     with pytest.raises(ValueError, match="not found"):
-        store.append_event_and_update_state(event, "app", "user", "missing", {})
+        store.append_event_and_update_state(missing_event, "app", "user", "missing", {})
     conn.rollback.assert_called_once()
     assert conn.autocommit is True
     with pytest.raises(RuntimeError, match="Failed to fetch"):
@@ -413,7 +420,7 @@ def test_teradata_memory_disabled_missing_and_duplicates(teradata_connection) ->
         enabled.insert_memory_entries([entry], owner_id=5)
     assert conn.autocommit is True
     original_fetchall = cursor.fetchall.side_effect
-    probes = iter([[], [("event",)]])
+    probes = iter([[], [("app", "user", "event")]])
     cursor.fetchall.side_effect = lambda: next(probes)
     assert enabled.insert_memory_entries([entry], owner_id=5) == 0
     assert conn.autocommit is True
@@ -550,13 +557,18 @@ def test_teradata_memory_dedup_prequery_and_tera_concurrent_race_recovery(monkey
             "embedding": None,
         }
 
-    fetch_results: list[list[tuple[str]]] = []
+    fetch_results: list[list[tuple[str, str, str]]] = []
 
     def _execute(sql: str, params: tuple[Any, ...] = ()) -> None:
         normalized = " ".join(sql.split())
-        if normalized.startswith("SELECT event_id FROM"):
+        if normalized.startswith("SELECT app_name, user_id, event_id FROM"):
             fetch_results.clear()
-            fetch_results.append([(ev,) for ev in persisted if ev in params])
+            if "WHERE event_id IN" in normalized:
+                fetch_results.append([("app", "u1", ev) for ev in persisted if ev in params])
+            else:
+                app_p, user_p, ev_p = str(params[0]), str(params[1]), str(params[2])
+                rows = [("app", "u1", ev_p)] if (app_p, user_p) == ("app", "u1") and ev_p in persisted else []
+                fetch_results.append(rows)
             return
         if normalized.startswith("INSERT INTO"):
             ev_id = str(params[5])
@@ -709,3 +721,127 @@ def test_teradata_extension_downgrades_skip_tables_already_dropped() -> None:
     driver = _CatalogDriver(set())
     events_downgrade(driver, queue_store, True)
     assert driver.dropped == []
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expects_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-1, False, id="negative-int"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+def test_teradata_adk_get_session_renews_only_for_positive_duration(
+    teradata_connection: Any, renew_for: int | timedelta | None, expects_update: bool
+) -> None:
+    """get_session executes the update_time touch only when renew_for is strictly positive."""
+    _conn, cursor = teradata_connection
+    now = datetime.now(UTC)
+    cursor.fetchone.return_value = ("s1", "app", "u1", '{"k":1}', now, now)
+    store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
+
+    session = store.get_session("app", "u1", "s1", renew_for=renew_for)
+
+    assert session is not None
+    executed = [" ".join(call.args[0].split()) for call in cursor.execute.call_args_list]
+    has_update = any(sql.startswith('UPDATE "ADK_SESSION" SET update_time') for sql in executed)
+    assert has_update is expects_update
+
+
+@pytest.mark.parametrize("owner_exists", [True, False])
+def test_teradata_adk_append_event_checks_session_ownership_and_rejects_mismatch(
+    teradata_connection: Any, owner_exists: bool
+) -> None:
+    """append_event checks ownership before inserting and append_event_and_update_state rejects mismatched scope."""
+    conn, cursor = teradata_connection
+    cursor.fetchone.return_value = (1,) if owner_exists else None
+    store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
+    now = datetime.now(UTC)
+    event: StoredEvent = {
+        "id": "e1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "invocation_id": "inv",
+        "timestamp": now,
+        "event_data": {"k": 1},
+    }
+
+    if owner_exists:
+        store.append_event(event)
+        executed = [" ".join(call.args[0].split()) for call in cursor.execute.call_args_list]
+        assert executed[0] == 'SELECT TOP 1 1 FROM "ADK_SESSION" WHERE id = ? AND app_name = ? AND user_id = ?'
+        assert executed[1].startswith('INSERT INTO "ADK_EVENT"')
+        assert conn.commit.call_count == 1
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            store.append_event(event)
+        assert len(cursor.execute.call_args_list) == 1
+        assert conn.rollback.call_count == 1
+        assert conn.commit.call_count == 0
+
+    cursor.execute.reset_mock()
+    with pytest.raises(ValueError, match="does not match"):
+        store.append_event_and_update_state({**event, "user_id": "other"}, "app", "u1", "s1", {})
+    assert cursor.execute.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_sql", "expected_params"),
+    [
+        pytest.param(None, None, 'DELETE FROM "ADK_MEMORY" WHERE session_id = ?', ("s1",), id="session-only"),
+        pytest.param(
+            "app", None, 'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND app_name = ?', ("s1", "app"), id="with-app"
+        ),
+        pytest.param(
+            None, "u1", 'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND user_id = ?', ("s1", "u1"), id="with-user"
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND app_name = ? AND user_id = ?',
+            ("s1", "app", "u1"),
+            id="with-app-and-user",
+        ),
+    ],
+)
+def test_teradata_memory_composite_dedup_ddl_and_scoped_session_delete(
+    teradata_connection: Any,
+    app_name: str | None,
+    user_id: str | None,
+    expected_sql: str,
+    expected_params: tuple[str, ...],
+) -> None:
+    """Memory DDL declares composite UNIQUE, batch dedup keeps cross-owner event_ids, and session delete scopes owner."""
+    _conn, cursor = teradata_connection
+    config = TeradataConfig(connection_config={"host": "localhost"}, extension_config={"adk": {"enable_memory": True}})
+    store = TeradataADKMemoryStore(config)
+    ddl = store._memory_table_ddl()
+    assert 'CONSTRAINT "uq_ADK_MEMORY_event_id" UNIQUE (app_name, user_id, event_id)' in ddl
+
+    now = datetime.now(UTC)
+    entry_a: StoredMemory = {
+        "id": "m1",
+        "session_id": "s1",
+        "app_name": "app-a",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "shared-ev",
+        "author": "user",
+        "timestamp": now,
+        "content_json": {},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": now,
+        "embedding": None,
+    }
+    entry_b: StoredMemory = {**entry_a, "id": "m2", "app_name": "app-b", "user_id": "u2"}
+    cursor.fetchall.return_value = [("app-a", "u1", "shared-ev")]
+    assert store.insert_memory_entries([entry_a, entry_b]) == 1
+
+    cursor.execute.reset_mock()
+    assert store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
+    assert cursor.execute.call_args.args == (expected_sql, expected_params)

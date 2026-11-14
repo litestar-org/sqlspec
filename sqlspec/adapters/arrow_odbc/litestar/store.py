@@ -34,60 +34,6 @@ _MAX_QUALIFIED_PARTS: Final = 2
 _MIN_QUOTED_SEGMENT_LEN: Final = 2
 
 
-def _build_chunk_table_name(table_name: str) -> str:
-    """Append _chunks inside trailing bracket or double-quote delimiters, preserving any schema prefix."""
-    if table_name.endswith("]"):
-        return f"{table_name[:-1]}_chunks]"
-    if table_name.endswith('"'):
-        return f'{table_name[:-1]}_chunks"'
-    return f"{table_name}_chunks"
-
-
-def _unwrap_odbc_segment(segment: str) -> str | None:
-    if not segment or segment != segment.strip():
-        return None
-    if segment.startswith("["):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith("]"):
-            return None
-        inner = segment[1:-1]
-        if "[" in inner or "]" in inner.replace("]]", ""):
-            return None
-        return inner.replace("]]", "]")
-    if segment.startswith('"'):
-        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith('"'):
-            return None
-        inner = segment[1:-1]
-        if '"' in inner.replace('""', ""):
-            return None
-        return inner.replace('""', '"')
-    return segment
-
-
-def _validate_arrow_odbc_table_name(table_name: str) -> None:
-    """Raise ValueError unless table_name is a valid 1- or 2-part ODBC table identifier."""
-    if not table_name or not table_name.strip():
-        msg = "Table name cannot be empty"
-        raise ValueError(msg)
-    if table_name != table_name.strip():
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    raw_segments = table_name.split(".")
-    if len(raw_segments) > _MAX_QUALIFIED_PARTS:
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-    unwrapped: list[str] = []
-    for raw_segment in raw_segments:
-        segment = _unwrap_odbc_segment(raw_segment)
-        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
-            msg = f"Invalid table name: {table_name!r}"
-            raise ValueError(msg)
-        unwrapped.append(segment)
-    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
-    if parts != tuple(unwrapped):
-        msg = f"Invalid table name: {table_name!r}"
-        raise ValueError(msg)
-
-
 class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
     """Session store using arrow-odbc sessions.
 
@@ -108,11 +54,6 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         else:
             msg = f"ArrowOdbcStore requires dialect 'mssql' or 'db2' (received {dialect!r})."
             raise ImproperConfigurationError(msg)
-
-    @staticmethod
-    def _ensure_table_name(table_name: str) -> None:
-        """Validate 1- or 2-part ODBC session table name."""
-        _validate_arrow_odbc_table_name(table_name)
 
     @property
     def _chunk_table_name(self) -> str:
@@ -154,6 +95,19 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         """Delete all expired sessions."""
         return await async_(self._delete_expired)()
 
+    def get_schema_targets(self) -> list[SchemaTarget]:
+        """Return primary session table and overflow chunk table SchemaTargets in FK order."""
+        return self._sql.schema_targets()
+
+    def get_companion_indexes(self) -> list[CompanionIndex]:
+        """Return the companion session expiry index definition."""
+        return self._sql.companion_indexes()
+
+    @staticmethod
+    def _ensure_table_name(table_name: str) -> None:
+        """Validate 1- or 2-part ODBC session table name."""
+        _validate_arrow_odbc_table_name(table_name)
+
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:
             self._sql.create_table(driver)
@@ -174,7 +128,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                 driver.commit()
                 return None
 
-            if renew_for is not None and expires_at is not None:
+            if self._should_renew(renew_for) and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
                     driver.execute(*self._sql.renew(key, new_expires_at))
@@ -260,14 +214,6 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
     def _table_ddl(self) -> str:
         """Get the CREATE TABLE DDL for the configured dialect."""
         return self._sql.table_ddl()
-
-    def get_schema_targets(self) -> list[SchemaTarget]:
-        """Return primary session table and overflow chunk table SchemaTargets in FK order."""
-        return self._sql.schema_targets()
-
-    def get_companion_indexes(self) -> list[CompanionIndex]:
-        """Return the companion session expiry index definition."""
-        return self._sql.companion_indexes()
 
     def _drop_table_sql(self) -> "list[str]":
         """Get the DROP TABLE statements for the configured dialect."""
@@ -397,6 +343,40 @@ class _TsqlSessionSql:
         END;
         """
 
+    def schema_targets(self) -> list[SchemaTarget]:
+        """Build ordered SchemaTargets for the primary session and chunk tables."""
+        return [
+            SchemaTarget.from_ddl(self._bare_table, self._session_table_ddl(), schema=self._schema, dialect="tsql"),
+            SchemaTarget.from_ddl(self._bare_chunk_table, self._chunk_table_ddl(), schema=self._schema, dialect="tsql"),
+        ]
+
+    def companion_indexes(self) -> list[CompanionIndex]:
+        """Build the guarded T-SQL companion expiry index definition."""
+        index_name = f"IX_{self._bare_table}_expires_at"
+        ddl = f"""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = N'{index_name}'
+              AND object_id = OBJECT_ID(N'{self._schema}.{self._bare_table}')
+        )
+        BEGIN
+            CREATE INDEX {index_name}
+                ON {self._table_name}(expires_at)
+                WHERE expires_at IS NOT NULL;
+        END;
+        """
+        return [CompanionIndex(name=index_name, table=self._bare_table, schema=self._schema, ddl=ddl)]
+
+    def drop_statements(self) -> "list[str]":
+        """Get SQL Server DROP TABLE statements."""
+        chunk_target = f"{self._schema}.{self._bare_chunk_table}"
+        table_target = f"{self._schema}.{self._bare_table}"
+        return [
+            f"IF OBJECT_ID(N'{chunk_target}', N'U') IS NOT NULL DROP TABLE {chunk_target};",
+            f"IF OBJECT_ID(N'{table_target}', N'U') IS NOT NULL DROP TABLE {table_target};",
+        ]
+
     def _session_table_ddl(self) -> str:
         """Get table-only SQL Server CREATE TABLE DDL for the primary session table."""
         return f"""
@@ -437,40 +417,6 @@ class _TsqlSessionSql:
             );
         END;
         """
-
-    def schema_targets(self) -> list[SchemaTarget]:
-        """Build ordered SchemaTargets for the primary session and chunk tables."""
-        return [
-            SchemaTarget.from_ddl(self._bare_table, self._session_table_ddl(), schema=self._schema, dialect="tsql"),
-            SchemaTarget.from_ddl(self._bare_chunk_table, self._chunk_table_ddl(), schema=self._schema, dialect="tsql"),
-        ]
-
-    def companion_indexes(self) -> list[CompanionIndex]:
-        """Build the guarded T-SQL companion expiry index definition."""
-        index_name = f"IX_{self._bare_table}_expires_at"
-        ddl = f"""
-        IF NOT EXISTS (
-            SELECT 1
-            FROM sys.indexes
-            WHERE name = N'{index_name}'
-              AND object_id = OBJECT_ID(N'{self._schema}.{self._bare_table}')
-        )
-        BEGIN
-            CREATE INDEX {index_name}
-                ON {self._table_name}(expires_at)
-                WHERE expires_at IS NOT NULL;
-        END;
-        """
-        return [CompanionIndex(name=index_name, table=self._bare_table, schema=self._schema, ddl=ddl)]
-
-    def drop_statements(self) -> "list[str]":
-        """Get SQL Server DROP TABLE statements."""
-        chunk_target = f"{self._schema}.{self._bare_chunk_table}"
-        table_target = f"{self._schema}.{self._bare_table}"
-        return [
-            f"IF OBJECT_ID(N'{chunk_target}', N'U') IS NOT NULL DROP TABLE {chunk_target};",
-            f"IF OBJECT_ID(N'{table_target}', N'U') IS NOT NULL DROP TABLE {table_target};",
-        ]
 
 
 class _Db2SessionSql:
@@ -596,6 +542,60 @@ class _Db2SessionSql:
             f"CONSTRAINT FK_{upper_base}_CHUNKS FOREIGN KEY (session_id) "
             f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
         )
+
+
+def _build_chunk_table_name(table_name: str) -> str:
+    """Append _chunks inside trailing bracket or double-quote delimiters, preserving any schema prefix."""
+    if table_name.endswith("]"):
+        return f"{table_name[:-1]}_chunks]"
+    if table_name.endswith('"'):
+        return f'{table_name[:-1]}_chunks"'
+    return f"{table_name}_chunks"
+
+
+def _unwrap_odbc_segment(segment: str) -> str | None:
+    if not segment or segment != segment.strip():
+        return None
+    if segment.startswith("["):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith("]"):
+            return None
+        inner = segment[1:-1]
+        if "[" in inner or "]" in inner.replace("]]", ""):
+            return None
+        return inner.replace("]]", "]")
+    if segment.startswith('"'):
+        if len(segment) < _MIN_QUOTED_SEGMENT_LEN or not segment.endswith('"'):
+            return None
+        inner = segment[1:-1]
+        if '"' in inner.replace('""', ""):
+            return None
+        return inner.replace('""', '"')
+    return segment
+
+
+def _validate_arrow_odbc_table_name(table_name: str) -> None:
+    """Raise ValueError unless table_name is a valid 1- or 2-part ODBC table identifier."""
+    if not table_name or not table_name.strip():
+        msg = "Table name cannot be empty"
+        raise ValueError(msg)
+    if table_name != table_name.strip():
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    raw_segments = table_name.split(".")
+    if len(raw_segments) > _MAX_QUALIFIED_PARTS:
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
+    unwrapped: list[str] = []
+    for raw_segment in raw_segments:
+        segment = _unwrap_odbc_segment(raw_segment)
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
+            msg = f"Invalid table name: {table_name!r}"
+            raise ValueError(msg)
+        unwrapped.append(segment)
+    parts = split_qualified_identifier(table_name, quote_chars='"', allow_bracket_quotes=True)
+    if parts != tuple(unwrapped):
+        msg = f"Invalid table name: {table_name!r}"
+        raise ValueError(msg)
 
 
 def _split_tsql_table_name(table_name: str) -> "tuple[str, str]":

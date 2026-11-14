@@ -1822,7 +1822,9 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                     "DuckDB does not support partial indexes; a full index would change the index semantics."
                 )
             where_expr = (
-                exp.condition(self._where, dialect=norm_dialect) if isinstance(self._where, str) else self._where.copy()
+                exp.condition(self._where, dialect=norm_dialect, copy=False)
+                if isinstance(self._where, str)
+                else self._where.copy()
             )
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
@@ -2361,7 +2363,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         if condition is not None:
             if has_sqlglot_expression(condition):
                 sqlglot_expr = condition.sqlglot_expression
-                condition_str = sqlglot_expr.sql(dialect=self.dialect) if sqlglot_expr else str(condition)
+                condition_str = sqlglot_expr.sql(dialect=self.dialect, copy=False) if sqlglot_expr else str(condition)
             else:
                 condition_str = str(condition)
 
@@ -3228,7 +3230,7 @@ def _translate_catalog_type(
         return dtype
     with contextlib.suppress(ParseError):
         built = exp.DataType.build(dtype, dialect=norm_source)
-        rendered = built.sql(dialect=norm_target)
+        rendered = built.sql(dialect=norm_target, copy=False)
         if norm_target == "sqlite" and _sqlite_type_affinity(rendered) != _sqlite_type_affinity(dtype):
             return dtype
         return rendered
@@ -3954,7 +3956,7 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         declared = dtype.strip()
         with contextlib.suppress(ParseError):
             built = exp.DataType.build(declared, dialect=target_dialect)
-            if _sqlite_type_affinity(built.sql(dialect="sqlite")) == _sqlite_type_affinity(declared):
+            if _sqlite_type_affinity(built.sql(dialect="sqlite", copy=False)) == _sqlite_type_affinity(declared):
                 return built
         return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=declared)
     if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
@@ -3963,7 +3965,7 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         return exp.DataType.build(dtype, dialect=target_dialect)
     if _QUALIFIED_TYPE_NAME_RE.fullmatch(dtype.strip()):
         type_name = _mark_explicit_table_quotes(exp.to_table(dtype.strip(), dialect=norm_dialect), dtype.strip())
-        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=type_name.sql(dialect=norm_dialect))
+        return exp.DataType(this=exp.DataType.Type.USERDEFINED, kind=type_name.sql(dialect=norm_dialect, copy=False))
     if target_dialect is not None:
         with contextlib.suppress(ParseError):
             return exp.DataType.build(dtype)
@@ -4024,7 +4026,7 @@ def _catalog_name(name: str, dialect: "DialectType | None", source_dialect: "Dia
     target_name = name
     if _BARE_IDENTIFIER_RE.fullmatch(name) and _fold_identifier(name, case_dialect) == name:
         target_name = _fold_identifier(name, norm_dialect)
-    return exp.Identifier(this=target_name, quoted=True).sql(dialect=norm_dialect)
+    return exp.Identifier(this=target_name, quoted=True).sql(dialect=norm_dialect, copy=False)
 
 
 def _fold_identifier(name: str, dialect: str | None) -> str:

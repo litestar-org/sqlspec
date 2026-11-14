@@ -882,6 +882,7 @@ def test_bigquery_session_context_rolls_back_on_exception_when_in_transaction() 
     """Verify BigQuerySessionContext.__exit__ rolls back active transaction on exception."""
     rolled_back: list[bool] = []
     released: list[bool] = []
+    detached: list[bool] = []
 
     class _Driver:
         def __init__(self, **_kwargs: Any) -> None:
@@ -892,6 +893,9 @@ def test_bigquery_session_context_rolls_back_on_exception_when_in_transaction() 
 
         def _connection_in_transaction(self) -> bool:
             return True
+
+        def _detach_connection(self) -> None:
+            detached.append(True)
 
     ctx = BigQuerySessionContext(
         acquire_connection=lambda: SimpleNamespace(),
@@ -909,6 +913,7 @@ def test_bigquery_session_context_rolls_back_on_exception_when_in_transaction() 
 
     assert rolled_back == [True]
     assert released == [True]
+    assert detached == [True]
 
 
 def test_build_dml_rowcount_preserves_zero_affected_rows() -> None:

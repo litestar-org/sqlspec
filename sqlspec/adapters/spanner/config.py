@@ -4,6 +4,7 @@ import contextlib
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, TypedDict, cast
 
 from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
@@ -337,6 +338,7 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._transaction:
+            rollback_failed = False
             try:
                 if self._connection is not None:
                     txn = cast("Any", self._connection)
@@ -349,12 +351,17 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
                     elif action == "rollback":
                         try:
                             txn.rollback()
-                        except SpannerGoogleAPICallError as exc:
+                        except BaseException as exc:
+                            rollback_failed = True
                             if exc_type is None:
-                                raise create_mapped_exception(exc) from exc
+                                if isinstance(exc, SpannerGoogleAPICallError):
+                                    raise create_mapped_exception(exc) from exc
+                                raise
             finally:
                 if self._session is not None:
-                    cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
+                    _return_spanner_session_sync(
+                        self._config.get_database(), self._session, rollback_failed=rollback_failed
+                    )
                 self._connection = None
                 self._session = None
             return None
@@ -458,14 +465,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
 
         self._client: Client | None = None
         self._database: Database | None = None
-
-    def _build_storage_capabilities(self) -> "StorageCapabilities":
-        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
-        capabilities = super()._build_storage_capabilities()
-        arrow_ready = self._dependency_available(ensure_pyarrow)
-        capabilities["arrow_import_enabled"] = arrow_ready
-        capabilities["arrow_export_enabled"] = arrow_ready
-        return capabilities
 
     def get_database(self) -> "Database":
         """Return the configured database, creating the pool and client on first use.
@@ -810,6 +809,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
 
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
+
     def _get_client(self) -> "Client":
         if self._client is None:
             self._client = Client(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
@@ -905,6 +912,7 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._transaction:
+            rollback_failed = False
             try:
                 if self._connection is not None:
                     txn = cast("Any", self._connection)
@@ -917,13 +925,16 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
                     elif action == "rollback":
                         try:
                             await txn.rollback()
-                        except SpannerGoogleAPICallError as exc:
+                        except BaseException as exc:
+                            rollback_failed = True
                             if exc_type is None:
-                                raise create_mapped_exception(exc) from exc
+                                if isinstance(exc, SpannerGoogleAPICallError):
+                                    raise create_mapped_exception(exc) from exc
+                                raise
             finally:
                 if self._session is not None:
                     database = await self._config.get_database()
-                    await cast("Any", database).sessions_manager.put_session(self._session)
+                    await _return_spanner_session_async(database, self._session, rollback_failed=rollback_failed)
                 self._connection = None
                 self._session = None
             return None
@@ -1027,14 +1038,6 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         self._client: AsyncClient | None = None
         self._database: AsyncDatabase | None = None
-
-    def _build_storage_capabilities(self) -> "StorageCapabilities":
-        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
-        capabilities = super()._build_storage_capabilities()
-        arrow_ready = self._dependency_available(ensure_pyarrow)
-        capabilities["arrow_import_enabled"] = arrow_ready
-        capabilities["arrow_export_enabled"] = arrow_ready
-        return capabilities
 
     async def get_database(self) -> "AsyncDatabase":
         """Return the configured database, creating the pool and client on first use.
@@ -1382,6 +1385,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
 
+    def _build_storage_capabilities(self) -> "StorageCapabilities":
+        """Enable Arrow conversion and mutation ingestion when PyArrow is installed."""
+        capabilities = super()._build_storage_capabilities()
+        arrow_ready = self._dependency_available(ensure_pyarrow)
+        capabilities["arrow_import_enabled"] = arrow_ready
+        capabilities["arrow_export_enabled"] = arrow_ready
+        return capabilities
+
     def _get_client(self) -> "AsyncClient":
         if self._client is None:
             self._client = AsyncClient(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
@@ -1524,3 +1535,27 @@ def _pool_kwargs(connection_config: "dict[str, Any]", pool_kind: str) -> dict[st
             )
         )
     return pool_kwargs
+
+
+def _return_spanner_session_sync(database: Any, session: Any, *, rollback_failed: bool) -> None:
+    """Return a Spanner session to the manager or evict non-multiplexed sessions on failed rollback."""
+    if not rollback_failed:
+        cast("Any", database).sessions_manager.put_session(session)
+        return
+    if getattr(session, "is_multiplexed", False) is not True:
+        with contextlib.suppress(Exception):
+            session.delete()
+
+
+async def _return_spanner_session_async(database: Any, session: Any, *, rollback_failed: bool) -> None:
+    """Return an async Spanner session to the manager or evict non-multiplexed sessions on failed rollback."""
+    if not rollback_failed:
+        result = cast("Any", database).sessions_manager.put_session(session)
+        if isawaitable(result):
+            await result
+        return
+    if getattr(session, "is_multiplexed", False) is not True:
+        with contextlib.suppress(Exception):
+            delete_result = session.delete()
+            if isawaitable(delete_result):
+                await delete_result

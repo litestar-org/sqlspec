@@ -26,6 +26,7 @@ from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemo
 from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
 from sqlspec.adapters.cockroach_asyncpg.tenant import CockroachAsyncpgRLSStrategy, CockroachAsyncpgTenantLease
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -898,3 +899,14 @@ def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> N
     assert config.supports_read_routing
     assert config.driver_features["enable_follower_reads"] is True
     assert config.driver_features["default_staleness"] == "follower_read_timestamp()"
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.is_in_transaction = lambda: False
+    pool = AsyncMock()
+    pool.acquire.return_value = connection
+    config = CockroachAsyncpgConfig(connection_instance=cast("Any", pool))
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _DETACHED_CONNECTION

@@ -124,6 +124,21 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     __slots__ = ("_dialect",)
 
+    def __init__(self, config: "AdbcConfig", *, read_config: "AdbcConfig | None" = None) -> None:
+        """Initialize ADBC ADK store.
+
+        Args:
+            config: AdbcConfig instance (any ADBC driver).
+            read_config: Optional compatible reader for pure reads.
+        """
+        super().__init__(config, read_config=read_config)
+        self._dialect = self._detect_dialect()
+
+    @property
+    def dialect(self) -> str:
+        """Return the detected database dialect."""
+        return self._dialect
+
     def drop_tables(self) -> None:
         """Drop all ADK tables in FK-safe order, probing the Teradata catalog before each drop."""
         if self._dialect != DIALECT_TERADATA:
@@ -145,16 +160,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         return [_teradata_guarded_drop(table) for table in tables]
 
-    def __init__(self, config: "AdbcConfig", *, read_config: "AdbcConfig | None" = None) -> None:
-        """Initialize ADBC ADK store.
-
-        Args:
-            read_config: Optional compatible reader for pure reads.
-            config: AdbcConfig instance (any ADBC driver).
-        """
-        super().__init__(config, read_config=read_config)
-        self._dialect = self._detect_dialect()
-
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
         """Reconcile session and event companion indexes for the active ADBC backend.
 
@@ -174,31 +179,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return
 
         _reconcile_adbc_indexes_sync(driver, self._dialect, self._session_index_specs())
-
-    def _session_index_specs(self) -> list[tuple[str, str, str]]:
-        """Return ordinary session and event companion index definitions."""
-        session_slug = _adbc_index_slug(self._session_table)
-        events_slug = _adbc_index_slug(self._events_table)
-        return [
-            (f"idx_{session_slug}_app_user", self._session_table, "app_name, user_id"),
-            (f"idx_{session_slug}_update_time", self._session_table, "update_time DESC"),
-            (f"idx_{events_slug}_session", self._events_table, "session_id, timestamp ASC"),
-        ]
-
-    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
-        """Build a dialect-aware SchemaTarget for one ADK table."""
-        return _build_adbc_schema_target(self._dialect, table, ddl)
-
-    def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct dialect-aware SchemaTarget definitions for all ADK session tables."""
-        ddl_targets = (
-            (self._session_table, self._sessions_table_ddl()),
-            (self._events_table, self._events_table_ddl()),
-            (self._app_state_table, self._app_states_table_ddl()),
-            (self._user_state_table, self._user_states_table_ddl()),
-            (self._metadata_table, self._metadata_table_ddl()),
-        )
-        return [self._adbc_target(table, ddl) for table, ddl in ddl_targets]
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -310,10 +290,30 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Set a metadata value."""
         self._set_metadata(key, value)
 
-    @property
-    def dialect(self) -> str:
-        """Return the detected database dialect."""
-        return self._dialect
+    def _session_index_specs(self) -> list[tuple[str, str, str]]:
+        """Return ordinary session and event companion index definitions."""
+        session_slug = _adbc_index_slug(self._session_table)
+        events_slug = _adbc_index_slug(self._events_table)
+        return [
+            (f"idx_{session_slug}_app_user", self._session_table, "app_name, user_id"),
+            (f"idx_{session_slug}_update_time", self._session_table, "update_time DESC"),
+            (f"idx_{events_slug}_session", self._events_table, "session_id, timestamp ASC"),
+        ]
+
+    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
+        """Build a dialect-aware SchemaTarget for one ADK table."""
+        return _build_adbc_schema_target(self._dialect, table, ddl)
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct dialect-aware SchemaTarget definitions for all ADK session tables."""
+        ddl_targets = (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+        return [self._adbc_target(table, ddl) for table, ddl in ddl_targets]
 
     def _detect_dialect(self) -> str:
         """Detect ADBC driver dialect from connection config.
@@ -1257,7 +1257,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             Session record or None if not found.
         """
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        if self._should_renew(renew_for):
             now_val = self._encode_timestamp(datetime.now(UTC))
             sql = f"""
             UPDATE {self._session_table}
@@ -1353,8 +1353,6 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             try:
                 self._enable_foreign_keys(cursor, conn)
                 self._execute(cursor, delete_events_sql, (app_name, user_id, session_id))
-                if self._dialect == DIALECT_DUCKDB:
-                    conn.commit()
                 self._execute(cursor, delete_session_sql, (app_name, user_id, session_id))
                 conn.commit()
             finally:
@@ -1418,26 +1416,32 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _insert_event(self, event_record: "StoredEvent") -> None:
-        """Insert an event record into the events table.
+        """Insert an event record into the events table when the owning session exists.
 
         Args:
             event_record: Event record to store.
         """
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
         event_data = self._serialize_json_field(event_record["event_data"])
-        if self._dialect == DIALECT_SNOWFLAKE:
-            sql = (
-                f"INSERT INTO {self._events_table} "
-                "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
-                f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+        use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        if self._dialect == DIALECT_DB2:
+            select_expr = (
+                "SELECT CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), "
+                "CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(256)), CAST(? AS TIMESTAMP), CAST(? AS CLOB(1M))"
             )
         else:
-            sql = f"""
-            INSERT INTO {self._events_table} (
-                id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-            ) VALUES (?, ?, ?, ?, ?, ?, {self._json_placeholder()})
-            """
+            select_expr = f"SELECT ?, ?, ?, ?, ?, ?, {self._json_placeholder()}"
+        returning_clause = " RETURNING 1" if use_returning else ""
+        sql = (
+            f"INSERT INTO {self._events_table} "
+            "(id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+            f"{select_expr} FROM {self._session_table} "
+            f"WHERE id = ? AND app_name = ? AND user_id = ?{returning_clause}"
+        )
 
-        with self._config.provide_connection() as conn:
+        with _adbc_atomic_connection(self._config, self._dialect) as conn:
             cursor = conn.cursor()
             try:
                 self._execute(
@@ -1445,14 +1449,37 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     sql,
                     (
                         event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
+                        app_name,
+                        user_id,
+                        session_id,
                         event_record["invocation_id"],
                         self._encode_timestamp(event_record["timestamp"]),
                         event_data,
+                        session_id,
+                        app_name,
+                        user_id,
                     ),
                 )
+                if use_returning:
+                    inserted = cursor.fetchone() is not None
+                else:
+                    rowcount = getattr(cursor, "rowcount", None)
+                    if isinstance(rowcount, int) and rowcount == 0:
+                        inserted = False
+                    elif isinstance(rowcount, int) and rowcount < 0:
+                        self._execute(
+                            cursor,
+                            f"SELECT 1 FROM {self._session_table} WHERE id = ? AND app_name = ? AND user_id = ?",
+                            (session_id, app_name, user_id),
+                        )
+                        inserted = cursor.fetchone() is not None
+                    else:
+                        inserted = True
+                if not inserted:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
+                    msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                    raise ValueError(msg)
                 conn.commit()
             finally:
                 cursor.close()
@@ -1486,6 +1513,17 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_state: Optional app-scoped state snapshot.
             user_state: Optional user-scoped state snapshot.
         """
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = (
+                f"Event scope ({event_record['app_name']!r}, {event_record['user_id']!r}, "
+                f"{event_record['session_id']!r}) does not match target ({app_name!r}, {user_id!r}, {session_id!r})."
+            )
+            raise ValueError(msg)
+
         if self._dialect == DIALECT_SNOWFLAKE:
             insert_sql = (
                 f"INSERT INTO {self._events_table} "
@@ -1619,7 +1657,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         if limit == 0:
             return []
 
-        where_clauses = ["s.app_name = ?", "s.user_id = ?", "e.session_id = ?"]
+        where_clauses = ["s.app_name = ?", "s.user_id = ?", "s.id = ?"]
         params: list[Any] = [app_name, user_id, session_id]
 
         if after_timestamp is not None:
@@ -1640,7 +1678,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         sql = f"""
         SELECT {f"TOP {int(limit)} " if self._dialect == DIALECT_TERADATA and limit is not None else ""}e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
-        JOIN {self._session_table} s ON e.session_id = s.id
+        JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
         ORDER BY e.timestamp ASC{limit_clause}
         """
@@ -1887,19 +1925,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     __slots__ = ("_dialect", "_sqlite_fts_enabled")
 
-    def drop_tables(self) -> None:
-        """Drop the memory table, probing the Teradata catalog before dropping."""
-        if self._dialect != DIALECT_TERADATA:
-            super().drop_tables()
-            return
-        _run_guarded_drops(self._config, self.downgrade_drops())
-
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops, catalog-probed on Teradata."""
-        if self._dialect != DIALECT_TERADATA:
-            return super().downgrade_drops()
-        return [_teradata_guarded_drop(self._memory_table)]
-
     def __init__(self, config: "AdbcConfig", *, read_config: "AdbcConfig | None" = None) -> None:
         super().__init__(config, read_config=read_config)
         self._dialect = self._detect_dialect()
@@ -1913,6 +1938,19 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     @property
     def dialect(self) -> str:
         return self._dialect
+
+    def drop_tables(self) -> None:
+        """Drop the memory table, probing the Teradata catalog before dropping."""
+        if self._dialect != DIALECT_TERADATA:
+            super().drop_tables()
+            return
+        _run_guarded_drops(self._config, self.downgrade_drops())
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._dialect != DIALECT_TERADATA:
+            return super().downgrade_drops()
+        return [_teradata_guarded_drop(self._memory_table)]
 
     def prepare_reconcile_sync(self, driver: Any) -> None:
         """Validate PostgreSQL memory index settings before executing target DDL."""
@@ -1976,25 +2014,6 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             extra_table_name=self._memory_table,
         )
 
-    def _memory_index_specs(self) -> list[tuple[str, str, str]]:
-        """Return ordinary memory companion index definitions."""
-        slug = _adbc_index_slug(self._memory_table)
-        return [
-            (f"idx_{slug}_app_scope_user_time", self._memory_table, "app_name, scope, user_id, timestamp DESC"),
-            (f"idx_{slug}_scope", self._memory_table, "app_name, scope"),
-            (f"idx_{slug}_session", self._memory_table, "session_id"),
-        ]
-
-    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
-        """Build a dialect-aware SchemaTarget for the ADK memory table."""
-        return _build_adbc_schema_target(self._dialect, table, ddl)
-
-    def _schema_targets(self) -> "list[SchemaTarget]":
-        """Construct the dialect-aware SchemaTarget definition for the ADK memory table when enabled."""
-        if not self._enabled:
-            return []
-        return [self._adbc_target(self._memory_table, self._memory_base_table_ddl())]
-
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
         if not self._enabled:
@@ -2022,13 +2041,34 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """Search memory entries by text query or vector embedding."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
-        return self._delete_entries_by_session(session_id)
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by app and user."""
+        return self._delete_entries_by_session(session_id, app_name=app_name, user_id=user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days, app_name, scope)
+
+    def _memory_index_specs(self) -> list[tuple[str, str, str]]:
+        """Return ordinary memory companion index definitions."""
+        slug = _adbc_index_slug(self._memory_table)
+        return [
+            (f"idx_{slug}_app_scope_user_time", self._memory_table, "app_name, scope, user_id, timestamp DESC"),
+            (f"idx_{slug}_scope", self._memory_table, "app_name, scope"),
+            (f"idx_{slug}_session", self._memory_table, "session_id"),
+        ]
+
+    def _adbc_target(self, table: str, ddl: str) -> SchemaTarget:
+        """Build a dialect-aware SchemaTarget for the ADK memory table."""
+        return _build_adbc_schema_target(self._dialect, table, ddl)
+
+    def _schema_targets(self) -> "list[SchemaTarget]":
+        """Construct the dialect-aware SchemaTarget definition for the ADK memory table when enabled."""
+        if not self._enabled:
+            return []
+        return [self._adbc_target(self._memory_table, self._memory_base_table_ddl())]
 
     def _pgvector_enabled(self) -> bool:
         if self._dialect != DIALECT_POSTGRESQL:
@@ -2190,13 +2230,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMPTZ NOT NULL,{embedding_line}
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
-            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2209,13 +2250,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name TEXT NOT NULL,
             user_id TEXT NOT NULL,
             scope TEXT NOT NULL DEFAULT 'user',
-            event_id TEXT NOT NULL UNIQUE,
+            event_id TEXT NOT NULL,
             author TEXT{owner_id_ddl},
             timestamp REAL NOT NULL,
             content_json TEXT NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json TEXT,
-            inserted_at REAL NOT NULL
+            inserted_at REAL NOT NULL,
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2228,13 +2270,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMP NOT NULL,
             content_json JSON NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSON,
-            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2266,13 +2309,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name VARCHAR NOT NULL,
             user_id VARCHAR NOT NULL,
             scope VARCHAR NOT NULL DEFAULT 'user',
-            event_id VARCHAR NOT NULL UNIQUE,
+            event_id VARCHAR NOT NULL,
             author VARCHAR{owner_id_ddl},
             timestamp TIMESTAMP_TZ NOT NULL,
             content_json VARIANT NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json VARIANT,
-            inserted_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+            inserted_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2286,13 +2330,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 app_name VARCHAR2(128) NOT NULL,
                 user_id VARCHAR2(128) NOT NULL,
                 scope VARCHAR2(16) DEFAULT ''user'' NOT NULL,
-                event_id VARCHAR2(128) NOT NULL UNIQUE,
+                event_id VARCHAR2(128) NOT NULL,
                 author VARCHAR2(256){owner_id_ddl},
                 timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
                 content_json CLOB NOT NULL,
                 content_text CLOB NOT NULL,
                 metadata_json CLOB,
-                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                UNIQUE (app_name, user_id, event_id)
             )';
         EXCEPTION
             WHEN OTHERS THEN
@@ -2311,13 +2356,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL WITH DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMP NOT NULL,
             content_json CLOB(1M) NOT NULL,
             content_text CLOB(1M) NOT NULL,
             metadata_json CLOB(1M),
-            inserted_at TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP
+            inserted_at TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2331,13 +2377,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name NVARCHAR(128) NOT NULL,
             user_id NVARCHAR(128) NOT NULL,
             scope NVARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id NVARCHAR(128) NOT NULL UNIQUE,
+            event_id NVARCHAR(128) NOT NULL,
             author NVARCHAR(256){owner_id_ddl},
             timestamp DATETIME2 NOT NULL,
             content_json NVARCHAR(MAX) NOT NULL,
             content_text NVARCHAR(MAX) NOT NULL,
             metadata_json NVARCHAR(MAX),
-            inserted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+            inserted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2350,13 +2397,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL UNIQUE,
+            event_id VARCHAR(128) NOT NULL,
             author VARCHAR(256){owner_id_ddl},
             timestamp TIMESTAMP NOT NULL,
             content_json TEXT NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json TEXT,
-            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (app_name, user_id, event_id)
         )
         """
 
@@ -2494,7 +2542,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             for col in merge_columns
         )
         return (
-            f"MERGE INTO {self._memory_table} t USING (SELECT {merge_source}) s ON t.event_id = s.event_id "
+            f"MERGE INTO {self._memory_table} t USING (SELECT {merge_source}) s "
+            "ON t.app_name = s.app_name AND t.user_id = s.user_id AND t.event_id = s.event_id "
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(merge_columns)}) "
             f"VALUES ({', '.join(f's.{col}' for col in merge_columns)})"
         )
@@ -2525,7 +2574,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     metadata_json, inserted_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
-                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                ) ON CONFLICT DO NOTHING RETURNING 1
                 """
             else:
                 sql = f"""
@@ -2534,7 +2583,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     timestamp, embedding, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
-                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                ) ON CONFLICT DO NOTHING RETURNING 1
                 """
         elif self._dialect == DIALECT_SNOWFLAKE:
             sql = self._snowflake_memory_merge_sql()
@@ -2547,7 +2596,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     metadata_json, inserted_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
-                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                ) ON CONFLICT DO NOTHING RETURNING 1
                 """
             else:
                 sql = f"""
@@ -2566,7 +2615,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     timestamp, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
-                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                ) ON CONFLICT DO NOTHING RETURNING 1
                 """
         else:
             sql = f"""
@@ -2582,20 +2631,29 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             cursor = conn.cursor()
             try:
                 entries_to_insert = entries
-                if not use_returning:
-                    event_ids = [entry["event_id"] for entry in entries if "event_id" in entry]
-                    if event_ids:
-                        placeholders = ", ".join("?" for _ in event_ids)
-                        select_sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id IN ({placeholders})"
-                        self._execute(cursor, select_sql, tuple(event_ids))
+                if not use_returning and self._dialect != DIALECT_SNOWFLAKE:
+                    lookup_keys = [
+                        (entry["app_name"], entry["user_id"], entry["event_id"])
+                        for entry in entries
+                        if "event_id" in entry
+                    ]
+                    if lookup_keys:
+                        predicate_sql = " OR ".join(
+                            "(app_name = ? AND user_id = ? AND event_id = ?)" for _ in lookup_keys
+                        )
+                        lookup_params = tuple(value for key in lookup_keys for value in key)
+                        select_sql = (
+                            f"SELECT app_name, user_id, event_id FROM {self._memory_table} WHERE {predicate_sql}"
+                        )
+                        self._execute(cursor, select_sql, lookup_params)
                         existing_rows = cursor.fetchall()
-                        existing_event_ids = {row[0] for row in existing_rows}
+                        existing_keys = {(row[0], row[1], row[2]) for row in existing_rows}
                         entries_to_insert = []
                         for entry in entries:
-                            event_id = entry["event_id"]
-                            if event_id not in existing_event_ids:
+                            entry_key = (entry["app_name"], entry["user_id"], entry["event_id"])
+                            if entry_key not in existing_keys:
                                 entries_to_insert.append(entry)
-                                existing_event_ids.add(event_id)
+                                existing_keys.add(entry_key)
 
                 for entry in entries_to_insert:
                     content_json = self._serialize_json_field(entry["content_json"])
@@ -2695,8 +2753,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                                 raise
                             self._execute(
                                 cursor,
-                                f"SELECT event_id FROM {self._memory_table} WHERE event_id = ?",
-                                (entry["event_id"],),
+                                f"SELECT event_id FROM {self._memory_table} WHERE app_name = ? AND user_id = ? AND event_id = ?",
+                                (entry["app_name"], entry["user_id"], entry["event_id"]),
                             )
                             if cursor.fetchone() is None:
                                 raise
@@ -2936,20 +2994,31 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.close()
         return self._rows_to_records(rows)
 
-    def _delete_entries_by_session(self, session_id: str) -> int:
+    def _delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        where_sql = " AND ".join(clauses)
         if use_returning:
-            sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
+            sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"
         else:
-            sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
+            sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                self._execute(cursor, sql, (session_id,))
+                self._execute(cursor, sql, tuple(params))
                 if use_returning:
                     deleted_rows = cursor.fetchall()
                     conn.commit()
@@ -3424,19 +3493,20 @@ class _AdbcNativeTransactionConnection:
 
 @contextlib.contextmanager
 def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
-    """Require transaction support before compound Teradata mutations.
+    """Require transaction support before compound Teradata and DuckDB mutations.
 
     Yields:
         A connection with autocommit disabled for the compound operation.
 
     Raises:
-        TransactionError: If the Teradata connection cannot provide transactions.
+        TransactionError: If the Teradata or DuckDB connection cannot provide transactions.
     """
     with config.provide_connection() as raw_connection:
         connection: Any = raw_connection
-        if dialect != DIALECT_TERADATA:
+        if dialect not in {DIALECT_TERADATA, DIALECT_DUCKDB}:
             yield connection
             return
+        dialect_label = "Teradata" if dialect == DIALECT_TERADATA else "DuckDB"
         native = getattr(connection, "adbc_connection", None)
         set_autocommit = getattr(native, "set_autocommit", None)
         get_option = getattr(native, "get_option", None)
@@ -3447,15 +3517,17 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
             except (AdbcNotSupportedError, NotImplementedError):
                 mode = None
             except AdbcNativeError as exc:
-                raise create_teradata_mapped_exception(exc) from exc
+                if dialect == DIALECT_TERADATA:
+                    raise create_teradata_mapped_exception(exc) from exc
+                raise
         previous = mode == "true" if mode in {"true", "false"} else getattr(connection, "_autocommit", None)
         if not callable(set_autocommit) or not isinstance(previous, bool):
-            msg = "ADBC Teradata cannot establish a transaction for this compound mutation."
+            msg = f"ADBC {dialect_label} cannot establish a transaction for this compound mutation."
             raise TransactionError(msg)
         try:
             set_autocommit(False)
         except (AdbcNotSupportedError, NotImplementedError) as exc:
-            msg = "ADBC Teradata supports autocommit-only operations; this compound mutation requires a transaction."
+            msg = f"ADBC {dialect_label} supports autocommit-only operations; this compound mutation requires a transaction."
             raise TransactionError(msg) from exc
         transaction_connection = _AdbcNativeTransactionConnection(connection, native) if previous else connection
         failed = False

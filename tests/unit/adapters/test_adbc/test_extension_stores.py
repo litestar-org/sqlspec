@@ -1,11 +1,14 @@
 """Unit tests for ADBC Litestar and Events extension stores across enterprise dialects."""
 
 from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+from sqlspec.adapters.adbc.adk.store import AdbcADKMemoryStore, AdbcADKStore, _adbc_atomic_connection
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
 from sqlspec.adapters.adbc.litestar.store import AdbcStore
@@ -390,3 +393,216 @@ def test_adbc_litestar_store_snowflake_set_uses_atomic_hex_merge(expires_in: int
         assert "? AS expires_at" in merge_sql
         assert len(merge_params) == 3
     assert executed[1] == ("COMMIT", ())
+
+
+@pytest.mark.parametrize(
+    ("expires_in", "expect_future"),
+    [
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(0, False, id="zero-expires-immediately"),
+        pytest.param(-3, False, id="negative-expires-immediately"),
+    ],
+)
+def test_adbc_litestar_store_set_ttl_precision_and_immediate_expiry(
+    expires_in: int | timedelta, expect_future: bool
+) -> None:
+    """AdbcStore._set preserves sub-second TTLs and writes past timestamps for non-positive expires_in."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _DriverStub:
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append((" ".join(sql.split()), params))
+
+        def commit(self) -> None:
+            pass
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "postgresql"
+
+    before = datetime.now(UTC)
+    store._set("sess_1", b"payload", expires_in=expires_in)
+    after = datetime.now(UTC)
+
+    assert len(executed) == 1
+    bound_expires_at = executed[0][1][2]
+    assert isinstance(bound_expires_at, datetime)
+    if expect_future:
+        assert before + timedelta(milliseconds=200) <= bound_expires_at <= after + timedelta(milliseconds=300)
+    else:
+        assert before - timedelta(microseconds=1) <= bound_expires_at <= after - timedelta(microseconds=1)
+
+
+@pytest.mark.parametrize(
+    ("renew_for", "expected_executes", "expected_commits"),
+    [
+        pytest.param(None, 0, 0, id="none"),
+        pytest.param(0, 0, 0, id="zero"),
+        pytest.param(-1, 0, 0, id="negative"),
+        pytest.param(timedelta(0), 0, 0, id="zero-timedelta"),
+        pytest.param(30, 1, 1, id="positive"),
+        pytest.param(timedelta(milliseconds=200), 1, 1, id="subsecond-positive"),
+    ],
+)
+def test_adbc_litestar_store_get_renews_only_for_positive_duration(
+    renew_for: int | timedelta | None, expected_executes: int, expected_commits: int
+) -> None:
+    """AdbcStore._get updates expires_at only when _should_renew(renew_for) holds."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+    commits = 0
+    future_time = datetime.now(UTC) + timedelta(seconds=120)
+
+    class _DriverStub:
+        def select_one_or_none(self, _sql: str, *_params: Any) -> dict[str, Any]:
+            return {"data": b"payload", "expires_at": future_time}
+
+        def execute(self, sql: str, *params: Any) -> None:
+            executed.append((" ".join(sql.split()), params))
+
+        def commit(self) -> None:
+            nonlocal commits
+            commits += 1
+
+    config_stub = SimpleNamespace(extension_config={"litestar": {}}, provide_session=lambda: nullcontext(_DriverStub()))
+    store = AdbcStore(cast("Any", config_stub))
+    store._dialect = "postgresql"
+
+    assert store._should_renew(renew_for) is (expected_executes == 1)
+    assert store._calculate_expires_at(None) is None
+    assert store._get("sess_1", renew_for=renew_for) == b"payload"
+    assert len(executed) == expected_executes
+    assert commits == expected_commits
+
+
+@pytest.mark.parametrize(
+    ("uri", "dialect", "expect_returning"),
+    [
+        ("postgresql://u:p@h/db", "postgresql", True),
+        ("sqlite:///:memory:", "sqlite", True),
+        ("duckdb:///:memory:", "duckdb", True),
+        ("snowflake://u:p@acct/db/schema", "snowflake", False),
+        ("oracle://localhost:1521/FREEPDB1", "oracle", False),
+        ("db2://u:p@localhost:50000/testdb", "db2", False),
+        ("sqlserver://sa:pass@localhost:1433?database=app", "mssql", False),
+        ("teradata://u:p@host/db", "teradata", False),
+    ],
+)
+def test_adbc_adk_generated_sql_scoping_across_dialects(
+    monkeypatch: pytest.MonkeyPatch, uri: str, dialect: str, expect_returning: bool
+) -> None:
+    """ADBC ADK stores generate three-column session joins, ownership-checked event inserts, and composite memory DDL."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (1,)
+    cursor.fetchall.return_value = []
+    cursor.rowcount = 1
+
+    def _exec(sql: str, params: Any = ()) -> None:
+        executed.append((" ".join(sql.split()), tuple(params)))
+
+    cursor.execute.side_effect = _exec
+    native = SimpleNamespace(
+        get_option=lambda _: "false", set_autocommit=lambda _: None, commit=MagicMock(), rollback=MagicMock()
+    )
+    conn = SimpleNamespace(
+        adbc_connection=native, _autocommit=False, cursor=lambda: cursor, commit=MagicMock(), rollback=MagicMock()
+    )
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    cfg = AdbcConfig(connection_config={"uri": uri}, extension_config={"adk": {"enable_memory": True}})
+    store = AdbcADKStore(cfg)
+    mem_store = AdbcADKMemoryStore(cfg)
+    assert store.dialect == dialect
+
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    event = {
+        "id": "e1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv1",
+        "timestamp": now,
+        "event_data": {"x": 1},
+    }
+    store.append_event(cast("Any", event))
+    insert_sql, insert_params = executed[-1]
+    assert "FROM adk_session WHERE id =" in insert_sql
+    assert ("RETURNING 1" in insert_sql) is expect_returning
+    assert insert_params[-3:] == ("s1", "app", "u1")
+
+    cursor.fetchone.return_value = None
+    cursor.rowcount = 0
+    with pytest.raises(ValueError, match="Session s1 not found"):
+        store.append_event(cast("Any", event))
+
+    executed.clear()
+    with pytest.raises(ValueError, match="does not match target"):
+        store.append_event_and_update_state(cast("Any", event), "other_app", "u1", "s1", {})
+    assert executed == []
+
+    executed.clear()
+    store.get_events("app", "u1", "s1")
+    events_sql, events_params = executed[-1]
+    assert (
+        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in events_sql
+    )
+    assert "s.app_name =" in events_sql and "s.user_id =" in events_sql and "s.id =" in events_sql
+    assert events_params == ("app", "u1", "s1")
+
+    mem_ddl = mem_store._memory_base_table_ddl()
+    assert "UNIQUE (app_name, user_id, event_id)" in mem_ddl
+    assert "event_id VARCHAR(128) NOT NULL UNIQUE" not in mem_ddl
+
+    executed.clear()
+    mem_store.delete_entries_by_session("s1", app_name="app", user_id="u1")
+    del_sql, del_params = executed[-1]
+    assert "DELETE FROM adk_memory WHERE session_id =" in del_sql
+    assert "app_name =" in del_sql and "user_id =" in del_sql
+    assert del_params == ("s1", "app", "u1")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expect_toggle"),
+    [("duckdb", True), ("teradata", True), ("postgresql", False), ("sqlite", False), ("snowflake", False)],
+)
+def test_adbc_atomic_connection_toggles_autocommit_for_duckdb_and_teradata(
+    monkeypatch: pytest.MonkeyPatch, dialect: str, expect_toggle: bool
+) -> None:
+    """_adbc_atomic_connection disables and restores autocommit for DuckDB and Teradata only."""
+    toggles: list[bool] = []
+    native_commits: list[str] = []
+    conn_commits: list[str] = []
+    cursor = MagicMock()
+    native = SimpleNamespace(
+        get_option=lambda _: "true",
+        set_autocommit=lambda flag: toggles.append(flag),
+        commit=lambda: native_commits.append("native_commit"),
+        rollback=MagicMock(),
+    )
+    conn = SimpleNamespace(
+        adbc_connection=native,
+        cursor=lambda: cursor,
+        commit=lambda: conn_commits.append("conn_commit"),
+        rollback=MagicMock(),
+    )
+    cfg = AdbcConfig(connection_config={"uri": "duckdb:///:memory:"})
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda _: nullcontext(conn))
+
+    with _adbc_atomic_connection(cfg, dialect) as active_conn:
+        active_conn.commit()
+
+    if expect_toggle:
+        assert toggles == [False, True]
+        assert native_commits == ["native_commit"]
+        assert conn_commits == []
+    else:
+        assert toggles == []
+        assert conn_commits == ["conn_commit"]
+
+    if dialect == "duckdb":
+        native_commits.clear()
+        toggles.clear()
+        store = AdbcADKStore(cfg)
+        store.delete_session("app", "u1", "s1")
+        assert toggles == [False, True]
+        assert native_commits == ["native_commit"]

@@ -1,11 +1,12 @@
 """Helper utilities for Flask extension."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
 from sqlspec.extensions._deferred_session import PortalSession
 from sqlspec.extensions.flask._state import tenant_receipt_key
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
@@ -24,6 +25,15 @@ __all__ = (
 )
 
 _MISSING = object()
+_LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
+    "adbc",
+    "arrow_odbc",
+    "asyncpg",
+    "cockroach_asyncpg",
+    "duckdb",
+    "psqlpy",
+    "teradata",
+})
 
 
 def get_context_value(target: Any, key: str, default: Any = _MISSING) -> Any:
@@ -76,11 +86,22 @@ def get_or_create_session(config_state: "FlaskConfigState", portal: "Portal | No
             return existing_view
     session = get_context_value(g, cache_key, None)
     if session is None:
-        session = config_state.config.driver_type(
-            connection=get_context_value(g, config_state.connection_key),
-            statement_config=config_state.config.statement_config,
-            driver_features=config_state.config.driver_features,
+        config = config_state.config
+        session = config._prepare_driver(
+            config.driver_type(
+                connection=get_context_value(g, config_state.connection_key),
+                statement_config=config.statement_config,
+                driver_features=config.driver_features,
+            )
         )
+        if (
+            config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
+            and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+        ):
+            session._auto_begin_on_write = True
+        runtime = session.observability
+        if not runtime.is_idle:
+            runtime.emit_session_start_sync(session)
         set_context_value(g, cache_key, session)
     if portal is None:
         return session

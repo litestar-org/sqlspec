@@ -509,16 +509,11 @@ def test_nested_expression_support() -> None:
 
 
 def test_empty_list_validation() -> None:
-    """Test empty list can be processed."""
+    """Test empty vector list raises ValueError."""
     col = Column("embedding")
 
-    distance = col.vector_distance([])
-
-    query = sql.select("*").from_("docs").where(distance < 0.5)
-    stmt = query.build(dialect="postgres")
-
-    assert "<->" in stmt.sql
-    assert "embedding" in stmt.sql
+    with pytest.raises(ValueError, match="Vector cannot be empty"):
+        col.vector_distance([])
 
 
 def test_multiple_dialects_from_same_query() -> None:
@@ -692,3 +687,74 @@ def test_vector_distance_renders_for_dialects_imported_before_registration() -> 
     assert result.returncode == 0, result.stderr
     assert "VECTOR_DISTANCE(" in result.stdout
     assert "OPERATOR(" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("vector", "expected_error"),
+    [
+        pytest.param([True, 1.0], TypeError, id="bool"),
+        pytest.param(["0.1", 0.2], TypeError, id="string"),
+        pytest.param([float("nan"), 1.0], ValueError, id="nan"),
+        pytest.param([float("inf"), 1.0], ValueError, id="inf"),
+        pytest.param([float("-inf"), 1.0], ValueError, id="neg-inf"),
+    ],
+)
+def test_vector_distance_rejects_non_finite_or_non_numeric_elements(
+    vector: list[object], expected_error: type[Exception]
+) -> None:
+    """Vector literals require finite int or float elements."""
+    col = Column("embedding")
+    with pytest.raises(expected_error):
+        col.vector_distance(vector)  # type: ignore[arg-type]
+
+
+def test_vector_distance_renders_negative_elements_across_dialects() -> None:
+    """Negative vector elements render across PostgreSQL, MySQL, and Oracle dialects."""
+    query = sql.select("*").from_("docs").where(Column("embedding").vector_distance([-0.5, 1.25]) < 0.5)
+    assert "-0.5" in query.build(dialect="postgres").sql
+    assert "[-0.5, 1.25]" in query.build(dialect="mysql").sql
+    assert "[-0.5, 1.25]" in query.build(dialect="oracle").sql
+
+
+def test_direct_vector_distance_rejects_invalid_metric() -> None:
+    """Direct VectorDistance construction validates metric names."""
+    col_expr = exp.Column(this=exp.Identifier(this="embedding"))
+    vec_expr = exp.Array(expressions=[exp.Literal.number(0.1), exp.Literal.number(0.2)])
+    with pytest.raises(ValueError, match="Invalid metric"):
+        VectorDistance(this=col_expr, expression=vec_expr, metric=exp.Literal.string("invalid_metric"))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_error"),
+    [
+        pytest.param({"table": "docs; DROP TABLE x"}, ValueError, id="invalid-table"),
+        pytest.param({"vector_column": "emb; --"}, ValueError, id="invalid-vector-column"),
+        pytest.param({"query_vector_bind": "123"}, ValueError, id="unprefixed-numeric-bind"),
+        pytest.param({"query_vector_bind": "vec()"}, ValueError, id="function-bind"),
+        pytest.param({"metric": "CHEBYSHEV"}, ValueError, id="unsupported-metric"),
+        pytest.param({"where_clause": "a = 1; DROP TABLE docs"}, ValueError, id="multi-statement-where"),
+        pytest.param({"where_clause": "a = 1 -- comment"}, ValueError, id="comment-where"),
+    ],
+)
+def test_build_oracle_hnsw_subquery_validates_identifiers_binds_and_where(
+    kwargs: dict[str, object], expected_error: type[Exception]
+) -> None:
+    """Oracle HNSW builder validates identifiers, bind parameters, metrics, and WHERE clauses."""
+    params: dict[str, object] = {"table": "docs"}
+    params.update(kwargs)
+    table = str(params.pop("table"))
+    with pytest.raises(expected_error):
+        build_oracle_hnsw_subquery(table, **params)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("rrf_k", [0, -1, True, float("nan"), float("inf")])
+def test_build_oracle_hybrid_rrf_sql_validates_rrf_k(rrf_k: object) -> None:
+    """Oracle hybrid RRF builder requires a positive finite numeric rrf_k."""
+    with pytest.raises((TypeError, ValueError)):
+        build_oracle_hybrid_rrf_sql(
+            "docs",
+            id_column="id",
+            text_column="body",
+            vector_column="embedding",
+            rrf_k=rrf_k,  # type: ignore[arg-type]
+        )

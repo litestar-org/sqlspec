@@ -20,6 +20,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL, StatementConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -478,7 +479,8 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
     result = await context.__aexit__(ValueError, exc, None)
 
     assert result is None
-    conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    assert conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
     assert context._connection is None
     assert inner_ctx.recorded_exit_args == (None, None, None)
     assert context._ctx is None
@@ -486,6 +488,7 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
     clean_context = PsqlpyConnectionContext(config)
     clean_inner_ctx = _RecordingAsyncContext()
     clean_conn = AsyncMock()
+    clean_conn.in_transaction = AsyncMock(return_value=False)
     clean_context._ctx = clean_inner_ctx
     clean_context._connection = clean_conn
 
@@ -498,12 +501,13 @@ async def test_psqlpy_connection_context_aexit_executes_rollback_on_exception() 
 
 @pytest.mark.anyio
 async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean_exit() -> None:
-    """_PsqlpySessionFactory.release_connection skips ROLLBACK on clean exit and suppresses rollback errors."""
+    """_PsqlpySessionFactory.release_connection skips ROLLBACK on clean idle exit and suppresses body-error rollback failures."""
     config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
     factory = _PsqlpySessionFactory(config)
     inner_ctx = _RecordingAsyncContext()
     factory._ctx = inner_ctx
     conn = AsyncMock()
+    conn.in_transaction = AsyncMock(return_value=False)
 
     await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
 
@@ -511,15 +515,57 @@ async def test_psqlpy_session_factory_release_connection_skips_rollback_on_clean
     assert inner_ctx.recorded_exit_args == (None, None, None)
 
     failing_conn = AsyncMock()
+    failing_conn.in_transaction = AsyncMock(return_value=False)
     failing_conn.execute.side_effect = RuntimeError("socket closed")
     err_ctx = _RecordingAsyncContext()
     factory._ctx = err_ctx
 
     await factory.release_connection(failing_conn, exc_type=RuntimeError, exc_val=RuntimeError("boom"), exc_tb=None)
 
-    failing_conn.execute.assert_awaited_once_with("ROLLBACK")
+    assert failing_conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    assert failing_conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
     assert err_ctx.recorded_exit_args == (None, None, None)
     assert factory._ctx is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind", ["context", "factory"])
+@pytest.mark.parametrize("rollback_fails", [False, True], ids=["rollback-ok", "rollback-fails"])
+async def test_psqlpy_clean_exit_with_open_transaction_rolls_back_or_terminates_backend(
+    kind: str, rollback_fails: bool
+) -> None:
+    """Clean exit with conn.in_transaction() True rolls back, terminating the backend and raising when ROLLBACK fails."""
+    config = PsqlpyConfig(connection_config={"dsn": "postgresql://localhost:5432/test"})
+    inner_ctx = _RecordingAsyncContext()
+    conn = AsyncMock()
+    conn.in_transaction = AsyncMock(return_value=True)
+    if rollback_fails:
+        conn.execute.side_effect = [RuntimeError("rollback broken"), None]
+
+    if kind == "context":
+        ctx = PsqlpyConnectionContext(config)
+        ctx._ctx = inner_ctx
+        ctx._connection = conn
+        if rollback_fails:
+            with pytest.raises(RuntimeError, match="rollback broken"):
+                await ctx.__aexit__(None, None, None)
+        else:
+            await ctx.__aexit__(None, None, None)
+        assert ctx._ctx is None
+    else:
+        factory = _PsqlpySessionFactory(config)
+        factory._ctx = inner_ctx
+        if rollback_fails:
+            with pytest.raises(RuntimeError, match="rollback broken"):
+                await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
+        else:
+            await factory.release_connection(conn, exc_type=None, exc_val=None, exc_tb=None)
+        assert factory._ctx is None
+
+    assert conn.execute.await_args_list[0].args == ("ROLLBACK",)
+    if rollback_fails:
+        assert conn.execute.await_args_list[1].args == ("SELECT pg_terminate_backend(pg_backend_pid())",)
+    assert inner_ctx.recorded_exit_args == (None, None, None)
 
 
 @pytest.mark.parametrize("strategy", ["default", "rls", True])
@@ -542,6 +588,7 @@ async def test_tenant_disabled_retains_native_provider(disabled: Any) -> None:
     from types import SimpleNamespace
 
     connection = AsyncMock()
+    connection.in_transaction = AsyncMock(return_value=False)
     connection.fetch.return_value = SimpleNamespace(result=lambda: [])
     context = AsyncMock()
     context.__aenter__.return_value = connection
@@ -761,3 +808,16 @@ def test_derived_dsn_preserves_literal_plus_in_security_paths() -> None:
     primary = PsqlpyConfig(connection_config={"dsn": "postgresql://app@writer/orders?sslrootcert=/keys/ca+extra.pem"})
     reader = primary.derive_pool(host="reader")
     assert "sslrootcert='/keys/ca+extra.pem'" in reader.connection_config["dsn"]
+
+
+async def test_provide_session_detaches_driver_on_exit() -> None:
+    connection = AsyncMock()
+    connection.in_transaction = AsyncMock(return_value=False)
+    context = AsyncMock()
+    context.__aenter__.return_value = connection
+    pool = AsyncMock()
+    pool.acquire = lambda: context
+    config = PsqlpyConfig(connection_instance=cast("PsqlpyConnectionPool", pool))
+    async with config.provide_session() as session:
+        assert session.connection is connection
+    assert session.connection is _DETACHED_CONNECTION

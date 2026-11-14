@@ -21,7 +21,13 @@ from sqlspec.storage._arrow_payload import (
     validate_arrow_write_options,
 )
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import is_file_destination, parse_file_uri_path, resolve_storage_path
+from sqlspec.storage._paths import (
+    ensure_path_within_root,
+    is_file_destination,
+    parse_file_uri_path,
+    reject_parent_traversal,
+    resolve_storage_path,
+)
 from sqlspec.storage._utils import import_fsspec, import_pyarrow, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
 from sqlspec.storage.backends.local import (
@@ -98,7 +104,7 @@ class FSSpecBackend:
                     if explicit_base_path:
                         uri_base_path = f"{uri_base_path.rstrip('/')}/{explicit_base_path.lstrip('/')}"
                     explicit_base_path = uri_base_path
-            elif self.protocol == "file":
+            elif self.protocol in _LOCAL_PROTOCOLS:
                 parsed_path = parse_file_uri_path(uri)
                 if parsed_path and parsed_path != "/":
                     path_obj = Path(parsed_path)
@@ -112,7 +118,11 @@ class FSSpecBackend:
             self.protocol = uri
             self._fs_uri = f"{uri}://"
 
-        self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
+        if self.protocol in _LOCAL_PROTOCOLS:
+            resolved_base = Path(explicit_base_path).resolve() if explicit_base_path else Path.cwd().resolve()
+            self.base_path = str(resolved_base)
+        else:
+            self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
 
         self.fs = fsspec.filesystem(self.protocol, **kwargs)
         log_storage_event(
@@ -415,7 +425,11 @@ class FSSpecBackend:
 
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects with optional prefix synchronously."""
-        resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_prefix = (
+            (self._resolve_path(prefix) if prefix else self.base_path)
+            if self.protocol in _LOCAL_PROTOCOLS
+            else resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
+        )
         if recursive:
             raw_results = execute_sync_storage_operation(
                 partial(self.fs.find, resolved_prefix, **kwargs),
@@ -423,7 +437,6 @@ class FSSpecBackend:
                 operation="list_objects",
                 path=resolved_prefix,
             )
-            results = sorted(raw_results)
         else:
             raw_results = execute_sync_storage_operation(
                 partial(self.fs.ls, resolved_prefix, detail=False, **kwargs),
@@ -431,7 +444,9 @@ class FSSpecBackend:
                 operation="list_objects",
                 path=resolved_prefix,
             )
-            results = sorted(raw_results)
+        if self.protocol in _LOCAL_PROTOCOLS:
+            raw_results = [item for item in raw_results if _is_within_local_root(item, self.base_path)]
+        results = sorted(raw_results)
         log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
@@ -451,6 +466,8 @@ class FSSpecBackend:
             operation="glob",
             path=resolved_pattern,
         )
+        if self.protocol in _LOCAL_PROTOCOLS:
+            raw_results = [item for item in raw_results if _is_within_local_root(item, self.base_path)]
         results = cast("list[str]", sorted(raw_results))
         log_storage_event(
             "storage.list",
@@ -464,17 +481,17 @@ class FSSpecBackend:
 
     def is_object_sync(self, path: str | Path) -> bool:
         """Check if path points to an object synchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         return self.fs.exists(resolved_path) and not self.fs.isdir(resolved_path)
 
     def is_path_sync(self, path: str | Path) -> bool:
         """Check if path points to a prefix (directory-like) synchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         return self.fs.isdir(resolved_path)  # type: ignore[no-any-return]
 
     def get_metadata_sync(self, path: str | Path, **kwargs: Any) -> "dict[str, object]":
         """Get object metadata synchronously."""
-        resolved_path = resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+        resolved_path = self._resolve_path(path)
         try:
             info = self.fs.info(resolved_path, **kwargs)
         except FileNotFoundError:
@@ -556,6 +573,8 @@ class FSSpecBackend:
         arrow_schema = kwargs.pop("arrow_schema", None)
         kwargs.pop("read_buffer_bytes", None)
         for obj_path in self.glob_sync(pattern):
+            if self.protocol in _LOCAL_PROTOCOLS:
+                ensure_path_within_root(obj_path, self.base_path)
             file_handle = execute_sync_storage_operation(
                 partial(self.fs.open, obj_path, mode="rb"),
                 backend=self.backend_type,
@@ -735,11 +754,28 @@ class FSSpecBackend:
         )
 
     def _resolve_path(self, path: str | Path) -> str:
+        if self.protocol in _LOCAL_PROTOCOLS:
+            reject_parent_traversal(path)
+            target = str(path)
+            if target.startswith("file://"):
+                target = parse_file_uri_path(target)
+            rel = ensure_path_within_root(target, self.base_path)
+            return self.base_path if not rel else f"{self.base_path}/{rel}"
         return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
 
     def _read_parquet_table(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
         with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
             return pq.read_table(file_obj)
+
+
+def _is_within_local_root(candidate: str | Path, root: str | Path) -> bool:
+    """Return True when ``candidate`` resolves within ``root``."""
+    try:
+        root_obj = Path(str(root)).resolve()
+        resolved = Path(str(candidate)).resolve()
+    except OSError:
+        return False
+    return resolved == root_obj or root_obj in resolved.parents
 
 
 def _resolve_fsspec_write_options(
@@ -972,6 +1008,7 @@ async def _abort_fsspec_stream_async(strategy: "_FsspecStrategy", fs: Any, stage
         return
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _FsspecSink:
     """Write to one fsspec file, normalizing storage failures."""
 
@@ -1012,6 +1049,7 @@ class _FsspecSink:
         self._closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncFsspecSink:
     """Run fsspec file writes off the event loop, normalizing storage failures."""
 
@@ -1052,6 +1090,7 @@ class _AsyncFsspecSink:
         self._closed = True
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _FsspecWriteStream:
     """Synchronous fsspec write stream context manager."""
 
@@ -1137,6 +1176,7 @@ class _FsspecWriteStream:
             _abort_fsspec_stream(self._strategy, self._fs, self._stage, file_obj)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncFsspecWriteStream:
     """Asynchronous fsspec write stream context manager with shielded completion."""
 

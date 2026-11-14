@@ -12,7 +12,8 @@ from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
-from sqlspec.exceptions import DatabaseConnectionError
+from sqlspec.driver._common import _DETACHED_CONNECTION
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -243,9 +244,9 @@ def test_pymysql_config_with_dsn_applies_to_connection_parameters() -> None:
 
 
 def test_pool_discards_connection_after_rollback_failure() -> None:
-    broken = MagicMock(server_status=1)
+    broken = MagicMock(server_status=1, get_autocommit=MagicMock(return_value=False))
     broken.rollback.side_effect = RuntimeError("rollback failed")
-    replacement = MagicMock(server_status=0)
+    replacement = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
     factory = MagicMock(side_effect=[broken, replacement])
     pool = PyMysqlConnectionPool({}, connection_factory=factory)
     try:
@@ -396,3 +397,18 @@ def test_pymysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() 
         PyMysqlConfig(replicas=["postgres://replica"])
     with pytest.raises(ImproperConfigurationError):
         PyMysqlConfig(replicas=[""])
+
+
+def test_provide_session_detaches_driver_on_exit() -> None:
+    raw_conn = MagicMock(server_status=0)
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    config = PyMysqlConfig(connection_instance=pool)
+    try:
+        with config.provide_session() as session:
+            assert session.connection is raw_conn
+
+        assert session.connection is _DETACHED_CONNECTION
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            session.execute("SELECT 1")
+    finally:
+        pool.close()

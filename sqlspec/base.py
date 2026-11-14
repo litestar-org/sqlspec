@@ -28,6 +28,7 @@ from sqlspec.core import (
     reset_stats_only,
     update_cache_config,
 )
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import AsyncEventChannel, SyncEventChannel
 from sqlspec.loader import SQLFileLoader
@@ -959,18 +960,21 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        value = self._value
+        raw_connection = value.connection if value is not None and self._config is not None else None
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
-            value = self._value
             if value is not None:
                 if self._config is None:
                     self._runtime.emit_connection_destroy_sync(value)
                 else:
                     self._runtime.emit_session_end_sync(value)
-                    connection = value.connection
-                    if connection is not None:
-                        self._runtime.emit_connection_destroy_sync(connection)
+                    if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                        self._runtime.emit_connection_destroy_sync(raw_connection)
+                    detach = getattr(value, "_detach_connection", None)
+                    if detach is not None:
+                        detach()
                 self._value = None
 
 
@@ -1008,18 +1012,21 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        value = self._value
+        raw_connection = value.connection if value is not None and self._config is not None else None
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            value = self._value
             if value is not None:
                 if self._config is None:
                     await self._runtime.emit_connection_destroy_async(value)
                 else:
                     await self._runtime.emit_session_end_async(value)
-                    connection = value.connection
-                    if connection is not None:
-                        await self._runtime.emit_connection_destroy_async(connection)
+                    if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                        await self._runtime.emit_connection_destroy_async(raw_connection)
+                    detach = getattr(value, "_detach_connection", None)
+                    if detach is not None:
+                        detach()
                 self._value = None
 
 

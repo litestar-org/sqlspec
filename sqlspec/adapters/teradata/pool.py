@@ -9,6 +9,8 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.teradata.core import build_connection_config, format_query_band, render_query_band_sql
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
@@ -21,6 +23,7 @@ from sqlspec.utils.module_loader import import_optional
 __all__ = ("TeradataConnectionPool",)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class TeradataConnectionPool:
     """Lazily allocate exclusive leases with bounded capacity and fork refusal."""
 
@@ -99,16 +102,16 @@ class TeradataConnectionPool:
         self._thread_local = threading.local()
         self._timeout = timeout_seconds
 
+    @property
+    def is_closed(self) -> bool:
+        self.check_pid()
+        return self._closed
+
     def check_pid(self) -> None:
         """Refuse inherited driver handles before acquiring inherited locks."""
         if os.getpid() != self._pid:
             msg = "Teradata pools cannot be shared across forked processes"
             raise DatabaseConnectionError(msg)
-
-    @property
-    def is_closed(self) -> bool:
-        self.check_pid()
-        return self._closed
 
     def new_connection(self) -> Any:
         """Open and initialize a caller-owned connection."""
@@ -207,6 +210,7 @@ class TeradataConnectionPool:
                 if connection.autocommit is False:
                     connection.rollback()
                 connection.autocommit = self._autocommit_baseline
+                self._reset_session_query_band(connection)
             except Exception:
                 discard = True
         with self._condition:
@@ -276,3 +280,13 @@ class TeradataConnectionPool:
         self.check_pid()
         with self._condition:
             return len(self._in_use)
+
+    def _reset_session_query_band(self, connection: Any) -> None:
+        """Reset the session query band to the configured baseline or NONE."""
+        cursor = connection.cursor()
+        try:
+            cursor.execute(render_query_band_sql(self._session_query_band or ""))
+        finally:
+            cursor.close()
+        if connection.autocommit is False:
+            connection.commit()

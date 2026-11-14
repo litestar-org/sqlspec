@@ -188,17 +188,6 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
             if not metadata_has_index(rows, index.table, index.name, schema_name=index.schema):
                 await driver.execute_script(index.ddl)
 
-    def _schema_target(self) -> SchemaTarget:
-        """Build the primary session table SchemaTarget from store DDL."""
-        statement_config = getattr(self._config, "statement_config", None)
-        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
-        dialect = (
-            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
-            if isinstance(raw_dialect, str)
-            else raw_dialect
-        )
-        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
-
     async def reconcile_schema(self, *, assume_existing: bool = False) -> None:
         """Apply additive session-table changes from the canonical store DDL.
 
@@ -218,6 +207,21 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
                 )
             return
         await async_(_reconcile_schema_sync)(self, create_schema=create_schema, assume_existing=assume_existing)
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops for the session table and its indexes."""
+        return [DropStatement(statement) for statement in self._drop_table_sql()]
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget from store DDL."""
+        statement_config = getattr(self._config, "statement_config", None)
+        raw_dialect = getattr(self, "_dialect", None) or getattr(statement_config, "dialect", None)
+        dialect = (
+            _SQLGLOT_PARSE_DIALECTS.get(raw_dialect.lower(), raw_dialect)
+            if isinstance(raw_dialect, str)
+            else raw_dialect
+        )
+        return SchemaTarget.from_ddl(self._table_name, self._table_ddl(), dialect=dialect)
 
     def _table_name_from_config(self) -> str:
         """Extract the configured session table name."""
@@ -271,10 +275,6 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         """
         raise NotImplementedError
 
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops for the session table and its indexes."""
-        return [DropStatement(statement) for statement in self._drop_table_sql()]
-
     def _log_table_created(self) -> None:
         logger.debug(
             "Litestar session table ready",
@@ -298,23 +298,39 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         )
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in.
+        """Calculate expiration timestamp from ``expires_in``.
+
+        Non-positive durations return an already-expired UTC timestamp rather than
+        ``None`` so sessions expire immediately instead of becoming persistent.
 
         Args:
-            expires_in: Seconds or timedelta until expiration.
+            expires_in: Seconds or timedelta until expiration, or ``None`` for no expiration.
 
         Returns:
-            UTC datetime of expiration, or None if no expiration.
+            UTC datetime of expiration, or ``None`` when ``expires_in`` is ``None``.
         """
         if expires_in is None:
             return None
 
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+        expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
 
         if expires_in_seconds <= 0:
-            return None
+            return datetime.now(UTC) - timedelta(microseconds=1)
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+
+    def _should_renew(self, renew_for: "int | timedelta | None") -> bool:
+        """Return whether ``renew_for`` requests session expiration renewal.
+
+        Args:
+            renew_for: Seconds or timedelta to extend expiration by, or ``None``.
+
+        Returns:
+            ``True`` only when ``renew_for`` represents a positive duration.
+        """
+        if renew_for is None:
+            return False
+        return (renew_for.total_seconds() if isinstance(renew_for, timedelta) else float(renew_for)) > 0
 
     def _value_to_bytes(self, value: "str | bytes") -> bytes:
         """Convert value to bytes if needed.

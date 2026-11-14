@@ -92,6 +92,8 @@ _INTEGER_KEYS: Final[tuple[str, ...]] = ("port", "connect_timeout")
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 _CLI_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
 _BRACED_MIN_LENGTH: Final[int] = 2
 _DEFAULT_PORT: Final[int] = 50000
 _MIN_PORT: Final[int] = 1
@@ -733,6 +735,9 @@ def _parse_db2_dsn(dsn: str) -> dict[str, Any]:
     """
     params: dict[str, Any] = {}
     extra: dict[str, Any] = {}
+    if "\x00" in dsn or "\r" in dsn or "\n" in dsn:
+        msg = "Db2 connection parameter 'dsn' contains disallowed control characters"
+        raise ImproperConfigurationError(msg)
     if "://" in dsn:
         parsed = urlsplit(dsn)
         if parsed.username is not None:
@@ -784,35 +789,34 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     return dict(merged.values())
 
 
+def _format_odbc_connection_value(key: str, value: Any) -> str:
+    """Validate a Db2 CLI keyword and format its value using MS-ODBCSTR brace escaping."""
+    if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid Db2 connection keyword: {key!r}"
+        raise ImproperConfigurationError(msg)
+    text = ("yes" if value else "no") if isinstance(value, bool) else str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"Db2 connection value for {key!r} contains disallowed control characters"
+        raise ImproperConfigurationError(msg)
+    if not text:
+        return ""
+    if any(ch in _ODBC_SPECIAL_CHARS for ch in text) or text != text.strip():
+        return "{" + text.replace("}", "}}") + "}"
+    return text
+
+
 def _format_cli_value(keyword: str, value: Any) -> str:
     """Render one ``KEYWORD=value`` pair for a Db2 CLI connection string.
 
-    Values containing ``;`` or ``{`` or leading/trailing whitespace are wrapped in braces; booleans
-    render as ``1``/``0``.
-
-    Args:
-        keyword: CLI keyword.
-        value: Value to render.
-
-    Returns:
-        str: The rendered pair without a trailing ``;``.
-
-    Raises:
-        ImproperConfigurationError: When the keyword is not a plain CLI keyword or the value
-            contains ``}``, which CLI connection strings cannot represent.
+    Values containing CLI delimiters or edge whitespace are wrapped in braces with ``}`` escaped
+    as ``}}``; booleans render as ``1``/``0``.
     """
-    if _CLI_KEYWORD_PATTERN.fullmatch(keyword) is None:
+    if "\x00" in keyword or "\r" in keyword or "\n" in keyword or _ODBC_KEY_PATTERN.fullmatch(keyword) is None:
         msg = f"Invalid Db2 connection keyword: {keyword!r}"
         raise ImproperConfigurationError(msg)
     if isinstance(value, bool):
         return f"{keyword}={'1' if value else '0'}"
-    text = str(value)
-    if "}" in text:
-        msg = f"Db2 connection value for {keyword} cannot contain '}}'"
-        raise ImproperConfigurationError(msg)
-    if ";" in text or "{" in text or text != text.strip():
-        return f"{keyword}={{{text}}}"
-    return f"{keyword}={text}"
+    return f"{keyword}={_format_odbc_connection_value(keyword, value)}"
 
 
 def _split_db2_raw_parts(name: str) -> list[str]:

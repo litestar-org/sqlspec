@@ -3278,3 +3278,58 @@ def test_snowflake_fixture_variant_insert_uses_parse_json_select(tmp_path: Path)
         'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
         'INSERT INTO "records" ("id", "payload", "items", "object") SELECT ?, PARSE_JSON(?), PARSE_JSON(?), PARSE_JSON(?)',
     ]
+
+
+def test_read_compressed_file_enforces_gzip_size_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_read_compressed_file rejects gzip streams whose uncompressed payload exceeds _MAX_ZIP_FIXTURE_BYTES."""
+    monkeypatch.setattr(fixture_module, "_MAX_ZIP_FIXTURE_BYTES", 64)
+    gz_file = tmp_path / "oversized.json.gz"
+    with gzip.open(gz_file, "wb") as handle:
+        handle.write(b"x" * 128)
+
+    with pytest.raises(ValueError, match="exceeds maximum allowed size"):
+        _read_compressed_file(gz_file)
+
+
+@pytest.mark.parametrize(
+    ("default_expr", "expected"),
+    [
+        ("nextval('public.users_id_seq'::regclass)", "public.users_id_seq"),
+        ('nextval(\'"public"."users_id_seq"\'::regclass)', "public.users_id_seq"),
+        ("nextval('users_id_seq')", "users_id_seq"),
+        ("nextval('users_id_seq); SELECT 1'::regclass)", None),
+        ("nextval('bad space seq'::regclass)", None),
+    ],
+)
+def test_extract_sequence_from_default_validates_single_quoted_names(default_expr: str, expected: str | None) -> None:
+    """_extract_sequence_from_default accepts valid identifiers and rejects arbitrary expressions."""
+    assert fixture_module._extract_sequence_from_default(default_expr) == expected
+
+
+@pytest.mark.parametrize(("json_type", "expected_cast"), [("jsonb", "JSONB"), ("json", "JSON")])
+def test_postgres_fixture_insert_statement_casts_json_placeholders_via_text(json_type: str, expected_cast: str) -> None:
+    """PostgreSQL JSON and JSONB fixture inserts wrap placeholders in CAST(CAST(:col AS TEXT) AS JSON/JSONB)."""
+    columns = [
+        fixture_module._TableColumn(
+            name="id",
+            data_type="integer",
+            is_primary=True,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+        fixture_module._TableColumn(
+            name="payload",
+            data_type=json_type,
+            is_primary=False,
+            is_identity=False,
+            identity_always=False,
+            sequence_name=None,
+            is_generated=False,
+        ),
+    ]
+    sql_text = fixture_module._table_insert_statement("postgres", "postgres", "events", ["id", "payload"], (), columns)
+    assert sql_text == (
+        f'INSERT INTO "events" ("id", "payload") VALUES (%(id)s, CAST(CAST(%(payload)s AS TEXT) AS {expected_cast}))'
+    )

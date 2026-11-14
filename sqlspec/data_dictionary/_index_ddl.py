@@ -22,25 +22,13 @@ __all__ = (
 )
 
 _MYSQL_FAMILY_DIALECTS: Final[frozenset[str]] = frozenset({"mysql", "mariadb"})
+_BACKTICK_INDEX_DIALECTS: Final[frozenset[str]] = _MYSQL_FAMILY_DIALECTS | frozenset({"spanner"})
 _SAP_DIALECTS: Final[frozenset[str]] = frozenset({"sybase", "sqlanywhere"})
 _INDEXLESS_DIALECTS: Final[frozenset[str]] = frozenset({"bigquery", "snowflake"})
+_MIN_QUOTED_INDEX_PART_LEN: Final[int] = 2
+_DIRECTION_TOKEN_PARTS: Final[int] = 2
 _CREATE_UNIQUE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
 _CREATE_INDEX_RE: Final = re.compile(r"^\s*CREATE\s+INDEX\s+(?!CONCURRENTLY\b)", re.IGNORECASE)
-
-
-def _canonical_index_dialect(dialect: str | None) -> str:
-    """Normalize an adapter or dialect string for index DDL generation."""
-    return normalize_adapter_dialect_name(dialect)
-
-
-def _teradata_index_column_list(index_meta: Mapping[str, Any]) -> str:
-    """Return the comma-separated key columns used to address an unnamed Teradata index."""
-    cols = index_meta.get("columns") or index_meta.get("column_names") or []
-    if isinstance(cols, str):
-        return cols
-    if isinstance(cols, Sequence):
-        return ", ".join(str(c) for c in cols if c)
-    return ""
 
 
 def filter_droppable_table_indexes(
@@ -103,33 +91,35 @@ def build_drop_index_sql(
         return None
     resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
     if norm == "teradata":
-        parts = split_qualified_identifier(table)
-        if len(parts) == 1 and resolved_schema:
-            parts = (*split_qualified_identifier(resolved_schema), *parts)
-        qualified_table = ".".join(quote_identifier(part) for part in parts)
+        qualified_table = _format_index_table(table, resolved_schema, norm)
         if index_meta.get("catalog_name_generated"):
-            column_list = _teradata_index_column_list(index_meta)
+            cols = index_meta.get("columns") or index_meta.get("column_names") or []
+            column_list = _format_index_columns(cols, norm, allow_direction=False)
             return f"DROP INDEX ({column_list}) ON {qualified_table}" if column_list else None
-        return f"DROP INDEX {quote_identifier(idx_name)} ON {qualified_table}"
+        return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in _SAP_DIALECTS:
-        table_parts = split_qualified_identifier(table)
-        if len(table_parts) == 1 and resolved_schema:
-            table_parts = (*split_qualified_identifier(resolved_schema), *table_parts)
-        quoted_parts = [quote_identifier(part) for part in table_parts]
-        quoted_parts.append(quote_identifier(idx_name))
-        return f"DROP INDEX {'.'.join(quoted_parts)}"
+        qualified_table = _format_index_table(table, resolved_schema, norm)
+        return f"DROP INDEX {qualified_table}.{_quote_index_part(idx_name, norm)}"
     if norm == "mssql":
-        qualified_table = f"[{resolved_schema}].[{table}]" if resolved_schema and "." not in table else f"[{table}]"
-        return f"DROP INDEX [{idx_name}] ON {qualified_table}"
+        qualified_table = _format_index_table(table, resolved_schema, norm)
+        return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in _MYSQL_FAMILY_DIALECTS:
-        qualified_table = f"`{resolved_schema}`.`{table}`" if resolved_schema and "." not in table else f"`{table}`"
-        return f"DROP INDEX `{idx_name}` ON {qualified_table}"
+        qualified_table = _format_index_table(table, resolved_schema, norm)
+        return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in {"oracle", "db2"}:
-        qualified_idx = f'"{resolved_schema}"."{idx_name}"' if resolved_schema else f'"{idx_name}"'
+        qualified_idx = (
+            f"{_quote_index_part(resolved_schema, norm)}.{_quote_index_part(idx_name, norm)}"
+            if resolved_schema
+            else _quote_index_part(idx_name, norm)
+        )
         return f"DROP INDEX {qualified_idx}"
     if norm == "spanner":
-        return f"DROP INDEX {idx_name}"
-    qualified_idx = f'"{resolved_schema}"."{idx_name}"' if resolved_schema else f'"{idx_name}"'
+        return f"DROP INDEX {_quote_index_part(idx_name, norm)}"
+    qualified_idx = (
+        f"{_quote_index_part(resolved_schema, norm)}.{_quote_index_part(idx_name, norm)}"
+        if resolved_schema
+        else _quote_index_part(idx_name, norm)
+    )
     return f"DROP INDEX IF EXISTS {qualified_idx}"
 
 
@@ -172,42 +162,19 @@ def build_create_index_sql(
     else:
         idx_name = str(index_meta.get("index_name") or index_meta.get("name") or "").strip()
         cols = index_meta.get("columns") or index_meta.get("column_names") or []
-        if isinstance(cols, str):
-            col_list = cols
-        elif isinstance(cols, Sequence):
-            col_list = ", ".join(str(c) for c in cols if c)
-        else:
-            col_list = ""
+        col_list = _format_index_columns(cols, norm, allow_direction=norm != "teradata")
         if not idx_name or not col_list:
             return None
         resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
         is_unique = bool(index_meta.get("is_unique") or index_meta.get("unique"))
         unique_kw = "UNIQUE " if is_unique else ""
+        qualified_table = _format_index_table(table, resolved_schema, norm)
         if norm == "teradata":
-            parts = split_qualified_identifier(table)
-            if len(parts) == 1 and resolved_schema:
-                parts = (*split_qualified_identifier(resolved_schema), *parts)
-            qualified_table = ".".join(quote_identifier(part) for part in parts)
-            clean_cols = re.sub(r"\s+(?:ASC|DESC)(?=\s*(?:,|$))", "", col_list, flags=re.IGNORECASE)
             if index_meta.get("catalog_name_generated"):
-                return f"CREATE {unique_kw}INDEX ({clean_cols}) ON {qualified_table}"
-            return f"CREATE {unique_kw}INDEX {quote_identifier(idx_name)} ({clean_cols}) ON {qualified_table}"
-        if norm in _SAP_DIALECTS:
-            table_parts = split_qualified_identifier(table)
-            if len(table_parts) == 1 and resolved_schema:
-                table_parts = (*split_qualified_identifier(resolved_schema), *table_parts)
-            qualified_table = ".".join(quote_identifier(part) for part in table_parts)
-            quoted_index = quote_identifier(idx_name)
-            sql_text = f"CREATE {unique_kw}INDEX {quoted_index} ON {qualified_table} ({col_list})"
-        elif norm == "mssql":
-            qualified_table = f"[{resolved_schema}].[{table}]" if resolved_schema and "." not in table else f"[{table}]"
-            sql_text = f"CREATE {unique_kw}INDEX [{idx_name}] ON {qualified_table} ({col_list})"
-        elif norm in _MYSQL_FAMILY_DIALECTS:
-            qualified_table = f"`{resolved_schema}`.`{table}`" if resolved_schema and "." not in table else f"`{table}`"
-            sql_text = f"CREATE {unique_kw}INDEX `{idx_name}` ON {qualified_table} ({col_list})"
-        else:
-            qualified_table = f'"{resolved_schema}"."{table}"' if resolved_schema and "." not in table else table
-            sql_text = f'CREATE {unique_kw}INDEX "{idx_name}" ON {qualified_table} ({col_list})'
+                return f"CREATE {unique_kw}INDEX ({col_list}) ON {qualified_table}"
+            return f"CREATE {unique_kw}INDEX {_quote_index_part(idx_name, norm)} ({col_list}) ON {qualified_table}"
+        quoted_index = _quote_index_part(idx_name, norm)
+        sql_text = f"CREATE {unique_kw}INDEX {quoted_index} ON {qualified_table} ({col_list})"
 
     if concurrent and not in_transaction and norm == "postgres":
         if _CREATE_UNIQUE_INDEX_RE.match(sql_text):
@@ -279,13 +246,6 @@ class SyncWithoutIndexesContext:
                 self._rebuild_statements.append(create_sql)
         return self
 
-    def _restore_dropped_indexes(self) -> None:
-        """Recreate indexes dropped before a later drop failed, keeping the original error."""
-        for stmt in self._rebuild_statements:
-            with contextlib.suppress(Exception):
-                self._driver.execute(stmt)
-        self._rebuild_statements.clear()
-
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
@@ -304,6 +264,13 @@ class SyncWithoutIndexesContext:
         if exc_type is None and rebuild_errors:
             raise rebuild_errors[0]
         return False
+
+    def _restore_dropped_indexes(self) -> None:
+        """Recreate indexes dropped before a later drop failed, keeping the original error."""
+        for stmt in self._rebuild_statements:
+            with contextlib.suppress(Exception):
+                self._driver.execute(stmt)
+        self._rebuild_statements.clear()
 
 
 @final
@@ -368,13 +335,6 @@ class AsyncWithoutIndexesContext:
                 self._rebuild_statements.append(create_sql)
         return self
 
-    async def _restore_dropped_indexes(self) -> None:
-        """Recreate indexes dropped before a later drop failed, keeping the original error."""
-        for stmt in self._rebuild_statements:
-            with contextlib.suppress(Exception):
-                await self._driver.execute(stmt)
-        self._rebuild_statements.clear()
-
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
@@ -394,30 +354,12 @@ class AsyncWithoutIndexesContext:
             raise rebuild_errors[0]
         return False
 
-
-def _extract_metadata_rows(result: Any) -> list[dict[str, Any]]:
-    """Extract normalized dictionary rows from a data-dictionary result payload."""
-    if result is None:
-        return []
-    data = getattr(result, "data", result)
-    if isinstance(data, list):
-        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
-    if isinstance(data, Sequence):
-        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
-    return []
-
-
-def _extract_ddl_text(result: Any) -> str | None:
-    """Extract a raw SQL DDL string from a ``get_ddl`` response."""
-    if isinstance(result, str) and result.strip():
-        return result.strip()
-    rows = _extract_metadata_rows(result)
-    for row in rows:
-        for key in ("ddl", "definition", "native_sql", "sql"):
-            val = row.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-    return None
+    async def _restore_dropped_indexes(self) -> None:
+        """Recreate indexes dropped before a later drop failed, keeping the original error."""
+        for stmt in self._rebuild_statements:
+            with contextlib.suppress(Exception):
+                await self._driver.execute(stmt)
+        self._rebuild_statements.clear()
 
 
 def ensure_teradata_ddl_outside_transaction(driver: Any, operation: str) -> None:
@@ -444,6 +386,100 @@ def ensure_teradata_ddl_outside_transaction(driver: Any, operation: str) -> None
         "session, before running it."
     )
     raise TransactionError(msg)
+
+
+def _canonical_index_dialect(dialect: str | None) -> str:
+    """Normalize an adapter or dialect string for index DDL generation."""
+    return normalize_adapter_dialect_name(dialect)
+
+
+def _quote_index_part(part: str, dialect: str) -> str:
+    """Quote a single index, table, schema, or column identifier segment for ``dialect``."""
+    stripped = part.strip()
+    if len(stripped) >= _MIN_QUOTED_INDEX_PART_LEN:
+        if stripped[0] == '"' and stripped[-1] == '"':
+            clean = stripped[1:-1].replace('""', '"')
+        elif stripped[0] == "`" and stripped[-1] == "`":
+            clean = stripped[1:-1].replace("``", "`")
+        elif stripped[0] == "[" and stripped[-1] == "]":
+            clean = stripped[1:-1].replace("]]", "]")
+        else:
+            clean = stripped
+    else:
+        clean = stripped
+    if not clean or "\x00" in clean:
+        msg = "Index DDL identifier must not be empty or contain NUL"
+        raise ValueError(msg)
+    if dialect == "mssql":
+        escaped = clean.replace("]", "]]")
+        return f"[{escaped}]"
+    if dialect in _BACKTICK_INDEX_DIALECTS:
+        escaped = clean.replace("`", "``")
+        return f"`{escaped}`"
+    return quote_identifier(clean)
+
+
+def _format_index_table(table: str, schema: str | None, dialect: str) -> str:
+    """Format a qualified or unqualified table reference with dialect-escaped segments."""
+    parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
+    if not parts:
+        msg = "Index DDL table name must not be empty"
+        raise ValueError(msg)
+    if len(parts) == 1 and schema:
+        schema_parts = split_qualified_identifier(schema, quote_chars='"`', allow_bracket_quotes=True)
+        parts = (*schema_parts, *parts)
+    return ".".join(_quote_index_part(part, dialect) for part in parts)
+
+
+def _format_index_columns(cols: Any, dialect: str, *, allow_direction: bool = True) -> str:
+    """Format index key columns with dialect-escaped names and optional ASC/DESC modifiers."""
+    raw_items: list[str]
+    if isinstance(cols, str):
+        raw_items = [item for item in cols.split(",") if item.strip()]
+    elif isinstance(cols, Sequence):
+        raw_items = [str(col) for col in cols if col is not None and str(col).strip()]
+    else:
+        return ""
+    formatted: list[str] = []
+    for item in raw_items:
+        stripped = item.strip()
+        if not stripped:
+            continue
+        direction = ""
+        tokens = stripped.rsplit(None, 1)
+        if len(tokens) == _DIRECTION_TOKEN_PARTS and tokens[1].upper() in {"ASC", "DESC"}:
+            col_name = tokens[0]
+            direction = tokens[1].upper()
+        else:
+            col_name = stripped
+        quoted_col = _quote_index_part(col_name, dialect)
+        formatted.append(f"{quoted_col} {direction}" if (direction and allow_direction) else quoted_col)
+    return ", ".join(formatted)
+
+
+def _extract_metadata_rows(result: Any) -> list[dict[str, Any]]:
+    """Extract normalized dictionary rows from a data-dictionary result payload."""
+    if result is None:
+        return []
+    data = getattr(result, "data", result)
+    if isinstance(data, list):
+        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
+    if isinstance(data, Sequence):
+        return [dict(item) if isinstance(item, Mapping) else {} for item in data]
+    return []
+
+
+def _extract_ddl_text(result: Any) -> str | None:
+    """Extract a raw SQL DDL string from a ``get_ddl`` response."""
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    rows = _extract_metadata_rows(result)
+    for row in rows:
+        for key in ("ddl", "definition", "native_sql", "sql"):
+            val = row.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return None
 
 
 def _safe_driver_in_transaction(driver: Any) -> bool:

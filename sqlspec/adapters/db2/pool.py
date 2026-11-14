@@ -9,6 +9,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.db2 import _typing as typing_module
 from sqlspec.adapters.db2._typing import ibm_db_dbi
 from sqlspec.adapters.db2.core import build_dsn_string
@@ -75,6 +77,7 @@ async def _set_current_schema_async(connection: Any, schema: str) -> None:
     await connection.set_current_schema(schema)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
@@ -185,15 +188,22 @@ class Db2SyncConnectionPool:
         depth = getattr(self._thread_local, "depth", 0)
         connection = self._get_thread_connection()
         self._thread_local.depth = depth + 1
+        body_failed = False
         try:
             yield connection
         except BaseException:
+            body_failed = True
             if getattr(self._thread_local, "depth", 1) <= 1:
                 with contextlib.suppress(Exception):
                     self._close_thread_connection()
             raise
         finally:
             self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened across all threads."""
@@ -212,7 +222,7 @@ class Db2SyncConnectionPool:
 
     def release(self, connection: Any) -> None:
         """Release connection back to the thread-local pool."""
-        _ = connection
+        self._rollback_on_checkin(connection)
 
     def size(self) -> int:
         """Return the total number of active connections registered across all threads."""
@@ -307,6 +317,24 @@ class Db2SyncConnectionPool:
         with contextlib.suppress(Exception):
             connection.close()
 
+    def _rollback_on_checkin(self, connection: Any) -> None:
+        """Roll back uncommitted work on outermost checkin and retire closed or broken connections."""
+        if getattr(self._thread_local, "depth", 0) > 0:
+            return
+        if getattr(self._thread_local, "connection", None) is not connection:
+            return
+        assert connection is not None
+        if getattr(connection, "conn_handler", object()) is None:
+            self._close_thread_connection()
+            return
+        if self._autocommit:
+            return
+        try:
+            connection.rollback()
+        except BaseException:
+            self._close_thread_connection()
+            raise
+
     def _close_thread_connection(self) -> None:
         """Close and detach the calling thread's dedicated connection."""
         thread_state = self._thread_local.__dict__
@@ -319,6 +347,7 @@ class Db2SyncConnectionPool:
                 del self._thread_local.last_used
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _Db2PooledConnection:
     """Idle-stack record for one pooled async connection."""
 
@@ -330,6 +359,7 @@ class _Db2PooledConnection:
         self.last_used = last_used
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncPoolConnectionContext:
     """Async context manager that checks a connection out of a ``Db2AsyncConnectionPool``."""
 
@@ -359,9 +389,14 @@ class Db2AsyncPoolConnectionContext:
         """Release the connection back to the pool."""
         connection = self._connection
         self._connection = None
-        await self._pool.release(connection)
+        if exc_type is not None:
+            with contextlib.suppress(Exception):
+                await self._pool.release(connection)
+        else:
+            await self._pool.release(connection)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class Db2AsyncConnectionPool:
     """Bounded asyncio pool of ``ibm_db_dbi.AsyncConnection`` objects.
 
@@ -530,8 +565,8 @@ class Db2AsyncConnectionPool:
         Args:
             connection: Connection previously returned by ``acquire()``.
         """
-        record = self._checked_out.pop(id(connection), None)
-        if record is None:
+        conn_id = id(connection)
+        if conn_id not in self._checked_out:
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -540,6 +575,19 @@ class Db2AsyncConnectionPool:
                 pool_id=self._pool_id,
                 database=self._database_name,
             )
+            return
+        if not self._closed:
+            if getattr(connection, "conn_handler", object()) is None:
+                await self.discard(connection)
+                return
+            if not self._autocommit:
+                try:
+                    await connection.rollback()
+                except BaseException:
+                    await self.discard(connection)
+                    raise
+        record = self._checked_out.pop(conn_id, None)
+        if record is None:
             return
         try:
             if self._closed:

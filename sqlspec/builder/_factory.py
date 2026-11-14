@@ -55,6 +55,7 @@ from sqlspec.builder._parsing_utils import (
     _normalize_dialect,
     _normalize_order_by,
     _normalize_partition_by,
+    _parse_table_reference,
     _resolve_dialect,
     _rollup_expression,
     extract_expression,
@@ -1441,20 +1442,35 @@ class SQLFactory:
 
         Returns:
             INSERT expression with placeholders for bulk operations
+
+        Raises:
+            SQLBuilderError: If ``column_count``, ``table_name``, or ``placeholder_style`` is invalid.
         """
+        if isinstance(column_count, bool) or not isinstance(column_count, int) or column_count < 1:
+            msg = f"column_count must be a positive integer, got {column_count!r}"
+            raise SQLBuilderError(msg)
+        table_expr = _parse_table_reference(table_name)
+        if table_expr.args.get("alias") is not None:
+            msg = f"Invalid table reference {table_name!r}: bulk_insert does not support table aliases."
+            raise SQLBuilderError(msg)
+        if not isinstance(placeholder_style, str):
+            msg = f"Unsupported placeholder_style for bulk_insert: {placeholder_style!r}"
+            raise SQLBuilderError(msg)
         placeholders: list[exp.Expr]
         if placeholder_style == "?":
             placeholders = [exp.Placeholder() for _ in range(column_count)]
-        elif placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit():
+        elif placeholder_style == "%s":
+            placeholders = [exp.Var(this="%s") for _ in range(column_count)]
+        elif (
+            placeholder_style[:1] in {":", "$"} and placeholder_style[1:].isdigit() and int(placeholder_style[1:]) >= 1
+        ):
             prefix = placeholder_style[0]
             placeholders = [exp.Var(this=f"{prefix}{index}") for index in range(1, column_count + 1)]
         else:
-            placeholders = [exp.Var(this=placeholder_style) for _ in range(column_count)]
+            msg = f"Unsupported placeholder_style for bulk_insert: {placeholder_style!r}"
+            raise SQLBuilderError(msg)
         return FunctionExpression(
-            exp.Insert(
-                this=exp.Table(this=exp.to_identifier(table_name)),
-                expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]),
-            )
+            exp.Insert(this=table_expr, expression=exp.Values(expressions=[exp.Tuple(expressions=placeholders)]))
         )
 
     def truncate(self, table_name: str, dialect: DialectType = None) -> "Truncate":
@@ -1729,7 +1745,7 @@ def _to_copy_schema(table: str, columns: "Sequence[str] | None") -> exp.Expr:
     base = exp.table_(table)
     if not columns:
         return base
-    column_nodes = [exp.column(column_name) for column_name in columns]
+    column_nodes = [exp.column(column_name, copy=False) for column_name in columns]
     return exp.Schema(this=base, expressions=column_nodes)
 
 

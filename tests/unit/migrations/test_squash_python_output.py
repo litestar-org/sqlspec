@@ -7,13 +7,22 @@ Tests for:
 - Correct up() and down() function generation
 """
 
+import ast
 from pathlib import Path
+
+import pytest
+
+from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+from sqlspec.migrations.templates import (
+    MigrationTemplateProfile,
+    MigrationTemplateSettings,
+    PythonTemplateDefinition,
+    SQLTemplateDefinition,
+)
 
 
 def test_generate_python_squash_generate_python_squash_valid_syntax(tmp_path: Path) -> None:
     """Test that generated Python file has valid syntax."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -31,8 +40,6 @@ def test_generate_python_squash_generate_python_squash_valid_syntax(tmp_path: Pa
 
 def test_generate_python_squash_generate_python_squash_has_docstring(tmp_path: Path) -> None:
     """Test that generated Python file contains metadata docstring."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -52,8 +59,6 @@ def test_generate_python_squash_generate_python_squash_has_docstring(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_up_function(tmp_path: Path) -> None:
     """Test that up() function returns SQL statements."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -79,8 +84,6 @@ def test_generate_python_squash_generate_python_squash_up_function(tmp_path: Pat
 
 def test_generate_python_squash_generate_python_squash_down_function(tmp_path: Path) -> None:
     """Test that down() function returns SQL statements in correct order."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -107,8 +110,6 @@ def test_generate_python_squash_generate_python_squash_down_function(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_empty_down(tmp_path: Path) -> None:
     """Test that empty down SQL generates None-returning down() function."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -130,8 +131,6 @@ def test_generate_python_squash_generate_python_squash_empty_down(tmp_path: Path
 
 def test_generate_python_squash_generate_python_squash_escapes_quotes(tmp_path: Path) -> None:
     """Test that SQL with quotes is properly escaped."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -154,8 +153,6 @@ def test_generate_python_squash_generate_python_squash_escapes_quotes(tmp_path: 
 
 def test_generate_python_squash_generate_python_squash_multiline_sql(tmp_path: Path) -> None:
     """Test that multiline SQL is handled correctly."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -181,8 +178,6 @@ def test_generate_python_squash_generate_python_squash_multiline_sql(tmp_path: P
 
 def test_generate_python_squash_generate_python_squash_return_type_annotation(tmp_path: Path) -> None:
     """Test that functions have proper type annotations."""
-    from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
-
     runner = type("Mock", (), {"load_migration": lambda *a: None})()
     squasher = MigrationSquasher(tmp_path, runner)
     plan = SquashPlan(
@@ -195,3 +190,62 @@ def test_generate_python_squash_generate_python_squash_return_type_annotation(tm
     content = squasher.generate_python_squash(plan, ["SELECT 1;"], ["SELECT 2;"])
     assert "def up() -> list[str]:" in content
     assert "def down() -> list[str]:" in content or "def down() -> list[str] | None:" in content
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected_snippet"),
+    [
+        ('Fix "users"\\path\nDROP TABLE users;', 'Fix "users"\\path DROP TABLE users;'),
+        ('Ends with """triple""" and quote"', 'Ends with """triple""" and quote"'),
+        ('Ends with """', 'Ends with """'),
+        ("Unicode \\u1234 and\r\nC:\\dir\\\x00", "Unicode \\u1234 and C:\\dir\\"),
+    ],
+)
+def test_generate_python_squash_escapes_docstring_and_headers(
+    tmp_path: Path, raw_text: str, expected_snippet: str
+) -> None:
+    """Squashed Python output remains valid AST syntax and preserves sanitized single-line headers."""
+    runner = type("Mock", (), {"load_migration": lambda *a: None})()
+    settings = MigrationTemplateSettings(
+        default_format="py",
+        profile=MigrationTemplateProfile(
+            name="custom",
+            title=raw_text,
+            sql=SQLTemplateDefinition(header="-- {title}"),
+            python=PythonTemplateDefinition(
+                docstring="{title} - {message}\nDescription: {description}\nVersion: {version}",
+                body="def up():\n    return []",
+            ),
+        ),
+    )
+    squasher = MigrationSquasher(tmp_path, runner, template_settings=settings)
+    plan = SquashPlan(
+        source_migrations=[("0001", tmp_path / "0001_test.sql")],
+        target_version="0001",
+        target_path=tmp_path / "0001_release.py",
+        description=raw_text,
+        source_versions=["0001"],
+    )
+    rendered = squasher.generate_python_squash(plan, ["SELECT 1;"], ["SELECT 2;"])
+    module = ast.parse(rendered)
+    module_doc = ast.get_docstring(module, clean=False) or ""
+    assert expected_snippet in module_doc
+    description_lines = [line for line in module_doc.splitlines() if line.startswith("Description: ")]
+    assert len(description_lines) == 1
+    assert expected_snippet in description_lines[0]
+
+    py_context = {
+        "title": raw_text,
+        "message": raw_text,
+        "description": raw_text,
+        "version": "0001",
+        "created_at": "2026-01-01",
+        "author": "tester",
+    }
+    py_rendered = settings.profile.python.render(py_context)
+    py_module = ast.parse(py_rendered)
+    py_doc = ast.get_docstring(py_module, clean=False) or ""
+    assert expected_snippet in py_doc
+    py_desc_lines = [line for line in py_doc.splitlines() if line.startswith("Description: ")]
+    assert len(py_desc_lines) == 1
+    assert expected_snippet in py_desc_lines[0]

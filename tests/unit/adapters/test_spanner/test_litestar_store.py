@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from sqlspec.adapters.spanner.litestar import SpannerAsyncStore, SpannerSyncStore
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner
 
@@ -361,3 +363,99 @@ def test_spanner_litestar_sharded_schema_target_and_strict_refusal() -> None:
     ]
     with pytest.raises(MigrationError, match=r'shard_id.*migration_mode="versioned"'):
         ensure_schema_sync(drv, [target], manage_schema=True, create_schema=True, commit=False, strict=True)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("expires_in", "expect_future"),
+    [
+        pytest.param(timedelta(milliseconds=250), True, id="subsecond-timedelta"),
+        pytest.param(0, False, id="zero-expires-immediately"),
+        pytest.param(-5, False, id="negative-expires-immediately"),
+    ],
+)
+async def test_spanner_litestar_set_ttl_precision_and_immediate_expiry(
+    mode: str, expires_in: int | timedelta, expect_future: bool
+) -> None:
+    """Spanner Litestar stores preserve sub-second TTLs and store past timestamps for non-positive expires_in."""
+    captured_params: list[dict[str, Any]] = []
+    before = datetime.now(UTC)
+
+    if mode == "sync":
+
+        class _SyncTxn:
+            def execute_update(self, _sql: str, params: Any = None, param_types: Any = None) -> int:
+                _ = param_types
+                captured_params.append(dict(params or {}))
+                return 1
+
+        sync_db = MagicMock()
+        sync_db.run_in_transaction = MagicMock(side_effect=lambda fn: fn(_SyncTxn()))
+        sync_cfg = MagicMock()
+        sync_cfg.extension_config = {"litestar": {"session_table": "sess"}}
+        sync_cfg.get_database.return_value = sync_db
+        sync_store = SpannerSyncStore(sync_cfg)
+        sync_store._set("s1", b"payload", expires_in=expires_in)  # pyright: ignore[reportPrivateUsage]
+    else:
+        async_db = _mock_async_database()
+        async_cfg = MagicMock()
+        async_cfg.extension_config = {"litestar": {"session_table": "sess"}}
+        async_cfg.get_database = AsyncMock(return_value=async_db)
+        async_store = SpannerAsyncStore(async_cfg)
+        await async_store.set("s1", b"payload", expires_in=expires_in)
+        captured_params.append(dict(async_db._txn.execute_update.call_args.kwargs["params"]))
+
+    after = datetime.now(UTC)
+    bound_expires_at = captured_params[0]["expires_at"]
+    assert isinstance(bound_expires_at, datetime)
+    if expect_future:
+        assert before + timedelta(milliseconds=200) <= bound_expires_at <= after + timedelta(milliseconds=300)
+    else:
+        assert before - timedelta(microseconds=1) <= bound_expires_at <= after - timedelta(microseconds=1)
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("renew_for", "expected_txn_calls"),
+    [
+        pytest.param(None, 0, id="none"),
+        pytest.param(0, 0, id="zero"),
+        pytest.param(-1, 0, id="negative"),
+        pytest.param(timedelta(0), 0, id="zero-timedelta"),
+        pytest.param(30, 1, id="positive"),
+        pytest.param(timedelta(milliseconds=200), 1, id="subsecond-positive"),
+    ],
+)
+async def test_spanner_litestar_get_renews_only_for_positive_duration(
+    mode: str, renew_for: int | timedelta | None, expected_txn_calls: int
+) -> None:
+    """Spanner Litestar get renews expires_at only when renew_for is positive."""
+    future_time = datetime.now(UTC) + timedelta(seconds=120)
+    row = {"data": bytes_to_spanner(b"abc"), "expires_at": future_time}
+
+    if mode == "sync":
+        sync_db = _mock_database()
+        sync_driver = MagicMock()
+        sync_driver.select_one_or_none.return_value = row
+        sync_cfg = MagicMock()
+        sync_cfg.extension_config = {"litestar": {"session_table": "sess"}}
+        sync_cfg.get_database.return_value = sync_db
+        sync_cfg.provide_read_session.side_effect = lambda: _context_manager_yielding(sync_driver)
+        sync_store = SpannerSyncStore(sync_cfg)
+        assert sync_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
+        result = sync_store._get("s1", renew_for=renew_for)  # pyright: ignore[reportPrivateUsage]
+        assert result == b"abc"
+        assert sync_db.run_in_transaction.call_count == expected_txn_calls
+    else:
+        async_db = _mock_async_database()
+        async_driver = MagicMock()
+        async_driver.select_one_or_none = AsyncMock(return_value=row)
+        async_cfg = MagicMock()
+        async_cfg.extension_config = {"litestar": {"session_table": "sess"}}
+        async_cfg.get_database = AsyncMock(return_value=async_db)
+        async_cfg.provide_read_session.side_effect = lambda: _async_context_manager_yielding(async_driver)
+        async_store = SpannerAsyncStore(async_cfg)
+        assert async_store._should_renew(renew_for) is (expected_txn_calls == 1)  # pyright: ignore[reportPrivateUsage]
+        result = await async_store.get("s1", renew_for=renew_for)
+        assert result == b"abc"
+        assert async_db.run_in_transaction.await_count == expected_txn_calls

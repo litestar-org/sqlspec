@@ -3,7 +3,7 @@
 import functools
 import hashlib
 import re
-from typing import Any
+from typing import Any, Final
 
 __all__ = (
     "compute_sql_hash",
@@ -14,7 +14,12 @@ __all__ = (
     "resolve_effective_db_system",
 )
 
-_LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
+_SQL_REDACT_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
+    r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
+    r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z0-9_]*)?)\$[\s\S]*?(?:\$(?P=tag)\$|\Z))"
+    r"|(?P<squote>(?:(?<![A-Za-z0-9_])[eEnNbBxX])?'(?>[^'\\]+|''|\\[\s\S])*(?:'|\\?\Z))"
+)
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("sqlanywhere", "sqlanywhere"),
@@ -119,28 +124,13 @@ def compute_sql_hash(sql: str) -> str:
 
 
 def redact_sql_literals(sql: str) -> str:
-    """Mask single-quoted (including backslash escapes) and dollar-quoted SQL literals."""
-    return _LITERAL_PATTERN.sub("'***'", sql)
+    """Mask single-quoted and dollar-quoted SQL literals while keeping comments and quoted identifiers."""
+    return _SQL_REDACT_TOKEN_PATTERN.sub(_replace_sql_token, sql)
 
 
 _OTEL_TRACE_MODULE: Any = None
 _OTEL_TRACE_RESOLVED = False
 _SQLCOMMENTER_CONTEXT: Any = None
-
-
-def _reset_otel_trace_cache() -> None:
-    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
-    _OTEL_TRACE_MODULE = None
-    _OTEL_TRACE_RESOLVED = False
-
-
-def _get_sqlcommenter_context() -> Any:
-    global _SQLCOMMENTER_CONTEXT
-    if _SQLCOMMENTER_CONTEXT is None:
-        from sqlspec.core.sqlcommenter import SQLCommenterContext
-
-        _SQLCOMMENTER_CONTEXT = SQLCommenterContext
-    return _SQLCOMMENTER_CONTEXT.get()
 
 
 def get_w3c_trace_context() -> tuple[str | None, str]:
@@ -167,3 +157,25 @@ def get_w3c_trace_context() -> tuple[str | None, str]:
     fallback = _get_sqlcommenter_context() or {}
     parent = (fallback.get("traceparent") or "").strip()
     return (parent, (fallback.get("tracestate") or "").strip()) if parent else (None, "")
+
+
+def _reset_otel_trace_cache() -> None:
+    global _OTEL_TRACE_MODULE, _OTEL_TRACE_RESOLVED
+    _OTEL_TRACE_MODULE = None
+    _OTEL_TRACE_RESOLVED = False
+
+
+def _get_sqlcommenter_context() -> Any:
+    global _SQLCOMMENTER_CONTEXT
+    if _SQLCOMMENTER_CONTEXT is None:
+        from sqlspec.core.sqlcommenter import SQLCommenterContext
+
+        _SQLCOMMENTER_CONTEXT = SQLCommenterContext
+    return _SQLCOMMENTER_CONTEXT.get()
+
+
+def _replace_sql_token(match: re.Match[str]) -> str:
+    """Preserve comments and double-quoted identifiers while masking SQL literals."""
+    if match.lastgroup in {"comment", "dquote"}:
+        return match.group(0)
+    return "'***'"

@@ -32,7 +32,12 @@ from typing_extensions import TypeVar
 from sqlspec.core._cursor import decode_cursor, encode_cursor, order_fingerprint
 from sqlspec.core._ordering import NullsPlacement, ordered
 from sqlspec.core._pagination import CursorPagination, OffsetPagination
-from sqlspec.core.query_modifiers import parse_column_for_condition, safe_modify_with_cte, wrap_as_subquery
+from sqlspec.core.query_modifiers import (
+    parse_column_for_condition,
+    safe_modify_with_cte,
+    sanitize_parameter_name,
+    wrap_as_subquery,
+)
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
 from sqlspec.utils.type_guards import has_field_name
 from sqlspec.utils.uuids import uuid4
@@ -72,6 +77,8 @@ __all__ = (
     "find_filter",
     "normalize_cursor_keys",
 )
+
+_MAX_QUALIFIED_PARTS = 4
 
 T = TypeVar("T")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
@@ -168,7 +175,7 @@ class StatementFilter:
         return parse_column_for_condition(field_name)
 
     def _sanitize_param_name(self, name: "str | exp.Expression") -> str:
-        """Sanitize field name for use as a parameter name by replacing dots with underscores.
+        """Normalize a field name into an identifier usable as a bind parameter name.
 
         Args:
             name: Original parameter name string or expression
@@ -178,7 +185,7 @@ class StatementFilter:
         """
         if isinstance(name, exp.Expression):
             return f"expr_{str(hash(name)).replace('-', '')[:8]}"
-        return name.replace(".", "_")
+        return sanitize_parameter_name(name)
 
     def _reconstruction_args(self) -> "tuple[Any, ...]":
         """Return the positional ``__init__`` args needed to rebuild this filter.
@@ -539,7 +546,9 @@ class LimitOffsetFilter(PaginationFilter):
         new_statement = safe_modify_with_cte(
             target,
             lambda expression: (
-                cast("exp.Select | exp.SetOperation", expression).limit(limit_placeholder).offset(offset_placeholder)
+                cast("exp.Select | exp.SetOperation", expression)
+                .limit(limit_placeholder, copy=False)
+                .offset(offset_placeholder, copy=False)
             ),
         )
 
@@ -581,6 +590,14 @@ class CursorKey:
     ) -> None:
         if not field_name:
             msg = "field_name must not be empty"
+            raise ValueError(msg)
+        field_parts = field_name.split(".")
+        if (
+            "\x00" in field_name
+            or len(field_parts) > _MAX_QUALIFIED_PARTS
+            or not all(part.strip() for part in field_parts)
+        ):
+            msg = "field_name must be a valid column or qualified column name"
             raise ValueError(msg)
         if sort_order not in ("asc", "desc"):
             msg = "sort_order must be 'asc' or 'desc'"
@@ -767,7 +784,7 @@ class CursorFilter(PaginationFilter):
         items: list[exp.Ordered] = []
         predicates: list[tuple[exp.Expr | bool, exp.Expr | bool]] = []
         for index, key in enumerate(self._keys):
-            col = exp.column(key.result_name) if wrap else self._get_column_expression(key.field_name)
+            col = exp.column(key.result_name, copy=False) if wrap else self._get_column_expression(key.field_name)
             ascending = (key.sort_order == "asc") != self._backward
             nulls = key.nulls
             if self._backward and nulls is not None:
@@ -931,9 +948,9 @@ class OrderByFilter(StatementFilter):
         current_statement = statement._filter_expression()
 
         if isinstance(current_statement, (exp.Select, exp.SetOperation)):
-            new_statement = current_statement.order_by(order_expr)
+            new_statement = current_statement.order_by(order_expr, copy=False)
         else:
-            new_statement = wrap_as_subquery(current_statement).order_by(order_expr)
+            new_statement = wrap_as_subquery(current_statement).order_by(order_expr, copy=False)
 
         return statement.copy(statement=new_statement)
 
@@ -1057,10 +1074,10 @@ class _TextSearchFilter(StatementFilter):
         """Return cache key for this filter configuration."""
         if isinstance(self.field_name, set):
             field_names: Any = tuple(
-                sorted(item.sql() if isinstance(item, exp.Expression) else item for item in self.field_name)
+                sorted(item.sql(copy=False) if isinstance(item, exp.Expression) else item for item in self.field_name)
             )
         elif isinstance(self.field_name, exp.Expression):
-            field_names = self.field_name.sql()
+            field_names = self.field_name.sql(copy=False)
         else:
             field_names = self.field_name
         return (self._cache_key_name, field_names, self.value, self.ignore_case)
@@ -1321,7 +1338,7 @@ def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":
 
 def _stable_filter_key_part(value: Any) -> Any:
     if isinstance(value, exp.Expression):
-        return value.sql()
+        return value.sql(copy=False)
     if isinstance(value, set):
         return tuple(sorted((_stable_filter_key_part(item) for item in value), key=repr))
     if isinstance(value, dict):

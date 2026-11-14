@@ -777,7 +777,7 @@ def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pyt
     """AdbcADKMemoryStore pre-queries existing event_ids on non-returning dialects."""
     executed_statements: list[str] = []
     mock_cursor = MagicMock()
-    mock_cursor.fetchall.return_value = [("evt-existing",)]
+    mock_cursor.fetchall.return_value = [("app1", "user1", "evt-existing")]
 
     def record_execute(sql: str, _params: Any = None) -> None:
         executed_statements.append(sql)
@@ -830,7 +830,7 @@ def test_oracle_adk_memory_store_pre_queries_existing_event_ids(monkeypatch: pyt
         },
     ])
 
-    assert any("SELECT event_id FROM" in s for s in executed_statements)
+    assert any("SELECT app_name, user_id, event_id FROM" in s for s in executed_statements)
     assert count == 1
 
 
@@ -924,8 +924,8 @@ def test_adbc_memory_insert_only_ignores_confirmed_event_conflicts(
     if event_exists and "foreign key" not in error_message:
         assert store.insert_memory_entries([entry]) == 0
         conn.commit.assert_called_once()
-        conflict_checks = [call.args[1] for call in cursor.execute.call_args_list if "WHERE event_id =" in call.args[0]]
-        assert conflict_checks == [("evt-1",)]
+        conflict_checks = [call.args[1] for call in cursor.execute.call_args_list if "WHERE app_name =" in call.args[0]]
+        assert conflict_checks == [("app", "u1", "evt-1")]
     else:
         with pytest.raises(IntegrityError) as exc_info:
             store.insert_memory_entries([entry])
@@ -1408,7 +1408,7 @@ def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: 
             cursor.fetchall.return_value = [cursor.fetchone.return_value]
         elif normalized.startswith("SELECT e.id, e.session_id"):
             cursor.fetchall.return_value = [("e1", "s1", "inv1", now, bytearray(b'{"text":"hello"}'), "app", "u1")]
-        elif normalized.startswith("SELECT event_id FROM adk_memory WHERE event_id IN"):
+        elif normalized.startswith("SELECT app_name, user_id, event_id FROM adk_memory"):
             cursor.fetchall.return_value = []
         elif normalized.startswith("MERGE INTO adk_memory"):
             cursor.rowcount = 1 if params[0] == "m1" else 0
@@ -1463,7 +1463,7 @@ def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: 
     store.append_event(cast("Any", event))
     assert (
         "INSERT INTO adk_event (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
-        "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)"
+        "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?) FROM adk_session WHERE id = ? AND app_name = ? AND user_id = ?"
     ) == executed[0][0]
 
     executed.clear()
@@ -1512,7 +1512,10 @@ def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: 
     assert len(merge_calls) == 2
     assert "PARSE_JSON(?) AS content_json" in merge_calls[0]
     assert "PARSE_JSON(?) AS metadata_json" in merge_calls[0]
-    assert "ON t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT" in merge_calls[0]
+    assert (
+        "ON t.app_name = s.app_name AND t.user_id = s.user_id AND t.event_id = s.event_id WHEN NOT MATCHED THEN INSERT"
+        in merge_calls[0]
+    )
 
     executed.clear()
     recalled = mem_store.search_entries(" budget ", "app", "u1", limit=5)

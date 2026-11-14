@@ -7,6 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import create_mapped_exception, end_transaction, is_read_only_sqlite_config
@@ -29,6 +31,7 @@ SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SqliteConnectionPool:
     """Thread-local connection manager for SQLite.
 
@@ -196,16 +199,26 @@ class SqliteConnectionPool:
             yield connection
         except BaseException:
             if outermost:
-                with contextlib.suppress(Exception):
+                try:
                     end_transaction(connection, commit=False)
+                except Exception:
+                    if getattr(self._thread_local, "connection", None) is connection:
+                        self._close_thread_connection()
+                    else:
+                        self._retire_connection(connection)
             raise
         else:
             if outermost:
                 try:
                     end_transaction(connection, commit=True)
                 except BaseException:
-                    with contextlib.suppress(Exception):
+                    try:
                         end_transaction(connection, commit=False)
+                    except Exception:
+                        if getattr(self._thread_local, "connection", None) is connection:
+                            self._close_thread_connection()
+                        else:
+                            self._retire_connection(connection)
                     raise
         finally:
             with self._registry_lock:
@@ -258,22 +271,16 @@ class SqliteConnectionPool:
             connection: The connection to release
         """
         try:
-            with contextlib.suppress(Exception):
+            try:
                 end_transaction(connection, commit=False)
+            except Exception:
+                if getattr(self._thread_local, "connection", None) is connection:
+                    self._close_thread_connection()
+                else:
+                    self._retire_connection(connection)
         finally:
             if self._write_lock is not None:
                 self._write_lock.release()
-
-    def _prune_dead_threads(self) -> None:
-        """Prune connections owned by dead threads."""
-        with self._registry_lock:
-            dead_threads = [t for t in self._thread_connections if not t.is_alive()]
-            for t in dead_threads:
-                conn = self._thread_connections.pop(t, None)
-                if conn is not None:
-                    self._connection_registry.discard(conn)
-                    with contextlib.suppress(Exception):
-                        conn.close()
 
     def size(self) -> int:
         """Get total number of active thread-local connections in pool."""
@@ -285,6 +292,17 @@ class SqliteConnectionPool:
         """Get number of checked out connections."""
         with self._registry_lock:
             return self._checked_out_count
+
+    def _prune_dead_threads(self) -> None:
+        """Prune connections owned by dead threads."""
+        with self._registry_lock:
+            dead_threads = [t for t in self._thread_connections if not t.is_alive()]
+            for t in dead_threads:
+                conn = self._thread_connections.pop(t, None)
+                if conn is not None:
+                    self._connection_registry.discard(conn)
+                    with contextlib.suppress(Exception):
+                        conn.close()
 
     def _create_connection(self) -> SqliteConnection:
         """Create a pool-owned connection and record it for shutdown."""

@@ -7,7 +7,9 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection, PyMysqlServerStatus
+from mypy_extensions import mypyc_attr
+
+from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -22,6 +24,7 @@ _ADAPTER_NAME = "pymysql"
 _pymysql_connect: "PyMysqlConnect" = cast("PyMysqlConnect", PyMysqlConnect)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class PyMysqlConnectionPool:
     """Thread-local connection manager for PyMySQL."""
 
@@ -114,10 +117,18 @@ class PyMysqlConnectionPool:
             A thread-local database connection.
         """
         connection = self.acquire()
+        body_failed = False
         try:
             yield connection
+        except BaseException:
+            body_failed = True
+            raise
         finally:
-            self.release(connection)
+            if body_failed:
+                with contextlib.suppress(Exception):
+                    self.release(connection)
+            else:
+                self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -133,28 +144,36 @@ class PyMysqlConnectionPool:
 
     def acquire(self) -> PyMysqlConnection:
         connection = self._get_thread_connection()
+        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: PyMysqlConnection) -> None:
         """Release connection back to the pool, sanitizing transactions."""
+        is_thread_conn = getattr(self._thread_local, "connection", None) is connection
+        if is_thread_conn:
+            remaining = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
+            self._thread_local.depth = remaining
+            outermost = remaining == 0
+        else:
+            outermost = True
         try:
             if (
                 getattr(getattr(connection, "_result", None), "unbuffered_active", False) is True
                 or getattr(connection, "unbuffered_active", False) is True
             ):
-                if getattr(self._thread_local, "connection", None) is connection:
+                if is_thread_conn:
                     self._close_thread_connection()
                 else:
                     self._retire_connection(connection)
                 return
 
-            if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
+            if outermost and not self._autocommit_enabled(connection):
                 try:
                     connection.rollback()
-                except Exception:
-                    if getattr(self._thread_local, "connection", None) is connection:
+                except BaseException:
+                    if is_thread_conn:
                         self._close_thread_connection()
                     else:
                         self._retire_connection(connection)
@@ -172,6 +191,14 @@ class PyMysqlConnectionPool:
     def checked_out(self) -> int:
         with self._registry_lock:
             return self._checked_out
+
+    @staticmethod
+    def _autocommit_enabled(connection: PyMysqlConnection) -> bool:
+        """Return whether autocommit is active on a PyMySQL connection."""
+        get_autocommit = getattr(connection, "get_autocommit", None)
+        if callable(get_autocommit):
+            return bool(get_autocommit())
+        return bool(getattr(connection, "autocommit_mode", False))
 
     def _prune_dead_thread_connections(self) -> None:
         dead_connections: list[PyMysqlConnection] = []
@@ -210,6 +237,7 @@ class PyMysqlConnectionPool:
                 self._retire_connection(cast("PyMysqlConnection", stale))
             thread_state.pop("created_at", None)
             thread_state.pop("last_used", None)
+            thread_state.pop("depth", None)
             self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
@@ -263,6 +291,7 @@ class PyMysqlConnectionPool:
 
     def _close_thread_connection(self) -> None:
         thread_state = self._thread_local.__dict__
+        thread_state.pop("depth", None)
         if "connection" in thread_state:
             self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
             del self._thread_local.connection

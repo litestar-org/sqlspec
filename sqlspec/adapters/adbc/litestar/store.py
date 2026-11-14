@@ -74,28 +74,6 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         super().__init__(config)
         self._dialect: str | None = None
 
-    def _validate_table_name(self, table_name: str) -> None:
-        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
-
-        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
-        """
-        if "." in table_name and self._configured_dialect() == "teradata":
-            schema_part, _, table_part = table_name.partition(".")
-            if schema_part and table_part and "." not in table_part:
-                BaseSQLSpecStore._ensure_table_name(schema_part)
-                BaseSQLSpecStore._ensure_table_name(table_part)
-                return
-        BaseSQLSpecStore._ensure_table_name(table_name)
-
-    def _configured_dialect(self) -> "str | None":
-        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
-        connection_config = getattr(self._config, "connection_config", None)
-        if not isinstance(connection_config, Mapping):
-            return None
-        return resolve_reconcile_adbc_dialect(
-            connection_config, getattr(self._config, "explicit_statement_dialect", None)
-        )
-
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
         if not self.create_schema_enabled:
@@ -190,38 +168,6 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         else:
             self._dialect = raw_dialect
 
-    def _resolve_schema_dialect(self) -> str:
-        """Return cached or config-classified dialect before falling back to a live session."""
-        if self._dialect is not None:
-            return self._dialect
-        connection_config = getattr(self._config, "connection_config", None)
-        if isinstance(connection_config, Mapping):
-            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
-            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
-            if resolved is not None:
-                self._dialect = resolved
-                return resolved
-        return self._get_dialect()
-
-    def _schema_target(self) -> SchemaTarget:
-        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
-        dialect = self._resolve_schema_dialect()
-        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
-        if dialect == "teradata":
-            schema_name, catalog_table = split_teradata_table_name(self._table_name)
-            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
-        if dialect == "db2":
-            schema_name, catalog_table = _split_db2_table_name(self._table_name)
-            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
-        raw_schema, dot, raw_table = self._table_name.partition(".")
-        if dot:
-            schema_name = raw_schema.strip('"`[]') or None
-            bare_table = raw_table.strip('"`[]')
-        else:
-            schema_name = None
-            bare_table = self._table_name.strip('"`[]')
-        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
-
     def get_companion_indexes(self) -> list[CompanionIndex]:
         """Return dialect-specific companion index definitions for ADBC session storage."""
         dialect = self._resolve_schema_dialect()
@@ -279,6 +225,73 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             return [CompanionIndex(name=index_name, table=bare_table, schema=schema_name, ddl=ddl)]
 
         return super().get_companion_indexes()
+
+    def downgrade_drops(self) -> "list[DropStatement]":
+        """Return the extension-downgrade drops, catalog-probed on Teradata."""
+        if self._get_dialect() != "teradata":
+            return super().downgrade_drops()
+        return [
+            DropStatement(
+                statement,
+                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
+                exists_parameters=split_teradata_table_name(self._table_name),
+            )
+            for statement in self._drop_table_sql()
+        ]
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate the session table name, accepting ``database.table`` names for Teradata configs.
+
+        Other ADBC backends derive index names from the raw table name, so they keep the bare-name rule.
+        """
+        if "." in table_name and self._configured_dialect() == "teradata":
+            schema_part, _, table_part = table_name.partition(".")
+            if schema_part and table_part and "." not in table_part:
+                BaseSQLSpecStore._ensure_table_name(schema_part)
+                BaseSQLSpecStore._ensure_table_name(table_part)
+                return
+        BaseSQLSpecStore._ensure_table_name(table_name)
+
+    def _configured_dialect(self) -> "str | None":
+        """Return the dialect implied by the connection config, or ``None`` when it needs a live driver."""
+        connection_config = getattr(self._config, "connection_config", None)
+        if not isinstance(connection_config, Mapping):
+            return None
+        return resolve_reconcile_adbc_dialect(
+            connection_config, getattr(self._config, "explicit_statement_dialect", None)
+        )
+
+    def _resolve_schema_dialect(self) -> str:
+        """Return cached or config-classified dialect before falling back to a live session."""
+        if self._dialect is not None:
+            return self._dialect
+        connection_config = getattr(self._config, "connection_config", None)
+        if isinstance(connection_config, Mapping):
+            explicit_dialect = getattr(self._config, "explicit_statement_dialect", None)
+            resolved = resolve_reconcile_adbc_dialect(connection_config, explicit_dialect)
+            if resolved is not None:
+                self._dialect = resolved
+                return resolved
+        return self._get_dialect()
+
+    def _schema_target(self) -> SchemaTarget:
+        """Build the primary session table SchemaTarget using the resolved ADBC backend dialect."""
+        dialect = self._resolve_schema_dialect()
+        parse_dialect = "postgres" if is_postgres_dialect(dialect) else ("tsql" if dialect == "mssql" else dialect)
+        if dialect == "teradata":
+            schema_name, catalog_table = split_teradata_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            return SchemaTarget.from_ddl(catalog_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
+        raw_schema, dot, raw_table = self._table_name.partition(".")
+        if dot:
+            schema_name = raw_schema.strip('"`[]') or None
+            bare_table = raw_table.strip('"`[]')
+        else:
+            schema_name = None
+            bare_table = self._table_name.strip('"`[]')
+        return SchemaTarget.from_ddl(bare_table, self._table_ddl(), schema=schema_name, dialect=parse_dialect)
 
     def _get_dialect(self) -> str:
         """Get the database dialect, caching it after first access.
@@ -543,19 +556,6 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 raise
         self._log_table_created()
 
-    def downgrade_drops(self) -> "list[DropStatement]":
-        """Return the extension-downgrade drops, catalog-probed on Teradata."""
-        if self._get_dialect() != "teradata":
-            return super().downgrade_drops()
-        return [
-            DropStatement(
-                statement,
-                exists_sql=_TERADATA_TABLE_EXISTS_SQL,
-                exists_parameters=split_teradata_table_name(self._table_name),
-            )
-            for statement in self._drop_table_sql()
-        ]
-
     def _drop_table_sql(self) -> "list[str]":
         """Get dialect-specific DROP TABLE SQL statements for ADBC.
 
@@ -625,7 +625,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             data = result["data"] if "data" in result else result["DATA"]
             expires_at = result.get("expires_at") if "expires_at" in result else result.get("EXPIRES_AT")
 
-            if renew_for is not None and expires_at:
+            if self._should_renew(renew_for) and expires_at:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 p1_update = self._get_param_placeholder(1)
                 p2_update = self._get_param_placeholder(2)

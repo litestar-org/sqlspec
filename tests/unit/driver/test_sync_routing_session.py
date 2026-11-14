@@ -13,6 +13,7 @@ from sqlspec import sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import SQL, StatementConfig, StatementStack
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import (
     ImproperConfigurationError,
@@ -61,8 +62,8 @@ def test_idle_facade_and_closed_session(routing_config: SqliteConfig) -> None:
         active_session.rollback()
     assert active_session.primary_session is None
     assert active_session.replica_session is None
-    assert leaked_replica.connection is None
-    assert leaked_primary.connection is None
+    assert leaked_replica.connection is _DETACHED_CONNECTION
+    assert leaked_primary.connection is _DETACHED_CONNECTION
 
 
 def test_reads_replica_then_write_pins_primary(routing_config: SqliteConfig) -> None:

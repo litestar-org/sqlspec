@@ -11,6 +11,7 @@ import pytest
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import StatementStack
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.driver._stream import AsyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError, SQLSpecError
@@ -45,8 +46,8 @@ async def test_async_idle_read_write_pin_and_closed(async_routing_config: Aiosql
         assert await session.fetch_value("SELECT origin FROM notes WHERE id=1") == "primary"
     assert session.primary_session is None
     assert session.replica_session is None
-    assert leaked_replica.connection is None
-    assert leaked_primary.connection is None
+    assert leaked_replica.connection is _DETACHED_CONNECTION
+    assert leaked_primary.connection is _DETACHED_CONNECTION
     with pytest.raises(SQLSpecError, match="closed"):
         await session.select("SELECT 1")
 

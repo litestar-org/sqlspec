@@ -50,7 +50,9 @@ class AdditiveSqliteADKMemoryStore(SqliteADKMemoryStore):
     """ADK memory target with one additive column."""
 
     def _memory_table_ddl(self) -> str:
-        return super()._memory_table_ddl().replace("embedding BLOB\n", "embedding BLOB,\n            schema_tag TEXT\n")
+        return (
+            super()._memory_table_ddl().replace("embedding BLOB,\n", "embedding BLOB,\n            schema_tag TEXT,\n")
+        )
 
 
 class AdditiveSqliteEventQueueStore(SqliteEventQueueStore):
@@ -411,7 +413,7 @@ async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_stri
         assert sync_rows[0]["attempts"] == 0
         assert all(not str(r["version_num"]).startswith("ext_events_") for r in sync_ledger)
 
-        sync_commands.downgrade()
+        sync_commands.downgrade("base")
         with sync_cfg.provide_session() as session:
             tables_after_down = {str(t["table_name"]).casefold() for t in session.data_dictionary.get_tables(session)}
         assert "sqlspec_event_queue" not in tables_after_down
@@ -444,7 +446,7 @@ async def test_events_reconcile_sync_and_async_end_to_end_partial_table_and_stri
         assert len(async_rows) == 1
         assert async_rows[0]["attempts"] == 0
 
-        await async_commands.downgrade()
+        await async_commands.downgrade("base")
         async with async_cfg.provide_session() as async_session:
             async_tables_after_down = {
                 str(t["table_name"]).casefold() for t in await async_session.data_dictionary.get_tables(async_session)
@@ -566,8 +568,10 @@ async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.Monkey
             del query, app_name, user_id, limit, scope_filter, embedding
             return []
 
-        def delete_entries_by_session(self, session_id: str) -> int:
-            del session_id
+        def delete_entries_by_session(
+            self, session_id: str, app_name: str | None = None, user_id: str | None = None
+        ) -> int:
+            del session_id, app_name, user_id
             return 0
 
         def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
@@ -1208,6 +1212,14 @@ async def test_builtin_extensions_default_to_reconcile_and_drop_at_base_downgrad
 
         sync_cmds.downgrade()
         with sync_cfg.provide_session() as drv:
+            tables_after_step = {str(t["table_name"]).casefold() for t in drv.data_dictionary.get_tables(drv)}
+        assert "app_items" not in tables_after_step
+        assert {"litestar_session", "adk_session", "adk_event", "adk_memory", "sqlspec_event_queue"}.issubset(
+            tables_after_step
+        )
+
+        sync_cmds.downgrade("base")
+        with sync_cfg.provide_session() as drv:
             tables_after = {str(t["table_name"]).casefold() for t in drv.data_dictionary.get_tables(drv)}
         assert not (
             {"app_items", "litestar_session", "adk_session", "adk_event", "adk_memory", "sqlspec_event_queue"}
@@ -1229,6 +1241,16 @@ async def test_builtin_extensions_default_to_reconcile_and_drop_at_base_downgrad
         }.issubset(async_tables)
 
         await async_cmds.downgrade()
+        async with async_cfg.provide_session() as drv:
+            async_tables_after_step = {
+                str(t["table_name"]).casefold() for t in await drv.data_dictionary.get_tables(drv)
+            }
+        assert "app_items" not in async_tables_after_step
+        assert {"litestar_session", "adk_session", "adk_event", "adk_memory", "sqlspec_event_queue"}.issubset(
+            async_tables_after_step
+        )
+
+        await async_cmds.downgrade("base")
         async with async_cfg.provide_session() as drv:
             async_tables_after = {str(t["table_name"]).casefold() for t in await drv.data_dictionary.get_tables(drv)}
         assert not (

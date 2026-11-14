@@ -823,3 +823,52 @@ def _table_shape(connection: sqlite3.Connection, table: str) -> tuple[object, ob
         connection.execute(f'PRAGMA table_info("{table}")').fetchall(),
         connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall(),
     )
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected_snippet"),
+    [
+        ('Fix "users"\\path\nDROP TABLE users;', 'Fix "users"\\path DROP TABLE users;'),
+        ("Title\r\nCREATE TABLE evil (id INT);\x00", "Title CREATE TABLE evil (id INT);"),
+    ],
+)
+def test_sql_templates_and_squash_keep_headers_single_line(
+    tmp_path: Path, raw_text: str, expected_snippet: str
+) -> None:
+    """SQL migration templates and squash output collapse line breaks and NUL bytes in headers."""
+    profile = MigrationTemplateProfile(
+        name="custom",
+        title=raw_text,
+        sql=SQLTemplateDefinition(
+            header="-- {title}",
+            metadata=["-- Version: {version}", "-- Description: {description}"],
+            body="-- name: migrate-{version}-up\nSELECT 1;",
+        ),
+        python=PythonTemplateDefinition(docstring="{title}", body="def up():\n    return []"),
+    )
+    settings = MigrationTemplateSettings(default_format="sql", profile=profile)
+    rendered_template = profile.sql.render({
+        "title": raw_text,
+        "version": "0001\nDROP TABLE x;",
+        "description": raw_text,
+    })
+    assert all(
+        line.startswith("-- ") for line in rendered_template.splitlines() if line.strip() and line != "SELECT 1;"
+    )
+    assert f"-- {expected_snippet}" in rendered_template
+    assert f"-- Description: {expected_snippet}" in rendered_template
+
+    squasher = MigrationSquasher(tmp_path, SyncMigrationRunner(tmp_path), template_settings=settings)
+    plan = SquashPlan(
+        source_migrations=[("0001", tmp_path / "0001_init.sql")],
+        target_version="0001\nDROP TABLE x;",
+        target_path=tmp_path / "0001_release.sql",
+        description=raw_text,
+        source_versions=["0001"],
+        schema="app\nDROP TABLE y;",
+    )
+    squashed = squasher.generate_squashed_content(plan, ["SELECT 1;"], [])
+    assert all(line.startswith("-- ") for line in squashed.splitlines() if line.strip() and line != "SELECT 1;")
+    assert f"-- Description: {expected_snippet}" in squashed
+    assert "-- schema: app DROP TABLE y;" in squashed
+    assert "DROP TABLE x;" not in [ln.strip() for ln in squashed.splitlines() if not ln.startswith("-- ")]

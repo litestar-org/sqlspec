@@ -114,7 +114,7 @@ class AsyncpgHybridEventsBackend:
                 continue
             event_id = _extract_event_id(parsed_payload)
             if event_id is not None:
-                event = await self._queue.dequeue_by_event_id(event_id)
+                event = await self._queue.dequeue_by_event_id(event_id, channel)
                 if event is not None:
                     self._runtime.increment_metric("events.marker.drain")
                     _record_dequeue_result(self._runtime, event)

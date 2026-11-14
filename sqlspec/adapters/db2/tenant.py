@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.db2._typing import connection_autocommit_enabled
 from sqlspec.core.tenant.base import TenantLeaseState, with_cause
 from sqlspec.driver._tenant import AsyncTenantLease, SyncTenantLease
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
@@ -37,26 +38,6 @@ def validate_global_variable(name: object) -> str:
         msg = "Db2 tenant global variables must be schema-qualified identifiers such as APP.CURRENT_TENANT_ID"
         raise ImproperConfigurationError(msg)
     return name.upper()
-
-
-def _read_sql(names: tuple[str, ...]) -> str:
-    return f"SELECT {', '.join(names)} FROM SYSIBM.SYSDUMMY1"
-
-
-def _assign_sql(names: tuple[str, ...]) -> str:
-    if len(names) == 1:
-        return f"SET {names[0]} = ?"
-    return f"SET ({', '.join(names)}) = ({', '.join('?' for _ in names)})"
-
-
-def _row_values(row: Any, count: int) -> tuple[str | None, ...]:
-    if row is None or len(row) != count:
-        msg = "Db2 tenant global variable read returned an unexpected row"
-        raise ValueError(msg)
-    if any(value is not None and not isinstance(value, str) for value in row):
-        msg = "Db2 tenant global variables must hold character values"
-        raise ValueError(msg)
-    return tuple(cast("str | None", value) for value in row)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -151,6 +132,12 @@ class Db2SyncGlobalVariableStrategy(_Db2GlobalVariables):
         if restored != values:
             msg = "Db2 tenant global variable restore verification failed"
             raise TenantCleanupError(msg)
+        if not connection_autocommit_enabled(connection):
+            try:
+                connection.rollback()
+            except Exception as exc:
+                msg = "Db2 tenant checkin could not end its verification unit of work"
+                raise with_cause(TenantCleanupError(msg), exc)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -203,6 +190,12 @@ class Db2AsyncGlobalVariableStrategy(_Db2GlobalVariables):
         if restored != values:
             msg = "Db2 tenant global variable restore verification failed"
             raise TenantCleanupError(msg)
+        if not connection_autocommit_enabled(connection):
+            try:
+                await connection.rollback()
+            except Exception as exc:
+                msg = "Db2 tenant checkin could not end its verification unit of work"
+                raise with_cause(TenantCleanupError(msg), exc)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -258,3 +251,23 @@ class Db2AsyncTenantLease(AsyncTenantLease):
 
     async def _finish_transaction(self, connection: Any, exc_type: type[BaseException] | None) -> None:
         await connection.rollback()
+
+
+def _read_sql(names: tuple[str, ...]) -> str:
+    return f"SELECT {', '.join(names)} FROM SYSIBM.SYSDUMMY1"
+
+
+def _assign_sql(names: tuple[str, ...]) -> str:
+    if len(names) == 1:
+        return f"SET {names[0]} = ?"
+    return f"SET ({', '.join(names)}) = ({', '.join('?' for _ in names)})"
+
+
+def _row_values(row: Any, count: int) -> tuple[str | None, ...]:
+    if row is None or len(row) != count:
+        msg = "Db2 tenant global variable read returned an unexpected row"
+        raise ValueError(msg)
+    if any(value is not None and not isinstance(value, str) for value in row):
+        msg = "Db2 tenant global variables must hold character values"
+        raise ValueError(msg)
+    return tuple(cast("str | None", value) for value in row)

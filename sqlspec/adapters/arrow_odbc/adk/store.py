@@ -72,16 +72,6 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         super().__init__(config, read_config=read_config)
         self._sql = _adk_sql_for(config)
 
-    def _table_ddls(self) -> tuple[tuple[str, str], ...]:
-        """Return ordered ADK session-store table names paired with canonical CREATE TABLE DDL."""
-        return (
-            (self._session_table, self._sessions_table_ddl()),
-            (self._events_table, self._events_table_ddl()),
-            (self._app_state_table, self._app_states_table_ddl()),
-            (self._user_state_table, self._user_states_table_ddl()),
-            (self._metadata_table, self._metadata_table_ddl()),
-        )
-
     def create_tables(self) -> None:
         """Create the ADK tables and indexes the catalog reports as missing."""
         if not self.create_schema_enabled:
@@ -91,12 +81,6 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         with self._config.provide_session() as driver:
             self._sql.create_missing_objects(driver, self._table_ddls(), self._index_specs())
             driver.commit()
-
-    def _schema_targets(self) -> list[SchemaTarget]:
-        """Return ADK session-store SchemaTarget definitions with Db2 catalog folding when active."""
-        if isinstance(self._sql, _Db2AdkSql):
-            return self._sql.schema_targets(self._table_ddls())
-        return super()._schema_targets()
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
         """Create missing ADK session and event companion indexes without committing."""
@@ -140,9 +124,10 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
+        should_renew = self._should_renew(renew_for)
         try:
             with self._provide_read_session(primary=renew_for is not None) as driver:
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                if should_renew:
                     driver.execute(
                         f"""
                         UPDATE {self._sql.table_ref(self._session_table)}
@@ -154,7 +139,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                 row = driver.select_one_or_none(
                     self._sql.session_select_sql(self._session_table), (app_name, user_id, session_id)
                 )
-                if renew_for is not None:
+                if should_renew:
                     driver.commit()
         except SQLSpecError as exc:
             if self._sql.is_table_missing(exc):
@@ -209,12 +194,22 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         )
 
     def append_event(self, event_record: StoredEvent) -> None:
-        """Append an event to a session."""
-        self._execute(
-            _insert_event_sql(self._sql.table_ref(self._events_table)),
-            _event_insert_params(event_record, self._sql.format_datetime),
-            commit=True,
-        )
+        """Append an event to an existing scoped session."""
+        app_name = event_record["app_name"]
+        user_id = event_record["user_id"]
+        session_id = event_record["session_id"]
+        sql_dialect = self._sql
+        with self._config.provide_session() as driver, _atomic_write(driver):
+            row = driver.select_one_or_none(
+                sql_dialect.session_select_sql(self._session_table), (app_name, user_id, session_id)
+            )
+            if row is None:
+                msg = f"Session {session_id} not found for app={app_name!r}, user={user_id!r}"
+                raise ValueError(msg)
+            driver.execute(
+                sql_dialect.scoped_insert_event_sql(self._events_table, self._session_table),
+                (*_event_insert_params(event_record, sql_dialect.format_datetime), session_id, app_name, user_id),
+            )
 
     def append_event_and_update_state(
         self,
@@ -228,6 +223,17 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
+        if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
+            app_name,
+            user_id,
+            session_id,
+        ):
+            msg = (
+                f"Event scope ({event_record['app_name']!r}, {event_record['user_id']!r}, "
+                f"{event_record['session_id']!r}) does not match target ({app_name!r}, {user_id!r}, {session_id!r})."
+            )
+            raise ValueError(msg)
+
         sql_dialect = self._sql
         with self._config.provide_session() as driver, _atomic_write(driver):
             driver.execute(
@@ -357,6 +363,22 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         """Set an ADK metadata value."""
         self._execute(self._sql.upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
+    def _table_ddls(self) -> tuple[tuple[str, str], ...]:
+        """Return ordered ADK session-store table names paired with canonical CREATE TABLE DDL."""
+        return (
+            (self._session_table, self._sessions_table_ddl()),
+            (self._events_table, self._events_table_ddl()),
+            (self._app_state_table, self._app_states_table_ddl()),
+            (self._user_state_table, self._user_states_table_ddl()),
+            (self._metadata_table, self._metadata_table_ddl()),
+        )
+
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Return ADK session-store SchemaTarget definitions with Db2 catalog folding when active."""
+        if isinstance(self._sql, _Db2AdkSql):
+            return self._sql.schema_targets(self._table_ddls())
+        return super()._schema_targets()
+
     def _index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return self._sql.session_index_specs(self._session_table, self._events_table)
@@ -413,7 +435,9 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, tuple[Any, ...]]":
-        return self._sql.events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
+        return self._sql.events_query(
+            self._events_table, app_name, user_id, session_id, after_timestamp, limit, self._session_table
+        )
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = ()) -> "dict[str, Any] | None":
         with self._config.provide_session() as driver:
@@ -482,14 +506,6 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             )
             driver.commit()
 
-    def _schema_targets(self) -> list[SchemaTarget]:
-        """Return ADK memory-store SchemaTarget definitions with Db2 catalog folding when active."""
-        if not self._enabled:
-            return []
-        if isinstance(self._sql, _Db2AdkSql):
-            return self._sql.schema_targets(((self._memory_table, self._memory_table_ddl()),))
-        return super()._schema_targets()
-
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
         """Create missing ADK memory companion indexes without committing when enabled."""
         if not self._enabled:
@@ -497,7 +513,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         self._sql.reconcile_companion_indexes(driver, self._memory_index_specs())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Insert memory entries, skipping duplicates by event_id."""
+        """Insert memory entries, skipping duplicates by (app_name, user_id, event_id)."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -509,7 +525,8 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         with self._config.provide_session() as driver, _atomic_write(driver):
             for entry in entries:
                 exists = driver.select_one_or_none(
-                    sql_dialect.memory_duplicate_sql(self._memory_table), (entry["event_id"],)
+                    sql_dialect.memory_duplicate_sql(self._memory_table),
+                    (entry["app_name"], entry["user_id"], entry["event_id"]),
                 )
                 if exists is not None:
                     continue
@@ -578,16 +595,27 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if app_name is not None:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        where_sql = " AND ".join(clauses)
         table_ref = self._sql.table_ref(self._memory_table)
         return self._count_and_delete(
-            f"SELECT COUNT(*) AS row_count FROM {table_ref} WHERE session_id = ?",
-            f"DELETE FROM {table_ref} WHERE session_id = ?",
-            (session_id,),
+            f"SELECT COUNT(*) AS row_count FROM {table_ref} WHERE {where_sql}",
+            f"DELETE FROM {table_ref} WHERE {where_sql}",
+            tuple(params),
         )
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -612,6 +640,14 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             f"DELETE FROM {table_ref} WHERE {where_sql}",
             tuple(params),
         )
+
+    def _schema_targets(self) -> list[SchemaTarget]:
+        """Return ADK memory-store SchemaTarget definitions with Db2 catalog folding when active."""
+        if not self._enabled:
+            return []
+        if isinstance(self._sql, _Db2AdkSql):
+            return self._sql.schema_targets(((self._memory_table, self._memory_table_ddl()),))
+        return super()._schema_targets()
 
     def _memory_table_ddl(self) -> str:
         return self._sql.memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
@@ -673,7 +709,7 @@ CREATE TABLE {_table_ref(table)} (
     metadata_json NVARCHAR(MAX) NULL,
     inserted_at DATETIME2(6) NOT NULL{owner_line},
     CONSTRAINT {_constraint_ref("pk", table, "id")} PRIMARY KEY (id),
-    CONSTRAINT {_constraint_ref("uq", table, "event_id")} UNIQUE (event_id)
+    CONSTRAINT {_constraint_ref("uq", table, "event_id")} UNIQUE (app_name, user_id, event_id)
 )
 """
 
@@ -848,19 +884,26 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _tsql_events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
+    table: str,
+    app_name: str,
+    user_id: str,
+    session_id: str,
+    after_timestamp: "datetime | None",
+    limit: "int | None",
+    session_table: str = "adk_session",
 ) -> "tuple[str, tuple[Any, ...]]":
     top_clause = f"TOP {int(limit)} " if limit is not None else ""
     params: list[Any] = [app_name, user_id, session_id]
     after_clause = ""
     if after_timestamp is not None:
-        after_clause = " AND timestamp > ?"
+        after_clause = " AND e.timestamp > ?"
         params.append(_format_datetime(after_timestamp))
     sql = f"""
-    SELECT {top_clause}id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {_table_ref(table)}
-    WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause}
-    ORDER BY timestamp ASC
+    SELECT {top_clause}e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
+    FROM {_table_ref(table)} e
+    JOIN {_table_ref(session_table)} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
+    WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause}
+    ORDER BY e.timestamp ASC
     """
     return sql, tuple(params)
 
@@ -1158,6 +1201,16 @@ class _TsqlAdkSql:
     def upsert_metadata_sql(self, table: str) -> str:
         return _upsert_metadata_sql(table)
 
+    def scoped_insert_event_sql(self, events_table: str, session_table: str) -> str:
+        return f"""
+        INSERT INTO {_table_ref(events_table)} (
+            id, app_name, user_id, session_id, invocation_id, timestamp, event_data
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        FROM {_table_ref(session_table)}
+        WHERE id = ? AND app_name = ? AND user_id = ?
+        """
+
     def events_query(
         self,
         table: str,
@@ -1166,8 +1219,9 @@ class _TsqlAdkSql:
         session_id: str,
         after_timestamp: "datetime | None",
         limit: "int | None",
+        session_table: str = "adk_session",
     ) -> "tuple[str, tuple[Any, ...]]":
-        return _tsql_events_query(table, app_name, user_id, session_id, after_timestamp, limit)
+        return _tsql_events_query(table, app_name, user_id, session_id, after_timestamp, limit, session_table)
 
     def session_index_specs(self, session_table: str, events_table: str) -> "list[tuple[str, str, str]]":
         return [*_sessions_index_specs(session_table), *_events_index_specs(events_table)]
@@ -1197,7 +1251,7 @@ class _TsqlAdkSql:
         return _tsql_memory_index_specs(table)
 
     def memory_duplicate_sql(self, table: str) -> str:
-        return f"SELECT TOP 1 id FROM {_table_ref(table)} WHERE event_id = ?"
+        return f"SELECT TOP 1 id FROM {_table_ref(table)} WHERE app_name = ? AND user_id = ? AND event_id = ?"
 
     def escape_like_query(self, query: str) -> str:
         return query.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]")
@@ -1327,6 +1381,15 @@ class _Db2AdkSql:
             'WHEN NOT MATCHED THEN INSERT ("KEY", value) VALUES (source."KEY", source.value)'
         )
 
+    def scoped_insert_event_sql(self, events_table: str, session_table: str) -> str:
+        return (
+            f"INSERT INTO {events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data) "
+            "SELECT CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(128)), "
+            "CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(256)), CAST(? AS TIMESTAMP), "
+            f"CAST(? AS {DB2_JSON_COLUMN_TYPE}) FROM {session_table} "
+            "WHERE id = ? AND app_name = ? AND user_id = ?"
+        )
+
     def events_query(
         self,
         table: str,
@@ -1335,16 +1398,19 @@ class _Db2AdkSql:
         session_id: str,
         after_timestamp: "datetime | None",
         limit: "int | None",
+        session_table: str = "adk_session",
     ) -> "tuple[str, tuple[Any, ...]]":
         params: list[Any] = [app_name, user_id, session_id]
         after_clause = ""
         if after_timestamp is not None:
-            after_clause = " AND timestamp > ?"
+            after_clause = " AND e.timestamp > ?"
             params.append(db2_timestamp_text(after_timestamp))
         limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY" if limit is not None else ""
         sql = (
-            f"SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM {table} "
-            f"WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause} ORDER BY timestamp ASC{limit_clause}"
+            f"SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data "
+            f"FROM {table} e "
+            f"JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
+            f"WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause} ORDER BY e.timestamp ASC{limit_clause}"
         )
         return sql, tuple(params)
 
@@ -1418,7 +1484,7 @@ class _Db2AdkSql:
             f"timestamp TIMESTAMP NOT NULL, content_json {DB2_JSON_COLUMN_TYPE} NOT NULL, "
             f"content_text {DB2_JSON_COLUMN_TYPE} NOT NULL, metadata_json {DB2_JSON_COLUMN_TYPE}, "
             f"inserted_at TIMESTAMP NOT NULL{owner_line}, CONSTRAINT pk_{bare_table}_id PRIMARY KEY (id), "
-            f"CONSTRAINT uq_{bare_table}_event UNIQUE (event_id))"
+            f"CONSTRAINT uq_{bare_table}_event UNIQUE (app_name, user_id, event_id))"
         )
 
     def memory_index_specs(self, table: str) -> "list[tuple[str, str, str]]":
@@ -1430,7 +1496,7 @@ class _Db2AdkSql:
         ]
 
     def memory_duplicate_sql(self, table: str) -> str:
-        return f"SELECT id FROM {table} WHERE event_id = ? FETCH FIRST 1 ROWS ONLY"
+        return f"SELECT id FROM {table} WHERE app_name = ? AND user_id = ? AND event_id = ? FETCH FIRST 1 ROWS ONLY"
 
     def escape_like_query(self, query: str) -> str:
         return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

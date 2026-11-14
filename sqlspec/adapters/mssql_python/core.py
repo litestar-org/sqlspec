@@ -14,6 +14,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
@@ -63,7 +64,14 @@ __all__ = (
     "resolve_many_rowcount",
     "resolve_rowcount",
     "split_schema_and_table",
+    "validate_bulk_identifier",
 )
+
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
+_UNQUOTED_TSQL_IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_@#][A-Za-z0-9_@#$]*$")
+_MAX_BULK_QUALIFIED_PARTS: Final[int] = 2
+_MIN_QUOTED_LEN: Final[int] = 2
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
@@ -207,6 +215,23 @@ def format_identifier(identifier: str) -> str:
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
     return ".".join([quote_bracket_identifier(part) for part in parts])
+
+
+def validate_bulk_identifier(identifier: str, *, allow_schema: bool = False) -> str:
+    """Validate a target table or column identifier for mssql-python bulk operations."""
+    if not isinstance(identifier, str) or "\x00" in identifier or "\r" in identifier or "\n" in identifier:
+        msg = f"Invalid SQL Server bulk identifier: {identifier!r}."
+        raise ImproperConfigurationError(msg)
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "SQL Server bulk identifier must not be empty."
+        raise ImproperConfigurationError(msg)
+    parts = _split_validated_tsql_parts(cleaned, raw_identifier=identifier)
+    max_parts = _MAX_BULK_QUALIFIED_PARTS if allow_schema else 1
+    if not parts or len(parts) > max_parts:
+        msg = f"Invalid SQL Server bulk identifier: {identifier!r}."
+        raise ImproperConfigurationError(msg)
+    return cleaned
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
@@ -449,48 +474,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     connection_string = config.pop("connection_string", None)
     if connection_string is not None:
-        if not config:
-            return str(connection_string), connect_kwargs
-
-        options: dict[str, tuple[str, str]] = {}
-        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
-            canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
-            options[canonical_key.lower()] = (canonical_key, raw_value)
-
-        server = _pop_alias(config, _SERVER_ALIASES, "server")
-        port = config.pop("port", None)
-        if server is not None:
-            options["server"] = ("Server", _append_port(str(server), port))
-        elif port is not None and "server" in options:
-            disp, val = options["server"]
-            options["server"] = (disp, _append_port(val, port))
-
-        for keys, option_name, strict in _CONNECTION_STRING_KEYS:
-            if option_name == "Server":
-                continue
-            value = _pop_alias(config, keys, option_name, strict=strict)
-            if value is not None:
-                options[option_name.lower()] = (option_name, _format_connection_value(value))
-
-        extra = config.pop("extra", None)
-        if isinstance(extra, dict):
-            for extra_key, extra_value in extra.items():
-                if extra_value is not None:
-                    extra_key_str = str(extra_key)
-                    canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
-                    options[canonical_extra_key.lower()] = (canonical_extra_key, _format_connection_value(extra_value))
-
-        for remaining_key, remaining_value in list(config.items()):
-            if remaining_value is not None:
-                canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-                options[canonical_remaining_key.lower()] = (
-                    canonical_remaining_key,
-                    _format_connection_value(remaining_value),
-                )
-            config.pop(remaining_key, None)
-
-        merged_parts = [f"{name}={val}" for name, val in options.values()]
-        return ";".join(merged_parts) + ";", connect_kwargs
+        return _merge_mssql_connection_string(str(connection_string), config), connect_kwargs
 
     server = _pop_alias(config, _SERVER_ALIASES, "server")
     if not server:
@@ -503,16 +487,22 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         value = _pop_alias(config, keys, option_name, strict=strict)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_connection_value(value)}")
+        parts.append(f"{option_name}={_format_odbc_connection_value(option_name, value)}")
 
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
-        parts.extend([f"{key}={_format_connection_value(value)}" for key, value in extra.items() if value is not None])
+        for extra_key, extra_value in extra.items():
+            if extra_value is not None:
+                extra_key_str = str(extra_key)
+                canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
+                parts.append(f"{canonical_extra_key}={_format_odbc_connection_value(canonical_extra_key, extra_value)}")
 
     for remaining_key, remaining_value in list(config.items()):
         if remaining_value is not None:
             canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-            parts.append(f"{canonical_remaining_key}={_format_connection_value(remaining_value)}")
+            parts.append(
+                f"{canonical_remaining_key}={_format_odbc_connection_value(canonical_remaining_key, remaining_value)}"
+            )
         config.pop(remaining_key, None)
 
     return ";".join(parts) + ";", connect_kwargs
@@ -631,10 +621,140 @@ def _identity(value: Any) -> Any:
     return value
 
 
-def _format_connection_value(value: Any) -> str:
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    return str(value)
+def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) -> str:
+    if "\x00" in raw_conn_str or "\r" in raw_conn_str or "\n" in raw_conn_str:
+        msg = "ODBC connection_string contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    if not config:
+        return raw_conn_str
+
+    options: dict[str, tuple[str, str]] = {}
+    for raw_key, raw_value in parse_odbc_connection_string(raw_conn_str):
+        canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+        options[canonical_key.lower()] = (canonical_key, raw_value)
+
+    server = _pop_alias(config, ("server", "address", "addr"), "server")
+    port = config.pop("port", None)
+    if server is not None:
+        options["server"] = ("Server", _format_odbc_connection_value("Server", _append_port(str(server), port)))
+    elif port is not None and "server" in options:
+        disp, val = options["server"]
+        options["server"] = (disp, _format_odbc_connection_value(disp, _append_port(val, port)))
+
+    for keys, option_name, strict in _CONNECTION_STRING_KEYS:
+        if option_name == "Server":
+            continue
+        value = _pop_alias(config, keys, option_name, strict=strict)
+        if value is not None:
+            options[option_name.lower()] = (option_name, _format_odbc_connection_value(option_name, value))
+
+    extra = config.pop("extra", None)
+    if isinstance(extra, dict):
+        for extra_key, extra_value in extra.items():
+            if extra_value is not None:
+                extra_key_str = str(extra_key)
+                canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
+                options[canonical_extra_key.lower()] = (
+                    canonical_extra_key,
+                    _format_odbc_connection_value(canonical_extra_key, extra_value),
+                )
+
+    for remaining_key, remaining_value in list(config.items()):
+        if remaining_value is not None:
+            canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+            options[canonical_remaining_key.lower()] = (
+                canonical_remaining_key,
+                _format_odbc_connection_value(canonical_remaining_key, remaining_value),
+            )
+        config.pop(remaining_key, None)
+
+    return ";".join(f"{name}={val}" for name, val in options.values()) + ";"
+
+
+def _format_odbc_connection_value(key: str, value: Any) -> str:
+    """Validate an ODBC keyword and format its value using MS-ODBCSTR brace escaping."""
+    if "\x00" in key or "\r" in key or "\n" in key or _ODBC_KEY_PATTERN.fullmatch(key) is None:
+        msg = f"Invalid ODBC connection parameter key: {key!r}."
+        raise ImproperConfigurationError(msg)
+    text = ("yes" if value else "no") if isinstance(value, bool) else str(value)
+    if "\x00" in text or "\r" in text or "\n" in text:
+        msg = f"ODBC connection parameter {key!r} contains disallowed control characters."
+        raise ImproperConfigurationError(msg)
+    if not text:
+        return ""
+    if any(ch in _ODBC_SPECIAL_CHARS for ch in text) or text != text.strip():
+        return "{" + text.replace("}", "}}") + "}"
+    return text
+
+
+def _split_validated_tsql_parts(cleaned: str, *, raw_identifier: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    quote_end: str | None = None
+    idx = 0
+    length = len(cleaned)
+    while idx < length:
+        ch = cleaned[idx]
+        if quote_end is not None:
+            if ch == quote_end:
+                if idx + 1 < length and cleaned[idx + 1] == quote_end:
+                    buf.append(ch)
+                    buf.append(ch)
+                    idx += 2
+                    continue
+                quote_end = None
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch in {"[", '"'}:
+            if "".join(buf).strip():
+                msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+                raise ImproperConfigurationError(msg)
+            quote_end = "]" if ch == "[" else '"'
+            buf.append(ch)
+            idx += 1
+            continue
+        if ch == ".":
+            parts.append(_validate_tsql_segment("".join(buf), raw_identifier=raw_identifier))
+            buf.clear()
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    if quote_end is not None:
+        msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+        raise ImproperConfigurationError(msg)
+    parts.append(_validate_tsql_segment("".join(buf), raw_identifier=raw_identifier))
+    return parts
+
+
+def _validate_tsql_segment(raw_segment: str, *, raw_identifier: str) -> str:
+    segment = raw_segment.strip()
+    if not segment:
+        msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+        raise ImproperConfigurationError(msg)
+    if segment[0] == "[":
+        if len(segment) < _MIN_QUOTED_LEN or segment[-1] != "]":
+            msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+            raise ImproperConfigurationError(msg)
+        inner = segment[1:-1]
+        if not inner or "]" in inner.replace("]]", ""):
+            msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+            raise ImproperConfigurationError(msg)
+        return inner.replace("]]", "]")
+    if segment[0] == '"':
+        if len(segment) < _MIN_QUOTED_LEN or segment[-1] != '"':
+            msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+            raise ImproperConfigurationError(msg)
+        inner = segment[1:-1]
+        if not inner or '"' in inner.replace('""', ""):
+            msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+            raise ImproperConfigurationError(msg)
+        return inner.replace('""', '"')
+    if _UNQUOTED_TSQL_IDENTIFIER_PATTERN.fullmatch(segment) is None:
+        msg = f"Invalid SQL Server bulk identifier: {raw_identifier!r}."
+        raise ImproperConfigurationError(msg)
+    return segment
 
 
 def _pop_alias(config: dict[str, Any], aliases: tuple[str, ...], option_name: str, *, strict: bool = True) -> Any:

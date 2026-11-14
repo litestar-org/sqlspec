@@ -1,5 +1,6 @@
 """OracleDB database configuration with direct field-based configuration."""
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -428,7 +429,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         pool = self._config.connection_instance
         body_error = kwargs.get("exc_val")
         try:
-            if kwargs.get("exc_type") is not None:
+            if kwargs.get("exc_type") is not None or getattr(conn, "autocommit", None) is False:
                 conn.rollback()
             clear_oracle_otel_trace_context(conn)
             hook = self._config.driver_features.get("session_context_hook")
@@ -1034,7 +1035,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         if conn is None:
             return
         try:
-            if exc_type is not None:
+            if exc_type is not None or getattr(conn, "autocommit", None) is False:
                 await conn.rollback()
             clear_oracle_otel_trace_context(conn)
             hook = self._config.driver_features.get("session_context_hook")
@@ -1774,6 +1775,8 @@ def _oracle_checkout_state(
 
 def _oracle_cleanup_error(body_error: BaseException | None, cleanup_error: BaseException) -> None:
     """Preserve an active body exception while recording failed cleanup."""
+    if isinstance(cleanup_error, asyncio.CancelledError):
+        raise cleanup_error
     if body_error is not None:
         body_error.add_note(f"Oracle connection cleanup failed: {cleanup_error}")
         return

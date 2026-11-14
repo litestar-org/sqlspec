@@ -1797,3 +1797,34 @@ def test_replica_derivation_re_resolves_implicit_dialect() -> None:
     assert replica.explicit_statement_dialect is None
     assert replica.statement_config.dialect == "postgres"
     assert primary.statement_config.dialect == "sqlite"
+
+
+def test_db2_cli_dsn_supports_braced_passwords_and_encodes_database_path() -> None:
+    """Braced Db2 CLI passwords preserve semicolons, equals, and doubled braces while encoding database path."""
+    resolved = build_connection_config({
+        "dsn": "DATABASE=tenant/prod?x=1;HOSTNAME=db.internal;PORT=50000;UID=db2inst1;PWD={p;a=s}}s};"
+    })
+    assert resolved == {
+        "uri": "db2://db.internal:50000/tenant%2Fprod%3Fx%3D1",
+        "username": "db2inst1",
+        "password": "p;a=s}s",
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PWD={unclosed;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=abc;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;PORT=70000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=evil.host/path?param=1;PORT=50000;"},
+        {"dsn": "DATABASE=sample;HOSTNAME=db;\nUID=x;"},
+        {"driver_name": "flightsql", "headers": {"Bad Header": "1"}},
+        {"driver_name": "flightsql", "headers": {"X-Trace": "val\r\nInjected: 1"}},
+        {"driver_name": "flightsql", "authorization_header": "Bearer tok\r\nX-Evil: 1"},
+    ],
+)
+def test_adbc_db2_and_flightsql_reject_malformed_dsn_ports_hosts_and_headers(bad_config: dict[str, Any]) -> None:
+    """Malformed Db2 CLI DSN braces, ports, hosts, or FlightSQL RPC headers raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(bad_config)

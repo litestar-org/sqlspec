@@ -26,6 +26,7 @@ from sqlspec.extensions.litestar._utils import (
     get_sqlspec_scope_state,
     set_sqlspec_scope_state,
 )
+from sqlspec.utils.adapters import resolve_adapter_name
 from sqlspec.utils.sync_tools import ensure_async_, with_ensure_async_
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -37,11 +38,13 @@ if TYPE_CHECKING:
     from litestar.types import Message
 
     from sqlspec.config import DatabaseConfigProtocol, DriverT
+    from sqlspec.extensions.litestar.plugin import CommitMode
     from sqlspec.typing import ConnectionT, PoolT
 
 __all__ = (
     "SESSION_TERMINUS_ASGI_EVENTS",
     "autocommit_handler_maker",
+    "build_request_session",
     "connection_provider_maker",
     "has_tenant_strategy",
     "lifespan_handler_maker",
@@ -55,6 +58,15 @@ __all__ = (
 _REQUEST_EXCEPTION_KEY: Final = "request_exception"
 SESSION_TERMINUS_ASGI_EVENTS = {HTTP_RESPONSE_START, WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT}
 _REQUEST_SCOPE_TYPES: Final = {ScopeType.HTTP, ScopeType.WEBSOCKET, "http", "websocket"}
+_LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
+    "adbc",
+    "arrow_odbc",
+    "asyncpg",
+    "cockroach_asyncpg",
+    "duckdb",
+    "psqlpy",
+    "teradata",
+})
 
 
 async def record_request_exception(exc: BaseException, scope: "Scope") -> None:
@@ -72,34 +84,67 @@ def tenant_payload_key(connection_key: str) -> str:
     return f"{connection_key}_tenant_payload"
 
 
-def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
+def build_request_session(
+    config: "DatabaseConfigProtocol[Any, Any, Any]", connection: Any, commit_mode: "CommitMode"
+) -> Any:
+    """Construct and arm a request-scoped driver session for a Litestar connection.
+
+    Args:
+        config: Database configuration supplying the driver class and runtime settings.
+        connection: Active request database connection.
+        commit_mode: Configured Litestar transaction commit mode.
+
+    Returns:
+        Prepared driver session bound to ``connection``.
+    """
+    driver = config._prepare_driver(
+        config.driver_type(
+            connection=connection, statement_config=config.statement_config, driver_features=config.driver_features
+        )
+    )
+    if (
+        commit_mode in {"autocommit", "autocommit_include_redirect"}
+        and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
+    ):
+        driver._auto_begin_on_write = True
+    return driver
+
+
+def manual_handler_maker(
+    connection_scope_key: str, *, session_scope_key: str | None = None
+) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for manual connection management.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
+        session_scope_key: Optional key used to store the driver session in the ASGI scope.
 
     Returns:
         The handler callable.
     """
-    ctx_scope_key = f"{connection_scope_key}_ctx"
     provider_owned_key = f"{connection_scope_key}_provider_owned"
+    stream_deferred_key = f"{connection_scope_key}_stream_deferred"
 
     async def handler(message: "Message", scope: "Scope") -> None:
-        """Handle closing and cleaning up connections before sending the response.
+        """Handle closing and cleaning up connections on response completion or disconnect.
 
         Args:
             message: ASGI Message.
             scope: ASGI Scope.
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
-        if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            if get_sqlspec_scope_state(scope, provider_owned_key):
+        if connection is None or get_sqlspec_scope_state(scope, provider_owned_key):
+            return
+        message_type = message["type"]
+        if message_type == "http.response.body":
+            if get_sqlspec_scope_state(scope, stream_deferred_key):
                 return
-            connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
-            try:
-                await _exit_connection_context(connection_cm, connection, scope, connection_key=connection_scope_key)
-            finally:
-                delete_sqlspec_scope_state(scope, connection_scope_key)
+            if message.get("more_body", False):
+                set_sqlspec_scope_state(scope, stream_deferred_key, True)
+                return
+            await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
+        elif message_type in {WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT}:
+            await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
 
     return handler
 
@@ -109,6 +154,8 @@ def autocommit_handler_maker(
     commit_on_redirect: bool = False,
     extra_commit_statuses: "set[int] | None" = None,
     extra_rollback_statuses: "set[int] | None" = None,
+    *,
+    session_scope_key: str | None = None,
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
     """Create handler for automatic transaction commit/rollback based on response status.
 
@@ -117,6 +164,7 @@ def autocommit_handler_maker(
         commit_on_redirect: Issue a commit when the response status is a redirect (3XX).
         extra_commit_statuses: A set of additional status codes that trigger a commit.
         extra_rollback_statuses: A set of additional status codes that trigger a rollback.
+        session_scope_key: Optional key used to store the driver session in the ASGI scope.
 
     Raises:
         ImproperConfigurationError: If extra_commit_statuses and extra_rollback_statuses share status codes.
@@ -135,55 +183,52 @@ def autocommit_handler_maker(
         raise ImproperConfigurationError(msg)
 
     commit_range = range(200, 400 if commit_on_redirect else 300)
-    ctx_scope_key = f"{connection_scope_key}_ctx"
     provider_owned_key = f"{connection_scope_key}_provider_owned"
+    stream_deferred_key = f"{connection_scope_key}_stream_deferred"
 
     async def handler(message: "Message", scope: "Scope") -> None:
-        """Handle commit/rollback, closing and cleaning up connections before sending.
+        """Handle commit/rollback on response start and release on body completion.
 
         Args:
             message: ASGI Message.
             scope: ASGI Scope.
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
-        transaction_target = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session") or connection
-        exc_override: BaseException | None = None
-        try:
-            if (
-                connection is not None
-                and message["type"] == HTTP_RESPONSE_START
-                and getattr(transaction_target, "pinned_to_primary", True)
-            ):
+        if connection is None or get_sqlspec_scope_state(scope, provider_owned_key):
+            return
+        if message["type"] == HTTP_RESPONSE_START:
+            session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
+            if session is None:
+                session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+            transaction_target = session or connection
+            if getattr(transaction_target, "pinned_to_primary", True):
                 has_exception = get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is not None
-                if (
+                should_commit = (
                     not has_exception
                     and (message["status"] in commit_range or message["status"] in extra_commit_statuses)
                     and message["status"] not in extra_rollback_statuses
-                ):
-                    try:
-                        await ensure_async_(transaction_target.commit)()
-                    except BaseException:
-                        with contextlib.suppress(Exception):
-                            await ensure_async_(transaction_target.rollback)()
-                        raise
-                else:
-                    await ensure_async_(transaction_target.rollback)()
-        except BaseException as finalization_exc:
-            exc_override = finalization_exc
-            raise
-        finally:
-            if (
-                connection
-                and message["type"] in SESSION_TERMINUS_ASGI_EVENTS
-                and not get_sqlspec_scope_state(scope, provider_owned_key)
-            ):
-                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+                )
+                finalization_error: BaseException | None = None
                 try:
-                    await _exit_connection_context(
-                        connection_cm, connection, scope, exc_override=exc_override, connection_key=connection_scope_key
-                    )
+                    await _finalize_request_session(session, connection, commit=should_commit)
+                except BaseException as exc:
+                    finalization_error = exc
+                    raise
                 finally:
-                    delete_sqlspec_scope_state(scope, connection_scope_key)
+                    if finalization_error is not None:
+                        await _release_request_session(
+                            scope, connection_scope_key, session_scope_key, connection, exc_override=finalization_error
+                        )
+            return
+        if message["type"] == "http.response.body":
+            if get_sqlspec_scope_state(scope, stream_deferred_key):
+                return
+            if message.get("more_body", False):
+                set_sqlspec_scope_state(scope, stream_deferred_key, True)
+                return
+            await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
+        elif message["type"] in {WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT}:
+            await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
 
     return handler
 
@@ -342,13 +387,19 @@ def connection_provider_maker(
 
 
 def session_provider_maker(
-    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]", connection_dependency_key: str
-) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
+    config: "DatabaseConfigProtocol[ConnectionT, PoolT, DriverT]",
+    connection_dependency_key: str,
+    *,
+    session_scope_key: str | None = None,
+    commit_mode: "CommitMode" = "manual",
+) -> "Callable[..., AsyncGenerator[DriverT, None]]":
     """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
 
     Args:
         config: Database configuration supplying the driver class and statement settings.
         connection_dependency_key: Dependency key used to inject the active connection.
+        session_scope_key: Optional key used to cache the driver session in the ASGI scope.
+        commit_mode: Configured Litestar transaction commit mode.
 
     Returns:
         Async generator dependency yielding a driver session bound to the request connection.
@@ -356,13 +407,28 @@ def session_provider_maker(
 
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
-        session = config.driver_type(
-            connection=connection_obj, statement_config=config.statement_config, driver_features=config.driver_features
-        )
-        scope = args[1] if len(args) > 1 else kwargs.get("scope")
+        scope = cast("Scope | None", args[1] if len(args) > 1 else kwargs.get("scope"))
+        if scope is not None and session_scope_key is not None:
+            existing = get_sqlspec_scope_state(scope, session_scope_key)
+            if existing is not None and getattr(existing, "connection", None) is connection_obj:
+                set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", existing)
+                yield cast("DriverT", existing)  # pyright: ignore
+                return
+            session = build_request_session(config, connection_obj, commit_mode)
+            set_sqlspec_scope_state(scope, session_scope_key, session)
+            set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
+            runtime = session.observability
+            if not runtime.is_idle:
+                await runtime.emit_session_start_async(session)
+            yield cast("DriverT", session)  # pyright: ignore
+            return
+        session = build_request_session(config, connection_obj, commit_mode)
         if scope is not None:
             set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
-        yield cast("DriverT", session)
+        runtime = session.observability
+        if not runtime.is_idle:
+            await runtime.emit_session_start_async(session)
+        yield cast("DriverT", session)  # pyright: ignore
 
     conn_type_annotation = config.connection_type
     injected_conn_annotation = SkipValidation[NamedDependency[conn_type_annotation]]  # type: ignore[valid-type]
@@ -372,12 +438,10 @@ def session_provider_maker(
         kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
         annotation=injected_conn_annotation,
     )
+    scope_param = inspect.Parameter(name="scope", kind=inspect.Parameter.KEYWORD_ONLY, default=None, annotation=Scope)
 
     provider_signature = inspect.Signature(
-        parameters=[
-            db_conn_param,
-            inspect.Parameter("scope", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Scope),
-        ],
+        parameters=[db_conn_param, scope_param],
         return_annotation=AsyncGenerator[config.driver_type, None],  # type: ignore[name-defined]
     )
 
@@ -388,6 +452,7 @@ def session_provider_maker(
 
     provide_session.__annotations__["scope"] = Scope
     provide_session.__annotations__[connection_dependency_key] = injected_conn_annotation
+    provide_session.__annotations__["scope"] = Scope
     provide_session.__annotations__["return"] = AsyncGenerator[config.driver_type, None]  # type: ignore[name-defined]
 
     return provide_session
@@ -447,6 +512,68 @@ def routing_session_provider_maker(
         yield await _open_request_resource_async(config, scope, routing_session_key, "routing")
 
     return provide_routing_session
+
+
+async def _finalize_request_session(session: Any, connection: Any, *, commit: bool) -> None:
+    """Finalize a request transaction through the driver session or raw connection."""
+    if (
+        session is not None
+        and getattr(session, "_auto_begin_on_write", False) is True
+        and not session._connection_in_transaction()
+    ):
+        return
+    if commit:
+        commit_target = session if session is not None and hasattr(session, "commit") else connection
+        try:
+            await ensure_async_(commit_target.commit)()
+        except BaseException:
+            rollback_target = session if session is not None and hasattr(session, "rollback") else connection
+            with contextlib.suppress(Exception):
+                await ensure_async_(rollback_target.rollback)()
+            raise
+        return
+    rollback_target = session if session is not None and hasattr(session, "rollback") else connection
+    await ensure_async_(rollback_target.rollback)()
+
+
+async def _release_request_session(
+    scope: "Scope",
+    connection_scope_key: str,
+    session_scope_key: str | None,
+    connection: Any,
+    exc_override: BaseException | None = None,
+) -> None:
+    """Emit session end, detach the session, exit the connection context, and clear scope state."""
+    connection_cm = get_sqlspec_scope_state(scope, f"{connection_scope_key}_ctx", pop=True)
+    session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
+    try:
+        try:
+            if session is not None:
+                runtime = getattr(session, "observability", None)
+                if runtime is not None and not runtime.is_idle:
+                    await runtime.emit_session_end_async(session)
+        finally:
+            if session is not None:
+                detach = getattr(session, "_detach_connection", None)
+                if detach is not None:
+                    detach()
+    finally:
+        try:
+            await _exit_connection_context(
+                connection_cm, connection, scope, exc_override=exc_override, connection_key=connection_scope_key
+            )
+        finally:
+            delete_sqlspec_scope_state(scope, connection_scope_key)
+            delete_sqlspec_scope_state(scope, f"{connection_scope_key}_provider_owned")
+            delete_sqlspec_scope_state(scope, f"{connection_scope_key}_stream_deferred")
+            if session_scope_key is not None:
+                delete_sqlspec_scope_state(scope, session_scope_key)
+                if session_scope_key.endswith("_instance"):
+                    deferred = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred", pop=True)
+                    if deferred is not None:
+                        deferred_detach = getattr(deferred, "_detach_connection", None)
+                        if deferred_detach is not None:
+                            deferred_detach()
 
 
 async def _capture_connection_tenant(

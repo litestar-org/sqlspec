@@ -20,6 +20,7 @@ from sqlspec.adapters.mssql_python.core import build_connection_config
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -255,9 +256,10 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
         connection_config={"server": "localhost"}, driver_features={"on_connection_create": seen.append}
     )
 
-    with config.provide_session():
-        pass
+    with config.provide_session() as session:
+        assert session.connection is connection
 
+    assert session.connection is _DETACHED_CONNECTION
     assert seen == [connection]
 
 
@@ -409,10 +411,11 @@ def test_failed_session_rolls_back_before_release() -> None:
         prepare_driver=lambda driver: driver,
     )
 
-    with pytest.raises(RuntimeError), context:
+    with pytest.raises(RuntimeError), context as session:
         raise RuntimeError
 
     assert calls == ["rollback", "release"]
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_pool_does_not_reconfigure_when_params_match(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -479,6 +482,7 @@ def test_session_clean_exit_rolls_back_active_transaction() -> None:
         session.begin()
 
     assert calls == ["rollback", "release"]
+    assert session.connection is _DETACHED_CONNECTION
 
 
 def test_connection_context_rolls_back_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:

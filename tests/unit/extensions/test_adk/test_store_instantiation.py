@@ -27,9 +27,12 @@ SESSION_STORE_CLASSES = [
     "sqlspec.adapters.asyncmy.adk.AsyncmyADKStore",
     "sqlspec.adapters.adbc.adk.AdbcADKStore",
     "sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKStore",
+    "sqlspec.adapters.bigquery.adk.BigQueryADKStore",
     "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKStore",
+    "sqlspec.adapters.db2.adk.Db2AsyncADKStore",
+    "sqlspec.adapters.db2.adk.Db2SyncADKStore",
     "sqlspec.adapters.duckdb.adk.DuckDBADKStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKStore",
@@ -44,7 +47,9 @@ SESSION_STORE_CLASSES = [
     "sqlspec.adapters.snowflake.adk.SnowflakeADKStore",
     "sqlspec.adapters.spanner.adk.SpannerAsyncADKStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
+    "sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKStore",
+    "sqlspec.adapters.sybase.adk.SybaseADKStore",
     "sqlspec.adapters.teradata.adk.TeradataADKStore",
 ]
 
@@ -58,6 +63,8 @@ MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgAsyncADKMemoryStore",
     "sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgSyncADKMemoryStore",
+    "sqlspec.adapters.db2.adk.Db2AsyncADKMemoryStore",
+    "sqlspec.adapters.db2.adk.Db2SyncADKMemoryStore",
     "sqlspec.adapters.duckdb.adk.DuckDBADKMemoryStore",
     "sqlspec.adapters.mssql_python.adk.MssqlPythonADKMemoryStore",
     "sqlspec.adapters.mysqlconnector.adk.MysqlConnectorAsyncADKMemoryStore",
@@ -72,7 +79,9 @@ MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.snowflake.adk.SnowflakeADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerAsyncADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
+    "sqlspec.adapters.sqlanywhere.adk.SqlanywhereADKMemoryStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
+    "sqlspec.adapters.sybase.adk.SybaseADKMemoryStore",
     "sqlspec.adapters.teradata.adk.TeradataADKMemoryStore",
 ]
 
@@ -153,10 +162,15 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
     for method_name in base.__abstractmethods__:
         base_signature = inspect.signature(getattr(base, method_name))
         concrete_signature = inspect.signature(getattr(cls, method_name))
-        assert list(base_signature.parameters) == list(concrete_signature.parameters), (
+        base_params = list(base_signature.parameters)
+        concrete_params = list(concrete_signature.parameters)
+        assert base_params == concrete_params, (
             f"{class_path}.{method_name} parameters differ from {base.__name__}: "
             f"{concrete_signature} != {base_signature}"
         )
+        if method_name == "delete_entries_by_session":
+            assert concrete_signature.parameters["app_name"].default is None
+            assert concrete_signature.parameters["user_id"].default is None
 
 
 @pytest.mark.parametrize("class_path", SYNC_SESSION_STORE_CLASSES)

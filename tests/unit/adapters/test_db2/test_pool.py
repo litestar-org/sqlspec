@@ -313,3 +313,61 @@ async def test_hadr_pool_passes_read_only_cli_options_without_mutation(
     assert module.connect_calls[-1][5] == {999: 42, module.SQL_ATTR_AUTOCOMMIT: module.SQL_AUTOCOMMIT_ON, 101: 1}
     assert "READONLY" not in module.connect_calls[-1][0]
     assert options == {999: 42}
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_db2_sync_pool_checkin_rolls_back_when_autocommit_off(fake_ibm_db: FakeModules, autocommit: bool) -> None:
+    """Db2SyncConnectionPool rolls back on outermost checkin when autocommit=False and skips when True."""
+    _, module = fake_ibm_db
+    connection = FakeDb2Connection(autocommit=autocommit)
+    module.pending_connections.append(connection)
+    pool = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": autocommit}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool.get_connection() as outer:
+            with pool.get_connection() as inner:
+                assert inner is outer
+            assert connection.rollbacks == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()
+
+
+def test_db2_sync_pool_retires_failed_rollback_and_closed_handle(
+    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Db2SyncConnectionPool retires connections on failed rollback or closed conn_handler."""
+    _, module = fake_ibm_db
+    c1 = FakeDb2Connection(autocommit=False)
+    c2 = FakeDb2Connection(autocommit=True)
+    c3 = FakeDb2Connection(autocommit=True)
+    module.pending_connections.extend([c1, c2, c3])
+
+    def fail_rollback() -> None:
+        raise RuntimeError("db2 rollback failed")
+
+    monkeypatch.setattr(c1, "rollback", fail_rollback)
+    pool_off = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": False}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pytest.raises(RuntimeError, match="db2 rollback failed"), pool_off.get_connection():
+            pass
+        assert c1.closed is True
+        assert pool_off.size() == 0
+    finally:
+        pool_off.close()
+
+    pool_on = Db2SyncConnectionPool(
+        {"database": "TESTDB", "autocommit": True}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        with pool_on.get_connection() as active:
+            assert cast("object", active) is c2
+            c2.conn_handler = None
+        assert pool_on.size() == 0
+        with pool_on.get_connection() as fresh:
+            assert cast("object", fresh) is c3
+    finally:
+        pool_on.close()

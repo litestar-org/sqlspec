@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Tests for Oracle ADK store behavior."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from inspect import isawaitable
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from sqlglot import exp, parse_one
 
 from sqlspec.adapters.oracledb.adk import (
     JSONStorageType,
@@ -25,7 +26,7 @@ from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
-from sqlspec.extensions.adk import StoredMemory
+from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -179,13 +180,11 @@ async def test_legacy_memory_retains_text_storage_and_rejects_vectors(
     ddl = store._memory_table_ddl()
     if isawaitable(ddl):
         ddl = await ddl
-    from sqlglot import parse_one
-    from sqlglot.expressions import Create
 
     create_sql = ddl.split("EXECUTE IMMEDIATE '", 1)[1].split("';", 1)[0].replace("''", "'")
     table = parse_one(create_sql, dialect="oracle")
-    assert isinstance(table, Create)
-    assert {column.name for column in table.this.expressions} == {
+    assert isinstance(table, exp.Create)
+    assert {column.name for column in table.this.expressions if isinstance(column, exp.ColumnDef)} == {
         "id",
         "session_id",
         "app_name",
@@ -199,6 +198,8 @@ async def test_legacy_memory_retains_text_storage_and_rejects_vectors(
         "content_text",
         "inserted_at",
     }
+    assert "event_id VARCHAR2(128) NOT NULL," in create_sql
+    assert "UNIQUE (app_name, user_id, event_id)" in create_sql
 
     inserted: int | Awaitable[int] = store.insert_memory_entries([_memory_entry()])
     if isawaitable(inserted):
@@ -952,17 +953,21 @@ def test_oracle_adk_memory_store_preserves_raw_owner_id() -> None:
     assert params["owner_id"] is owner_uuid
 
 
-def test_oracle_adk_owner_id_column_ddl_escapes_single_quotes() -> None:
-    """owner_id_column DDL with single-quoted defaults is escaped inside EXECUTE IMMEDIATE."""
-    config = _mock_config({"owner_id_column": "owner_id VARCHAR2(32) DEFAULT 'anon' NOT NULL"})
-    session_store = OracleSyncADKStore(config)
-    memory_store = OracleSyncADKMemoryStore(config)
+@pytest.mark.parametrize("store_cls", [OracleSyncADKStore, OracleSyncADKMemoryStore])
+def test_oracle_adk_owner_id_column_ddl_validates_and_renders_unquoted_defaults(store_cls: type[Any]) -> None:
+    """owner_id_column accepts unquoted defaults and rejects single-quoted literals."""
+    valid_config = _mock_config({"owner_id_column": "owner_id NUMBER(10) DEFAULT 0 NOT NULL"})
+    store = store_cls(valid_config)
+    ddl = (
+        store._sessions_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+        if isinstance(store, OracleSyncADKStore)
+        else store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    )
+    assert "owner_id NUMBER(10) DEFAULT 0 NOT NULL" in ddl
 
-    session_ddl = session_store._sessions_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
-    memory_ddl = memory_store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
-
-    assert "DEFAULT ''anon'' NOT NULL" in session_ddl
-    assert "DEFAULT ''anon'' NOT NULL" in memory_ddl
+    quoted_config = _mock_config({"owner_id_column": "owner_id VARCHAR2(32) DEFAULT 'anon' NOT NULL"})
+    with pytest.raises(ValueError, match="owner_id_column"):
+        store_cls(quoted_config)
 
 
 def test_oracle_sync_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candidates() -> None:
@@ -1285,3 +1290,196 @@ def test_oracle_reconcile_keeps_existing_json_storage(
     assert result.added_columns == {}
     assert all("ALTER" not in str(call.args[0]).upper() for call in driver.execute.call_args_list)
     assert driver.execute.call_count == 0
+
+
+def _oracle_event(
+    *, app_name: str = "app", user_id: str = "u1", session_id: str = "s1", event_id: str = "e1"
+) -> StoredEvent:
+    return {
+        "id": event_id,
+        "app_name": app_name,
+        "user_id": user_id,
+        "session_id": session_id,
+        "invocation_id": "inv-1",
+        "timestamp": datetime(2026, 5, 10, 12, 0, tzinfo=UTC),
+        "event_data": {"text": "hello"},
+    }
+
+
+def _oracle_session_store_with_mocks(
+    *, is_async: bool, fetchone_values: list[Any] | None = None
+) -> tuple[Any, MagicMock, MagicMock]:
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {}}
+    cursor = MagicMock()
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        cursor.fetchone = AsyncMock(side_effect=fetchone_values if fetchone_values is not None else [None])
+        cursor.fetchall = AsyncMock(return_value=[])
+        conn.commit = AsyncMock()
+        conn.rollback = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = conn
+        return OracleAsyncADKStore(config), conn, cursor
+    cursor.fetchone.side_effect = fetchone_values if fetchone_values is not None else [None]
+    cursor.fetchall.return_value = []
+    config.provide_connection.return_value.__enter__.return_value = conn
+    return OracleSyncADKStore(config), conn, cursor
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("renew_for", "expects_update"),
+    [
+        pytest.param(None, False, id="none"),
+        pytest.param(0, False, id="zero-int"),
+        pytest.param(-1, False, id="negative-int"),
+        pytest.param(timedelta(0), False, id="zero-timedelta"),
+        pytest.param(timedelta(milliseconds=200), True, id="subsecond-timedelta"),
+        pytest.param(30, True, id="positive-int"),
+    ],
+)
+async def test_oracle_adk_get_session_renews_only_for_positive_duration(
+    is_async: bool, renew_for: int | timedelta | None, expects_update: bool
+) -> None:
+    """get_session executes the SYSTIMESTAMP touch only when renew_for is strictly positive."""
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    store, _conn, cursor = _oracle_session_store_with_mocks(
+        is_async=is_async, fetchone_values=[("s1", "app", "u1", '{"k":1}', now, now)]
+    )
+    maybe = store.get_session("app", "u1", "s1", renew_for=renew_for)
+    result = await maybe if isawaitable(maybe) else maybe
+
+    assert result is not None
+    executed_sql = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    has_update = any(sql.startswith("UPDATE adk_session SET update_time = SYSTIMESTAMP") for sql in executed_sql)
+    assert has_update is expects_update
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("owner_exists", [True, False])
+async def test_oracle_adk_append_event_verifies_session_ownership_before_insert(
+    is_async: bool, owner_exists: bool
+) -> None:
+    """append_event queries session ownership first and rolls back without inserting when missing."""
+    store, conn, cursor = _oracle_session_store_with_mocks(
+        is_async=is_async, fetchone_values=[(1,)] if owner_exists else [None]
+    )
+    event = _oracle_event()
+
+    if owner_exists:
+        maybe = store.append_event(event)
+        if isawaitable(maybe):
+            await maybe
+        executed = [(_normalized(call.args[0]), call.args[1]) for call in cursor.execute.call_args_list]
+        assert len(executed) == 2
+        assert executed[0] == (
+            (
+                "SELECT 1 FROM adk_session WHERE id = :id AND app_name = :app_name AND user_id = :user_id "
+                "FETCH FIRST 1 ROWS ONLY"
+            ),
+            {"id": "s1", "app_name": "app", "user_id": "u1"},
+        )
+        assert executed[1][0].startswith("INSERT INTO adk_event")
+        assert conn.commit.call_count == 1
+    else:
+        with pytest.raises(ValueError, match="Session s1 not found for app='app', user='u1'"):
+            maybe = store.append_event(event)
+            if isawaitable(maybe):
+                await maybe
+        assert len(cursor.execute.call_args_list) == 1
+        assert conn.commit.call_count == 0
+        assert conn.rollback.call_count == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_adk_append_event_and_update_state_rejects_mismatch_and_scopes_queries(is_async: bool) -> None:
+    """Mismatched event scope fails before acquiring a connection; get_events and delete_session scope by owner."""
+    store, conn, cursor = _oracle_session_store_with_mocks(is_async=is_async)
+    bad_event = _oracle_event(user_id="other-user")
+
+    with pytest.raises(ValueError, match="does not match"):
+        maybe = store.append_event_and_update_state(bad_event, "app", "u1", "s1", {"turn": 1})
+        if isawaitable(maybe):
+            await maybe
+    assert cursor.execute.call_count == 0
+
+    maybe_events = store.get_events("app", "u1", "s1")
+    events = await maybe_events if isawaitable(maybe_events) else maybe_events
+    assert events == []
+    events_sql = _normalized(cursor.execute.call_args.args[0])
+    assert (
+        "JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in events_sql
+    )
+    assert "WHERE s.app_name = :app_name AND s.user_id = :user_id AND s.id = :session_id" in events_sql
+
+    cursor.execute.reset_mock()
+    maybe_del = store.delete_session("app", "u1", "s1")
+    if isawaitable(maybe_del):
+        await maybe_del
+    delete_calls = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert delete_calls == [
+        "DELETE FROM adk_event WHERE app_name = :app_name AND user_id = :user_id AND session_id = :id",
+        "DELETE FROM adk_session WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+    ]
+    assert conn.commit.call_count == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("app_name", "user_id", "expected_where", "expected_params"),
+    [
+        pytest.param(None, None, "session_id = :session_id", {"session_id": "s1"}, id="session-only"),
+        pytest.param(
+            "app",
+            None,
+            "session_id = :session_id AND app_name = :app_name",
+            {"session_id": "s1", "app_name": "app"},
+            id="with-app",
+        ),
+        pytest.param(
+            None,
+            "u1",
+            "session_id = :session_id AND user_id = :user_id",
+            {"session_id": "s1", "user_id": "u1"},
+            id="with-user",
+        ),
+        pytest.param(
+            "app",
+            "u1",
+            "session_id = :session_id AND app_name = :app_name AND user_id = :user_id",
+            {"session_id": "s1", "app_name": "app", "user_id": "u1"},
+            id="with-app-and-user",
+        ),
+    ],
+)
+async def test_oracle_adk_memory_delete_entries_by_session_scopes_owner_predicates(
+    is_async: bool, app_name: str | None, user_id: str | None, expected_where: str, expected_params: dict[str, Any]
+) -> None:
+    """delete_entries_by_session appends :app_name and :user_id predicates when provided."""
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {}}
+    cursor = MagicMock()
+    cursor.rowcount = 2
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    if is_async:
+        cursor.execute = AsyncMock()
+        conn.commit = AsyncMock()
+        config.provide_connection.return_value.__aenter__.return_value = conn
+        store: Any = OracleAsyncADKMemoryStore(config)
+        deleted = await store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+    else:
+        config.provide_connection.return_value.__enter__.return_value = conn
+        store = OracleSyncADKMemoryStore(config)
+        deleted = store.delete_entries_by_session("s1", app_name=app_name, user_id=user_id)
+
+    assert deleted == 2
+    sql, params = cursor.execute.call_args.args
+    assert sql == f"DELETE FROM adk_memory WHERE {expected_where}"
+    assert params == expected_params

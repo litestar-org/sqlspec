@@ -88,14 +88,15 @@ class SQLSpecRequestLeaseMiddleware:
         routing_states = [state for state in self.config_states if state.enable_routing_middleware]
         payload = RoutingContext.current() or RoutingContextPayload()
         for state in routing_states:
-            if state.default_routing_mode == "primary" and payload.get(state.config.bind_key) is None:
-                payload = payload.with_entry(state.config.bind_key, RoutingEntry("primary"))
+            bind_key = getattr(state.config, "bind_key", None)
+            if state.default_routing_mode == "primary" and payload.get(bind_key) is None:
+                payload = payload.with_entry(bind_key, RoutingEntry("primary"))
             cookie_header, routing_header_value = extract_asgi_routing_headers(
                 scope, state.routing_header_bytes, include_cookies=state.write_pin_cookie is not None
             )
             payload = apply_request_routing_hints(
                 payload,
-                bind_key=state.config.bind_key,
+                bind_key=bind_key,
                 routing_header_value=routing_header_value,
                 cookie_header=cookie_header,
                 write_pin_cookie=state.write_pin_cookie,
@@ -103,6 +104,7 @@ class SQLSpecRequestLeaseMiddleware:
             )
         status_code = 500
         response_complete = False
+        completions: list[_ResponseCompletion] = []
 
         async def tracked_send(message: "Message") -> None:
             nonlocal status_code, response_complete
@@ -111,12 +113,16 @@ class SQLSpecRequestLeaseMiddleware:
             await send(message)
             if _completes_response(message):
                 response_complete = True
+                for completion in completions:
+                    completion.complete = True
 
         routing_scope: Any = RoutingContext.scope(payload) if routing_states else nullcontext()
         async with routing_scope, AsyncExitStack() as stack:
             with ExitStack() as sync_stack:
                 for state in self.config_states:
-                    set_state_value(request.state, _response_owner_key(state.connection_key), True)
+                    completion = _ResponseCompletion()
+                    completions.append(completion)
+                    set_state_value(request.state, _response_owner_key(state.connection_key), completion)
                     set_state_value(
                         request.state,
                         _pending_connection_key(state.connection_key),
@@ -691,6 +697,15 @@ class _PendingConnection:
         self.lock = asyncio.Lock()
 
 
+class _ResponseCompletion:
+    """Downstream response completion flag shared through request state."""
+
+    __slots__ = ("complete",)
+
+    def __init__(self) -> None:
+        self.complete = False
+
+
 def _response_owner_key(connection_key: str) -> str:
     return f"sqlspec_response_owner_{connection_key}"
 
@@ -706,10 +721,28 @@ def _completes_response(message: "Message") -> bool:
 
 
 def _clear_published_connection(request: "Request", config_state: "SQLSpecConfigState") -> None:
-    pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
-    pop_state_value(request.state, f"{config_state.session_key}_instance")
-    pop_state_value(request.state, deferred_session_key(config_state))
-    pop_state_value(request.state, config_state.connection_key)
+    session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
+    if session is None:
+        session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
+    try:
+        if session is not None:
+            try:
+                runtime = getattr(session, "observability", None)
+                if runtime is not None and not runtime.is_idle:
+                    runtime.emit_session_end_sync(session)
+            finally:
+                detach = getattr(session, "_detach_connection", None)
+                if detach is not None:
+                    detach()
+    finally:
+        pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
+        pop_state_value(request.state, f"{config_state.session_key}_instance")
+        deferred = pop_state_value(request.state, deferred_session_key(config_state))
+        pop_state_value(request.state, config_state.connection_key)
+        if deferred is not None:
+            deferred_detach = getattr(deferred, "_detach_connection", None)
+            if deferred_detach is not None:
+                deferred_detach()
 
 
 @contextmanager
@@ -788,6 +821,12 @@ async def _finalize_request_transaction(
     session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
     if session is None:
         session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
+    if (
+        session is not None
+        and getattr(session, "_auto_begin_on_write", False) is True
+        and not session._connection_in_transaction()
+    ):
+        return
     operation = "commit" if commit else "rollback"
     target = session if session is not None and hasattr(session, operation) else connection
     callback = getattr(target, operation, None)

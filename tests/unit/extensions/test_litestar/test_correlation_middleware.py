@@ -47,7 +47,7 @@ async def test_litestar_correlation_middleware_restores_previous_correlation_id(
 
 
 def test_correlation_middleware_slots_include_cached_extractor() -> None:
-    assert CorrelationMiddleware.__slots__ == ("_app", "_extractor", "_headers")
+    assert CorrelationMiddleware.__slots__ == ("_app", "_extractor", "_header_bytes", "_headers")
 
 
 async def test_litestar_correlation_middleware_sanitizes_header_value() -> None:
@@ -107,3 +107,24 @@ async def test_litestar_correlation_middleware_skips_non_http_scope() -> None:
         assert CorrelationContext.get() == "outer"
     finally:
         CorrelationContext.clear()
+
+
+async def test_litestar_correlation_middleware_ignores_binary_unrelated_headers_and_invalid_trace_bytes() -> None:
+    """Raw latin-1 bytes in unrelated headers or grpc-trace-bin never raise UnicodeDecodeError."""
+    seen: dict[str, Any] = {}
+
+    async def app(_scope: Any, _receive: Any, _send: Any) -> None:
+        seen["cid"] = CorrelationContext.get()
+
+    scope = {
+        "type": "http",
+        "headers": [
+            (b"x-binary", b"\x80\xff"),
+            (b"grpc-trace-bin", b"\x00\x80\xff"),
+            (b"x-correlation-id", b"first-valid"),
+            (b"x-correlation-id", b"second-duplicate"),
+        ],
+    }
+
+    await _call_middleware(scope, app, headers=("grpc-trace-bin", "x-correlation-id"))
+    assert seen["cid"] == "first-valid"

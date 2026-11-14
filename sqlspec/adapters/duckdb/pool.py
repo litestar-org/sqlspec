@@ -1,11 +1,14 @@
 """DuckDB connection pool with thread-local connections."""
 
 import logging
+import math
 import re
 import threading
 import time
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast, final
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
@@ -61,6 +64,7 @@ _SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
 
 
 @final
+@mypyc_attr(allow_interpreted_subclasses=False)
 class DuckDBConnectionPool:
     """Thread-local connection manager for DuckDB.
 
@@ -701,7 +705,12 @@ def _format_secret_key(key: Any) -> str:
 def _format_secret_literal(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (int, float)):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            msg = "DuckDB secret float option must be finite."
+            raise ValueError(msg)
+        return str(value)
+    if isinstance(value, int):
         return str(value)
     escaped = str(value).replace("'", "''")
     return f"'{escaped}'"

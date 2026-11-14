@@ -649,3 +649,111 @@ def test_adbc_driver_and_runner_implicit_transaction_detection() -> None:
         )
         is False
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_reconciler_downgrade_runs_only_at_base_not_step_back(tmp_path: Path, is_async: bool) -> None:
+    """downgrade('-1') preserves reconciled extension tables while downgrade('base') drops them."""
+    core_dir = tmp_path / "migrations"
+    core_dir.mkdir()
+    (core_dir / "0001_core.sql").write_text(
+        "-- name: migrate-0001-up\nCREATE TABLE core_t (id INTEGER PRIMARY KEY);\n\n"
+        "-- name: migrate-0001-down\nDROP TABLE core_t;\n",
+        encoding="utf-8",
+    )
+    ext_dir = tmp_path / "ext_demo"
+    ext_dir.mkdir()
+    (ext_dir / "reconcile.py").write_text(
+        """
+async def _up_async(driver):
+    await driver.execute("CREATE TABLE IF NOT EXISTS ext_demo_t (id INTEGER PRIMARY KEY)")
+
+async def _down_async(driver):
+    await driver.execute("DROP TABLE IF EXISTS ext_demo_t")
+
+def reconcile(context):
+    if context.is_async_driver:
+        return _up_async(context.driver)
+    context.driver.execute("CREATE TABLE IF NOT EXISTS ext_demo_t (id INTEGER PRIMARY KEY)")
+    return None
+
+def downgrade(context):
+    if context.is_async_driver:
+        return _down_async(context.driver)
+    context.driver.execute("DROP TABLE IF EXISTS ext_demo_t")
+    return None
+""",
+        encoding="utf-8",
+    )
+
+    cfg: SqliteConfig | AiosqliteConfig
+    if is_async:
+        cfg = AiosqliteConfig(
+            connection_config={"database": str(tmp_path / "reconcile_base.db")},
+            migration_config={
+                "enabled": True,
+                "script_location": str(core_dir),
+                "include_extensions": ["demo"],
+                "use_logger": False,
+            },
+            extension_config={"demo": {"migrations_path": ext_dir}},
+        )
+        await AsyncMigrationCommands(cfg).upgrade(echo=False)
+        await AsyncMigrationCommands(cfg).downgrade(revision="-1", echo=False)
+        async with cfg.provide_session() as driver:
+            tables_after_step = {
+                row["name"] for row in await driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        assert "core_t" not in tables_after_step
+        assert "ext_demo_t" in tables_after_step
+
+        await AsyncMigrationCommands(cfg).downgrade(revision="-1", echo=False)
+        async with cfg.provide_session() as driver:
+            tables_after_second_step = {
+                row["name"] for row in await driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        assert "ext_demo_t" in tables_after_second_step
+
+        await AsyncMigrationCommands(cfg).downgrade(revision="base", echo=False)
+        async with cfg.provide_session() as driver:
+            tables_after_base = {
+                row["name"] for row in await driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        await cfg.close_pool()
+        assert "ext_demo_t" not in tables_after_base
+        return
+
+    cfg = SqliteConfig(
+        connection_config={"database": str(tmp_path / "reconcile_base.db")},
+        migration_config={
+            "enabled": True,
+            "script_location": str(core_dir),
+            "include_extensions": ["demo"],
+            "use_logger": False,
+        },
+        extension_config={"demo": {"migrations_path": ext_dir}},
+    )
+    SyncMigrationCommands(cfg).upgrade(echo=False)
+    SyncMigrationCommands(cfg).downgrade(revision="-1", echo=False)
+    with cfg.provide_session() as driver:
+        tables_after_step = {
+            row["name"] for row in driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    assert "core_t" not in tables_after_step
+    assert "ext_demo_t" in tables_after_step
+
+    SyncMigrationCommands(cfg).downgrade(revision="-1", echo=False)
+    with cfg.provide_session() as driver:
+        tables_after_second_step = {
+            row["name"] for row in driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    assert "ext_demo_t" in tables_after_second_step
+
+    SyncMigrationCommands(cfg).downgrade(revision="base", echo=False)
+    with cfg.provide_session() as driver:
+        tables_after_base = {
+            row["name"] for row in driver.select("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    cfg.close_pool()
+    assert "ext_demo_t" not in tables_after_base

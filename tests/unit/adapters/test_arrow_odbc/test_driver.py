@@ -544,10 +544,16 @@ def test_arrow_odbc_build_connection_config_formats_security_fields_and_kwargs()
     })
 
     assert connection_string == (
-        "Driver=ODBC Driver 18 for SQL Server;Server=localhost;Database=app;UID=sa;PWD=secret;"
+        "Driver=ODBC Driver 18 for SQL Server;Server=localhost;Database=app;"
         "Trusted_Connection=yes;TrustServerCertificate=yes;Encrypt=mandatory;"
     )
-    assert kwargs == {"login_timeout_sec": 7, "packet_size": 8192, "autocommit": True}
+    assert kwargs == {
+        "user": "sa",
+        "password": "secret",
+        "login_timeout_sec": 7,
+        "packet_size": 8192,
+        "autocommit": True,
+    }
 
 
 def test_arrow_odbc_session_release_allows_connections_without_close(monkeypatch: Any) -> None:

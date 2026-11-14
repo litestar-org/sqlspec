@@ -6,7 +6,12 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
-from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
+from sqlspec.extensions.adk._table_utils import (
+    ensure_table_name,
+    owner_id_column_name,
+    unique_statements,
+    validate_owner_id_column_ddl,
+)
 from sqlspec.extensions.adk.store import _adk_read_provider, _adk_read_settings, _reconcile_adk_schema_sync
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
@@ -79,9 +84,12 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._enable_bm25: bool = bool(store_config.get("enable_bm25", False))
         self._scann_num_leaves: int = store_config.get("scann_num_leaves", 100)
         self._scann_quantizer: str = store_config.get("scann_quantizer", "SQ8")
-        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        raw_owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_ddl: str | None = (
+            validate_owner_id_column_ddl(raw_owner_id_column_ddl) if raw_owner_id_column_ddl is not None else None
+        )
         self._owner_id_column_name: str | None = (
-            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl is not None else None
         )
 
     @property
@@ -361,11 +369,15 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session.
+    async def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner.
 
         Args:
             session_id: Session ID to delete entries for.
+            app_name: Optional application name owner filter.
+            user_id: Optional user identifier owner filter.
 
         Returns:
             Number of entries deleted.
@@ -511,8 +523,19 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_entries_by_session(self, session_id: str) -> int:
-        """Delete all memory entries for a specific session."""
+    def delete_entries_by_session(
+        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+    ) -> int:
+        """Delete memory entries for a specific session, optionally scoped by owner.
+
+        Args:
+            session_id: Session ID to delete entries for.
+            app_name: Optional application name owner filter.
+            user_id: Optional user identifier owner filter.
+
+        Returns:
+            Number of entries deleted.
+        """
         raise NotImplementedError
 
     @abstractmethod

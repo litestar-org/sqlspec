@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
-from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
+from sqlspec.extensions.adk._table_utils import (
+    ensure_table_name,
+    owner_id_column_name,
+    unique_statements,
+    validate_owner_id_column_ddl,
+)
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.adapters import resolve_adapter_name
@@ -106,9 +111,12 @@ class _ADKStoreCommon(Generic[ConfigT]):
         self._app_state_table: str = str(store_config["app_state_table"])
         self._user_state_table: str = str(store_config["user_state_table"])
         self._metadata_table: str = str(store_config["metadata_table"])
-        self._owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        raw_owner_id_column_ddl: str | None = store_config.get("owner_id_column")
+        self._owner_id_column_ddl: str | None = (
+            validate_owner_id_column_ddl(raw_owner_id_column_ddl) if raw_owner_id_column_ddl is not None else None
+        )
         self._owner_id_column_name: str | None = (
-            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
+            owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl is not None else None
         )
         ensure_table_name(self._session_table, max_parts=self._max_table_name_parts)
         ensure_table_name(self._events_table, max_parts=self._max_table_name_parts)
@@ -221,23 +229,39 @@ class _ADKStoreCommon(Generic[ConfigT]):
         return bool(settings.get("manage_schema", True)), bool(settings.get("create_schema", True))
 
     def _calculate_expires_at(self, expires_in: "int | timedelta | None") -> "datetime | None":
-        """Calculate expiration timestamp from expires_in.
+        """Calculate expiration timestamp from ``expires_in``.
+
+        Non-positive durations return an already-expired UTC timestamp rather than
+        ``None`` so sessions expire immediately instead of becoming persistent.
 
         Args:
-            expires_in: Seconds or timedelta until expiration.
+            expires_in: Seconds or timedelta until expiration, or ``None`` for no expiration.
 
         Returns:
-            UTC datetime of expiration, or None if no expiration.
+            UTC datetime of expiration, or ``None`` when ``expires_in`` is ``None``.
         """
         if expires_in is None:
             return None
 
-        expires_in_seconds = int(expires_in.total_seconds()) if isinstance(expires_in, timedelta) else expires_in
+        expires_in_seconds = expires_in.total_seconds() if isinstance(expires_in, timedelta) else float(expires_in)
 
         if expires_in_seconds <= 0:
-            return None
+            return datetime.now(UTC) - timedelta(microseconds=1)
 
         return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
+
+    def _should_renew(self, renew_for: "int | timedelta | None") -> bool:
+        """Return whether ``renew_for`` requests session expiration renewal.
+
+        Args:
+            renew_for: Seconds or timedelta to extend expiration by, or ``None``.
+
+        Returns:
+            ``True`` only when ``renew_for`` represents a positive duration.
+        """
+        if renew_for is None:
+            return False
+        return (renew_for.total_seconds() if isinstance(renew_for, timedelta) else float(renew_for)) > 0
 
     def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile
@@ -824,7 +848,17 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        """Get a session."""
+        """Get a session.
+
+        Args:
+            app_name: Name of the application.
+            user_id: ID of the user.
+            session_id: Session identifier.
+            renew_for: If positive, touch the session update timestamp while reading.
+
+        Returns:
+            Session record if found, None otherwise.
+        """
         raise NotImplementedError
 
     @abstractmethod
