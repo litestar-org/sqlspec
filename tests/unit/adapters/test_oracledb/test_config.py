@@ -32,6 +32,7 @@ from sqlspec.adapters.oracledb import (
     build_session_release_plsql,
 )
 from sqlspec.adapters.oracledb import config as oracle_config_module
+from sqlspec.adapters.oracledb import core as oracle_core_module
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
@@ -877,6 +878,9 @@ async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool(
         zf.writestr("ewallet.p12", p12_bytes)
         zf.writestr("tnsnames.ora", tns_text)
     archive_bytes = buf.getvalue()
+    expected_dir = oracle_core_module._default_temp_wallet_dir(
+        "sqlspec_oracle_wallet_", oracle_core_module._compute_wallet_digest(archive_bytes, "WalletSecret123")
+    )
 
     with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
         OracleSyncConfig(
@@ -888,6 +892,8 @@ async def test_oracle_shared_wallet_zip_refcounted_across_pools_and_derive_pool(
                 "tns_alias": "missing_alias",
             }
         )
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS
 
     sync_cfg = OracleSyncConfig(
         connection_instance=Mock(),
@@ -2303,3 +2309,71 @@ async def test_oracle_pool_acquire_maps_interface_error(async_mode: bool) -> Non
             with config_sync.provide_connection():
                 pass
     assert exc_info.value.__cause__ is native
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig], ids=["sync", "async"])
+async def test_oracle_failed_wallet_zip_init_cleans_up_without_dropping_shared_owner(config_type: Any) -> None:
+    """Failed config construction releases its wallet temp dir without evicting an active shared owner."""
+    p12_bytes = _make_p12_wallet_bytes(b"WalletSecretFailPath")
+    tns_text = (
+        "fail_guard_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=fail_guard_tp.adb.oraclecloud.com)))\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.p12", p12_bytes)
+        zf.writestr("tnsnames.ora", tns_text)
+    archive_bytes = buf.getvalue()
+    expected_dir = oracle_core_module._default_temp_wallet_dir(
+        "sqlspec_oracle_wallet_", oracle_core_module._compute_wallet_digest(archive_bytes, "WalletSecretFailPath")
+    )
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        config_type(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecretFailPath",
+                "tns_alias": "missing_alias",
+            }
+        )
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS
+
+    active_pool = MagicMock()
+    if config_type is OracleAsyncConfig:
+        active_pool.close = AsyncMock()
+    active_cfg = config_type(
+        connection_instance=active_pool,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": archive_bytes,
+            "wallet_password": "WalletSecretFailPath",
+            "tns_alias": "fail_guard_tp",
+        },
+    )
+    assert expected_dir.is_dir()
+    assert oracle_core_module._WALLET_DIR_REFCOUNTS.get(expected_dir.resolve()) == 1
+
+    with pytest.raises(ImproperConfigurationError, match="not found in tnsnames\\.ora"):
+        config_type(
+            connection_config={
+                "user": "admin",
+                "password": "pw",
+                "wallet_zip": archive_bytes,
+                "wallet_password": "WalletSecretFailPath",
+                "tns_alias": "missing_alias",
+            }
+        )
+    assert expected_dir.is_dir()
+    assert oracle_core_module._WALLET_DIR_REFCOUNTS.get(expected_dir.resolve()) == 1
+
+    if config_type is OracleAsyncConfig:
+        await active_cfg._close_pool()
+    else:
+        active_cfg._close_pool()
+    assert not expected_dir.exists()
+    assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS

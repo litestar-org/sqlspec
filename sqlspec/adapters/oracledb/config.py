@@ -592,8 +592,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
         try:
             self._extracted_wallet_dir: Path | None = pending_wallet_dir
-            if pending_wallet_dir is not None:
-                retain_extracted_wallet_dir(pending_wallet_dir)
             self._oracle_version_cache = OracleVersionCache()
             self._owns_pool_session_callback = False
             self._thin_sharding_warned = False
@@ -1195,8 +1193,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         connection_config, pending_wallet_dir = _process_oracle_wallet_and_config(connection_config)
         try:
             self._extracted_wallet_dir: Path | None = pending_wallet_dir
-            if pending_wallet_dir is not None:
-                retain_extracted_wallet_dir(pending_wallet_dir)
             self._oracle_version_cache = OracleVersionCache()
             self._owns_pool_session_callback = False
             self._thin_sharding_warned = False
@@ -1576,7 +1572,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 def _process_oracle_wallet_and_config(
     connection_config: "Mapping[str, Any] | None",
 ) -> "tuple[dict[str, Any], Path | None]":
-    """Extract wallet zip and normalize connection configuration."""
+    """Extract wallet zip, retain any created directory, and normalize connection configuration."""
     normalized_conn = dict(normalize_connection_config(connection_config or {}))
     pending_wallet_dir: Path | None = None
     if normalized_conn.get("wallet_zip") is not None:
@@ -1587,9 +1583,15 @@ def _process_oracle_wallet_and_config(
         )
         if not source_is_existing_dir or wallet_dir.resolve() != Path(raw_wallet_source).resolve():
             pending_wallet_dir = wallet_dir
+            retain_extracted_wallet_dir(pending_wallet_dir)
         normalized_conn.setdefault("config_dir", str(wallet_dir))
         normalized_conn.setdefault("wallet_location", str(wallet_dir))
-    built_config = build_connection_config(normalized_conn)
+    try:
+        built_config = build_connection_config(normalized_conn)
+    except BaseException:
+        if pending_wallet_dir is not None:
+            release_extracted_wallet_dir(pending_wallet_dir)
+        raise
     return built_config, pending_wallet_dir
 
 
