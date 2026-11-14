@@ -4,6 +4,7 @@ import array
 import contextlib
 import math
 import re
+import weakref
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
@@ -17,6 +18,7 @@ from sqlspec.adapters.sqlite.core import (
     julian_to_datetime,
     render_pragmas,
 )
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -77,7 +79,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         config: SqliteConfig instance with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_pragma_overrides")
 
     def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK store.
@@ -88,7 +90,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
         super().__init__(config, read_config=read_config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
@@ -729,9 +731,11 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             driver.execute(statement)
 
     def _ensure_pragmas(self, connection: Any) -> None:
-        """Apply PRAGMA optimization profile once per connection."""
-        if id(connection) not in self._configured_connection_ids:
-            self._apply_pragmas(connection)
+        """Apply PRAGMA optimization profile once per live pooled connection."""
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        if token is not None and token in self._configured_connections:
+            return
+        self._apply_pragmas(connection)
 
     def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
@@ -745,7 +749,9 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA journal_size_limit = 67108864"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _session_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the sessions table."""
@@ -879,7 +885,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         config: SqliteConfig with extension_config["adk"] settings.
     """
 
-    __slots__ = ("_configured_connection_ids", "_fts_options", "_pragma_overrides")
+    __slots__ = ("_configured_connections", "_fts_options", "_pragma_overrides")
 
     def __init__(self, config: "SqliteConfig", *, read_config: "SqliteConfig | None" = None) -> None:
         """Initialize SQLite ADK memory store.
@@ -891,7 +897,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         super().__init__(config, read_config=read_config)
         self._fts_options = _fts_options(config)
         self._pragma_overrides = _pragma_overrides(config)
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist.
@@ -1266,8 +1272,10 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         return statements
 
     def _ensure_foreign_keys(self, connection: Any) -> None:
-        if id(connection) not in self._configured_connection_ids:
-            self._enable_foreign_keys(connection)
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        if token is not None and token in self._configured_connections:
+            return
+        self._enable_foreign_keys(connection)
 
     def _enable_foreign_keys(self, connection: Any) -> None:
         """Enable foreign key constraints and apply PRAGMA overrides for this connection.
@@ -1278,7 +1286,9 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         _close_cursor(connection.execute("PRAGMA foreign_keys = ON"))
         for pragma_name, pragma_value in self._pragma_overrides:
             _close_cursor(connection.execute(f"PRAGMA {pragma_name} = {pragma_value}"))
-        self._configured_connection_ids.add(id(connection))
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config, self._read_config)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"

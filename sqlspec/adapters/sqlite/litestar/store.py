@@ -1,6 +1,7 @@
 """SQLite sync session store for Litestar integration."""
 
 import contextlib
+import weakref
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired
 
@@ -13,6 +14,7 @@ from sqlspec.adapters.sqlite.core import (
     extension_pragma_statements,
     julian_to_datetime,
 )
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -53,7 +55,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         config: SqliteConfig instance.
     """
 
-    __slots__ = ("_configured_connection_ids", "_pragma_statements")
+    __slots__ = ("_configured_connections", "_pragma_statements")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
         "pragma_overrides",
         "pragma_profile",
@@ -67,7 +69,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
         super().__init__(config)
         self._pragma_statements = extension_pragma_statements(config, "litestar")
-        self._configured_connection_ids: set[int] = set()
+        self._configured_connections: weakref.WeakSet[Any] = weakref.WeakSet()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -80,7 +82,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
     def prepare_schema_sync(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before migration DDL generation."""
         apply_extension_pragmas(driver.connection, self._pragma_statements)
-        self._configured_connection_ids.add(id(driver.connection))
+        self._record_configured_connection(driver.connection)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -146,10 +148,20 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
         return await async_(self._delete_expired)()
 
+    def _record_configured_connection(self, connection: Any) -> None:
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config)
+        if token is not None:
+            self._configured_connections.add(token)
+
     def _ensure_pragmas(self, connection: Any) -> None:
-        if self._pragma_statements and id(connection) not in self._configured_connection_ids:
-            apply_extension_pragmas(connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(connection))
+        if not self._pragma_statements:
+            return
+        token = SqliteConnectionPool.resolve_connection_token(connection, self._config)
+        if token is not None and token in self._configured_connections:
+            return
+        apply_extension_pragmas(connection, self._pragma_statements)
+        if token is not None:
+            self._configured_connections.add(token)
 
     def _table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL.
@@ -188,7 +200,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         sql = self._table_ddl()
         with self._config.provide_session() as driver:
             apply_extension_pragmas(driver.connection, self._pragma_statements)
-            self._configured_connection_ids.add(id(driver.connection))
+            self._record_configured_connection(driver.connection)
             driver.execute_script(sql)
             end_transaction(driver.connection, commit=True)
         self._log_table_created()

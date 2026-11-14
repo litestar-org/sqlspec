@@ -1,6 +1,8 @@
 """SQLite ADK adapter-local configuration tests."""
 
+import gc
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Self, get_type_hints
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -10,6 +12,7 @@ import pytest
 from sqlspec.adapters.sqlite.adk import SqliteADKConfig, SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.litestar import SqliteStore
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
@@ -569,5 +572,59 @@ def test_sqlite_adk_delete_entries_by_session_scopes_and_syncs_fts(
         assert app_a_u1 == (["m-1"] if "m-1" in expected_remaining else [])
         assert app_a_u2 == (["m-2"] if "m-2" in expected_remaining else [])
         assert app_b_u1 == (["m-3"] if "m-3" in expected_remaining else [])
+    finally:
+        config.close_pool()
+
+
+async def test_sqlite_stores_reapply_pragmas_after_close_pool(tmp_path: Path) -> None:
+    """ADK and Litestar stores evict closed connection tokens and reapply PRAGMA foreign_keys."""
+    db_path = tmp_path / "reopen.db"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)}, extension_config={"litestar": {"pragma_profile": True}}
+    )
+    adk_store = SqliteADKStore(config)
+    memory_store = SqliteADKMemoryStore(config)
+    litestar_store = SqliteStore(config)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    try:
+        adk_store.create_tables()
+        memory_store.create_tables()
+        await litestar_store.create_table()
+        adk_store.create_session("s1", "app", "user", {"k": "v"})
+        adk_store.append_event(
+            StoredEvent(
+                id="e1",
+                app_name="app",
+                user_id="user",
+                session_id="s1",
+                invocation_id="inv-1",
+                timestamp=now,
+                event_data={"role": "user"},
+            )
+        )
+        assert len(adk_store._configured_connections) == 1
+        assert len(litestar_store._configured_connections) == 1
+
+        config.close_pool()
+        gc.collect()
+        assert len(adk_store._configured_connections) == 0
+        assert len(memory_store._configured_connections) == 0
+        assert len(litestar_store._configured_connections) == 0
+
+        adk_store.delete_session("app", "user", "s1")
+        assert adk_store.get_session("app", "user", "s1") is None
+        await litestar_store.set("sess-1", b"payload")
+        assert memory_store.delete_entries_by_session("s1", app_name="app", user_id="user") == 0
+        with config.provide_connection() as conn:
+            cur = conn.execute(f"SELECT COUNT(*) FROM {adk_store.events_table} WHERE session_id = ?", ("s1",))
+            orphan_count = cur.fetchone()[0]
+            cur.close()
+            fk_cur = conn.execute("PRAGMA foreign_keys")
+            fk_enabled = fk_cur.fetchone()[0]
+            fk_cur.close()
+        assert orphan_count == 0
+        assert fk_enabled == 1
+        assert len(adk_store._configured_connections) == 1
     finally:
         config.close_pool()
