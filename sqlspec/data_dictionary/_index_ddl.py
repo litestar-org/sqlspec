@@ -90,28 +90,29 @@ def build_drop_index_sql(
     idx_name = str(index_meta.get("index_name") or index_meta.get("name") or "").strip()
     if not idx_name:
         return None
-    resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
+    table_parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
+    schema_parts = _resolve_index_schema_parts(table_parts, schema, index_meta)
     if norm == "teradata":
-        qualified_table = _format_index_table(table, resolved_schema, norm)
+        qualified_table = _format_index_table_parts(table_parts, schema_parts, norm)
         if index_meta.get("catalog_name_generated"):
             cols = index_meta.get("columns") or index_meta.get("column_names") or []
             column_list = _format_index_columns(cols, norm, allow_direction=False)
             return f"DROP INDEX ({column_list}) ON {qualified_table}" if column_list else None
         return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in _SAP_DIALECTS:
-        qualified_table = _format_index_table(table, resolved_schema, norm)
+        qualified_table = _format_index_table_parts(table_parts, schema_parts, norm)
         return f"DROP INDEX {qualified_table}.{_quote_index_part(idx_name, norm)}"
     if norm == "mssql":
-        qualified_table = _format_index_table(table, resolved_schema, norm)
+        qualified_table = _format_index_table_parts(table_parts, schema_parts, norm)
         return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in _MYSQL_FAMILY_DIALECTS:
-        qualified_table = _format_index_table(table, resolved_schema, norm)
+        qualified_table = _format_index_table_parts(table_parts, schema_parts, norm)
         return f"DROP INDEX {_quote_index_part(idx_name, norm)} ON {qualified_table}"
     if norm in {"oracle", "db2"}:
-        return f"DROP INDEX {_format_qualified_index_name(idx_name, table, resolved_schema, norm)}"
+        return f"DROP INDEX {_format_qualified_index_parts(idx_name, schema_parts, norm)}"
     if norm == "spanner":
         return f"DROP INDEX {_quote_index_part(idx_name, norm)}"
-    return f"DROP INDEX IF EXISTS {_format_qualified_index_name(idx_name, table, resolved_schema, norm)}"
+    return f"DROP INDEX IF EXISTS {_format_qualified_index_parts(idx_name, schema_parts, norm)}"
 
 
 def build_create_index_sql(
@@ -156,10 +157,11 @@ def build_create_index_sql(
         col_list = _format_index_columns(cols, norm, allow_direction=norm != "teradata")
         if not idx_name or not col_list:
             return None
-        resolved_schema = schema or (str(index_meta.get("schema_name") or "").strip() or None)
+        table_parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
+        schema_parts = _resolve_index_schema_parts(table_parts, schema, index_meta)
         is_unique = bool(index_meta.get("is_unique") or index_meta.get("unique"))
         unique_kw = "UNIQUE " if is_unique else ""
-        qualified_table = _format_index_table(table, resolved_schema, norm)
+        qualified_table = _format_index_table_parts(table_parts, schema_parts, norm)
         if norm == "teradata":
             if index_meta.get("catalog_name_generated"):
                 return f"CREATE {unique_kw}INDEX ({col_list}) ON {qualified_table}"
@@ -419,28 +421,35 @@ def _resolve_ddl_target(table: str, schema: str | None, table_name: str, dialect
     return _quote_index_part(table_name, dialect), schema
 
 
-def _format_qualified_index_name(idx_name: str, table: str, resolved_schema: str | None, dialect: str) -> str:
-    if resolved_schema is not None:
-        schema_parts = split_qualified_identifier(resolved_schema, quote_chars='"`', allow_bracket_quotes=True)
-        if schema_parts:
-            return ".".join(_quote_index_part(part, dialect) for part in (*schema_parts, idx_name))
-        return f"{_quote_index_part(resolved_schema, dialect)}.{_quote_index_part(idx_name, dialect)}"
-    table_parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
+def _resolve_index_schema_parts(
+    table_parts: tuple[str, ...], explicit_schema: str | None, index_meta: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Resolve schema qualifier segments without re-splitting catalog metadata names."""
     if len(table_parts) > 1:
-        return ".".join(_quote_index_part(part, dialect) for part in (*table_parts[:-1], idx_name))
+        return table_parts[:-1]
+    if explicit_schema is not None and explicit_schema.strip():
+        schema_parts = split_qualified_identifier(explicit_schema, quote_chars='"`', allow_bracket_quotes=True)
+        return schema_parts or (explicit_schema.strip(),)
+    meta_schema = str(index_meta.get("schema_name") or "").strip()
+    if meta_schema:
+        return (meta_schema,)
+    return ()
+
+
+def _format_qualified_index_parts(idx_name: str, schema_parts: tuple[str, ...], dialect: str) -> str:
+    """Format an index identifier prefixed by already-resolved qualifier segments."""
+    if schema_parts:
+        return ".".join(_quote_index_part(part, dialect) for part in (*schema_parts, idx_name))
     return _quote_index_part(idx_name, dialect)
 
 
-def _format_index_table(table: str, schema: str | None, dialect: str) -> str:
+def _format_index_table_parts(table_parts: tuple[str, ...], schema_parts: tuple[str, ...], dialect: str) -> str:
     """Format a qualified or unqualified table reference with dialect-escaped segments."""
-    parts = split_qualified_identifier(table, quote_chars='"`', allow_bracket_quotes=True)
-    if not parts:
+    if not table_parts:
         msg = "Index DDL table name must not be empty"
         raise ValueError(msg)
-    if len(parts) == 1 and schema:
-        schema_parts = split_qualified_identifier(schema, quote_chars='"`', allow_bracket_quotes=True)
-        parts = (*schema_parts, *parts)
-    return ".".join(_quote_index_part(part, dialect) for part in parts)
+    full_parts = table_parts if len(table_parts) > 1 or not schema_parts else (*schema_parts, *table_parts)
+    return ".".join(_quote_index_part(part, dialect) for part in full_parts)
 
 
 def _format_index_columns(cols: Any, dialect: str, *, allow_direction: bool = True) -> str:

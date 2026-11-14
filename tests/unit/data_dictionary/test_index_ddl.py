@@ -525,3 +525,102 @@ async def test_async_without_indexes_uses_transaction_open_and_restores_on_cance
         'DROP INDEX IF EXISTS "my.schema"."idx_b"',
         'CREATE INDEX "idx_a" ON "my.schema"."my.orders" ("a")',
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("table", "meta_schema", "expected_lookup", "expected_drop", "expected_create"),
+    [
+        (
+            '"My.Schema"."My.Orders"',
+            "My.Schema",
+            ("My.Schema", "My.Orders"),
+            'DROP INDEX IF EXISTS "My.Schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "My.Schema"."My.Orders" ("cust")',
+        ),
+        (
+            "catalog.schema.orders",
+            "schema",
+            ("catalog.schema", "orders"),
+            'DROP INDEX IF EXISTS "catalog"."schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "catalog"."schema"."orders" ("cust")',
+        ),
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_without_indexes_ignores_catalog_schema_name_when_table_is_already_qualified(
+    is_async: bool,
+    table: str,
+    meta_schema: str,
+    expected_lookup: tuple[str, str],
+    expected_drop: str,
+    expected_create: str,
+) -> None:
+    """Catalog schema_name metadata does not override or re-split qualified table identifiers."""
+    executed: list[str] = []
+
+    if is_async:
+
+        class _AsyncDD:
+            async def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                assert (schema, table) == expected_lookup
+                return ({"index_name": "idx_cust", "columns": ["cust"], "schema_name": meta_schema},)
+
+            async def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _AsyncDriver:
+            dialect = "postgres"
+            data_dictionary = _AsyncDD()
+
+            async def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+        async with AsyncWithoutIndexesContext(_AsyncDriver(), table, concurrent=False):
+            pass
+    else:
+
+        class _SyncDD:
+            def get_indexes(self, _driver: Any, *, table: str, schema: str | None) -> tuple[dict[str, Any], ...]:
+                assert (schema, table) == expected_lookup
+                return ({"index_name": "idx_cust", "columns": ["cust"], "schema_name": meta_schema},)
+
+            def get_constraints(self, _driver: Any, *, table: str, schema: str | None) -> list[dict[str, Any]]:
+                return []
+
+        class _SyncDriver:
+            dialect = "postgres"
+            data_dictionary = _SyncDD()
+
+            def execute(self, sql: str) -> None:
+                executed.append(sql)
+
+        with SyncWithoutIndexesContext(_SyncDriver(), table, concurrent=False):
+            pass
+
+    assert executed == [expected_drop, expected_create]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected_drop", "expected_create"),
+    [
+        (
+            "postgres",
+            'DROP INDEX IF EXISTS "My.Schema"."idx_cust"',
+            'CREATE INDEX "idx_cust" ON "My.Schema"."orders" ("cust")',
+        ),
+        ("oracle", 'DROP INDEX "My.Schema"."idx_cust"', 'CREATE INDEX "idx_cust" ON "My.Schema"."orders" ("cust")'),
+        (
+            "mssql",
+            "DROP INDEX [idx_cust] ON [My.Schema].[orders]",
+            "CREATE INDEX [idx_cust] ON [My.Schema].[orders] ([cust])",
+        ),
+    ],
+)
+def test_index_ddl_quotes_dotted_catalog_schema_name_as_single_identifier(
+    dialect: str, expected_drop: str, expected_create: str
+) -> None:
+    """Unqualified tables keep dotted index_meta['schema_name'] values intact as one schema identifier."""
+    meta = {"index_name": "idx_cust", "columns": ["cust"], "schema_name": "My.Schema"}
+    assert build_drop_index_sql(dialect, meta, "orders") == expected_drop
+    assert build_create_index_sql(dialect, meta, "orders") == expected_create
