@@ -226,8 +226,8 @@ OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]] = {
 
 ROW_RETURNING_COMMANDS: Final[frozenset[str]] = frozenset({"EXPLAIN", "SHOW", "DESC", "DESCRIBE"})
 
-ROW_RETURNING_STATEMENT_KEYWORDS: Final[frozenset[str]] = frozenset({"TABLE"})
-"""Leading keywords of row-returning statements that sqlglot does not model."""
+ROW_RETURNING_STATEMENT_KEYWORDS: Final[frozenset[str]] = frozenset({"SELECT", "WITH", "VALUES", "TABLE"})
+"""Leading keywords of row-returning statements handled on unparsed fallback."""
 
 PLAN_TABLE_EXPLAIN_PREFIX: Final[str] = "PLAN"
 
@@ -1137,13 +1137,14 @@ class SQLProcessor:
             raise
         except ParseError as exc:
             log_with_context(logger, logging.DEBUG, "sql.compile", error_type=type(exc).__name__, status="fallback")
+            fallback_profile = OperationProfile(returns_rows=SQLProcessor._statement_text_returns_rows(sql))
             fallback = CompiledSQL(
                 compiled_sql=sql,
                 execution_parameters=parameters,
                 operation_type="COMMAND",
                 parameter_casts={},
                 parameter_profile=parameter_profile,
-                operation_profile=operation_profile,
+                operation_profile=fallback_profile,
             )
             return fallback, None
         except Exception as exc:
@@ -1304,9 +1305,8 @@ class SQLProcessor:
     def _statement_text_returns_rows(sql: str) -> bool:
         """Determine whether the leading keyword names a row-returning statement.
 
-        Covers statements sqlglot has no expression for, where the parse either fails
-        or yields an unrelated shape. ``TABLE t`` is shorthand for ``SELECT * FROM t``
-        and parses as a column aliased to ``t``.
+        Covers statements sqlglot cannot parse and shorthands such as ``TABLE t``
+        after stripping leading whitespace, SQL comments, and opening parentheses.
 
         Args:
             sql: Raw statement text.
@@ -1314,16 +1314,61 @@ class SQLProcessor:
         Returns:
             True when the statement text opens with a row-returning keyword and an operand.
         """
-        parts = sql.lstrip().split(maxsplit=1)
-        if not parts[1:]:
+        parsed = _leading_statement_keyword_and_rest(sql)
+        if parsed is None:
             return False
-
-        return parts[0].upper() in ROW_RETURNING_STATEMENT_KEYWORDS
+        keyword, remainder = parsed
+        if keyword not in ROW_RETURNING_STATEMENT_KEYWORDS:
+            return False
+        if not remainder.lstrip():
+            return False
+        if keyword == "TABLE":
+            return remainder[0].isspace()
+        return True
 
     @staticmethod
     def _make_parse_cache_key(sql: str, dialect: "str | None") -> Any:
         dialect_marker = dialect or "default"
         return (dialect_marker, sql)
+
+
+def _leading_statement_keyword_and_rest(sql: str) -> "tuple[str, str] | None":
+    """Return ``(UPPER_KEYWORD, remainder)`` after skipping leading whitespace, comments, and ``(``."""
+    pos = 0
+    length = len(sql)
+    while pos < length:
+        ch = sql[pos]
+        if ch.isspace() or ch == "(":
+            pos += 1
+            continue
+        if sql.startswith("--", pos):
+            newline = sql.find("\n", pos + 2)
+            if newline < 0:
+                return None
+            pos = newline + 1
+            continue
+        if sql.startswith("/*", pos):
+            pos += 2
+            depth = 1
+            while pos < length and depth > 0:
+                next_open = sql.find("/*", pos)
+                next_close = sql.find("*/", pos)
+                if next_close < 0:
+                    return None
+                if 0 <= next_open < next_close:
+                    depth += 1
+                    pos = next_open + 2
+                else:
+                    depth -= 1
+                    pos = next_close + 2
+            continue
+        break
+    if pos >= length or not (sql[pos].isalpha() or sql[pos] == "_"):
+        return None
+    end = pos + 1
+    while end < length and (sql[end].isalnum() or sql[end] == "_"):
+        end += 1
+    return sql[pos:end].upper(), sql[end:]
 
 
 def _describe_is_analyze(expression: "exp.Describe") -> bool:

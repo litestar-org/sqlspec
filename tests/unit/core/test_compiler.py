@@ -1379,3 +1379,29 @@ def test_expression_override_skips_reparse_on_placeholder_conversion(
         pg_sql, pg_params = pg_stmt.compile()
         assert pg_sql == "SELECT id FROM users WHERE org_id = $1"
         assert pg_params == (2,)
+
+
+@pytest.mark.parametrize(
+    ("sql", "dialect"),
+    [
+        ("SELECT (@ -5) AS d0, $1::text AS c0", "postgres"),
+        ("-- leading comment\nSELECT (@ -5) AS d0", "postgres"),
+        ("/* outer /* inner */ outer */\n((SELECT (@ -5) AS d0))", "postgres"),
+        ("WITH cte AS (SELECT (@ -5) AS d0) SELECT * FROM cte", "postgres"),
+        ("VALUES (1, (@ -5))", "postgres"),
+    ],
+)
+def test_unparseable_row_returning_statements_stay_non_read_only(sql: str, dialect: str) -> None:
+    """Unparseable row-returning SQL returns rows while failing closed on read-only checks."""
+    config = StatementConfig(dialect=dialect)
+    statement = SQL(sql, statement_config=config)
+
+    assert statement.returns_rows() is True
+    assert statement.is_read_only() is False
+    assert statement.operation_type == "COMMAND"
+
+
+def test_unparseable_keyword_without_operand_does_not_return_rows() -> None:
+    assert SQLProcessor._statement_text_returns_rows("SELECT") is False
+    assert SQLProcessor._statement_text_returns_rows("-- only a comment") is False
+    assert SQLProcessor._statement_text_returns_rows("/* unclosed") is False
