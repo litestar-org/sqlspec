@@ -3071,6 +3071,8 @@ class CommonDriverAttributesMixin:
                 expr = expr.copy()
                 expr.set("with_", None)
 
+        positional_only = not _has_named_input_parameters(original_sql)
+
         if isinstance(expr, exp.Select):
             from_clause = expr.args.get("from_")
             if from_clause is None:
@@ -3104,10 +3106,14 @@ class CommonDriverAttributesMixin:
             leading_stripped = (
                 0
                 if needs_subquery
-                else sum(_count_anonymous_placeholders(select_expr) for select_expr in expr.expressions)
+                else sum(
+                    _count_anonymous_placeholders(select_expr, count_named_as_positional=positional_only)
+                    for select_expr in expr.expressions
+                )
             )
             trailing_stripped = sum(
-                _count_anonymous_placeholders(expr.args.get(clause)) for clause in ("order", "limit", "offset", "fetch")
+                _count_anonymous_placeholders(expr.args.get(clause), count_named_as_positional=positional_only)
+                for clause in ("order", "limit", "offset", "fetch")
             )
             pagination_params = _pagination_names(original_sql, include_select_expressions=not needs_subquery)
             if needs_subquery:
@@ -3136,7 +3142,8 @@ class CommonDriverAttributesMixin:
 
         leading_stripped = 0
         trailing_stripped = sum(
-            _count_anonymous_placeholders(expr.args.get(clause)) for clause in ("order", "limit", "offset", "fetch")
+            _count_anonymous_placeholders(expr.args.get(clause), count_named_as_positional=positional_only)
+            for clause in ("order", "limit", "offset", "fetch")
         )
         pagination_params = _pagination_names(original_sql, include_select_expressions=False)
         count_source = cast("exp.Query", expr.copy())
@@ -3600,11 +3607,39 @@ def _clone_processed_state(
     )
 
 
-def _count_anonymous_placeholders(node: "exp.Expr | None") -> int:
+def _named_placeholder_name(node: "exp.Expr") -> "str | None":
+    if isinstance(node, exp.Placeholder):
+        return str(node.this) if node.this is not None else None
+    if isinstance(node, exp.Parameter):
+        inner = node.this
+        if isinstance(inner, (exp.Var, exp.Identifier)) and inner.name and not inner.name.isdigit():
+            return inner.name
+    return None
+
+
+def _numeric_parameter_ordinal(node: "exp.Expr") -> "int | None":
+    if isinstance(node, exp.Parameter):
+        inner = node.this
+        if isinstance(inner, exp.Literal) and inner.name.isdigit():
+            return int(inner.name)
+    return None
+
+
+def _is_positional_placeholder(node: "exp.Expr", *, count_named_as_positional: bool = False) -> bool:
+    if isinstance(node, exp.Placeholder):
+        return count_named_as_positional or node.this is None
+    return _numeric_parameter_ordinal(node) is not None
+
+
+def _count_anonymous_placeholders(node: "exp.Expr | None", *, count_named_as_positional: bool = False) -> int:
     """Count anonymous positional placeholders within a SQLGlot expression subtree."""
     if node is None:
         return 0
-    return sum(1 for child in node.walk() if isinstance(child, exp.Placeholder) and child.this is None)
+    count = 0
+    for child in node.walk():
+        if _is_positional_placeholder(child, count_named_as_positional=count_named_as_positional):
+            count += 1
+    return count
 
 
 def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_expressions: bool = False) -> "set[str]":
@@ -3630,8 +3665,9 @@ def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_ex
 
     for clause_node in stripped_nodes:
         for node in clause_node.walk():
-            if isinstance(node, exp.Placeholder) and node.this is not None:
-                stripped_placeholders.add(str(node.this))
+            name = _named_placeholder_name(node)
+            if name is not None:
+                stripped_placeholders.add(name)
 
     if not stripped_placeholders:
         return set()
@@ -3642,9 +3678,11 @@ def _pagination_names_in_expression(expression: "exp.Expr", *, include_select_ex
     for clause_name in ("order", "limit", "offset", "fetch"):
         retained_expr.set(clause_name, None)
 
-    retained_placeholders = {
-        str(node.this) for node in retained_expr.walk() if isinstance(node, exp.Placeholder) and node.this is not None
-    }
+    retained_placeholders: set[str] = set()
+    for node in retained_expr.walk():
+        name = _named_placeholder_name(node)
+        if name is not None:
+            retained_placeholders.add(name)
     return stripped_placeholders - retained_placeholders
 
 
@@ -3663,6 +3701,42 @@ def _has_stripped_placeholder(stmt_expr: "exp.Expr", *, include_select_expressio
     return False
 
 
+def _has_named_placeholder(stmt_expr: "exp.Expr") -> bool:
+    return any(_named_placeholder_name(node) is not None for node in stmt_expr.walk())
+
+
+def _has_named_input_parameters(original_sql: "SQL") -> bool:
+    if original_sql.named_parameters:
+        return True
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    if not isinstance(processed_state, ProcessedState) or not processed_state.input_named_parameters:
+        return False
+    return any(not name.isdigit() for name in processed_state.input_named_parameters)
+
+
+def _realign_numeric_parameters(
+    rewritten_expr: "exp.Expr", positional: "list[Any] | tuple[Any, ...]"
+) -> "tuple[Any, ...] | None":
+    numeric_nodes: list[tuple[exp.Parameter, int]] = []
+    ordinals: set[int] = set()
+    for node in rewritten_expr.walk():
+        ordinal = _numeric_parameter_ordinal(node)
+        if ordinal is not None:
+            if ordinal < 1 or ordinal > len(positional):
+                return None
+            numeric_nodes.append((cast("exp.Parameter", node), ordinal))
+            ordinals.add(ordinal)
+    if not numeric_nodes:
+        return None
+    ordered = sorted(ordinals)
+    mapping = {old_index: new_index for new_index, old_index in enumerate(ordered, start=1)}
+    for node, old_index in numeric_nodes:
+        new_index = mapping[old_index]
+        if new_index != old_index:
+            node.set("this", exp.Literal.number(new_index))
+    return tuple(positional[old_index - 1] for old_index in ordered)
+
+
 def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool = False) -> "set[str]":
     """Extract placeholder names from stripped pagination/projection clauses.
 
@@ -3673,15 +3747,13 @@ def _pagination_names(original_sql: "SQL", *, include_select_expressions: bool =
     Returns:
         Set of placeholder names found exclusively in stripped clauses.
     """
-    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
-    has_input_named = isinstance(processed_state, ProcessedState) and bool(processed_state.input_named_parameters)
+    has_input_named = _has_named_input_parameters(original_sql)
     stmt_expr = original_sql.statement_expression
     if stmt_expr is not None:
         placeholders = _pagination_names_in_expression(stmt_expr, include_select_expressions=include_select_expressions)
         if placeholders:
             return placeholders
-        has_named = any(isinstance(n, exp.Placeholder) and n.this is not None for n in stmt_expr.walk())
-        if has_named or (not original_sql.named_parameters and not has_input_named):
+        if _has_named_placeholder(stmt_expr) or not has_input_named:
             return set()
         if not _has_stripped_placeholder(stmt_expr, include_select_expressions=include_select_expressions):
             return set()
@@ -3731,7 +3803,15 @@ def _build_rewritten_sql(
 ) -> "SQL":
     """Construct a rewritten SQL object with stripped positional or named parameters."""
     positional = original_sql.positional_parameters
-    retained_positional = positional
+    processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
+    exec_params = processed_state.execution_parameters if isinstance(processed_state, ProcessedState) else None
+    numeric_source = positional or (exec_params if isinstance(exec_params, (list, tuple)) else None)
+    if numeric_source and (leading_stripped or trailing_stripped):
+        realigned = _realign_numeric_parameters(rewritten_expr, numeric_source)
+        if realigned is not None:
+            return SQL(rewritten_expr, *realigned, statement_config=original_sql.statement_config)
+
+    retained_positional: Any = positional
     if positional and (leading_stripped or trailing_stripped):
         end_idx = len(positional) - trailing_stripped if trailing_stripped else len(positional)
         retained_positional = positional[leading_stripped:end_idx]
@@ -3740,7 +3820,6 @@ def _build_rewritten_sql(
         materialized_parameters = _parameters_for_repeated_names(original_sql, pagination_params)
         if materialized_parameters is not None:
             return SQL(rewritten_expr, *materialized_parameters, statement_config=original_sql.statement_config)
-        processed_state = original_sql._processed_state  # pyright: ignore[reportPrivateUsage]
         input_names = processed_state.input_named_parameters if isinstance(processed_state, ProcessedState) else ()
         filtered_named_params: dict[str, Any] = {}
         for name in input_names:

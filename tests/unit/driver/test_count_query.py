@@ -12,7 +12,7 @@ import sqlglot
 
 from sqlspec import SQL
 from sqlspec.adapters.sqlite.driver import SqliteDriver
-from sqlspec.core import StatementConfig, get_default_config
+from sqlspec.core import ParameterStyle, ParameterStyleConfig, StatementConfig, get_default_config
 from sqlspec.driver import SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.conftest import requires_interpreted
@@ -1168,3 +1168,175 @@ def test_count_query_skips_redundant_reparse_without_pagination_clauses(
     count_sql = mock_driver._count_query(sql)
     assert "count(*)" in count_sql.sql.lower()
     assert parse_calls == []
+
+
+@pytest.mark.parametrize(
+    ("dialect", "param_config", "query_sql", "param_arg", "expected_params", "expected_token", "expect_zero_reparses"),
+    [
+        (
+            "bigquery",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_AT,
+                supported_parameter_styles={ParameterStyle.NAMED_AT},
+                default_execution_parameter_style=ParameterStyle.NAMED_AT,
+                supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
+            ),
+            "SELECT id FROM t WHERE org = @org ORDER BY id LIMIT @lim",
+            {"org": "a", "lim": 5},
+            {"org": "a"},
+            "@org",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id FROM t WHERE org = $1 ORDER BY id LIMIT $2 OFFSET $3",
+            (7, 10, 20),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "WITH c AS (SELECT id FROM t WHERE a = $1) SELECT id FROM c ORDER BY id LIMIT $2",
+            (7, 10),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t ORDER BY id LIMIT $2",
+            ("x", 10),
+            [],
+            None,
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t WHERE org = $2 ORDER BY id LIMIT $3",
+            ("x", 7, 10),
+            [7],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+            ),
+            "SELECT id, $1 AS tag FROM t WHERE org = $1 ORDER BY id LIMIT $2",
+            ("x", 10),
+            ["x"],
+            "$1",
+            True,
+        ),
+        (
+            "postgres",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NUMERIC,
+                supported_parameter_styles={ParameterStyle.NUMERIC, ParameterStyle.NAMED_COLON},
+                default_execution_parameter_style=ParameterStyle.NUMERIC,
+                supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+                preserve_parameter_format=True,
+            ),
+            "SELECT id, :tag AS tag FROM t WHERE org = :org ORDER BY id LIMIT :lim",
+            {"tag": "x", "org": "a", "lim": 5},
+            ["a"],
+            "$1",
+            False,
+        ),
+        (
+            "oracle",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.QMARK,
+                supported_parameter_styles={ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.POSITIONAL_COLON,
+                supported_execution_parameter_styles={ParameterStyle.POSITIONAL_COLON},
+            ),
+            "SELECT id FROM t WHERE org = ? ORDER BY id OFFSET ? ROWS",
+            (7, 10),
+            [7],
+            ":1",
+            True,
+        ),
+        (
+            "oracle",
+            ParameterStyleConfig(
+                default_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC, ParameterStyle.QMARK},
+                default_execution_parameter_style=ParameterStyle.NAMED_COLON,
+                supported_execution_parameter_styles={ParameterStyle.NAMED_COLON, ParameterStyle.POSITIONAL_COLON},
+                preserve_parameter_format=True,
+            ),
+            "SELECT id FROM t WHERE org = :1 ORDER BY id OFFSET :2 ROWS",
+            (7, 10),
+            {"param_0": 7},
+            ":param_0",
+            True,
+        ),
+    ],
+)
+def test_count_query_handles_parameter_nodes_for_named_at_numeric_and_colon(
+    mock_driver: "MockSyncDriver",
+    monkeypatch: pytest.MonkeyPatch,
+    dialect: str,
+    param_config: ParameterStyleConfig,
+    query_sql: str,
+    param_arg: Any,
+    expected_params: Any,
+    expected_token: str | None,
+    expect_zero_reparses: bool,
+) -> None:
+    """_count_query preserves retained parameters and renumbers numeric ordinals across parameter styles."""
+    cfg = StatementConfig(dialect=dialect, parameter_config=param_config)
+    mock_driver.statement_config = cfg
+    sql = (
+        mock_driver.prepare_statement(SQL(query_sql, statement_config=cfg, **param_arg), statement_config=cfg)
+        if isinstance(param_arg, dict)
+        else mock_driver.prepare_statement(SQL(query_sql, param_arg, statement_config=cfg), statement_config=cfg)
+    )
+    sql.compile()
+
+    parse_calls: list[str] = []
+    orig_parse_one = sqlglot.parse_one
+
+    def spy_parse_one(sql_text: str, *args: Any, **kwargs: Any) -> Any:
+        parse_calls.append(sql_text)
+        return orig_parse_one(sql_text, *args, **kwargs)
+
+    monkeypatch.setattr("sqlglot.parse_one", spy_parse_one)
+    count_sql = mock_driver._count_query(sql)
+    compiled_sql, compiled_params = count_sql.compile()
+    assert "count(*)" in compiled_sql.lower()
+    if expected_token is not None:
+        assert expected_token in compiled_sql
+    assert compiled_params == expected_params
+    if expect_zero_reparses:
+        assert parse_calls == []
