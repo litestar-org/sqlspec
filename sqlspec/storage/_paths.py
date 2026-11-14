@@ -204,7 +204,7 @@ def resolve_storage_path(
 
     if path_str.startswith(FILE_SCHEME_PREFIX):
         decoded_file_path = parse_file_uri_path(path_str)
-        if strip_file_scheme or bool(base_path) or protocol in _LOCAL_PROTOCOLS:
+        if strip_file_scheme or bool(base_path):
             path_str = decoded_file_path
 
     reject_parent_traversal(path_str)
