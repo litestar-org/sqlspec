@@ -636,15 +636,19 @@ async def test_asyncmy_append_event_and_update_state_rejects_mismatched_record(
 
 
 @pytest.mark.parametrize(
-    ("rowcount", "expect_succeed"),
-    [pytest.param(1, True, id="session-updated"), pytest.param(0, False, id="session-missing")],
+    ("rowcount", "session_exists", "expect_succeed"),
+    [
+        pytest.param(1, True, True, id="session-updated"),
+        pytest.param(0, True, True, id="same-microsecond-unchanged"),
+        pytest.param(0, False, False, id="session-missing"),
+    ],
 )
 async def test_asyncmy_append_event_and_update_state_updates_session_before_insert(
-    rowcount: int, expect_succeed: bool
+    rowcount: int, session_exists: bool, expect_succeed: bool
 ) -> None:
-    """Session UPDATE runs before event INSERT; missing session raises ValueError without inserting."""
+    """Session UPDATE runs before SELECT and event INSERT; missing session raises ValueError without inserting."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    session_row = ("sess-1", "app-a", "user-1", '{"k": 1}', now, now) if expect_succeed else None
+    session_row = ("sess-1", "app-a", "user-1", '{"k": 1}', now, now) if session_exists else None
     config, conn, cursor = _make_asyncmy_scoping_mocks(rowcount=rowcount, session_row=session_row)
     store = AsyncmyADKStore(config)
     event = StoredEvent(
@@ -669,12 +673,12 @@ async def test_asyncmy_append_event_and_update_state_updates_session_before_inse
         with pytest.raises(ValueError, match="not found"):
             await store.append_event_and_update_state(event, "app-a", "user-1", "sess-1", {"k": 1})
         executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
-        assert executed == [
-            (
-                "UPDATE adk_session SET state = %s, update_time = UTC_TIMESTAMP(6) "
-                "WHERE app_name = %s AND user_id = %s AND id = %s"
-            )
-        ]
+        assert len(executed) == 2
+        assert executed[0] == (
+            "UPDATE adk_session SET state = %s, update_time = UTC_TIMESTAMP(6) "
+            "WHERE app_name = %s AND user_id = %s AND id = %s"
+        )
+        assert executed[1].startswith("SELECT id, app_name, user_id, state, create_time, update_time FROM adk_session")
         conn.rollback.assert_awaited_once()
         conn.commit.assert_not_awaited()
 

@@ -43,12 +43,12 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
 _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
-    "            id VARCHAR(128) PRIMARY KEY,\n"
-    "            session_id VARCHAR(128) NOT NULL,\n"
-    "            app_name VARCHAR(128) NOT NULL,\n"
-    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,\n"
+    "            session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
     "            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
-    "            event_id VARCHAR(128) NOT NULL,\n"
+    "            event_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            content_json JSON NOT NULL,\n"
@@ -65,9 +65,9 @@ _ADK_MYSQL_SESSIONS_DDL_TEMPLATE = "\n            {0},"
 _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
-    "            id VARCHAR(128) PRIMARY KEY,\n"
-    "            app_name VARCHAR(128) NOT NULL,\n"
-    "            user_id VARCHAR(128) NOT NULL,{1}\n"
+    "            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,{1}\n"
     "            state JSON NOT NULL,\n"
     "            create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
@@ -79,10 +79,10 @@ _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2 = (
 _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
-    "            id VARCHAR(128) PRIMARY KEY,\n"
-    "            app_name VARCHAR(128) NOT NULL,\n"
-    "            user_id VARCHAR(128) NOT NULL,\n"
-    "            session_id VARCHAR(128) NOT NULL,\n"
+    "            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
     "            invocation_id VARCHAR(256) NOT NULL,\n"
     "            timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),\n"
     "            event_data JSON NOT NULL{1},\n"
@@ -95,7 +95,7 @@ _ADK_MYSQL_EVENTS_DDL_TEMPLATE_2 = (
 _ADK_MYSQL_APP_STATE_DDL_TEMPLATE = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
-    "            app_name VARCHAR(128) PRIMARY KEY,\n"
+    "            app_name VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,\n"
     "            state JSON NOT NULL,\n"
     "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)\n"
     "        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{1}\n"
@@ -105,8 +105,8 @@ _ADK_MYSQL_APP_STATE_DDL_TEMPLATE = (
 _ADK_MYSQL_USER_STATE_DDL_TEMPLATE = (
     "\n"
     "        CREATE TABLE IF NOT EXISTS {0} (\n"
-    "            app_name VARCHAR(128) NOT NULL,\n"
-    "            user_id VARCHAR(128) NOT NULL,\n"
+    "            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
+    "            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,\n"
     "            state JSON NOT NULL,\n"
     "            update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n"
     "            PRIMARY KEY (app_name, user_id)\n"
@@ -314,7 +314,12 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     rows = await cursor.fetchall()
                 finally:
                     await cursor.close()
-            return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
+            records = [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
+            return [
+                record
+                for record in records
+                if record["app_name"] == app_name and (user_id is None or record["user_id"] == user_id)
+            ]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -406,8 +411,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             cursor = await conn.cursor()
             try:
                 await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
-                if isinstance(cursor.rowcount, int) and cursor.rowcount == 0:
-                    _raise_session_not_found(session_id)
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
                 if row is None:
@@ -499,7 +502,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         return await _async_state(self, self._app_state_table, "app_name = %s", (app_name,))
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
-        return await _async_state(self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
+        return await _async_user_state(self, app_name, user_id)
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         await _async_execute_commit(
@@ -739,7 +742,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
-            return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
+            records = [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
+            return [
+                record
+                for record in records
+                if record["app_name"] == app_name and (user_id is None or record["user_id"] == user_id)
+            ]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -835,8 +843,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             cursor = conn.cursor()
             try:
                 cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
-                if isinstance(cursor.rowcount, int) and cursor.rowcount == 0:
-                    _raise_session_not_found(session_id)
                 cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 if row is None:
@@ -935,7 +941,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        return _sync_state(self, self._user_state_table, "app_name = %s AND user_id = %s", (app_name, user_id))
+        return _sync_user_state(self, app_name, user_id)
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
@@ -1183,6 +1189,8 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         records: list[StoredMemory] = []
         for row in rows:
             rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
+            if not _memory_record_matches_scope(rec, app_name, user_id, scope_filter):
+                continue
             rec["content_json"] = _json_dict(rec.get("content_json"), deserializer=self._json_deserializer)
             metadata_val = rec.get("metadata_json")
             rec["metadata_json"] = (
@@ -1440,6 +1448,8 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         records: list[StoredMemory] = []
         for row in rows:
             rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
+            if not _memory_record_matches_scope(rec, app_name, user_id, scope_filter):
+                continue
             rec["content_json"] = _json_dict(rec.get("content_json"), deserializer=self._json_deserializer)
             metadata_val = rec.get("metadata_json")
             rec["metadata_json"] = (
@@ -1689,6 +1699,26 @@ async def _async_state(
         raise
 
 
+async def _async_user_state(store: MysqlConnectorAsyncADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    sql = (
+        f"SELECT app_name, user_id, state FROM {_mysql_table_ref(store._user_state_table)} "
+        "WHERE app_name = %s AND user_id = %s LIMIT 1"
+    )
+    try:
+        async with store._config.provide_connection() as conn:
+            cursor = await conn.cursor()
+            try:
+                await cursor.execute(sql, (app_name, user_id))
+                row = await cursor.fetchone()
+            finally:
+                await cursor.close()
+        return _user_state_from_row(row, app_name, user_id, deserializer=store._json_deserializer)
+    except MysqlConnectorError as exc:
+        if _is_mysql_table_missing(exc):
+            return None
+        raise
+
+
 async def _async_execute_commit(store: MysqlConnectorAsyncADKStore, sql: str, params: "tuple[Any, ...]") -> None:
     async with store._config.provide_connection() as conn:
         cursor = await conn.cursor()
@@ -1743,6 +1773,26 @@ def _sync_state(
             finally:
                 cursor.close()
         return _json_dict(row[0], deserializer=store._json_deserializer) if row is not None else None
+    except MysqlConnectorError as exc:
+        if _is_mysql_table_missing(exc):
+            return None
+        raise
+
+
+def _sync_user_state(store: MysqlConnectorSyncADKStore, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    sql = (
+        f"SELECT app_name, user_id, state FROM {_mysql_table_ref(store._user_state_table)} "
+        "WHERE app_name = %s AND user_id = %s LIMIT 1"
+    )
+    try:
+        with store._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, (app_name, user_id))
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+        return _user_state_from_row(row, app_name, user_id, deserializer=store._json_deserializer)
     except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
@@ -1919,6 +1969,33 @@ def _build_mysql_scope_where(
     if scope_filter == "user":
         return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
     return "app_name = %s AND scope = 'app'", (app_name,)
+
+
+def _user_state_from_row(
+    row: Any, app_name: str, user_id: str, *, deserializer: Callable[[Any], Any] = from_json
+) -> "dict[str, Any] | None":
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        if row.get("app_name") != app_name or row.get("user_id") != user_id:
+            return None
+        return _json_dict(row["state"], deserializer=deserializer)
+    if row[0] != app_name or row[1] != user_id:
+        return None
+    return _json_dict(row[2], deserializer=deserializer)
+
+
+def _memory_record_matches_scope(
+    rec: Mapping[str, Any], app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> bool:
+    if rec.get("app_name") != app_name:
+        return False
+    scope = rec.get("scope")
+    if scope_filter == "app":
+        return scope == "app"
+    if scope_filter == "user":
+        return scope == "user" and rec.get("user_id") == user_id
+    return scope == "app" or (scope == "user" and rec.get("user_id") == user_id)
 
 
 def _session_list_query(

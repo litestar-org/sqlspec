@@ -205,7 +205,12 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
-                return [_session_record_from_row(row, self._json_deserializer) for row in rows]
+                records = [_session_record_from_row(row, self._json_deserializer) for row in rows]
+                return [
+                    record
+                    for record in records
+                    if record["app_name"] == app_name and (user_id is None or record["user_id"] == user_id)
+                ]
         except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -296,8 +301,6 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         ):
             try:
                 await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
-                if isinstance(cursor.rowcount, int) and cursor.rowcount == 0:
-                    _raise_session_not_found(session_id)
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
                 if row is None:
@@ -456,7 +459,10 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 
     async def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        sql = f"SELECT state FROM {_mysql_table_ref(self._user_state_table)} WHERE app_name = %s AND user_id = %s"
+        sql = (
+            f"SELECT app_name, user_id, state FROM {_mysql_table_ref(self._user_state_table)} "
+            "WHERE app_name = %s AND user_id = %s"
+        )
 
         try:
             async with (
@@ -465,7 +471,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             ):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
-                return _json_dict(_row_first_value(row, "state"), self._json_deserializer) if row is not None else None
+                return _user_state_from_row(row, app_name, user_id, deserializer=self._json_deserializer)
         except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
@@ -733,6 +739,8 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
         for row in rows:
             row_dict = dict(row) if isinstance(row, Mapping) else dict(zip(columns, row, strict=False))
             rec = cast("StoredMemory", row_dict)
+            if not _memory_record_matches_scope(rec, app_name, user_id, scope_filter):
+                continue
             rec["content_json"] = _json_dict(rec.get("content_json"), self._json_deserializer)
             metadata_val = rec.get("metadata_json")
             rec["metadata_json"] = (
@@ -824,12 +832,12 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
         return f"""
         CREATE TABLE IF NOT EXISTS {_mysql_table_ref(self._memory_table)} (
-            id VARCHAR(128) PRIMARY KEY,
-            session_id VARCHAR(128) NOT NULL,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
+            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,
+            session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
-            event_id VARCHAR(128) NOT NULL,
+            event_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             content_json JSON NOT NULL,
@@ -1071,9 +1079,9 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
 
     return f"""
         CREATE TABLE IF NOT EXISTS {_mysql_table_ref(session_table)} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,{owner_id_line}
+            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,
+            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,{owner_id_line}
             state JSON NOT NULL,
             create_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -1098,10 +1106,10 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
 
     return f"""
         CREATE TABLE IF NOT EXISTS {_mysql_table_ref(events_table)} (
-            id VARCHAR(128) PRIMARY KEY,
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
-            session_id VARCHAR(128) NOT NULL,
+            id VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,
+            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             invocation_id VARCHAR(256) NOT NULL,
             timestamp TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             event_data JSON NOT NULL{generated_columns},
@@ -1114,7 +1122,7 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
 def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS {_mysql_table_ref(app_state_table)} (
-            app_name VARCHAR(128) PRIMARY KEY,
+            app_name VARCHAR(128) COLLATE utf8mb4_bin PRIMARY KEY,
             state JSON NOT NULL,
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{table_options}
@@ -1124,8 +1132,8 @@ def _mysql_app_state_ddl(app_state_table: str, table_options: str = "") -> str:
 def _mysql_user_state_ddl(user_state_table: str, table_options: str = "") -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS {_mysql_table_ref(user_state_table)} (
-            app_name VARCHAR(128) NOT NULL,
-            user_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
             state JSON NOT NULL,
             update_time TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
             PRIMARY KEY (app_name, user_id)
@@ -1179,6 +1187,33 @@ def _build_mysql_scope_where(
     if scope_filter == "user":
         return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
     return "app_name = %s AND scope = 'app'", (app_name,)
+
+
+def _user_state_from_row(
+    row: Any, app_name: str, user_id: str, deserializer: "Callable[[Any], Any]" = from_json
+) -> "dict[str, Any] | None":
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        if row.get("app_name") != app_name or row.get("user_id") != user_id:
+            return None
+        return _json_dict(row["state"], deserializer=deserializer)
+    if row[0] != app_name or row[1] != user_id:
+        return None
+    return _json_dict(row[2], deserializer=deserializer)
+
+
+def _memory_record_matches_scope(
+    rec: Mapping[str, Any], app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
+) -> bool:
+    if rec.get("app_name") != app_name:
+        return False
+    scope = rec.get("scope")
+    if scope_filter == "app":
+        return scope == "app"
+    if scope_filter == "user":
+        return scope == "user" and rec.get("user_id") == user_id
+    return scope == "app" or (scope == "user" and rec.get("user_id") == user_id)
 
 
 def _session_list_query(
