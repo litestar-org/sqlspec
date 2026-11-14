@@ -44,6 +44,7 @@ from sqlspec.adapters.oracledb.core import (
     apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
     build_connection_config,
+    capture_oracle_transaction_priority_baseline,
     clear_oracle_otel_trace_context,
     create_mapped_exception,
     default_statement_config,
@@ -56,6 +57,7 @@ from sqlspec.adapters.oracledb.core import (
     forget_oracle_session_state,
     has_callable_alter_session_fields,
     is_oracle_standby_failover_error,
+    oracle_transaction_priority_matches,
     release_extracted_wallet_dir,
     retain_extracted_wallet_dir,
     rewrite_oracle_dsn_service_name,
@@ -392,7 +394,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
         if self._tenant_lease is not None:
             try:
                 return cast("OracleSyncConnection", self._tenant_lease.acquire())
-            except oracledb.DatabaseError as exc:
+            except oracledb.Error as exc:
                 raise create_mapped_exception(exc) from exc
         pool = self._config.provide_pool()
         hook = self._config.driver_features.get("session_context_hook")
@@ -400,7 +402,7 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             conn = pool.acquire(
                 **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
             )
-        except oracledb.DatabaseError as exc:
+        except oracledb.Error as exc:
             raise create_mapped_exception(exc) from exc
         self._conn = conn
         try:
@@ -435,7 +437,9 @@ class OracleSyncConnectionContext(SyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 execute_session_release_sync(conn, hook)
-            if self._priority_baseline is not None and conn.transaction_priority != self._priority_baseline:
+            if self._priority_baseline is not None and not oracle_transaction_priority_matches(
+                conn, self._priority_baseline
+            ):
                 conn.rollback()
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
         except BaseException as exc:
@@ -997,7 +1001,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
         if self._tenant_lease is not None:
             try:
                 return await self._tenant_lease.acquire()
-            except oracledb.DatabaseError as exc:
+            except oracledb.Error as exc:
                 raise create_mapped_exception(exc) from exc
         pool = await self._config.provide_pool()
         self._pool = pool
@@ -1006,7 +1010,7 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             conn = await pool.acquire(
                 **self._config._build_pool_acquire_kwargs(self._acquire_options, pool=pool, session_hook=hook)
             )
-        except oracledb.DatabaseError as exc:
+        except oracledb.Error as exc:
             raise create_mapped_exception(exc) from exc
         self._connection = conn
         try:
@@ -1041,7 +1045,9 @@ class OracleAsyncConnectionContext(AsyncPoolConnectionContext):
             hook = self._config.driver_features.get("session_context_hook")
             if hook is not None:
                 await execute_session_release_async(conn, hook)
-            if self._priority_baseline is not None and conn.transaction_priority != self._priority_baseline:
+            if self._priority_baseline is not None and not oracle_transaction_priority_matches(
+                conn, self._priority_baseline
+            ):
                 await conn.rollback()
                 apply_oracle_transaction_priority(conn, self._priority_baseline)
         except BaseException as exc:
@@ -1756,15 +1762,9 @@ def _oracle_checkout_state(
         skip = desired is not None and not has_callable_alter_session_fields(hook) and connection.tag == desired
     elif config._owns_pool_session_callback and not has_callable_alter_session_fields(hook):
         skip = True
-    baseline = None
-    priority_type = getattr(oracledb, "TransactionPriority", None)
-    if priority_type is not None:
-        baseline = config.connection_config.get("transaction_priority")
-        if baseline is None:
-            with contextlib.suppress(oracledb.NotSupportedError):
-                candidate = getattr(connection, "transaction_priority", None)
-                if isinstance(candidate, priority_type):
-                    baseline = candidate
+    baseline = capture_oracle_transaction_priority_baseline(
+        connection, configured_priority=config.connection_config.get("transaction_priority")
+    )
     requested = options.transaction_priority
     if requested is None:
         requested = config.connection_config.get("transaction_priority")

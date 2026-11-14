@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
+from oracledb import TransactionPriority
 
 import sqlspec.adapters.oracledb._typing as oracle_typing
 from sqlspec.adapters.oracledb import config, parse_sqlnet_ora, parse_tnsnames_ora
@@ -25,16 +26,20 @@ from sqlspec.adapters.oracledb.core import (
     OracleEndpoint,
     OracleTopologyConfig,
     apply_driver_features,
+    apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
     build_duality_etag_update_sql,
     build_insert_statement,
     build_tns_description,
     build_truncate_statement,
+    capture_oracle_transaction_priority_baseline,
     extract_duality_etag,
     extract_duality_view_etag,
     extract_oracle_wallet_zip,
     format_oracle_table_identifier,
     inject_duality_view_etag,
+    normalize_oracle_transaction_priority,
+    oracle_transaction_priority_matches,
     sanitize_oracle_text_query,
 )
 from sqlspec.core import StatementConfig
@@ -827,3 +832,62 @@ def test_build_insert_statement_rejects_control_column_names(bad_col: str) -> No
     """Empty or control-bearing column names in Oracle INSERT statements raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
         build_insert_statement("users", [bad_col])
+
+
+def test_normalize_and_apply_default_transaction_priority_with_none_state() -> None:
+    """Default TransactionPriority normalizes cleanly and treats None as equivalent to DEFAULT."""
+    assert normalize_oracle_transaction_priority(TransactionPriority.DEFAULT) is TransactionPriority.DEFAULT
+
+    class UntouchedConnection:
+        def __init__(self) -> None:
+            self.writes: list[object] = []
+            self._priority: object = None
+
+        @property
+        def transaction_priority(self) -> object:
+            return self._priority
+
+        @transaction_priority.setter
+        def transaction_priority(self, value: object) -> None:
+            self.writes.append(value)
+            self._priority = value
+
+    conn = UntouchedConnection()
+    baseline = capture_oracle_transaction_priority_baseline(conn)
+    assert baseline is TransactionPriority.DEFAULT
+    assert oracle_transaction_priority_matches(conn, baseline) is True
+
+    apply_oracle_transaction_priority(conn, TransactionPriority.DEFAULT)
+    assert conn.writes == []
+
+    apply_oracle_transaction_priority(conn, "HIGH")
+    assert conn.writes == [TransactionPriority.HIGH]
+    assert oracle_transaction_priority_matches(conn, baseline) is False
+
+
+@pytest.mark.parametrize(
+    ("valid_kwargs", "expected_tokens"),
+    [
+        ({"endpoints": [OracleEndpoint("primary-host")]}, ("primary-host",)),
+        ({"address_lists": [[OracleEndpoint("site-a")], [OracleEndpoint("site-b")]]}, ("site-a", "site-b")),
+    ],
+    ids=["endpoints", "address_lists"],
+)
+def test_build_tns_description_validates_endpoints_and_address_lists(
+    valid_kwargs: dict[str, Any], expected_tokens: tuple[str, ...]
+) -> None:
+    """TNS description rejects invalid hosts in both endpoints and address_lists."""
+    valid = OracleTopologyConfig(service_name="APP_RW", **valid_kwargs)
+    tns = build_tns_description(valid)
+    assert "APP_RW" in tns
+    assert all(token in tns for token in expected_tokens)
+
+    mutated = OracleEndpoint("safe-host")
+    mutated.host = "bad)host"
+    invalid = (
+        OracleTopologyConfig(service_name="APP_RW", endpoints=[mutated])
+        if "endpoints" in valid_kwargs
+        else OracleTopologyConfig(service_name="APP_RW", address_lists=[[mutated]])
+    )
+    with pytest.raises(ImproperConfigurationError, match="host"):
+        build_tns_description(invalid)

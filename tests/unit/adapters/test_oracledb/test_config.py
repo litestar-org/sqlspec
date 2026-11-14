@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
-from oracledb import AuthMode, PoolGetMode, Purity
+from oracledb import AuthMode, InterfaceError, PoolGetMode, Purity, TransactionPriority
 from oracledb import Error as NativeOracleError
 
 from sqlspec.adapters.oracledb import (
@@ -40,7 +40,7 @@ from sqlspec.adapters.oracledb.config import (
     OracleSyncConfig,
 )
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.tenant import TenantContext
 
 
@@ -2223,3 +2223,83 @@ async def test_oracle_release_drops_connection_when_hook_or_rollback_fails(
 
     assert pool.drop.call_count == 1
     assert pool.release.call_count == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_oracle_none_initial_transaction_priority_restores_default_and_skips_spurious_rollback(
+    async_mode: bool,
+) -> None:
+    """Pooled borrows restore DEFAULT when initial priority was None and avoid spurious rollbacks for string defaults."""
+
+    class NativeConnection:
+        def __init__(self) -> None:
+            self.thin = True
+            self.autocommit = True
+            self.transaction_priority: object = None
+            self.rollback = AsyncMock() if async_mode else MagicMock()
+
+    conn_override = NativeConnection()
+    pool_override = MagicMock()
+    pool_override.thin = True
+    if async_mode:
+        pool_override.acquire = AsyncMock(return_value=conn_override)
+        pool_override.release = AsyncMock()
+        pool_override.drop = AsyncMock()
+        config_override = OracleAsyncConfig(connection_instance=pool_override)
+        async with config_override.provide_connection(transaction_priority="HIGH") as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+    else:
+        pool_override.acquire.return_value = conn_override
+        config_override = OracleSyncConfig(connection_instance=pool_override)
+        with config_override.provide_connection(transaction_priority="HIGH") as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+
+    conn_override.rollback.assert_called_once_with()
+    assert conn_override.transaction_priority == TransactionPriority.DEFAULT
+    pool_override.release.assert_called_once_with(conn_override)
+
+    conn_baseline = NativeConnection()
+    pool_baseline = MagicMock()
+    pool_baseline.thin = True
+    if async_mode:
+        pool_baseline.acquire = AsyncMock(return_value=conn_baseline)
+        pool_baseline.release = AsyncMock()
+        pool_baseline.drop = AsyncMock()
+        config_baseline = OracleAsyncConfig(
+            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        )
+        async with config_baseline.provide_connection() as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+    else:
+        pool_baseline.acquire.return_value = conn_baseline
+        config_baseline = OracleSyncConfig(
+            connection_instance=pool_baseline, connection_config={"transaction_priority": "HIGH"}
+        )
+        with config_baseline.provide_connection() as acquired:
+            assert acquired.transaction_priority == TransactionPriority.HIGH
+
+    conn_baseline.rollback.assert_not_called()
+    assert conn_baseline.transaction_priority == TransactionPriority.HIGH
+    pool_baseline.release.assert_called_once_with(conn_baseline)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_oracle_pool_acquire_maps_interface_error(async_mode: bool) -> None:
+    """Pool acquire InterfaceError failures map to DatabaseConnectionError for replica failover."""
+    native = InterfaceError("DPY-4011: the database or network closed the connection")
+    pool = MagicMock()
+    if async_mode:
+        pool.acquire = AsyncMock(side_effect=native)
+        config_async = OracleAsyncConfig(connection_instance=pool)
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            async with config_async.provide_connection():
+                pass
+    else:
+        pool.acquire.side_effect = native
+        config_sync = OracleSyncConfig(connection_instance=pool)
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            with config_sync.provide_connection():
+                pass
+    assert exc_info.value.__cause__ is native

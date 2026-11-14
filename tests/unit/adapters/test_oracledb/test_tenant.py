@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
@@ -17,7 +18,7 @@ from sqlspec.adapters.oracledb.tenant import (
     compose_tenant_session_hook,
     tenant_client_identifier,
 )
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, TenantCleanupError, TenantContextError
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
@@ -756,3 +757,73 @@ async def test_matching_thick_tenant_tag_keeps_dynamic_session_settings(mode: st
     assert len(alters) == 2
     assert "UTC" in alters[0]
     assert "+01:00" in alters[1]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("override_via_acquire", [True, False], ids=["acquire_option", "mid_lease_mutation"])
+async def test_tenant_lease_restores_none_initial_transaction_priority(mode: str, override_via_acquire: bool) -> None:
+    """Tenant leases restore DEFAULT when initial transaction_priority was None."""
+    connection = _connection(mode)
+    connection.transaction_priority = None
+    connection.rollback = (AsyncMock if mode == "async" else MagicMock)()
+    pool = SimpleNamespace(
+        acquire=(AsyncMock if mode == "async" else MagicMock)(return_value=connection),
+        release=(AsyncMock if mode == "async" else MagicMock)(),
+        drop=(AsyncMock if mode == "async" else MagicMock)(),
+    )
+    cfg_cls: Any = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cfg_cls(driver_features={"tenant_strategy": "identifier"})
+    config.connection_instance = pool
+    acquire_kwargs = {"transaction_priority": "HIGH"} if override_via_acquire else {}
+
+    with TenantContext.bind(TenantContextPayload("tenant-a")):
+        if mode == "sync":
+            with config.provide_connection(**acquire_kwargs) as acquired:
+                if not override_via_acquire:
+                    acquired.transaction_priority = oracledb.TransactionPriority.HIGH
+                assert acquired.transaction_priority == oracledb.TransactionPriority.HIGH
+        else:
+            async with config.provide_connection(**acquire_kwargs) as acquired:
+                if not override_via_acquire:
+                    acquired.transaction_priority = oracledb.TransactionPriority.HIGH
+                assert acquired.transaction_priority == oracledb.TransactionPriority.HIGH
+
+    assert connection.transaction_priority == oracledb.TransactionPriority.DEFAULT
+    pool.release.assert_called_once_with(connection)
+    pool.drop.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_tenant_lease_invalidates_connection_when_priority_rejected(mode: str) -> None:
+    """Tenant lease invalidates and drops a connection when setting transaction_priority fails."""
+    connection = _connection(mode)
+
+    class UnsupportedPriorityConnection(SimpleNamespace):
+        @property
+        def transaction_priority(self) -> Any:
+            raise oracledb.NotSupportedError("DPY-3043: unsupported")
+
+    bad_connection = UnsupportedPriorityConnection(**vars(connection))
+    bad_connection.rollback = (AsyncMock if mode == "async" else MagicMock)()
+    pool = SimpleNamespace(
+        acquire=(AsyncMock if mode == "async" else MagicMock)(return_value=bad_connection),
+        release=(AsyncMock if mode == "async" else MagicMock)(),
+        drop=(AsyncMock if mode == "async" else MagicMock)(),
+    )
+    cfg_cls: Any = OracleSyncConfig if mode == "sync" else OracleAsyncConfig
+    config = cfg_cls(driver_features={"tenant_strategy": "identifier"})
+    config.connection_instance = pool
+
+    with TenantContext.bind(TenantContextPayload("tenant-a")):
+        with pytest.raises(SQLSpecError):
+            if mode == "sync":
+                with config.provide_connection(transaction_priority="HIGH"):
+                    pass
+            else:
+                async with config.provide_connection(transaction_priority="HIGH"):
+                    pass
+
+    pool.drop.assert_called_once_with(bad_connection)
+    pool.release.assert_not_called()

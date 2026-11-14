@@ -13,6 +13,7 @@ from sqlspec.adapters.oracledb.core import (
     _validate_oracle_identifier,
     apply_end_user_security_checkout,
     apply_oracle_transaction_priority,
+    capture_oracle_transaction_priority_baseline,
     clear_end_user_security_release,
     clear_oracle_otel_trace_context,
     execute_session_checkout_async,
@@ -22,6 +23,7 @@ from sqlspec.adapters.oracledb.core import (
     extract_pipeline_single_row,
     forget_oracle_session_state,
     has_callable_alter_session_fields,
+    oracle_transaction_priority_matches,
     prepare_session_checkout_pipeline,
     prepare_session_release_pipeline,
     synthesize_session_state_tag,
@@ -69,26 +71,6 @@ _TENANT_STATE_QUERY: Final = (
 OracleShardResolver: TypeAlias = Callable[[TenantContextPayload], tuple[Sequence[Any] | None, Sequence[Any] | None]]
 OracleDeepSecIdentityProvider: TypeAlias = Literal["database", "oci", "entra", "obo"]
 ORACLE_DEEPSEC_IDENTITY_PROVIDERS: Final[frozenset[str]] = frozenset({"database", "oci", "entra", "obo"})
-
-
-def _validate_variable_keys(keys: Sequence[str]) -> tuple[str, ...]:
-    if isinstance(keys, (str, bytes)):
-        msg = "Oracle tenant variable_keys must be a sequence of identifiers"
-        raise ImproperConfigurationError(msg)
-    for key in keys:
-        _validate_oracle_identifier(key, "variable key")
-    return tuple(keys)
-
-
-def _tenant_variables(payload: TenantContextPayload, keys: Sequence[str], *, secrets: bool = False) -> dict[str, str]:
-    permitted = set(keys)
-    if secrets:
-        permitted.update({"end_user_token", "end_user_key"})
-    undeclared = set(payload.variables) - permitted
-    if undeclared:
-        msg = f"Undeclared Oracle tenant variables: {', '.join(sorted(undeclared))}"
-        raise TenantContextError(msg)
-    return {key: str(payload.variables[key]) for key in keys if key in payload.variables}
 
 
 def validate_oracle_tenant_shard_features(driver_features: Mapping[str, Any]) -> None:
@@ -148,13 +130,6 @@ def resolve_tenant_shard_keys(
         purity=options.purity,
         transaction_priority=options.transaction_priority,
     )
-
-
-def _skip_tenant_alter(connection: Any, hook: OracleSessionContextConfig) -> bool:
-    if getattr(connection, "thin", None) is not False or has_callable_alter_session_fields(hook):
-        return False
-    tag = synthesize_session_state_tag(hook)
-    return tag is not None and connection.tag == tag
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -227,22 +202,6 @@ class OracleAsyncClientContextStrategy:
         with TenantContext.bind(state.payload):
             if self.source_hook is not None:
                 await execute_session_release_async(connection, self.source_hook)
-
-
-def _deepsec_tenant_config(strategy: Any, payload: TenantContextPayload) -> OracleEndUserSecurityConfig:
-    variables = _tenant_variables(payload, strategy._variable_keys, secrets=True)
-    if strategy._tenant_attribute is not None:
-        variables[strategy._tenant_attribute] = payload.tenant_id
-    identity: Any = payload.variables.get("end_user_token")
-    if strategy._identity_provider in {"oci", "entra", "obo"} and not identity:
-        msg = "Oracle token identity providers require the end_user_token tenant variable"
-        raise TenantContextError(msg)
-    if identity is None:
-        identity = (payload.tenant_id, payload.variables.get("end_user_key"))
-    roles = strategy._data_roles(payload) if callable(strategy._data_roles) else strategy._data_roles
-    return OracleEndUserSecurityConfig(
-        strategy._database_access_token, end_user_identity=identity, data_roles=roles, attributes=variables
-    )
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -624,16 +583,19 @@ class OracleSyncTenantLease(SyncTenantLease):
         )
         connection = self._pool.acquire(**kwargs)
         self._release_tag = kwargs.get("tag") if getattr(self._pool, "thin", None) is False else None
+        configured_priority = self._config.connection_config.get("transaction_priority")
         priority = options.transaction_priority if options is not None else None
         if priority is None:
-            priority = self._config.connection_config.get("transaction_priority")
-        if priority is not None:
-            self._priority_baseline = getattr(connection, "transaction_priority", None)
-            try:
+            priority = configured_priority
+        try:
+            self._priority_baseline = capture_oracle_transaction_priority_baseline(
+                connection, configured_priority=configured_priority
+            )
+            if priority is not None:
                 apply_oracle_transaction_priority(connection, priority)
-            except BaseException:
-                self._invalidate(connection)
-                raise
+        except BaseException:
+            self._invalidate(connection)
+            raise
         bypass = payload.is_bypass
         hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
@@ -653,8 +615,9 @@ class OracleSyncTenantLease(SyncTenantLease):
         if hook is not None:
             with TenantContext.bind(TenantContextPayload.bypass()):
                 execute_session_release_sync(connection, hook)
-        if self._priority_baseline is not None:
-            apply_oracle_transaction_priority(connection, self._priority_baseline)
+        baseline, self._priority_baseline = self._priority_baseline, None
+        if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
+            apply_oracle_transaction_priority(connection, baseline)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             self._pool.release(connection, tag=self._release_tag)
         else:
@@ -699,16 +662,19 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         )
         connection = await self._pool.acquire(**kwargs)
         self._release_tag = kwargs.get("tag") if getattr(self._pool, "thin", None) is False else None
+        configured_priority = self._config.connection_config.get("transaction_priority")
         priority = options.transaction_priority if options is not None else None
         if priority is None:
-            priority = self._config.connection_config.get("transaction_priority")
-        if priority is not None:
-            self._priority_baseline = getattr(connection, "transaction_priority", None)
-            try:
+            priority = configured_priority
+        try:
+            self._priority_baseline = capture_oracle_transaction_priority_baseline(
+                connection, configured_priority=configured_priority
+            )
+            if priority is not None:
                 apply_oracle_transaction_priority(connection, priority)
-            except BaseException:
-                await await_owned_disposal(self._invalidate(connection))
-                raise
+        except BaseException:
+            await await_owned_disposal(self._invalidate(connection))
+            raise
         bypass = payload.is_bypass
         hook = self._config.driver_features.get("session_context_hook") if bypass else None
         if hook is not None:
@@ -730,8 +696,9 @@ class OracleAsyncTenantLease(AsyncTenantLease):
         if hook is not None:
             with TenantContext.bind(TenantContextPayload.bypass()):
                 await execute_session_release_async(connection, hook)
-        if self._priority_baseline is not None:
-            apply_oracle_transaction_priority(connection, self._priority_baseline)
+        baseline, self._priority_baseline = self._priority_baseline, None
+        if baseline is not None and not oracle_transaction_priority_matches(connection, baseline):
+            apply_oracle_transaction_priority(connection, baseline)
         if getattr(connection, "thin", None) is False and self._release_tag is not None:
             await self._pool.release(connection, tag=self._release_tag)
         else:
@@ -959,3 +926,46 @@ def _validate_vpd_settings(
     _validate_oracle_identifier(namespace, "namespace")
     _validate_oracle_identifier(attribute, "attribute")
     return set_procedure, clear_procedure
+
+
+def _validate_variable_keys(keys: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(keys, (str, bytes)):
+        msg = "Oracle tenant variable_keys must be a sequence of identifiers"
+        raise ImproperConfigurationError(msg)
+    for key in keys:
+        _validate_oracle_identifier(key, "variable key")
+    return tuple(keys)
+
+
+def _tenant_variables(payload: TenantContextPayload, keys: Sequence[str], *, secrets: bool = False) -> dict[str, str]:
+    permitted = set(keys)
+    if secrets:
+        permitted.update({"end_user_token", "end_user_key"})
+    undeclared = set(payload.variables) - permitted
+    if undeclared:
+        msg = f"Undeclared Oracle tenant variables: {', '.join(sorted(undeclared))}"
+        raise TenantContextError(msg)
+    return {key: str(payload.variables[key]) for key in keys if key in payload.variables}
+
+
+def _skip_tenant_alter(connection: Any, hook: OracleSessionContextConfig) -> bool:
+    if getattr(connection, "thin", None) is not False or has_callable_alter_session_fields(hook):
+        return False
+    tag = synthesize_session_state_tag(hook)
+    return tag is not None and connection.tag == tag
+
+
+def _deepsec_tenant_config(strategy: Any, payload: TenantContextPayload) -> OracleEndUserSecurityConfig:
+    variables = _tenant_variables(payload, strategy._variable_keys, secrets=True)
+    if strategy._tenant_attribute is not None:
+        variables[strategy._tenant_attribute] = payload.tenant_id
+    identity: Any = payload.variables.get("end_user_token")
+    if strategy._identity_provider in {"oci", "entra", "obo"} and not identity:
+        msg = "Oracle token identity providers require the end_user_token tenant variable"
+        raise TenantContextError(msg)
+    if identity is None:
+        identity = (payload.tenant_id, payload.variables.get("end_user_key"))
+    roles = strategy._data_roles(payload) if callable(strategy._data_roles) else strategy._data_roles
+    return OracleEndUserSecurityConfig(
+        strategy._database_access_token, end_user_identity=identity, data_roles=roles, attributes=variables
+    )

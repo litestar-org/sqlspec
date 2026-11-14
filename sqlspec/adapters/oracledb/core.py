@@ -128,6 +128,7 @@ __all__ = (
     "build_tns_description",
     "build_truncate_statement",
     "build_wallet_ssl_context_if_needed",
+    "capture_oracle_transaction_priority_baseline",
     "chain_input_handler",
     "chain_output_handler",
     "clear_end_user_security_release",
@@ -167,6 +168,7 @@ __all__ = (
     "normalize_oracle_purity",
     "normalize_oracle_sharding_keys",
     "normalize_oracle_transaction_priority",
+    "oracle_transaction_priority_matches",
     "parse_sqlnet_ora",
     "parse_tnsnames_ora",
     "prepare_session_checkout_pipeline",
@@ -889,6 +891,7 @@ def clear_end_user_security_release(connection: Any) -> None:
 
 _INITIAL_SCHEMA_BY_CONN_ID: dict[int, str] = {}
 _INITIAL_PRIORITY_BY_CONN_ID: dict[int, Any] = {}
+_MISSING_TRANSACTION_PRIORITY: Final = object()
 
 
 def forget_oracle_session_state(connection: Any) -> None:
@@ -945,7 +948,9 @@ def prepare_session_checkout_pipeline(
         if getattr(oracledb_module, "TransactionPriority", None) is None:
             msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
             raise oracledb_module.NotSupportedError(msg)
-        _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), connection.transaction_priority)
+        baseline_priority = capture_oracle_transaction_priority_baseline(connection)
+        if baseline_priority is not None:
+            _INITIAL_PRIORITY_BY_CONN_ID.setdefault(id(connection), baseline_priority)
         apply_oracle_transaction_priority(connection, resolved.transaction_priority)
     if resolved.end_user_security is not None:
         apply_end_user_security_checkout(connection, resolved.end_user_security)
@@ -2615,7 +2620,10 @@ def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") 
         msg = "OracleTopologyConfig requires at least one endpoint"
         raise ImproperConfigurationError(msg)
     _validate_tns_token(resolved.service_name, "service_name")
-    for ep in (*resolved.endpoints, *(ep for group in resolved.address_lists for ep in group)):
+    all_endpoints = list(resolved.endpoints)
+    for group in resolved.address_lists:
+        all_endpoints.extend(group)
+    for ep in all_endpoints:
         _validate_tns_token(ep.host, "host")
     desc_parts: list[str] = []
     if resolved.address_lists:
@@ -2980,6 +2988,8 @@ def normalize_oracle_transaction_priority(value: Any) -> Any:
     if priority_type is None:
         msg = "Oracle transaction priority requires python-oracledb 26.1 or newer"
         raise oracledb_module.NotSupportedError(msg)
+    if isinstance(value, priority_type):
+        return value
     if isinstance(value, str):
         value = getattr(priority_type, value.upper(), None)
     if value is None or isinstance(value, bool) or not isinstance(value, priority_type):
@@ -2988,12 +2998,47 @@ def normalize_oracle_transaction_priority(value: Any) -> Any:
     return value
 
 
+def capture_oracle_transaction_priority_baseline(connection: Any, *, configured_priority: Any = None) -> Any:
+    """Capture the effective native transaction priority baseline for a connection.
+
+    Untouched Oracle connections report ``None`` until priority is changed,
+    which corresponds to ``TransactionPriority.DEFAULT``. Mock connections that do
+    not expose ``None`` or a ``TransactionPriority`` enum member return ``None``.
+    """
+    priority_type = getattr(oracledb_module, "TransactionPriority", None)
+    if priority_type is None:
+        return None
+    if configured_priority is not None:
+        return normalize_oracle_transaction_priority(configured_priority)
+    try:
+        current = getattr(connection, "transaction_priority", _MISSING_TRANSACTION_PRIORITY)
+    except oracledb_module.NotSupportedError:
+        return None
+    if current is _MISSING_TRANSACTION_PRIORITY:
+        return None
+    return _resolve_transaction_priority_value(current, priority_type)
+
+
+def oracle_transaction_priority_matches(connection: Any, target: Any) -> bool:
+    """Return whether ``connection.transaction_priority`` effectively matches ``target``."""
+    resolved = normalize_oracle_transaction_priority(target)
+    if resolved is None:
+        return True
+    priority_type = getattr(oracledb_module, "TransactionPriority", None)
+    if priority_type is None:
+        return True
+    current = getattr(connection, "transaction_priority", _MISSING_TRANSACTION_PRIORITY)
+    if current is _MISSING_TRANSACTION_PRIORITY:
+        return False
+    return bool(_resolve_transaction_priority_value(current, priority_type) == resolved)
+
+
 def apply_oracle_transaction_priority(connection: Any, priority: Any) -> None:
     """Assign native priority and map optional-feature server rejection."""
     resolved = normalize_oracle_transaction_priority(priority)
     if resolved is not None:
         try:
-            if connection.transaction_priority != resolved:
+            if not oracle_transaction_priority_matches(connection, resolved):
                 connection.transaction_priority = resolved
         except oracledb_module.Error as exc:
             raise create_mapped_exception(exc) from exc
@@ -3575,7 +3620,11 @@ def _session_release_needs_priority_rollback(
 ) -> bool:
     resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
     baseline = _INITIAL_PRIORITY_BY_CONN_ID.get(id(connection))
-    return resolved.reset_on_release and baseline is not None and connection.transaction_priority != baseline
+    return (
+        resolved.reset_on_release
+        and baseline is not None
+        and not oracle_transaction_priority_matches(connection, baseline)
+    )
 
 
 def _oracle_context_value(config: Any, field: str) -> Any:
@@ -4817,3 +4866,11 @@ def _create_oracle_error(
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
+
+
+def _resolve_transaction_priority_value(value: Any, priority_type: Any) -> Any:
+    if value is None:
+        return priority_type.DEFAULT
+    if isinstance(value, priority_type):
+        return value
+    return None

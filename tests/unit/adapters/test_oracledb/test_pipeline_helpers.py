@@ -9,11 +9,16 @@ import pytest
 from sqlspec import SQL, StatementStack
 from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
+    OracleSessionContextConfig,
     _coerce_sync_row_values,  # pyright: ignore[reportPrivateUsage]
     build_insert_statement,
     build_pipeline_stack_result,
     create_mapped_exception,
     default_statement_config,
+    execute_session_checkout_async,
+    execute_session_checkout_sync,
+    execute_session_release_async,
+    execute_session_release_sync,
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
 )
@@ -419,3 +424,32 @@ async def test_pipeline_materializes_async_and_sync_lob_cells() -> None:
     assert await coerce_pipeline_rows_async(rows, {}) == [("text payload", b"binary payload", 42)]
     assert await coerce_pipeline_rows_async(rows, {"fetch_lobs": True}) == rows
     assert await coerce_pipeline_rows_async([(1, "value")], {}) == [(1, "value")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_session_context_restores_none_initial_transaction_priority_on_release(is_async: bool) -> None:
+    """Session context hook rolls back and restores DEFAULT when initial transaction_priority was None."""
+    hook = OracleSessionContextConfig(transaction_priority="HIGH", reset_on_release=True)
+    rollback = AsyncMock() if is_async else MagicMock()
+
+    class NativeConnection:
+        transaction_priority: object = None
+
+        def cursor(self) -> Any:
+            return MagicMock()
+
+    NativeConnection.rollback = rollback  # type: ignore[attr-defined]
+    conn = NativeConnection()
+
+    if is_async:
+        await execute_session_checkout_async(conn, hook)
+        assert conn.transaction_priority == oracledb.TransactionPriority.HIGH
+        await execute_session_release_async(conn, hook)
+    else:
+        execute_session_checkout_sync(conn, hook)
+        assert conn.transaction_priority == oracledb.TransactionPriority.HIGH
+        execute_session_release_sync(conn, hook)
+
+    rollback.assert_called_once_with()
+    assert conn.transaction_priority == oracledb.TransactionPriority.DEFAULT
