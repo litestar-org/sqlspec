@@ -2296,11 +2296,11 @@ def test_equality_with_none_renders_null_predicate(
 @pytest.mark.parametrize(
     ("column", "dialect", "expected"),
     [
-        ("status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
-        ("status", "postgres", 'WHERE "t"."status" <> ALL ( ARRAY[%(where_param_1)s, %(where_param_2)s] )'),
-        ("t.status", None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
-        (Column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
-        (exp.column("status"), None, 'WHERE "t"."status" <> ALL ( ARRAY(:where_param_1, :where_param_2) )'),
+        ("status", None, 'WHERE NOT "t"."status" = ANY( ARRAY(:where_param_1, :where_param_2) )'),
+        ("status", "postgres", 'WHERE NOT "t"."status" = ANY( ARRAY[%(where_param_1)s, %(where_param_2)s] )'),
+        ("t.status", None, 'WHERE NOT "t"."status" = ANY( ARRAY(:where_param_1, :where_param_2) )'),
+        (Column("status"), None, 'WHERE NOT "t"."status" = ANY( ARRAY(:where_param_1, :where_param_2) )'),
+        (exp.column("status"), None, 'WHERE NOT "t"."status" = ANY( ARRAY(:where_param_1, :where_param_2) )'),
     ],
     ids=["name", "name_postgres", "qualified_name", "column_object", "sqlglot_column"],
 )
@@ -2329,9 +2329,16 @@ def test_not_any_matches_column_not_any() -> None:
 def test_not_any_with_subquery_keeps_all_comparison_and_merges_parameters(dialect: str | None) -> None:
     banned = sql.select("user_id").from_("bans").where_gt("severity", 3)
 
-    built = (
-        sql.select("*").from_("users").where_gt("severity", 1).where(sql.not_any_("id", banned)).build(dialect=dialect)
-    )
+    query = sql.select("*").from_("users").where_gt("severity", 1).where(sql.not_any_("id", banned))
+    default_built = query.build(dialect=dialect)
+    default_rendered = " ".join(default_built.sql.split())
+
+    assert default_built.parameters == {"severity": 1, "severity_1": 3}
+    assert 'NOT "users"."id" = ANY( SELECT "bans"."user_id"' in default_rendered
+    assert "LEFT JOIN" not in default_rendered
+
+    query.simplify_expressions = True
+    built = query.build(dialect=dialect)
     rendered = " ".join(built.sql.split())
 
     assert built.parameters == {"severity": 1, "severity_1": 3}
@@ -2355,6 +2362,69 @@ def test_not_any_composes_with_boolean_operators() -> None:
     built = sql.select("*").from_("t").where(condition).build()
     rendered = " ".join(built.sql.split())
 
-    assert '"t"."status" <> ALL ( ARRAY(:where_param_1) )' in rendered
+    assert 'NOT "t"."status" = ANY( ARRAY(:where_param_1) )' in rendered
     assert '"t"."age" >= :where_param_2' in rendered
     assert built.parameters == {"where_param_1": "banned", "where_param_2": 18}
+
+
+@pytest.mark.parametrize(
+    ("decimals", "expected_sql"),
+    [(2, "ROUND(price, 2)"), ("2", "ROUND(price, 2)"), ("0", "ROUND(price)"), (0.5, "ROUND(price, 0.5)")],
+    ids=["int", "int-str", "zero-str", "float"],
+)
+def test_round_coerces_numeric_decimals(decimals: Any, expected_sql: str) -> None:
+    """sql.round accepts numeric ints, finite floats, and numeric strings."""
+    assert sql.round("price", decimals).expression.sql(dialect="postgres") == expected_sql
+
+
+@pytest.mark.parametrize(
+    "bad_numeric", [True, False, "2 OR 1=1", "abc", "", "   ", None, float("nan"), float("inf"), "nan", "inf"]
+)
+def test_round_lag_and_lead_reject_bool_and_non_numeric_arguments(bad_numeric: Any) -> None:
+    """sql.round, sql.lag, and sql.lead reject booleans, non-finite floats, and non-numeric strings."""
+    with pytest.raises(SQLBuilderError):
+        sql.round("price", bad_numeric)
+
+    with pytest.raises(SQLBuilderError):
+        sql.lag("price", offset=bad_numeric, order_by="id")
+
+    with pytest.raises(SQLBuilderError):
+        sql.lead("price", offset=bad_numeric, order_by="id")
+
+
+@pytest.mark.parametrize(
+    ("fn", "offset", "expected_prefix"),
+    [
+        (lambda o: sql.lag("price", offset=o, order_by="id"), "3", "LAG(price, 3)"),
+        (lambda o: sql.lead("price", offset=o, order_by="id"), "4", "LEAD(price, 4)"),
+    ],
+    ids=["lag-str", "lead-str"],
+)
+def test_lag_and_lead_coerce_numeric_string_offsets(
+    fn: Callable[[Any], FunctionExpression], offset: str, expected_prefix: str
+) -> None:
+    """sql.lag and sql.lead coerce numeric string offsets."""
+    assert fn(offset).expression.sql(dialect="postgres").startswith(expected_prefix)
+
+
+@pytest.mark.parametrize("bad_key", ["", " ", "1format", "format; DROP TABLE t", "format csv", "format\n", 123])
+def test_copy_builders_reject_invalid_option_keys(bad_key: Any) -> None:
+    """COPY builders validate option keys against ASCII identifier syntax without newlines."""
+    with pytest.raises(SQLBuilderError, match="Invalid COPY option key"):
+        build_copy_from_statement("users", "s3://bucket/in.csv", options={bad_key: "csv"})
+
+    with pytest.raises(SQLBuilderError, match="Invalid COPY option key"):
+        build_copy_to_statement("users", "s3://bucket/out.csv", options={bad_key: "csv"})
+
+    with pytest.raises(SQLBuilderError, match="Invalid COPY option key"):
+        sql.copy_from("users", "s3://bucket/in.csv", options={bad_key: "csv"})
+
+    with pytest.raises(SQLBuilderError, match="Invalid COPY option key"):
+        sql.copy("users", target="s3://bucket/out.csv", options={bad_key: "csv"})
+
+
+@pytest.mark.parametrize("bad_float", [float("nan"), float("inf"), float("-inf")])
+def test_copy_builders_reject_non_finite_numeric_option_values(bad_float: float) -> None:
+    """COPY builders reject non-finite float option values."""
+    with pytest.raises(SQLBuilderError, match="finite"):
+        build_copy_from_statement("users", "s3://bucket/in.csv", options={"batch_size": bad_float})

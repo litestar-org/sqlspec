@@ -270,13 +270,25 @@ class InsertFromSelectMixin:
         if isinstance(self, QueryBuilder):
             select_expr: exp.Expr | None = self._embed_subquery(select_builder, alias_hint="insert_src")
         else:
+            raw_expr = select_builder.get_expression()
+            select_expr = raw_expr.copy() if isinstance(raw_expr, exp.Expr) else None
             subquery_parameters = select_builder.parameters
             if subquery_parameters:
                 builder_with_params = cast("SQLBuilderProtocol", self)
+                param_mapping: dict[str, str] = {}
+                existing_params = getattr(builder_with_params, "parameters", {})
                 for param_name, param_value in subquery_parameters.items():
-                    builder_with_params.add_parameter(param_value, name=param_name)
-            raw_expr = select_builder.get_expression()
-            select_expr = raw_expr.copy() if isinstance(raw_expr, exp.Expr) else None
+                    target_name = (
+                        builder_with_params.generate_unique_parameter_name(param_name)
+                        if param_name in existing_params
+                        and hasattr(builder_with_params, "generate_unique_parameter_name")
+                        else param_name
+                    )
+                    _, actual_name = builder_with_params.add_parameter(param_value, name=target_name)
+                    if actual_name != param_name:
+                        param_mapping[param_name] = actual_name
+                if param_mapping and select_expr is not None and hasattr(builder_with_params, "_update_placeholders"):
+                    select_expr = cast("Any", builder_with_params)._update_placeholders(select_expr, param_mapping)
 
         if select_expr is not None and isinstance(select_expr, (exp.Select, exp.SetOperation)):
             select_with = select_expr.args.get("with_")
@@ -432,6 +444,8 @@ class UpdateFromClauseMixin:
             table_expr = _parse_table_reference(table, alias, cast("QueryBuilder", self).dialect)
         elif unwrapped_source is not None:
             source_copy = unwrapped_source.copy() if isinstance(table, exp.Expr) else unwrapped_source
+            if isinstance(self, QueryBuilder):
+                source_copy = self._merge_subquery_fragments(source_copy)
             if isinstance(source_copy, (exp.Select, exp.SetOperation)):
                 table_expr = exp.Subquery(this=source_copy)
                 if alias:

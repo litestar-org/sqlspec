@@ -598,7 +598,7 @@ def test_or_where_eq_renders_expression_value() -> None:
 
     assert (
         " ".join(statement.sql.split())
-        == 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE "t"."a" = "t"."b" OR "t"."q" = :q'
+        == 'SELECT "t"."z" AS "z" FROM "t" AS "t" WHERE "t"."q" = :q OR "t"."a" = "t"."b"'
     )
     assert statement.parameters == {"q": 1}
 

@@ -12,18 +12,23 @@ import sqlglot
 from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot import optimizer as sqlglot_optimizer
+from sqlglot.dialects.athena import Athena
 from sqlglot.dialects.dialect import DialectType
+from sqlglot.dialects.presto import Presto
 from sqlglot.errors import OptimizeError as SQLGlotOptimizeError
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import RULES
 from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
 from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
+from sqlglot.optimizer.normalize import normalized as _is_normalized_condition
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
+from sqlglot.optimizer.pushdown_predicates import pushdown_cnf as _pushdown_cnf
+from sqlglot.optimizer.pushdown_predicates import pushdown_dnf as _pushdown_dnf
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
 from sqlglot.optimizer.pushdown_projections import pushdown_projections as _pushdown_projections_rule
 from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
-from sqlglot.optimizer.scope import build_scope
+from sqlglot.optimizer.scope import Scope, build_scope
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from sqlglot.schema import MappingSchema
 
@@ -63,8 +68,8 @@ __all__ = (
 )
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
-PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
-_PARAMETER_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)_(?P<index>\d+)$")
+PARAMETER_INDEX_PATTERN = re.compile(r"\A(?:.+_)?param_(?P<index>\d+)\Z")
+_PARAMETER_SUFFIX_PATTERN = re.compile(r"\A(?P<base>.+)_(?P<index>\d+)\Z")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 _UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
 SUBQUERY_PARAMETERS_META_KEY: Final[str] = "sqlspec_subquery_parameters"
@@ -127,7 +132,7 @@ class QueryBuilder:
         enable_optimization: bool = True,
         optimize_joins: bool = True,
         optimize_predicates: bool = True,
-        simplify_expressions: bool = True,
+        simplify_expressions: bool = False,
     ) -> None:
         self.dialect = dialect
         self.schema = schema
@@ -225,8 +230,11 @@ class QueryBuilder:
             self._sync_parameter_name_counter(name)
             return self, name
 
-        self._parameter_counter += 1
-        param_name = f"param_{self._parameter_counter}"
+        while True:
+            self._parameter_counter += 1
+            param_name = f"param_{self._parameter_counter}"
+            if param_name not in self._parameters:
+                break
         self._parameters[param_name] = value
         self._sync_parameter_name_counter(param_name)
         return self, param_name
@@ -567,7 +575,7 @@ class QueryBuilder:
         enable_optimization = kwargs.pop("enable_optimization", True)
         optimize_joins = kwargs.pop("optimize_joins", True)
         optimize_predicates = kwargs.pop("optimize_predicates", True)
-        simplify_expressions = kwargs.pop("simplify_expressions", True)
+        simplify_expressions = kwargs.pop("simplify_expressions", False)
 
         if kwargs:
             unknown = ", ".join(sorted(kwargs.keys()))
@@ -725,12 +733,7 @@ class QueryBuilder:
             subquery_expression = exp.maybe_parse(sql_text, dialect=self.dialect_name) or exp.convert(sql_text)
 
         if parameters:
-            param_mapping: dict[str, str] = {}
-            for old_name, value in parameters.items():
-                target_name = self._next_parameter_name(old_name) if old_name in self._parameters else old_name
-                _, actual_name = self.add_parameter(value, name=target_name)
-                if actual_name != old_name:
-                    param_mapping[old_name] = actual_name
+            param_mapping = self._merge_parameter_dict(parameters)
             if param_mapping:
                 subquery_expression = self._update_placeholders(subquery_expression, param_mapping)
         return subquery_expression
@@ -818,13 +821,12 @@ class QueryBuilder:
         Returns:
             str: The placeholder name for the parameter.
         """
-        self._parameter_counter += 1
-
-        param_name = (
-            f"{sanitize_parameter_name(context)}_param_{self._parameter_counter}"
-            if context
-            else f"param_{self._parameter_counter}"
-        )
+        prefix = f"{sanitize_parameter_name(context)}_param_" if context else "param_"
+        while True:
+            self._parameter_counter += 1
+            param_name = f"{prefix}{self._parameter_counter}"
+            if param_name not in self._parameters:
+                break
 
         self._parameters[param_name] = value
         self._sync_parameter_name_counter(param_name)
@@ -901,15 +903,20 @@ class QueryBuilder:
             if parameters is None:
                 continue
             del node.meta[SUBQUERY_PARAMETERS_META_KEY]
-            param_mapping: dict[str, str] = {}
-            for name, value in parameters.items():
-                target_name = self._next_parameter_name(name) if name in self._parameters else name
-                _, actual_name = self.add_parameter(value, name=target_name)
-                if actual_name != name:
-                    param_mapping[name] = actual_name
+            param_mapping = self._merge_parameter_dict(parameters)
             if param_mapping:
                 self._update_placeholders(node, param_mapping)
         return merged
+
+    def _merge_parameter_dict(self, parameters: "Mapping[str, Any]") -> dict[str, str]:
+        """Merge parameter bindings into this builder without overwriting existing keys."""
+        param_mapping: dict[str, str] = {}
+        for old_name, value in parameters.items():
+            target_name = self._next_parameter_name(old_name) if old_name in self._parameters else old_name
+            _, actual_name = self.add_parameter(value, name=target_name)
+            if actual_name != old_name:
+                param_mapping[old_name] = actual_name
+        return param_mapping
 
     def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name when collision occurs.
@@ -1171,7 +1178,18 @@ class QueryBuilder:
         ):
             excluded_rules.add(_pushdown_projections_rule)
 
-        rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
+        pushdown_rule = (
+            _pushdown_predicates_rule if self.simplify_expressions else _pushdown_predicates_without_simplify
+        )
+        rules = (
+            RULES
+            if not excluded_rules
+            else tuple(
+                (pushdown_rule if rule is _pushdown_predicates_rule else rule)
+                for rule in RULES
+                if rule not in excluded_rules
+            )
+        )
         rule_sets = [rules]
         if _pushdown_projections_rule not in excluded_rules:
             rule_sets.append(tuple(rule for rule in rules if rule is not _pushdown_projections_rule))
@@ -1328,17 +1346,10 @@ class QueryBuilder:
         Returns:
             Mapping of original parameter names to renamed parameter names.
         """
-        param_mapping: dict[str, str] = {}
         if not has_expression_and_parameters(sql_obj):
-            return param_mapping
+            return {}
 
-        sql_parameters = sql_obj.parameters
-        for param_name, param_value in sql_parameters.items():
-            target_name = self._next_parameter_name(param_name) if param_name in self._parameters else param_name
-            _, actual_name = self.add_parameter(param_value, name=target_name)
-            if actual_name != param_name:
-                param_mapping[param_name] = actual_name
-        return param_mapping
+        return self._merge_parameter_dict(sql_obj.parameters)
 
     def _folds_unquoted_to_upper(self, dialect: "DialectType | str | None") -> bool:
         """Check if the target dialect folds unquoted identifiers to uppercase."""
@@ -1622,3 +1633,108 @@ def _tsql_target_reference(target: exp.Table) -> exp.Table:
     if target.alias:
         return exp.Table(this=exp.to_identifier(target.alias))
     return target.copy()
+
+
+def _pushdown_predicates_without_simplify(expression: exp.Expr, dialect: DialectType = None) -> exp.Expr:
+    """Push down predicates into JOIN and subquery scopes without invoking ``simplify()``."""
+    root = build_scope(expression)
+    if not root:
+        return expression
+
+    resolved_dialect = Dialect.get_or_raise(dialect)
+    unnest_requires_cross_join = isinstance(resolved_dialect, (Athena, Presto))
+    scope_ref_count = root.ref_count()
+
+    for scope in reversed(list(root.traverse())):
+        select = scope.expression
+        where_node = select.args.get("where")
+        joins: list[exp.Join] = select.args.get("joins") or []
+
+        if any(join.args.get("nearest") for join in joins):
+            continue
+
+        if isinstance(where_node, exp.Where) and where_node.this is not None:
+            selected_sources: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = dict(scope.selected_sources)
+            join_index = {join.alias_or_name: i for i, join in enumerate(joins)}
+            last_null_extending = max((i for i, join in enumerate(joins) if join.side in ("RIGHT", "FULL")), default=-1)
+            pushdown_allowed = True
+            reachable: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = {}
+            for name, (node, source) in selected_sources.items():
+                parent = node.find_ancestor(exp.Join, exp.From)
+                if isinstance(parent, exp.Join):
+                    if isinstance(node, exp.Unnest) and unnest_requires_cross_join:
+                        pushdown_allowed = False
+                        break
+                    position = join_index.get(parent.alias_or_name, -1)
+                else:
+                    position = -1
+                if position >= last_null_extending:
+                    reachable[name] = (node, source)
+
+            if pushdown_allowed:
+                preserved_true_ids = {id(node) for node in where_node.this.find_all(exp.Boolean) if node.this is True}
+                _pushdown_condition_without_simplify(where_node.this, reachable, scope_ref_count, join_index=join_index)
+                updated_where = where_node.args.get("this")
+                if isinstance(updated_where, exp.Expr):
+                    pruned_where = _prune_pushed_true(updated_where, preserved_true_ids)
+                    if pruned_where is None:
+                        select.set("where", None)
+                    elif pruned_where is not updated_where:
+                        where_node.set("this", pruned_where)
+
+        for join in joins:
+            name = join.alias_or_name
+            if join.side in ("RIGHT", "FULL"):
+                continue
+            on_expr = join.args.get("on")
+            if isinstance(on_expr, exp.Expr) and name in scope.selected_sources:
+                preserved_true_ids = {id(node) for node in on_expr.find_all(exp.Boolean) if node.this is True}
+                _pushdown_condition_without_simplify(on_expr, {name: scope.selected_sources[name]}, scope_ref_count)
+                updated_on = join.args.get("on")
+                if isinstance(updated_on, exp.Expr):
+                    pruned_on = _prune_pushed_true(updated_on, preserved_true_ids)
+                    if pruned_on is None:
+                        join.set("on", exp.true())
+                    elif pruned_on is not updated_on:
+                        join.set("on", pruned_on)
+
+    return expression
+
+
+def _pushdown_condition_without_simplify(
+    condition: exp.Expr,
+    sources: "Mapping[str, tuple[exp.Selectable, exp.Table | Scope]]",
+    scope_ref_count: "Mapping[int, int]",
+    join_index: "Mapping[str, int] | None" = None,
+) -> None:
+    unwrapped = condition
+    while isinstance(unwrapped, exp.Paren):
+        unwrapped = unwrapped.this
+    cnf_like = _is_normalized_condition(unwrapped) or not _is_normalized_condition(unwrapped, dnf=True)
+    predicates = list(unwrapped.flatten() if isinstance(unwrapped, exp.And if cnf_like else exp.Or) else [unwrapped])
+    if cnf_like:
+        _pushdown_cnf(predicates, sources, scope_ref_count, join_index=join_index)
+    else:
+        _pushdown_dnf(predicates, sources, scope_ref_count, join_index=join_index)
+
+
+def _prune_pushed_true(condition: exp.Expr, preserved_true_ids: set[int]) -> exp.Expr | None:
+    if isinstance(condition, exp.Boolean) and condition.this is True:
+        return condition if id(condition) in preserved_true_ids else None
+    if isinstance(condition, exp.Paren):
+        inner = _prune_pushed_true(condition.this, preserved_true_ids)
+        if inner is None:
+            return None
+        if inner is not condition.this:
+            return exp.paren(inner, copy=False) if isinstance(inner, exp.Or) else inner
+        return condition
+    if isinstance(condition, exp.And):
+        left = _prune_pushed_true(condition.left, preserved_true_ids)
+        right = _prune_pushed_true(condition.right, preserved_true_ids)
+        if left is None:
+            return right
+        if right is None:
+            return left
+        if left is not condition.left or right is not condition.right:
+            return exp.and_(left, right, copy=False)
+    return condition

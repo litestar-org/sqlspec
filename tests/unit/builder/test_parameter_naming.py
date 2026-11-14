@@ -476,3 +476,35 @@ def test_builder_sanitizes_non_identifier_parameter_names(column_key: str, expec
     assert expected_param in stmt.parameters
     assert stmt.parameters[expected_param] == "val"
     assert f":{expected_param}" in stmt.sql
+
+
+@pytest.mark.parametrize(
+    ("existing_name", "expected_next_index"),
+    [("param_1", 2), ("where_param_1", 2), ("having_param_2", 3), ("cte_where_param_3", 4)],
+)
+def test_update_parameter_counter_recognizes_prefixed_param_names(existing_name: str, expected_next_index: int) -> None:
+    """_update_parameter_counter advances _parameter_counter past <prefix>_param_<N> names."""
+    builder = sql.select("*").from_("tasks")
+    builder.add_parameter(100, name=existing_name)
+
+    next_name = builder._add_parameter(200, context="where")
+
+    assert next_name == f"where_param_{expected_next_index}"
+    assert builder.parameters == {existing_name: 100, next_name: 200}
+
+
+def test_add_parameter_never_overwrites_existing_key_when_counter_lags() -> None:
+    """Both add_parameter and _add_parameter skip pre-existing keys even if counter lags behind."""
+    builder = sql.select("*").from_("tasks")
+    builder._parameters["where_param_1"] = 100
+    builder._parameters["param_1"] = 300
+
+    next_where = builder._add_parameter(200, context="where")
+    _, next_plain = builder.add_parameter(400)
+
+    assert next_where != "where_param_1"
+    assert next_plain != "param_1"
+    assert builder.parameters["where_param_1"] == 100
+    assert builder.parameters["param_1"] == 300
+    assert builder.parameters[next_where] == 200
+    assert builder.parameters[next_plain] == 400

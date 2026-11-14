@@ -1,10 +1,13 @@
 """Regression tests for DDL builder Wave 1 fixes."""
 
+from typing import Any, cast
+
 import pytest
 from sqlglot import exp, parse_one
 
 from sqlspec import sql
 from sqlspec.builder._ddl import (
+    _BARE_IDENTIFIER_RE,
     CONSTRAINT_TYPE_CHECK,
     CONSTRAINT_TYPE_FOREIGN_KEY,
     VALID_FOREIGN_KEY_ACTIONS,
@@ -12,6 +15,7 @@ from sqlspec.builder._ddl import (
     ColumnDefinition,
     ConstraintDefinition,
     CreateIndex,
+    CreateSequence,
     CreateTable,
     build_column_expression,
     build_constraint_expression,
@@ -367,3 +371,110 @@ def test_ddl_rebuilds_after_mutation_and_resets_parameters() -> None:
     assert first_built.parameters == second_built.parameters
     assert "UNION" in first_built.sql
     assert not hasattr(union_query, "_with_ctes") or len(union_query.with_ctes) == 0
+
+
+@pytest.mark.parametrize("bad_ident", ["", " ", "123abc", "btree; DROP TABLE t", "btree\n", "a-b", "a b", 123])
+def test_ddl_clause_identifiers_reject_invalid_values(bad_ident: object) -> None:
+    """DDL option keys and raw clause identifiers reject non-identifier tokens including trailing newlines."""
+    bad_value = cast("Any", bad_ident)
+    with pytest.raises(SQLBuilderError):
+        CreateIndex("idx").on_table("t").columns("a").using(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateTable("t").column("id", "INT").engine(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateTable("t").column("id", "INT").tablespace(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateTable("t").column("id", "INT").with_option(bad_value, 1)
+
+    with pytest.raises(SQLBuilderError):
+        sql.create_materialized_view("mv").as_select("SELECT 1").storage_parameter(bad_value, 1)
+
+    with pytest.raises(SQLBuilderError):
+        sql.create_materialized_view("mv").as_select("SELECT 1").tablespace(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        sql.create_materialized_view("mv").as_select("SELECT 1").using_index(bad_value)
+
+
+def test_bare_identifier_pattern_rejects_trailing_newline() -> None:
+    """Identifier regex uses full-string anchors so trailing newlines never match."""
+    assert _BARE_IDENTIFIER_RE.fullmatch("valid_ident_1") is not None
+    assert _BARE_IDENTIFIER_RE.fullmatch("valid_ident_1\n") is None
+
+
+@pytest.mark.parametrize(
+    "bad_partition_spec",
+    ["", "   ", "RANGE (id); DROP TABLE t", "); DROP TABLE t", "bad\x00spec", "RANGE (", "SELECT 1"],
+)
+def test_create_table_partition_by_rejects_invalid_or_multi_statement_specs(bad_partition_spec: str) -> None:
+    """CreateTable.partition_by rejects unparseable fallback tokens and non-expression statements."""
+    with pytest.raises(SQLBuilderError, match="PARTITION BY"):
+        CreateTable("events", dialect="postgres").column("id", "INT").partition_by(bad_partition_spec).build()
+
+
+def test_create_table_ddl_clauses_accept_valid_identifiers() -> None:
+    """Valid bare clause identifiers build clean DDL statements."""
+    table_stmt = (
+        CreateTable("t", dialect="mysql")
+        .column("id", "INT")
+        .engine("InnoDB")
+        .tablespace("ts_main")
+        .with_option("row_format", "DYNAMIC")
+        .build()
+    )
+    assert "ENGINE=`InnoDB`" in table_stmt.sql
+    assert "TABLESPACE=`ts_main`" in table_stmt.sql
+    assert "ROW_FORMAT='DYNAMIC'" in table_stmt.sql
+
+    mv_stmt = (
+        sql
+        .create_materialized_view("mv", dialect="postgres")
+        .as_select("SELECT 1")
+        .tablespace("fast_ts")
+        .using_index("idx_mv")
+        .storage_parameter("fillfactor", 70)
+        .build()
+    )
+    assert 'TABLESPACE="fast_ts"' in mv_stmt.sql or "tablespace" in mv_stmt.sql.lower()
+    assert "fillfactor='70'" in mv_stmt.sql
+
+
+@pytest.mark.parametrize("bad_int", [True, False, "1; DROP TABLE t", "abc", "", 1.5, None])
+def test_create_sequence_rejects_bool_and_non_integer_bounds(bad_int: object) -> None:
+    """Sequence numeric options reject booleans and non-integer inputs."""
+    bad_value = cast("Any", bad_int)
+    if bad_int is not None:
+        with pytest.raises(SQLBuilderError):
+            CreateSequence("seq", start_with=bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateSequence("seq").start_with(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateSequence("seq").increment_by(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateSequence("seq").min_value(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateSequence("seq").max_value(bad_value)
+
+    with pytest.raises(SQLBuilderError):
+        CreateSequence("seq").cache(bad_value)
+
+
+def test_create_sequence_coerces_integer_strings() -> None:
+    """Sequence integer options accept integer strings alongside integers."""
+    stmt = (
+        CreateSequence("seq", dialect="postgres")
+        .start_with(cast("Any", "10"))
+        .increment_by(cast("Any", "2"))
+        .cache(cast("Any", "5"))
+        .build()
+    )
+    assert "START WITH 10" in stmt.sql
+    assert "INCREMENT BY 2" in stmt.sql
+    assert "CACHE 5" in stmt.sql

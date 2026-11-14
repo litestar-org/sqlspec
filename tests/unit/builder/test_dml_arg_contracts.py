@@ -360,7 +360,7 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
         ),
         pytest.param(
             lambda: sql.update("t AS u").set(a=1).from_("s", alias="s").where("u.id = s.id"),
-            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS [s]\nWHERE\n  [s].[id] = [u].[id]",
+            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u], [s] AS [s]\nWHERE\n  [u].[id] = [s].[id]",
             id="update-existing-from",
         ),
         pytest.param(
@@ -370,7 +370,7 @@ def test_dml_table_string_alias_parses_with_builder_dialect() -> None:
         ),
         pytest.param(
             lambda: sql.update("t AS u").set(a=1).join("s", on="u.id = s.id"),
-            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u]\n  JOIN [s]\n    ON [s].[id] = [u].[id]",
+            "UPDATE [u] SET [a] = :a\nFROM [t] AS [u]\n  JOIN [s]\n    ON [u].[id] = [s].[id]",
             id="update-join",
         ),
         pytest.param(

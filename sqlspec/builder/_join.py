@@ -93,6 +93,8 @@ class JoinClauseMixin:
             return cast("Self", builder)
 
         join_expr = build_join_clause(builder, table, on, alias, join_type, lateral=lateral)
+        if isinstance(builder, QueryBuilder):
+            join_expr = cast("exp.Join", builder._merge_subquery_fragments(join_expr))
 
         if as_of is not None:
             join_expr.set("this", _attach_as_of_version(join_expr.this, alias, as_of, as_of_type))
@@ -367,8 +369,19 @@ def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProto
             subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
 
         if parameters:
+            param_mapping: dict[str, str] = {}
+            existing_params = getattr(builder, "parameters", {})
             for param_name, param_value in parameters.items():
-                builder.add_parameter(param_value, name=param_name)
+                target_name = (
+                    builder.generate_unique_parameter_name(param_name)
+                    if param_name in existing_params and hasattr(builder, "generate_unique_parameter_name")
+                    else param_name
+                )
+                _, actual_name = builder.add_parameter(param_value, name=target_name)
+                if actual_name != param_name:
+                    param_mapping[param_name] = actual_name
+            if param_mapping and hasattr(builder, "_update_placeholders"):
+                subquery_expression = cast("Any", builder)._update_placeholders(subquery_expression, param_mapping)
 
     subquery_exp = exp.paren(subquery_expression, copy=False)
     return exp.alias_(subquery_exp, alias, copy=False) if alias else subquery_exp

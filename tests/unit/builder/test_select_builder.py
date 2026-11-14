@@ -234,7 +234,7 @@ PREDICATE_VALUES = [
         ),
         pytest.param(
             lambda q, v: q.where_between("a", v, 9),
-            '"t"."a" <= :a_high AND "t"."a" >= {fragment}',
+            '"t"."a" BETWEEN {fragment} AND :a_high',
             {"a_high": 9},
             id="where-between",
         ),
@@ -287,7 +287,7 @@ def test_not_between_renders_expression_bound() -> None:
     """A NOT BETWEEN bound renders as SQL beside a bound parameter."""
     statement = sql.select("z").from_("t").where(("a", "NOT BETWEEN", (sql.column("b"), 9))).build()
 
-    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" < "t"."b" OR "t"."a" > :a_high'
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + 'NOT "t"."a" BETWEEN "t"."b" AND :a_high'
     assert statement.parameters == {"a_high": 9}
 
 
@@ -298,7 +298,7 @@ def test_not_between_renders_expression_bound() -> None:
         pytest.param(lambda q: q.where_in("a", [1, 2]), '"t"."a" IN (:a_1, :a_2)', {"a_1": 1, "a_2": 2}, id="where-in"),
         pytest.param(
             lambda q: q.where_between("a", 1, 9),
-            '"t"."a" <= :a_high AND "t"."a" >= :a_low',
+            '"t"."a" BETWEEN :a_low AND :a_high',
             {"a_low": 1, "a_high": 9},
             id="where-between",
         ),
@@ -463,7 +463,7 @@ def test_where_not_any_renders_expression_elements() -> None:
     """Expression elements of a where_not_any list render as SQL."""
     statement = sql.select("z").from_("t").where_not_any("a", [sql.column("b")]).build()
 
-    assert _normalized_sql(statement) == QUALIFIED_PREFIX + '"t"."a" <> ALL ( ARRAY("t"."b") )'
+    assert _normalized_sql(statement) == QUALIFIED_PREFIX + 'NOT "t"."a" = ANY( ARRAY("t"."b") )'
     assert statement.parameters == {}
 
 
@@ -494,12 +494,12 @@ def test_any_predicates_reject_strings(apply: Any, value: str) -> None:
         ),
         pytest.param(
             lambda q: q.where_not_any("a", sql.select("x").from_("y")),
-            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            'NOT "t"."a" = ANY( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
             id="where-not-any",
         ),
         pytest.param(
             lambda q: q.where(sql.not_any_("a", sql.select("x").from_("y"))),
-            '"t"."a" <> ALL ( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
+            'NOT "t"."a" = ANY( SELECT "y"."x" AS "x" FROM "y" AS "y" )',
             id="factory-not-any",
         ),
     ],

@@ -5,6 +5,7 @@ Provides statement builders (select, insert, update, etc.) and column expression
 
 import hashlib
 import logging
+import math
 import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, Union, cast, final
@@ -91,6 +92,7 @@ MIN_SQL_LIKE_STRING_LENGTH = 6
 MIN_DECODE_ARGS = 2
 _COLUMN_NAMESPACE: Final[ColumnNamespace] = ColumnNamespace()
 _FIRST_WORD_RE: Final["re.Pattern[str]"] = re.compile(r"\w+")
+_COPY_OPTION_KEY_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 SQL_STARTERS = {
     "SELECT",
     "INSERT",
@@ -1287,9 +1289,10 @@ class SQLFactory:
             ROUND expression.
         """
         col_expr = extract_expression(column)
-        if decimals == 0:
+        coerced_decimals = _coerce_numeric_argument(decimals, name="decimals")
+        if coerced_decimals == 0:
             return MathExpression(exp.Round(this=col_expr))
-        return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(decimals)))
+        return MathExpression(exp.Round(this=col_expr, decimals=exp.Literal.number(coerced_decimals)))
 
     @staticmethod
     def to_literal(value: Any) -> FunctionExpression:
@@ -1559,7 +1562,8 @@ class SQLFactory:
             LAG window function expression.
         """
         col_expr = extract_expression(column)
-        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
+        coerced_offset = _coerce_numeric_argument(offset, name="offset")
+        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(coerced_offset)]
         if default is not None:
             func_args.append(exp.convert(default))
         return self._create_window_function("LAG", func_args, partition_by, order_by)
@@ -1587,7 +1591,8 @@ class SQLFactory:
             LEAD window function expression.
         """
         col_expr = extract_expression(column)
-        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(offset)]
+        coerced_offset = _coerce_numeric_argument(offset, name="offset")
+        func_args: list[exp.Expr] = [col_expr, exp.Literal.number(coerced_offset)]
         if default is not None:
             func_args.append(exp.convert(default))
         return self._create_window_function("LEAD", func_args, partition_by, order_by)
@@ -1728,6 +1733,43 @@ class SQLFactory:
         return FunctionExpression(exp.Window(this=func_expr, **over_args))
 
 
+def _coerce_numeric_argument(value: Any, *, name: str) -> int | float:
+    """Validate and coerce a numeric builder argument to int or finite float.
+
+    Raises:
+        SQLBuilderError: If ``value`` is a bool, non-numeric, or non-finite.
+    """
+    if isinstance(value, bool):
+        msg = f"{name} must be a numeric value, got bool"
+        raise SQLBuilderError(msg)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            msg = f"{name} must be a finite numeric value, got {value!r}"
+            raise SQLBuilderError(msg)
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            msg = f"{name} must be a numeric value, got {value!r}"
+            raise SQLBuilderError(msg)
+        try:
+            return int(stripped)
+        except ValueError:
+            try:
+                parsed = float(stripped)
+            except ValueError as exc:
+                msg = f"{name} must be a numeric value, got {value!r}"
+                raise SQLBuilderError(msg) from exc
+            if not math.isfinite(parsed):
+                msg = f"{name} must be a finite numeric value, got {value!r}"
+                raise SQLBuilderError(msg)
+            return parsed
+    msg = f"{name} must be a numeric value, got {type(value).__name__}"
+    raise SQLBuilderError(msg)
+
+
 def _fingerprint_sql(sql: str) -> str:
     digest = hashlib.sha256(sql.encode("utf-8", errors="replace")).hexdigest()
     return digest[:12]
@@ -1762,13 +1804,21 @@ def _build_copy_expression(
     if options:
         params: list[exp.CopyParameter] = []
         for key, value in options.items():
-            identifier = exp.Var(this=str(key).upper())
+            if not isinstance(key, str) or not _COPY_OPTION_KEY_PATTERN.fullmatch(key):
+                msg = f"Invalid COPY option key: {key!r}"
+                raise SQLBuilderError(msg)
+            identifier = exp.Var(this=key.upper())
             value_expression: exp.Expr
             if isinstance(value, bool):
                 value_expression = exp.Boolean(this=value)
             elif value is None:
                 value_expression = exp.null()
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, int):
+                value_expression = exp.Literal.number(value)
+            elif isinstance(value, float):
+                if not math.isfinite(value):
+                    msg = f"COPY option {key!r} numeric value must be finite, got {value!r}"
+                    raise SQLBuilderError(msg)
                 value_expression = exp.Literal.number(value)
             elif isinstance(value, (list, tuple)):
                 elements = [exp.Literal.string(str(item)) for item in value]

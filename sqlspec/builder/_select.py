@@ -235,6 +235,8 @@ class SelectClauseMixin:
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
         for column in columns:
             column_expr = column.expression if isinstance(column, Case) else parse_column_expression(column, builder)
+            if isinstance(builder, QueryBuilder):
+                column_expr = builder._merge_subquery_fragments(column_expr)
             select_expr = select_expr.select(column_expr, copy=False)
         self.set_expression(select_expr)
         return cast("Self", builder)
@@ -251,6 +253,8 @@ class SelectClauseMixin:
         select_expr.set("expressions", [])
         for column in columns:
             column_expr = column.expression if isinstance(column, Case) else parse_column_expression(column, builder)
+            if isinstance(builder, QueryBuilder):
+                column_expr = builder._merge_subquery_fragments(column_expr)
             select_expr = select_expr.select(column_expr, copy=False)
         self.set_expression(select_expr)
         return cast("Self", builder)
@@ -295,6 +299,8 @@ class SelectClauseMixin:
             from_expr = (
                 exp.alias_(unwrapped_source, alias, copy=isinstance(table, exp.Expr)) if alias else unwrapped_source
             )
+            if isinstance(builder, QueryBuilder):
+                from_expr = builder._merge_subquery_fragments(from_expr)
         elif has_parameter_builder(table):
             subquery_expression = (
                 cast("QueryBuilder", table)._build_final_expression(copy=True)
@@ -640,7 +646,10 @@ class WhereClauseMixin:
             msg = "Cannot add OR WHERE clause: no existing WHERE clause found. Use where() before or_where()."
             raise SQLBuilderError(msg)
 
-        combined_condition = exp.Or(this=where_clause.this, expression=new_condition)
+        merged_condition = (
+            builder._merge_subquery_fragments(new_condition) if isinstance(builder, QueryBuilder) else new_condition
+        )
+        combined_condition = exp.Or(this=where_clause.this, expression=merged_condition)
         where_clause.set("this", combined_condition)
         builder.set_expression(expression)
         return cast("Self", builder)
@@ -778,12 +787,8 @@ class WhereClauseMixin:
             parsed_subquery = subquery_builder._build_final_expression(copy=True)
             parameters: Any = subquery_builder.parameters
             if isinstance(parameters, dict):
-                param_mapping: dict[str, str] = {}
                 query_builder = cast("QueryBuilder", builder)
-                for param_name, param_value in parameters.items():
-                    unique_name = query_builder._next_parameter_name(param_name)
-                    param_mapping[param_name] = unique_name
-                    query_builder.add_parameter(param_value, name=unique_name)
+                param_mapping = query_builder._merge_parameter_dict(parameters)
                 if param_mapping:
                     parsed_subquery = query_builder._update_placeholders(parsed_subquery, param_mapping)
             elif isinstance(parameters, (list, tuple)):

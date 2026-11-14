@@ -185,6 +185,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         elif unwrapped_source is not None:
             effective_alias = alias or ("src" if is_teradata else None)
             source_copy = unwrapped_source.copy() if isinstance(source, exp.Expr) else unwrapped_source
+            if isinstance(builder, QueryBuilder):
+                source_copy = builder._merge_subquery_fragments(source_copy)
             if isinstance(source_copy, (exp.Select, exp.SetOperation)):
                 source_expr = (
                     exp.Subquery(this=source_copy, alias=_parse_alias_identifier(effective_alias))
@@ -1022,6 +1024,8 @@ def _parse_merge_condition(
         ):
             msg = f"Unsupported condition expression for {clause_label} clause: {type(condition)}"
             raise SQLBuilderError(msg)
+        if isinstance(builder, QueryBuilder):
+            return builder._merge_subquery_fragments(condition)
         return condition
     msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
     raise SQLBuilderError(msg)
