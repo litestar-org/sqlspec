@@ -316,10 +316,19 @@ class OracleAsyncAQHub:
 def _apply_deq_options(
     queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float, correlation: str
 ) -> None:
-    """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
+    """Configure a queue's dequeue options in place (python-oracledb 4.x API).
+
+    Oracle AQ ``deqoptions.correlation`` interprets ``_`` and ``%`` as SQL ``LIKE``
+    wildcards, so channel names containing either character filter on exact
+    ``corrid`` equality via ``deqoptions.condition`` instead.
+    """
     options = queue.deqoptions
     options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
-    options.correlation = correlation
+    if "_" in correlation or "%" in correlation:
+        escaped = correlation.replace("'", "''")
+        options.condition = f"corrid = '{escaped}'"
+    else:
+        options.correlation = correlation
     if visibility is not None:
         options.visibility = visibility
     elif default_visibility is not None:
