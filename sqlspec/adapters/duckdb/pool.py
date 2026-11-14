@@ -1,12 +1,16 @@
 """DuckDB connection pool with thread-local connections."""
 
+import asyncio
 import logging
 import math
 import re
 import threading
 import time
 from contextlib import contextmanager, suppress
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast, final
+from urllib.parse import urlsplit, urlunsplit
+from weakref import WeakKeyDictionary
 
 from mypy_extensions import mypyc_attr
 
@@ -30,6 +34,7 @@ __all__ = ("DuckDBConnectionPool",)
 
 _SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _EXPLICIT_INSTALL_KEYS: Final[tuple[str, ...]] = ("version", "repository", "repository_url")
+_DUCKDB_PROFILING_MODES: Final[frozenset[str]] = frozenset({"json", "query_tree", "no_output", "html", "graphviz"})
 
 
 logger = get_logger(POOL_LOGGER_NAME)
@@ -62,6 +67,27 @@ _SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
     "n": "false",
     "0": "false",
 }
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+def _sanitize_database_name(database: object) -> str:
+    """Strip userinfo and query parameters from DuckDB database URIs for logging."""
+    raw = str(database) if database else ""
+    if not raw or raw.startswith(":memory:"):
+        return ":memory:"
+    parsed = urlsplit(raw)
+    if parsed.scheme and len(parsed.scheme) > 1:
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[1]
+        return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    return raw
 
 
 @final
@@ -134,10 +160,53 @@ class DuckDBConnectionPool:
     @property
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
-        db = self._connection_config.get("database", "")
-        if db.startswith(":memory:") or db == "":
-            return ":memory:"
-        return str(db)
+        return _sanitize_database_name(self._connection_config.get("database", ""))
+
+    def _checkout_state(self) -> "dict[str, Any]":
+        """Return the checkout state mapping for the current sync thread or active asyncio task."""
+        thread_dict = self._thread_local.__dict__
+        task = _current_async_task()
+        if task is None:
+            return thread_dict
+        task_states = cast(
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+        )
+        if task_states is None:
+            task_states = WeakKeyDictionary()
+            thread_dict["_task_states"] = task_states
+        state = task_states.get(task)
+        if state is None:
+            state = {}
+            task_states[task] = state
+            task.add_done_callback(partial(self._retire_finished_task_state, task_states))
+        return state
+
+    def _existing_checkout_state(self) -> "dict[str, Any] | None":
+        """Return an existing checkout state mapping without allocating a new task slot."""
+        thread_dict = self._thread_local.__dict__
+        task = _current_async_task()
+        if task is None:
+            return thread_dict
+        task_states = cast(
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+        )
+        if task_states is None:
+            return None
+        return task_states.get(task)
+
+    def _retire_finished_task_state(
+        self, task_states: "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]]", completed_task: "asyncio.Task[Any]"
+    ) -> None:
+        state = task_states.pop(completed_task, None)
+        if state is None or state.get("manual_acquire"):
+            return
+        connection = cast("DuckDBConnection | None", state.get("connection"))
+        if connection is None:
+            return
+        with self._lock:
+            if self._is_memory_db and len(self._connection_registry) <= 1:
+                return
+        self._retire_connection(connection)
 
     def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
         """Open a standalone connection with extensions and secrets applied.
@@ -258,29 +327,33 @@ class DuckDBConnectionPool:
                 self._profile_paths[id(connection)] = profile_path
         storage_protocols.update(connection.list_filesystems())
         if record_thread_state:
-            self._thread_local.storage_extensions = frozenset(loaded_extensions)
-            self._thread_local.storage_secrets = tuple(created_secrets)
-            self._thread_local.secret_refresh_times = secret_refresh_times
-            self._thread_local.storage_protocols = frozenset(storage_protocols)
-            self._thread_local.profile_path = profile_path
+            state = self._checkout_state()
+            state["storage_extensions"] = frozenset(loaded_extensions)
+            state["storage_secrets"] = tuple(created_secrets)
+            state["secret_refresh_times"] = secret_refresh_times
+            state["storage_protocols"] = frozenset(storage_protocols)
+            state["profile_path"] = profile_path
+            state.pop("_cached_storage_settings", None)
         return connection
 
     @contextmanager
     def get_connection(self) -> "Generator[DuckDBConnection, None, None]":
-        """Get a thread-local connection.
+        """Get a thread-local or task-local connection.
 
-        Each thread gets its own dedicated DuckDB connection to prevent
-        thread-safety issues with concurrent cursor operations.
+        Each thread (and each concurrent asyncio task running on an event loop thread)
+        gets its own dedicated DuckDB connection to prevent concurrent cursor and
+        transaction sharing.
 
-        Re-entrant checkouts on the same thread reuse the active connection
+        Re-entrant checkouts on the same thread or task reuse the active connection
         without committing, rolling back, or closing on inner exits.
 
         Yields:
-            DuckDBConnection: A thread-local connection.
+            DuckDBConnection: A thread- or task-isolated connection.
         """
         connection = self._get_thread_connection()
-        depth = int(getattr(self._thread_local, "depth", 0))
-        self._thread_local.depth = depth + 1
+        state = self._checkout_state()
+        depth = int(state.get("depth", 0))
+        state["depth"] = depth + 1
         try:
             yield connection
         except BaseException:
@@ -301,11 +374,17 @@ class DuckDBConnectionPool:
                         self._close_thread_connection()
                     raise
         finally:
-            self._thread_local.depth = depth
+            state["depth"] = depth
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
         self._close_thread_connection()
+        task_states = cast(
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None",
+            self._thread_local.__dict__.pop("_task_states", None),
+        )
+        if task_states is not None:
+            task_states.clear()
         with self._lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
@@ -319,23 +398,29 @@ class DuckDBConnectionPool:
             cleanup_duckdb_profile_path(profile_path)
 
     def size(self) -> int:
-        """Get current pool size (always 1 for thread-local)."""
-        return 1 if "connection" in self._thread_local.__dict__ else 0
+        """Return the number of active connections registered with this pool."""
+        with self._lock:
+            return len(self._connection_registry)
 
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0 for thread-local)."""
         return 0
 
     def acquire(self) -> DuckDBConnection:
-        """Acquire a thread-local connection.
+        """Acquire a thread-local or task-local connection.
 
-        Each thread gets its own dedicated DuckDB connection to prevent
-        thread-safety issues with concurrent cursor operations.
+        Each thread (and each concurrent asyncio task running on an event loop thread)
+        gets its own dedicated DuckDB connection to prevent concurrent cursor and
+        transaction sharing.
 
         Returns:
-            DuckDBConnection: A thread-local connection
+            DuckDBConnection: A thread- or task-isolated connection
         """
-        return self._get_thread_connection()
+        state = self._checkout_state()
+        connection = self._get_thread_connection()
+        if not state.get("depth", 0):
+            state["manual_acquire"] = True
+        return connection
 
     def release(self, connection: DuckDBConnection) -> None:
         """Release a connection (no-op for thread-local connections).
@@ -353,8 +438,8 @@ class DuckDBConnectionPool:
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
         """Return storage setup completed for this thread's current connection."""
-        state = self._thread_local.__dict__
-        if state.get("connection") is not connection:
+        state = self._existing_checkout_state()
+        if state is None or state.get("connection") is not connection:
             with self._lock:
                 profile_path = self._profile_paths.get(id(connection))
             if profile_path is not None:
@@ -417,29 +502,33 @@ class DuckDBConnectionPool:
         Each thread gets its own dedicated DuckDB connection to prevent
         thread-safety issues with concurrent cursor operations.
         """
-        thread_state = self._thread_local.__dict__
+        thread_state = self._checkout_state()
         if thread_state.get("generation") != self._generation:
             stale = thread_state.pop("connection", None)
             if stale is not None:
                 self._retire_connection(cast("DuckDBConnection", stale))
             thread_state.pop("created_at", None)
             thread_state.pop("last_used", None)
-            self._thread_local.generation = self._generation
+            thread_state["generation"] = self._generation
         if "connection" not in thread_state:
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return cast("DuckDBConnection", self._thread_local.connection)
+            now = time.time()
+            thread_state["connection"] = self._create_connection()
+            thread_state["created_at"] = now
+            thread_state["last_used"] = now
+            return cast("DuckDBConnection", thread_state["connection"])
 
-        if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
-            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
-            self._thread_local.last_used = time.time()
-            return cast("DuckDBConnection", self._thread_local.connection)
+        if self._recycle > 0 and time.time() - float(thread_state["created_at"]) > self._recycle:
+            self._retire_connection(cast("DuckDBConnection", thread_state["connection"]))
+            now = time.time()
+            thread_state["connection"] = self._create_connection()
+            thread_state["created_at"] = now
+            thread_state["last_used"] = now
+            return cast("DuckDBConnection", thread_state["connection"])
 
-        idle_time = time.time() - thread_state.get("last_used", 0)
-        if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
+        idle_time = time.time() - float(thread_state.get("last_used", 0))
+        if idle_time > self._health_check_interval and not self._is_connection_alive(
+            cast("DuckDBConnection", thread_state["connection"])
+        ):
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -450,21 +539,26 @@ class DuckDBConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
-            self._thread_local.connection = self._create_connection()
-            self._thread_local.created_at = time.time()
+            self._retire_connection(cast("DuckDBConnection", thread_state["connection"]))
+            thread_state["connection"] = self._create_connection()
+            thread_state["created_at"] = time.time()
 
-        self._thread_local.last_used = time.time()
-        self._refresh_dynamic_secrets(cast("DuckDBConnection", self._thread_local.connection))
-        return cast("DuckDBConnection", self._thread_local.connection)
+        thread_state["last_used"] = time.time()
+        connection = cast("DuckDBConnection", thread_state["connection"])
+        self._refresh_dynamic_secrets(connection)
+        return connection
 
     def _refresh_dynamic_secrets(self, connection: DuckDBConnection) -> None:
         """Refresh secrets configured with ``value_provider`` when ``refresh_interval_seconds`` has elapsed."""
         if not self._has_dynamic_secrets:
             return
-        thread_state = self._thread_local.__dict__
+        thread_state = self._checkout_state()
         refresh_times = cast("dict[str, float]", thread_state.setdefault("secret_refresh_times", {}))
         current_secrets = list(cast("tuple[dict[str, Any], ...]", thread_state.get("storage_secrets", ())))
+        profile_path = cast("Path | None", thread_state.get("profile_path"))
+        if profile_path is None:
+            with self._lock:
+                profile_path = self._profile_paths.get(id(connection))
         now_monotonic = time.monotonic()
         updated = False
         for secret_config in self._secrets:
@@ -477,7 +571,7 @@ class DuckDBConnectionPool:
             if now_monotonic - last_refreshed < interval:
                 continue
             resolved_secret = _resolve_secret_config(secret_config)
-            if _create_secret(connection, resolved_secret):
+            if _create_secret(connection, resolved_secret, profile_path=profile_path):
                 refresh_times[str(secret_name)] = now_monotonic
                 updated_entry = {**resolved_secret, "value": dict(resolved_secret.get("value") or {})}
                 replaced = False
@@ -490,7 +584,7 @@ class DuckDBConnectionPool:
                     current_secrets.append(updated_entry)
                 updated = True
         if updated:
-            self._thread_local.storage_secrets = tuple(current_secrets)
+            thread_state["storage_secrets"] = tuple(current_secrets)
             thread_state.pop("_cached_storage_settings", None)
 
     def _retire_connection(self, connection: DuckDBConnection) -> None:
@@ -503,20 +597,21 @@ class DuckDBConnectionPool:
         cleanup_duckdb_profile_path(profile_path)
 
     def _close_thread_connection(self) -> None:
-        """Close the connection for the current thread."""
-        thread_state = self._thread_local.__dict__
+        """Close the connection for the current thread or task."""
+        thread_state = self._existing_checkout_state()
+        if thread_state is None:
+            return
         thread_state.pop("storage_extensions", None)
         thread_state.pop("storage_secrets", None)
+        thread_state.pop("secret_refresh_times", None)
         thread_state.pop("storage_protocols", None)
         thread_state.pop("profile_path", None)
         thread_state.pop("_cached_storage_settings", None)
+        thread_state.pop("manual_acquire", None)
         if "connection" in thread_state:
-            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
-            del self._thread_local.connection
-            if "created_at" in thread_state:
-                del self._thread_local.created_at
-            if "last_used" in thread_state:
-                del self._thread_local.last_used
+            self._retire_connection(cast("DuckDBConnection", thread_state.pop("connection")))
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
 
     def _is_connection_alive(self, connection: DuckDBConnection) -> bool:
         """Check if a connection is still alive and usable.
@@ -593,7 +688,9 @@ def _resolve_secret_config(secret_config: dict[str, Any]) -> dict[str, Any]:
     return resolved
 
 
-def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) -> bool:
+def _create_secret(
+    connection: DuckDBConnection, secret_config: dict[str, Any], *, profile_path: "Path | None" = None
+) -> bool:
     secret_config = _resolve_secret_config(secret_config)
     secret_name = secret_config.get("name")
     secret_type = secret_config.get("secret_type")
@@ -605,7 +702,7 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
         _validate_sql_identifier(secret_name, "secret_name")
         _validate_sql_identifier(secret_type, "secret_type")
         sql = _secret_sql(secret_config, secret_name, secret_type)
-        mismatch = _apply_secret(connection, secret_config, secret_name, secret_type, sql)
+        mismatch = _apply_secret(connection, secret_config, secret_name, secret_type, sql, profile_path=profile_path)
     except Exception:
         if required:
             raise
@@ -620,7 +717,13 @@ def _create_secret(connection: DuckDBConnection, secret_config: dict[str, Any]) 
 
 
 def _apply_secret(
-    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+    connection: DuckDBConnection,
+    secret_config: dict[str, Any],
+    secret_name: str,
+    secret_type: str,
+    sql: str,
+    *,
+    profile_path: "Path | None" = None,
 ) -> "str | None":
     """Create or reuse a declared secret under the process-wide secret lock.
 
@@ -631,21 +734,31 @@ def _apply_secret(
         A description of how the visible secret differs from its declaration, or ``None`` when it matches.
     """
     for attempt in range(1, SECRET_CONFLICT_ATTEMPTS):
-        applied, mismatch = _try_apply_secret(connection, secret_config, secret_name, secret_type, sql)
+        applied, mismatch = _try_apply_secret(
+            connection, secret_config, secret_name, secret_type, sql, profile_path=profile_path
+        )
         if applied:
             return mismatch
         time.sleep(SECRET_CONFLICT_BACKOFF * attempt)
     with _SECRET_LOCK:
-        return _apply_secret_locked(connection, secret_config, secret_name, secret_type, sql)
+        return _apply_secret_locked(connection, secret_config, secret_name, secret_type, sql, profile_path=profile_path)
 
 
 def _try_apply_secret(
-    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+    connection: DuckDBConnection,
+    secret_config: dict[str, Any],
+    secret_name: str,
+    secret_type: str,
+    sql: str,
+    *,
+    profile_path: "Path | None" = None,
 ) -> "tuple[bool, str | None]":
     """Apply a declared secret once, returning ``(False, None)`` on a catalog write-write conflict."""
     try:
         with _SECRET_LOCK:
-            mismatch = _apply_secret_locked(connection, secret_config, secret_name, secret_type, sql)
+            mismatch = _apply_secret_locked(
+                connection, secret_config, secret_name, secret_type, sql, profile_path=profile_path
+            )
     except duckdb.TransactionException as exc:
         if "write-write conflict" not in str(exc):
             raise
@@ -653,24 +766,72 @@ def _try_apply_secret(
     return True, mismatch
 
 
+def _read_profiling_state(connection: DuckDBConnection) -> "tuple[str | None, str | None]":
+    """Read active profiling mode and output path if profiling is currently enabled on connection."""
+    with suppress(Exception):
+        row = connection.execute(
+            "SELECT current_setting('enable_profiling'), current_setting('profiling_output')"
+        ).fetchone()
+        if row and row[0]:
+            mode = str(row[0]).strip().lower()
+            if mode in _DUCKDB_PROFILING_MODES:
+                output = str(row[1]) if len(row) > 1 and row[1] else None
+                return mode, output
+    return None, None
+
+
+def _restore_profiling_state(
+    connection: DuckDBConnection,
+    *,
+    profile_path: "Path | None",
+    previous_mode: "str | None",
+    previous_output: "str | None",
+) -> None:
+    """Restore statement profiling after secret creation completes."""
+    if profile_path is not None:
+        with suppress(Exception):
+            configure_duckdb_statement_profiling(connection, profile_path)
+        return
+    if previous_mode is not None:
+        with suppress(Exception):
+            connection.execute(f"PRAGMA enable_profiling='{previous_mode}'")
+            if previous_output:
+                escaped = previous_output.replace("'", "''")
+                connection.execute(f"SET profiling_output='{escaped}'")
+
+
 def _apply_secret_locked(
-    connection: DuckDBConnection, secret_config: dict[str, Any], secret_name: str, secret_type: str, sql: str
+    connection: DuckDBConnection,
+    secret_config: dict[str, Any],
+    secret_name: str,
+    secret_type: str,
+    sql: str,
+    *,
+    profile_path: "Path | None" = None,
 ) -> "str | None":
     """Reuse a visible secret unless replacement is requested, otherwise create it, then compare it."""
-    expected_provider = secret_config.get("provider") or _default_secret_provider(connection, secret_type)
-    if not secret_config.get("replace", False):
-        existing = _visible_secret(connection, secret_config, secret_name, secret_type)
-        if existing is not None:
-            mismatch = _secret_mismatch(existing, secret_config, secret_name, secret_type, expected_provider, True)
-            if mismatch is None:
-                logger.debug("DuckDB secret %r already exists and is reused", secret_name)
-            return mismatch
-    connection.execute(sql)
-    created = _visible_secret(connection, secret_config, secret_name, secret_type)
-    if created is None:
-        storage = "persistent" if secret_config.get("persistent", False) else "temporary"
-        return f"DuckDB secret {secret_name!r} was not visible as a {storage} secret after creation"
-    return _secret_mismatch(created, secret_config, secret_name, secret_type, expected_provider, False)
+    previous_mode, previous_output = _read_profiling_state(connection)
+    with suppress(Exception):
+        connection.execute("PRAGMA disable_profiling")
+    try:
+        expected_provider = secret_config.get("provider") or _default_secret_provider(connection, secret_type)
+        if not secret_config.get("replace", False):
+            existing = _visible_secret(connection, secret_config, secret_name, secret_type)
+            if existing is not None:
+                mismatch = _secret_mismatch(existing, secret_config, secret_name, secret_type, expected_provider, True)
+                if mismatch is None:
+                    logger.debug("DuckDB secret %r already exists and is reused", secret_name)
+                return mismatch
+        connection.execute(sql)
+        created = _visible_secret(connection, secret_config, secret_name, secret_type)
+        if created is None:
+            storage = "persistent" if secret_config.get("persistent", False) else "temporary"
+            return f"DuckDB secret {secret_name!r} was not visible as a {storage} secret after creation"
+        return _secret_mismatch(created, secret_config, secret_name, secret_type, expected_provider, False)
+    finally:
+        _restore_profiling_state(
+            connection, profile_path=profile_path, previous_mode=previous_mode, previous_output=previous_output
+        )
 
 
 def _secret_sql(secret_config: dict[str, Any], secret_name: str, secret_type: str) -> str:

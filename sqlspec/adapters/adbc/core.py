@@ -5,6 +5,7 @@ import datetime as dt
 import decimal
 import importlib
 import math
+import os
 import re
 import tempfile
 from collections.abc import Mapping, Sized
@@ -59,7 +60,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
-from sqlspec.utils.uuids import uuid4, uuid_from_string
+from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1204,8 +1205,17 @@ def apply_driver_features(
 
 
 def create_duckdb_profile_path() -> Path:
-    """Allocate a unique temporary file path for DuckDB JSON statement profiling."""
-    return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
+    """Create a 0600 temporary file path for DuckDB JSON statement profiling."""
+    fd, raw_path = tempfile.mkstemp(prefix="sqlspec_duckdb_profile_", suffix=".json", dir=tempfile.gettempdir())
+    path = Path(raw_path)
+    try:
+        os.close(fd)
+        path.chmod(0o600)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def cleanup_duckdb_profile_path(profile_path: Path | str | None) -> None:

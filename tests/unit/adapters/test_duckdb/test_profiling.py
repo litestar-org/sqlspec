@@ -1,8 +1,10 @@
 """Unit tests for DuckDB JSON statement profiling and per-statement script events."""
 
+import stat
 from pathlib import Path
 
 from sqlspec.adapters.duckdb import DuckDBConfig
+from sqlspec.adapters.duckdb.core import cleanup_duckdb_profile_path, create_duckdb_profile_path
 from sqlspec.observability import ObservabilityConfig, StatementEvent
 
 
@@ -88,3 +90,73 @@ def test_duckdb_profiling_scratch_file_cleaned_up_on_close_pool(tmp_path: Path) 
 
     assert profile_path is not None
     assert not profile_path.exists()
+
+
+def test_duckdb_profile_path_uses_private_permissions(tmp_path: Path) -> None:
+    """Profile temp files are created with 0o600 permissions before and after queries."""
+    standalone = create_duckdb_profile_path()
+    try:
+        assert stat.S_IMODE(standalone.stat().st_mode) == 0o600
+    finally:
+        cleanup_duckdb_profile_path(standalone)
+
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "perm.duckdb")},
+        driver_features={"enable_statement_profiling": True},
+    )
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1")
+            raw_path = session.driver_features.get("_duckdb_profile_path")
+            assert raw_path is not None
+            assert stat.S_IMODE(Path(raw_path).stat().st_mode) == 0o600
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_secret_creation_excludes_credentials_from_profile_json(tmp_path: Path) -> None:
+    """Secret DDL and refreshes disable profiling so credential values never enter profile JSON."""
+    secret_value = "TOP_SECRET_CREDENTIAL_98765"
+    refresh_calls = 0
+
+    def next_credentials() -> dict[str, str]:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return {"key_id": f"KID_{refresh_calls}", "secret": secret_value}
+
+    events: list[StatementEvent] = []
+    config = DuckDBConfig(
+        connection_config={"database": str(tmp_path / "secret_prof.duckdb")},
+        driver_features={
+            "enable_statement_profiling": True,
+            "secrets": [
+                {
+                    "name": "dyn_s3_secret",
+                    "secret_type": "s3",
+                    "required": True,
+                    "refresh_interval_seconds": 0.0,
+                    "value_provider": next_credentials,
+                }
+            ],
+        },
+        observability_config=ObservabilityConfig(statement_observers=(events.append,)),
+    )
+    try:
+        with config.provide_session() as session:
+            session.execute("SELECT 1 AS first_query")
+            raw_path = session.driver_features.get("_duckdb_profile_path")
+            assert raw_path is not None
+            assert secret_value not in Path(raw_path).read_text(encoding="utf-8")
+
+        with config.provide_session() as session:
+            session.execute("SELECT 2 AS second_query")
+            raw_path = session.driver_features.get("_duckdb_profile_path")
+            assert raw_path is not None
+            assert secret_value not in Path(raw_path).read_text(encoding="utf-8")
+    finally:
+        config.close_pool()
+
+    assert refresh_calls >= 2
+    assert len(events) == 2
+    assert all(isinstance(event.profile, dict) for event in events)
+    assert all(secret_value not in repr(event.profile) for event in events)

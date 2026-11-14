@@ -1,5 +1,6 @@
 """Unit tests for ADBC DuckDB JSON statement profiling and per-statement script events."""
 
+import stat
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.core import cleanup_duckdb_profile_path, create_duckdb_profile_path
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import ObservabilityConfig, StatementEvent
 
@@ -214,3 +216,13 @@ assert "duckdb" not in sys.modules
 assert "sqlspec.adapters.duckdb" not in sys.modules
 """
     subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+
+def test_adbc_duckdb_profile_path_uses_private_permissions() -> None:
+    """ADBC DuckDB profile temp files are pre-created with 0o600 permissions."""
+    profile_path = create_duckdb_profile_path()
+    try:
+        assert profile_path.exists()
+        assert stat.S_IMODE(profile_path.stat().st_mode) == 0o600
+    finally:
+        cleanup_duckdb_profile_path(profile_path)
