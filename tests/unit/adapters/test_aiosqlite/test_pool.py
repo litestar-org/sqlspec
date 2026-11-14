@@ -869,3 +869,20 @@ async def test_aiosqlite_commit_and_rollback_double_failure_retires_and_replaces
             assert replacement_conn is not first_conn
     finally:
         await pool.close()
+
+
+async def test_aiosqlite_pool_respects_explicit_uri_false_for_memory_substrings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pool with uri=False does not open shared-memory anchors for memory-like filenames."""
+    monkeypatch.chdir(tmp_path)
+    db_name = "file:async_disk?mode=memory&cache=shared"
+    pool = AiosqliteConnectionPool({"database": db_name, "uri": False}, pool_size=1, min_size=1)
+    try:
+        async with pool.get_connection() as conn:
+            await conn.execute("CREATE TABLE t (id INT)")
+            await conn.commit()
+        assert pool._anchor_connection is None
+        assert (tmp_path / db_name).exists()
+    finally:
+        await pool.close()

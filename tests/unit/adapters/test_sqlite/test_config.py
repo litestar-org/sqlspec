@@ -437,3 +437,32 @@ def test_sqlite_create_mapped_exception_maps_notadb_and_replica_failover(tmp_pat
             assert reader.select_value("SELECT COUNT(*) FROM probe") == 0
     finally:
         config.close_pool()
+
+
+def test_sqlite_preserves_explicit_uri_false_on_file_prefix_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit uri=False prevents file: auto-URI upgrade and read-only URI inference."""
+    monkeypatch.chdir(tmp_path)
+    db_name = "file:literal.sqlite?mode=ro&cache=shared"
+    config = SqliteConfig(connection_config={"database": db_name, "uri": False})
+    assert config.connection_config["uri"] is False
+    assert build_connection_config({"database": db_name, "uri": False})["uri"] is False
+    assert sqlite_core.is_read_only_sqlite_config({"database": db_name, "uri": False}) is False
+    assert sqlite_core.is_read_only_sqlite_config({"database": db_name, "extra": {"uri": False}}) is False
+
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            session.commit()
+        assert (tmp_path / db_name).exists()
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_render_pragmas_rejects_trailing_newline() -> None:
+    """PRAGMA name and string value validation reject trailing newlines."""
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA name"):
+        sqlite_core.render_pragmas({"busy_timeout\n": 5000})
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA value"):
+        sqlite_core.render_pragmas({"journal_mode": "WAL\n"})

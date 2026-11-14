@@ -23,7 +23,7 @@ from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
     from types import TracebackType
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
@@ -343,9 +343,7 @@ class AiosqliteConnectionPool:
         pragma_lines: list[str] = []
 
         try:
-            database_path = str(self._connection_parameters.get("database", ""))
-            is_shared_cache = "cache=shared" in database_path
-            is_memory_db = ":memory:" in database_path or "mode=memory" in database_path
+            is_memory_db, is_shared_cache = _classify_memory_mode(self._connection_parameters)
             try:
                 if self._enable_optimizations:
                     if is_memory_db:
@@ -713,8 +711,7 @@ class AiosqliteConnectionPool:
             pool_connection = AiosqlitePoolConnection(connection)
             pool_connection.mark_as_idle()
 
-            database_path = str(self._connection_parameters.get("database", ""))
-            is_shared_memory = "mode=memory" in database_path and "cache=shared" in database_path
+            _, is_shared_memory = _classify_memory_mode(self._connection_parameters)
             raw_conn = getattr(connection, "_conn", None)
 
             async with self._lock:
@@ -1150,3 +1147,18 @@ async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup:
     progress_handler = runtime_setup.get("progress_handler")
     if progress_handler is not None:
         await connection.set_progress_handler(progress_handler, runtime_setup.get("progress_handler_interval", 1000))
+
+
+def _classify_memory_mode(connection_parameters: "Mapping[str, Any]") -> "tuple[bool, bool]":
+    """Classify whether SQLite connection parameters target a memory and shared-cache database."""
+    database = str(connection_parameters.get("database", ":memory:"))
+    if database == ":memory:":
+        return True, False
+    uri_flag = connection_parameters.get("uri")
+    if uri_flag is False:
+        return False, False
+    if not uri_flag and not database.startswith("file:"):
+        return False, False
+    is_memory_db = "mode=memory" in database or (database.startswith("file:") and ":memory:" in database)
+    is_shared_memory = is_memory_db and "cache=shared" in database
+    return is_memory_db, is_shared_memory

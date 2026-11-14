@@ -11,7 +11,7 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqliteDriverFeatures,
     AiosqlitePoolParams,
 )
-from sqlspec.adapters.aiosqlite.core import build_connection_config
+from sqlspec.adapters.aiosqlite.core import build_connection_config, is_read_only_sqlite_config, render_pragmas
 from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectTimeoutError
 from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _DETACHED_CONNECTION
@@ -450,3 +450,32 @@ async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path:
             assert await reader.select_value("SELECT COUNT(*) FROM probe") == 0
     finally:
         await config.close_pool()
+
+
+async def test_aiosqlite_preserves_explicit_uri_false_on_file_prefix_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit uri=False prevents file: auto-URI upgrade and read-only URI inference."""
+    monkeypatch.chdir(tmp_path)
+    db_name = "file:literal_async.sqlite?mode=ro&cache=shared"
+    config = AiosqliteConfig(connection_config={"database": db_name, "uri": False})
+    assert config.connection_config["uri"] is False
+    assert build_connection_config({"database": db_name, "uri": False})["uri"] is False
+    assert is_read_only_sqlite_config({"database": db_name, "uri": False}) is False
+    assert is_read_only_sqlite_config({"database": db_name, "extra": {"uri": False}}) is False
+
+    try:
+        async with config.provide_session() as session:
+            await session.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            await session.commit()
+        assert (tmp_path / db_name).exists()
+    finally:
+        await config.close_pool()
+
+
+def test_aiosqlite_render_pragmas_rejects_trailing_newline() -> None:
+    """PRAGMA name and string value validation reject trailing newlines."""
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA name"):
+        render_pragmas({"busy_timeout\n": 5000})
+    with pytest.raises(ImproperConfigurationError, match="PRAGMA value"):
+        render_pragmas({"journal_mode": "WAL\n"})

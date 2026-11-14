@@ -101,8 +101,8 @@ SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
 SQLITE_TABLE_INFO_MIN_COLUMNS = 2
 SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
-_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_PRAGMA_NAME_PATTERN = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
+_PRAGMA_VALUE_PATTERN = re.compile(r"\A[A-Za-z0-9_.\-]+\Z")
 _EXTENSION_PRAGMA_PROFILE = (
     "PRAGMA foreign_keys = ON",
     "PRAGMA cache_size = -64000",
@@ -199,14 +199,14 @@ def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> N
 def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
     rendered: list[tuple[str, str]] = []
     for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.fullmatch(pragma_name) is None:
             msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
             raise ImproperConfigurationError(msg)
         if isinstance(pragma_value, bool):
             rendered_value = "1" if pragma_value else "0"
         elif isinstance(pragma_value, int):
             rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.fullmatch(pragma_value) is not None:
             rendered_value = pragma_value
         else:
             msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
@@ -433,6 +433,13 @@ def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
     """Return whether a configuration requests SQLite read-only enforcement."""
     if connection_config.get("query_only"):
         return True
+    explicit_uri = connection_config.get("uri")
+    if explicit_uri is None:
+        extra = connection_config.get("extra")
+        if isinstance(extra, Mapping):
+            explicit_uri = extra.get("uri")
+    if explicit_uri is False:
+        return False
     database = str(connection_config.get("database", ""))
     return database.startswith("file:") and dict(parse_qsl(urlsplit(database).query)).get("mode") == "ro"
 
@@ -481,7 +488,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         connection_parameters.update(_filter_connection_params(extra))
 
     database = str(connection_parameters.get("database", ""))
-    if database.startswith("file:"):
+    if database.startswith("file:") and connection_parameters.get("uri") is None:
         connection_parameters["uri"] = True
     return connection_parameters
 

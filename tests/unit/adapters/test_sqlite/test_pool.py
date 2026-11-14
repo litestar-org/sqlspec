@@ -1,5 +1,6 @@
 """Unit tests for the SQLite thread-local connection pool."""
 
+import asyncio
 import sqlite3
 import threading
 from pathlib import Path
@@ -511,5 +512,80 @@ def test_sqlite_pool_retires_thread_connection_when_rollback_fails(monkeypatch: 
         with pool.get_connection() as second_conn:
             assert second_conn is not first_conn
             assert second_conn.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        pool.close()
+
+
+def test_sqlite_pool_isolates_connections_and_transactions_across_asyncio_tasks(tmp_path: Path) -> None:
+    """Concurrent asyncio tasks on the same thread receive isolated connections and transactions."""
+    db_path = tmp_path / "async_tasks.db"
+    with sqlite3.connect(db_path) as setup_conn:
+        setup_conn.execute("CREATE TABLE items (label TEXT)")
+        setup_conn.commit()
+    pool = SqliteConnectionPool({"database": str(db_path)})
+
+    async def _run() -> None:
+        task_a_in_tx = asyncio.Event()
+        task_b_finished = asyncio.Event()
+        seen_connections: list[int] = []
+        task_b_saw_rows: list[Any] = []
+        task_a_remained_in_tx: list[bool] = []
+
+        async def committing_worker() -> int:
+            with pool.get_connection() as conn:
+                seen_connections.append(id(conn))
+                conn.execute("INSERT INTO items VALUES ('committed')")
+                task_a_in_tx.set()
+                await task_b_finished.wait()
+                task_a_remained_in_tx.append(bool(getattr(conn, "in_transaction", False)))
+                return id(conn)
+
+        async def failing_worker() -> int:
+            await task_a_in_tx.wait()
+            try:
+                with pool.get_connection() as conn:
+                    seen_connections.append(id(conn))
+                    assert pool.size() == 2
+                    assert pool.checked_out() == 2
+                    task_b_saw_rows.extend(conn.execute("SELECT label FROM items").fetchall())
+                    msg = "abort task b"
+                    raise ValueError(msg)
+            finally:
+                task_b_finished.set()
+
+        t1 = asyncio.create_task(committing_worker())
+        t2 = asyncio.create_task(failing_worker())
+        results = await asyncio.gather(t1, t2, return_exceptions=True)
+
+        assert isinstance(results[0], int)
+        assert isinstance(results[1], ValueError)
+        assert len(set(seen_connections)) == 2
+        assert task_b_saw_rows == []
+        assert task_a_remained_in_tx == [True]
+        assert pool.size() == 0
+
+    try:
+        asyncio.run(_run())
+        with pool.get_connection() as verify_conn:
+            rows = verify_conn.execute("SELECT label FROM items ORDER BY label").fetchall()
+            assert rows == [("committed",)]
+    finally:
+        pool.close()
+
+
+def test_sqlite_pool_respects_explicit_uri_false_for_memory_substrings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pool with uri=False treats file:-prefixed memory-like names as literal file paths."""
+    monkeypatch.chdir(tmp_path)
+    db_name = "file:disk_target?mode=memory&cache=shared"
+    pool = SqliteConnectionPool({"database": db_name, "uri": False})
+    try:
+        assert pool._is_memory_db is False
+        assert pool._is_shared_memory is False
+        assert pool._database_name == db_name
+        with pool.get_connection() as conn:
+            conn.execute("CREATE TABLE t (id INT)")
+        assert (tmp_path / db_name).exists()
     finally:
         pool.close()

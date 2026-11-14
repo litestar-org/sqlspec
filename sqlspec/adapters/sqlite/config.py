@@ -276,7 +276,11 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             config_dict["uri"] = True
         elif "database" in config_dict:
             database_path = str(config_dict["database"])
-            if database_path.startswith("file:") and not config_dict.get("uri"):
+            extra_config = config_dict.get("extra")
+            explicit_uri = config_dict.get("uri")
+            if explicit_uri is None and isinstance(extra_config, Mapping):
+                explicit_uri = extra_config.get("uri")
+            if database_path.startswith("file:") and explicit_uri is None:
                 logger.debug(
                     "Database URI detected (%s) but uri=True not set. "
                     "Auto-enabling URI mode to prevent physical file creation.",
