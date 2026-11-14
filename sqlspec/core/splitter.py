@@ -486,6 +486,7 @@ class PostgreSQLDialectConfig(_EagerDialectConfig):
             List of dialect-specific token patterns
         """
         return [
+            (TokenType.COMMENT_BLOCK, _nested_block_comment_token),
             (TokenType.STRING_LITERAL, self._handle_dollar_quoted_string),
             (TokenType.STRING_LITERAL, _ESCAPE_STRING_PATTERN),
             (TokenType.KEYWORD, r"\bBEGIN\s+ATOMIC\b"),
@@ -570,9 +571,12 @@ class DuckDBDialectConfig(_EagerDialectConfig):
         """Get DuckDB-specific token patterns.
 
         Returns:
-            Dollar-quoted string literal handler
+            Nested block comment and dollar-quoted string handlers
         """
-        return [(TokenType.STRING_LITERAL, _dollar_quoted_token)]
+        return [
+            (TokenType.COMMENT_BLOCK, _nested_block_comment_token),
+            (TokenType.STRING_LITERAL, _dollar_quoted_token),
+        ]
 
 
 @final
@@ -1088,3 +1092,33 @@ def _dollar_quoted_token(text: str, position: int, line: int, column: int) -> To
     content_end = text.find(tag, position + len(tag))
     full_value = text[position:] if content_end < 0 else text[position : content_end + len(tag)]
     return Token(type=TokenType.STRING_LITERAL, value=full_value, line=line, column=column, position=position)
+
+
+def _nested_block_comment_token(text: str, position: int, line: int, column: int) -> Token | None:
+    """Match a depth-counted nested ``/* ... */`` block comment in linear time."""
+    if not text.startswith("/*", position):
+        return None
+    idx = position + 2
+    depth = 1
+    next_open = text.find("/*", idx)
+    next_close = text.find("*/", idx)
+    while depth > 0:
+        if next_close < 0:
+            return Token(
+                type=TokenType.COMMENT_BLOCK, value=text[position:], line=line, column=column, position=position
+            )
+        if 0 <= next_open < next_close:
+            depth += 1
+            idx = next_open + 2
+            next_open = text.find("/*", idx)
+            if next_close < idx:
+                next_close = text.find("*/", idx)
+        else:
+            depth -= 1
+            idx = next_close + 2
+            if depth == 0:
+                break
+            if 0 <= next_open < idx:
+                next_open = text.find("/*", idx)
+            next_close = text.find("*/", idx)
+    return Token(type=TokenType.COMMENT_BLOCK, value=text[position:idx], line=line, column=column, position=position)

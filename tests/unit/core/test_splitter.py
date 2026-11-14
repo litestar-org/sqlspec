@@ -496,3 +496,26 @@ def test_unknown_dialects_reuse_generic_splitter_cache_and_bound_warnings() -> N
     assert len(splitter_module._splitter_cache) == 1
     assert next(iter(splitter_module._splitter_cache)) == ("generic", False)
     assert len(splitter_module._warned_unknown_dialects) <= splitter_module._MAX_WARNED_UNKNOWN_DIALECTS
+
+
+@pytest.mark.parametrize("dialect", ["postgresql", "postgres", "cockroach", "cockroachdb", "duckdb"])
+def test_split_preserves_semicolons_inside_nested_block_comments(dialect: str) -> None:
+    """Nested block comments on PostgreSQL-family and DuckDB dialects do not split early."""
+    script = "SELECT /* a /* b */ ; INSERT INTO r5 VALUES ('x'); */ 1; SELECT /*/**/*/ 2; SELECT /*/*/"
+    statements = split_sql_script(script, dialect=dialect, strip_trailing_terminator=True)
+    assert statements == [
+        "SELECT /* a /* b */ ; INSERT INTO r5 VALUES ('x'); */ 1",
+        "SELECT /*/**/*/ 2",
+        "SELECT /*/*/",
+    ]
+    assert splitter_module.contains_statement_terminator("SELECT /* a /* b */ ; */ 1", dialect=dialect) is False
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "mysql", "oracle"])
+def test_split_keeps_non_nested_block_comments_on_standard_dialects(dialect: str) -> None:
+    """Dialects without nested block comments close at the first closing delimiter."""
+    script = "SELECT /* a /* b */ ; SELECT 2;"
+    assert split_sql_script(script, dialect=dialect, strip_trailing_terminator=True) == [
+        "SELECT /* a /* b */",
+        "SELECT 2",
+    ]
