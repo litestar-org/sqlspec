@@ -1,13 +1,15 @@
 """DuckDB configuration tests covering statement config builders."""
 
+import tempfile
 from pathlib import Path
 from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import duckdb
 import pytest
 
+from sqlspec.adapters.adbc.core import build_connection_config as build_adbc_connection_config
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,
     DuckDBConnectionParams,
@@ -356,3 +358,131 @@ def test_duckdb_patterns_reject_trailing_newline() -> None:
             pass
     finally:
         cfg.close_pool()
+
+
+@pytest.mark.parametrize("db_value", [None, "", ":memory:"])
+def test_duckdb_default_in_memory_configs_are_isolated(db_value: str | None) -> None:
+    """Separate DuckDBConfig instances with omitted, empty, or ':memory:' database stay isolated."""
+    conn_cfg_a: DuckDBPoolParams = {} if db_value is None else {"database": db_value}
+    conn_cfg_b: DuckDBPoolParams = {} if db_value is None else {"database": db_value}
+    cfg_a = DuckDBConfig(connection_config=conn_cfg_a)
+    cfg_b = DuckDBConfig(connection_config=conn_cfg_b)
+    try:
+        db_a = cfg_a.connection_config["database"]
+        db_b = cfg_b.connection_config["database"]
+        assert isinstance(db_a, str)
+        assert isinstance(db_b, str)
+        assert db_a.startswith(":memory:sqlspec_")
+        assert db_b.startswith(":memory:sqlspec_")
+        assert db_a != db_b
+
+        with cfg_a.provide_session() as s_a:
+            s_a.execute("CREATE TABLE iso_items (id INTEGER)")
+            s_a.execute("INSERT INTO iso_items VALUES (1)")
+        with cfg_b.provide_session() as s_b:
+            rows = s_b.select_value("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'iso_items'")
+            assert rows == 0
+    finally:
+        cfg_a.close_pool()
+        cfg_b.close_pool()
+
+
+def test_duckdb_explicit_named_memory_database_is_shared() -> None:
+    """Explicit ':memory:<name>' databases remain shared across independent DuckDBConfig instances."""
+    shared_name = f":memory:shared_{uuid4().hex}"
+    cfg_a = DuckDBConfig(connection_config={"database": shared_name})
+    cfg_b = DuckDBConfig(connection_config={"database": shared_name})
+    try:
+        assert cfg_a.connection_config["database"] == shared_name
+        assert cfg_b.connection_config["database"] == shared_name
+        with cfg_a.provide_session() as s_a:
+            s_a.execute("CREATE TABLE shared_items (id INTEGER)")
+            s_a.execute("INSERT INTO shared_items VALUES (42)")
+        with cfg_b.provide_session() as s_b:
+            assert s_b.select_value("SELECT id FROM shared_items") == 42
+    finally:
+        cfg_a.close_pool()
+        cfg_b.close_pool()
+
+
+def test_duckdb_in_memory_creates_and_cleans_private_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In-memory DuckDB pools allocate an isolated temp_directory and remove it on close_pool."""
+    cwd_dir = tmp_path / "cwd"
+    temp_root = tmp_path / "sys_tmp"
+    cwd_dir.mkdir()
+    temp_root.mkdir()
+    monkeypatch.chdir(cwd_dir)
+    monkeypatch.setenv("TMPDIR", str(temp_root))
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    managed_dir: Path | None = None
+    try:
+        with config.provide_session() as session:
+            configured = session.select_value("SELECT current_setting('temp_directory')")
+            assert isinstance(configured, str)
+            managed_dir = Path(configured)
+            assert managed_dir.exists()
+            assert managed_dir.name.startswith("sqlspec_duckdb_")
+            assert managed_dir.parent == temp_root
+            assert not (cwd_dir / ".tmp").exists()
+    finally:
+        config.close_pool()
+
+    assert managed_dir is not None
+    assert not managed_dir.exists()
+    assert list(cwd_dir.iterdir()) == []
+
+
+def test_duckdb_explicit_temp_directory_is_preserved_on_close(tmp_path: Path) -> None:
+    """An explicit temp_directory on an in-memory DuckDBConfig is respected and not deleted on close."""
+    explicit_dir = tmp_path / "user_spill"
+    explicit_dir.mkdir()
+    marker = explicit_dir / "keep.txt"
+    marker.write_text("ok", encoding="utf-8")
+
+    config = DuckDBConfig(connection_config={"database": ":memory:", "temp_directory": str(explicit_dir)})
+    try:
+        with config.provide_session() as session:
+            configured = session.select_value("SELECT current_setting('temp_directory')")
+            assert isinstance(configured, str)
+            assert Path(configured) == explicit_dir
+    finally:
+        config.close_pool()
+
+    assert explicit_dir.exists()
+    assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("conn_cfg"),
+    [
+        {"driver_name": "duckdb", "path": ":memory:"},
+        {"driver_name": "duckdb", "uri": ":memory:"},
+        {"driver_name": "duckdb", "uri": "duckdb://:memory:"},
+        {"driver_name": "duckdb", "uri": "duckdb:///:memory:"},
+        {"driver_name": "adbc_driver_duckdb", "entrypoint": "duckdb_adbc_init", "uri": ":memory:"},
+    ],
+)
+def test_adbc_duckdb_memory_uri_normalizes_to_path(conn_cfg: dict[str, Any]) -> None:
+    """DuckDB ADBC configurations normalize ':memory:' URIs to path=':memory:' without uri."""
+    normalized = build_adbc_connection_config(conn_cfg)
+    assert normalized["path"] == ":memory:"
+    assert "uri" not in normalized
+
+
+@pytest.mark.parametrize(
+    ("conn_cfg"),
+    [
+        {"driver_name": "duckdb", "path": ":memory:shared_db"},
+        {"driver_name": "duckdb", "uri": ":memory:shared_db"},
+        {"driver_name": "duckdb", "uri": "duckdb://:memory:shared_db"},
+        {"driver_name": "duckdb", "uri": "duckdb:///:memory:shared_db"},
+    ],
+)
+def test_adbc_duckdb_rejects_named_memory_database(conn_cfg: dict[str, Any]) -> None:
+    """Named ':memory:<name>' identifiers are rejected for DuckDB ADBC to avoid local file creation."""
+    with pytest.raises(ImproperConfigurationError, match="DuckDB ADBC"):
+        build_adbc_connection_config(conn_cfg)

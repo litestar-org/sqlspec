@@ -1345,6 +1345,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             user_id: User identifier.
             session_id: Session identifier.
         """
+        owner_check_sql = f"SELECT 1 FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
@@ -1352,7 +1353,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             cursor = conn.cursor()
             try:
                 self._enable_foreign_keys(cursor, conn)
+                if self._dialect == DIALECT_DUCKDB:
+                    self._execute(cursor, owner_check_sql, (app_name, user_id, session_id))
+                    if cursor.fetchone() is None:
+                        return
                 self._execute(cursor, delete_events_sql, (app_name, user_id, session_id))
+                if self._dialect == DIALECT_DUCKDB:
+                    conn.commit()
                 self._execute(cursor, delete_session_sql, (app_name, user_id, session_id))
                 conn.commit()
             finally:
@@ -1760,6 +1767,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     row = cursor.fetchone()
                     count = int(row[0]) if row is not None else 0
                     self._execute(cursor, delete_events_sql, params)
+                    if self._dialect == DIALECT_DUCKDB:
+                        conn.commit()
                     self._execute(cursor, delete_sessions_sql, params)
                     conn.commit()
                     return count

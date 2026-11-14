@@ -19,17 +19,17 @@ Features:
     - Cacheable filter configurations
 """
 
+import datetime as dt
 import re
 from abc import abstractmethod
 from collections import abc
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
-from sqlspec.core._cursor import decode_cursor, encode_cursor, order_fingerprint
+from sqlspec.core._cursor import decode_cursor, encode_cursor, normalize_cursor_ttl, order_fingerprint
 from sqlspec.core._ordering import NullsPlacement, ordered
 from sqlspec.core._pagination import CursorPagination, OffsetPagination
 from sqlspec.core.query_modifiers import (
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from sqlspec.core.statement import SQL
 
 __all__ = (
+    "LIKE_ESCAPE_CHAR",
     "AnyCollectionFilter",
     "BeforeAfterFilter",
     "BooleanFilter",
@@ -78,6 +79,7 @@ __all__ = (
     "normalize_cursor_keys",
 )
 
+LIKE_ESCAPE_CHAR: Final[str] = "/"
 _MAX_QUALIFIED_PARTS = 4
 _CURSOR_KEY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
@@ -216,8 +218,8 @@ class _DatetimeBoundFilter(StatementFilter):
     def __init__(
         self,
         field_name: "str | exp.Expression",
-        upper_value: datetime | None = None,
-        lower_value: datetime | None = None,
+        upper_value: "dt.datetime | None" = None,
+        lower_value: "dt.datetime | None" = None,
     ) -> None:
         self._field_name = field_name
         self._upper_value = upper_value
@@ -308,16 +310,19 @@ class BeforeAfterFilter(_DatetimeBoundFilter):
     _upper_param_suffix: ClassVar[str] = "before"
 
     def __init__(
-        self, field_name: "str | exp.Expression", before: datetime | None = None, after: datetime | None = None
+        self,
+        field_name: "str | exp.Expression",
+        before: "dt.datetime | None" = None,
+        after: "dt.datetime | None" = None,
     ) -> None:
         super().__init__(field_name, before, after)
 
     @property
-    def before(self) -> datetime | None:
+    def before(self) -> "dt.datetime | None":
         return self._upper_value
 
     @property
-    def after(self) -> datetime | None:
+    def after(self) -> "dt.datetime | None":
         return self._lower_value
 
 
@@ -338,17 +343,17 @@ class OnBeforeAfterFilter(_DatetimeBoundFilter):
     def __init__(
         self,
         field_name: "str | exp.Expression",
-        on_or_before: datetime | None = None,
-        on_or_after: datetime | None = None,
+        on_or_before: "dt.datetime | None" = None,
+        on_or_after: "dt.datetime | None" = None,
     ) -> None:
         super().__init__(field_name, on_or_before, on_or_after)
 
     @property
-    def on_or_before(self) -> datetime | None:
+    def on_or_before(self) -> "dt.datetime | None":
         return self._upper_value
 
     @property
-    def on_or_after(self) -> datetime | None:
+    def on_or_after(self) -> "dt.datetime | None":
         return self._lower_value
 
 
@@ -420,7 +425,7 @@ class InAnyFilter(StatementFilter, Generic[T]):
         if condition_type == "not_in":
             return exp.Not(this=exp.In(this=col_expr, expressions=placeholders))
 
-        array_expr = exp.Array(expressions=placeholders)
+        array_expr = exp.Paren(this=exp.Array(expressions=placeholders))
         condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
         if condition_type == "not_any":
             return exp.Not(this=condition)
@@ -699,20 +704,31 @@ class CursorFilter(PaginationFilter):
             Bare names sort ascending.
         limit: Maximum page size.
         cursor: Optional token identifying the next or previous page.
-        secret: Optional nonempty signing key.
+        secret: Optional nonempty signing or encryption key.
+        ttl: Optional positive finite cursor lifetime in seconds or timedelta.
+        encrypt: Encrypt cursor tokens using HMAC-SHA256 CTR + Encrypt-then-MAC.
 
     Raises:
-        ValueError: Keys, limit, or secret are invalid.
-        InvalidCursorError: The token does not match the requested ordering.
+        ValueError: Keys, limit, secret, or ttl are invalid.
+        InvalidCursorError: The token does not match the requested ordering, is invalid, or has expired.
     """
 
-    __slots__ = ("_backward", "_cursor", "_fingerprint", "_keys", "_limit", "_secret", "_values")
+    __slots__ = ("_backward", "_cursor", "_encrypt", "_fingerprint", "_keys", "_limit", "_secret", "_ttl", "_values")
     _keys: tuple[CursorKey, ...]
     _secret: bytes | None
+    _ttl: float | dt.timedelta | None
+    _encrypt: bool
     _values: tuple[Any, ...] | None
 
     def __init__(
-        self, keys: CursorKeys, limit: int, cursor: str | None = None, secret: str | bytes | None = None
+        self,
+        keys: CursorKeys,
+        limit: int,
+        cursor: str | None = None,
+        secret: str | bytes | None = None,
+        *,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool = False,
     ) -> None:
         self._keys = normalize_cursor_keys(keys)
         if len({key.field_name for key in self._keys}) != len(self._keys) or len({
@@ -727,18 +743,30 @@ class CursorFilter(PaginationFilter):
         if self._secret == b"":
             msg = "secret must not be empty"
             raise ValueError(msg)
+        if encrypt and not self._secret:
+            msg = "secret must not be empty when encrypt=True"
+            raise ValueError(msg)
+        normalize_cursor_ttl(ttl)
         self._limit = limit
         self._cursor = cursor
+        self._ttl = ttl
+        self._encrypt = bool(encrypt)
         self._fingerprint = order_fingerprint([(key.field_name, key.sort_order, key.nulls) for key in self._keys])
         self._values = None
         self._backward = False
         if cursor is not None:
-            decoded = decode_cursor(cursor, self._fingerprint, len(self._keys), secret=self._secret)
+            decoded = decode_cursor(
+                cursor, self._fingerprint, len(self._keys), secret=self._secret, ttl=self._ttl, encrypt=self._encrypt
+            )
             self._values = decoded.values
             self._backward = decoded.backward
             if any(value is None and key.nulls is None for key, value in zip(self._keys, self._values, strict=True)):
                 msg = "Invalid pagination cursor: ordering mismatch"
                 raise InvalidCursorError(msg)
+
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via helper supporting keyword-only ttl and encrypt options."""
+        return (_rebuild_cursor_filter, self._reconstruction_args())
 
     @property
     def keys(self) -> tuple[CursorKey, ...]:
@@ -751,6 +779,14 @@ class CursorFilter(PaginationFilter):
     @property
     def cursor(self) -> str | None:
         return self._cursor
+
+    @property
+    def ttl(self) -> "float | dt.timedelta | None":
+        return self._ttl
+
+    @property
+    def encrypt(self) -> bool:
+        return self._encrypt
 
     @property
     def backward(self) -> bool:
@@ -835,7 +871,14 @@ class CursorFilter(PaginationFilter):
         Raises:
             ImproperConfigurationError: A key is missing or unexpectedly NULL.
         """
-        return encode_cursor(self._row_values(row), self._fingerprint, backward=backward, secret=self._secret)
+        return encode_cursor(
+            self._row_values(row),
+            self._fingerprint,
+            backward=backward,
+            secret=self._secret,
+            ttl=self._ttl,
+            encrypt=self._encrypt,
+        )
 
     def build_page(self, rows: list[dict[str, Any]]) -> CursorPagination[dict[str, Any]]:
         """Trim the sentinel and mint adjacent-page cursors.
@@ -891,7 +934,7 @@ class CursorFilter(PaginationFilter):
         return values
 
     def _reconstruction_args(self) -> tuple[Any, ...]:
-        return self._keys, self._limit, self._cursor, self._secret
+        return self._keys, self._limit, self._cursor, self._secret, self._ttl, self._encrypt
 
 
 class OrderByFilter(StatementFilter):
@@ -967,7 +1010,7 @@ class OrderByFilter(StatementFilter):
 class _TextSearchFilter(StatementFilter):
     """Private base for LIKE and NOT LIKE filters."""
 
-    __slots__ = ("_field_name", "_ignore_case", "_value")
+    __slots__ = ("_escape_wildcards", "_field_name", "_ignore_case", "_value")
 
     _cache_key_name: ClassVar[str] = "SearchFilter"
     _combine_operator: ClassVar[Literal["and", "or"]] = "or"
@@ -980,10 +1023,12 @@ class _TextSearchFilter(StatementFilter):
         field_name: "str | exp.Expression | set[str | exp.Expression]",
         value: str | None,
         ignore_case: bool | None = False,
+        escape_wildcards: bool = False,
     ) -> None:
         self._field_name = field_name
         self._value = value
         self._ignore_case = ignore_case if ignore_case is not None else False
+        self._escape_wildcards = bool(escape_wildcards)
 
     @property
     def field_name(self) -> "str | exp.Expression | set[str | exp.Expression]":
@@ -998,29 +1043,45 @@ class _TextSearchFilter(StatementFilter):
         return self._ignore_case
 
     @property
+    def escape_wildcards(self) -> bool:
+        return self._escape_wildcards
+
+    @property
     def like_pattern(self) -> str | None:
         """Return the search value wrapped in LIKE wildcards.
 
         Returns:
             The pattern for a LIKE operation, or None if no value.
         """
-        return f"%{self.value}%" if self.value else None
+        if not self.value:
+            return None
+        value = self.escape_like_value(self.value) if self._escape_wildcards else self.value
+        return f"%{value}%"
 
     @staticmethod
-    def escape_like_value(value: str) -> str:
-        r"""Escape ``%`` and ``_`` metacharacters for safe LIKE/ILIKE pattern matching.
+    def escape_like_value(value: str, escape_char: str = LIKE_ESCAPE_CHAR) -> str:
+        """Escape ``%`` and ``_`` metacharacters for safe LIKE/ILIKE pattern matching.
 
-        Backslash is the default LIKE escape character in PostgreSQL (with
-        ``standard_conforming_strings`` on), SQLite, and MySQL, so the produced
-        pattern is safe without an explicit ``ESCAPE`` clause on those engines.
+        Uses ``/`` by default so an explicit ``ESCAPE '/'`` clause works uniformly
+        across PostgreSQL, SQLite, DuckDB, MySQL, and Oracle without backslash
+        quoting divergence.
 
         Args:
             value: Raw user input to escape before wrapping in wildcards.
+            escape_char: Single escape character used to prefix wildcards.
 
         Returns:
-            The input with ``\``, ``%``, and ``_`` escaped using ``\``.
+            The input with ``escape_char``, ``%``, and ``_`` escaped.
+
+        Raises:
+            ValueError: If ``escape_char`` is not a single character.
         """
-        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if len(escape_char) != 1:
+            msg = "escape_char must be a single character"
+            raise ValueError(msg)
+        return (
+            value.replace(escape_char, escape_char * 2).replace("%", f"{escape_char}%").replace("_", f"{escape_char}_")
+        )
 
     def get_param_name(self) -> str | None:
         """Get parameter name without storing it."""
@@ -1082,18 +1143,20 @@ class _TextSearchFilter(StatementFilter):
             field_names = self.field_name.sql(copy=False)
         else:
             field_names = self.field_name
-        return (self._cache_key_name, field_names, self.value, self.ignore_case)
+        return (self._cache_key_name, field_names, self.value, self.ignore_case, self.escape_wildcards)
 
     def _build_search_condition(self, field_name: "str | exp.Expression", param_name: str) -> "Condition":
         like_op = exp.ILike if self.ignore_case else exp.Like
         search_target = (
             field_name if isinstance(field_name, exp.Expression) else self._get_column_expression(field_name)
         )
-        condition = like_op(this=search_target, expression=exp.Placeholder(this=param_name))
+        condition: exp.Condition = like_op(this=search_target, expression=exp.Placeholder(this=param_name))
+        if self._escape_wildcards:
+            condition = exp.Escape(this=condition, expression=exp.Literal.string(LIKE_ESCAPE_CHAR))
         return exp.Not(this=condition) if self._negate else condition
 
     def _reconstruction_args(self) -> "tuple[Any, ...]":
-        return (self._field_name, self._value, self._ignore_case)
+        return (self._field_name, self._value, self._ignore_case, self._escape_wildcards)
 
 
 class SearchFilter(_TextSearchFilter):
@@ -1361,3 +1424,14 @@ def _stable_filter_key_part(value: Any) -> Any:
 
 def _canonical_filter_key(f: "StatementFilter") -> "tuple[Any, ...]":
     return tuple(_stable_filter_key_part(item) for item in f.get_cache_key())
+
+
+def _rebuild_cursor_filter(
+    keys: CursorKeys,
+    limit: int,
+    cursor: str | None,
+    secret: bytes | None,
+    ttl: "float | dt.timedelta | None",
+    encrypt: bool,
+) -> CursorFilter:
+    return CursorFilter(keys, limit, cursor, secret, ttl=ttl, encrypt=encrypt)

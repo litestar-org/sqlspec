@@ -410,7 +410,7 @@ def test_bare_identifier_pattern_rejects_trailing_newline() -> None:
     ["", "   ", "RANGE (id); DROP TABLE t", "); DROP TABLE t", "bad\x00spec", "RANGE (", "SELECT 1"],
 )
 def test_create_table_partition_by_rejects_invalid_or_multi_statement_specs(bad_partition_spec: str) -> None:
-    """CreateTable.partition_by rejects unparseable fallback tokens and non-expression statements."""
+    """CreateTable.partition_by rejects unparsable fallback tokens and non-expression statements."""
     with pytest.raises(SQLBuilderError, match="PARTITION BY"):
         CreateTable("events", dialect="postgres").column("id", "INT").partition_by(bad_partition_spec).build()
 

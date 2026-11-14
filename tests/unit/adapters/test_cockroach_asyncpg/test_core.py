@@ -243,7 +243,7 @@ async def test_cockroach_exception_handler_maps_transport_and_interface_errors(
 @pytest.mark.anyio
 async def test_cockroach_asyncpg_load_from_storage_rejects_read_only_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_from_storage fails closed on read-only sessions even on idle autocommit connections."""
-    conn = SimpleNamespace(is_in_transaction=lambda: False)
+    conn: Any = SimpleNamespace(is_in_transaction=lambda: False)
     driver = CockroachAsyncpgDriver(
         conn,
         statement_config=default_statement_config,
@@ -273,7 +273,7 @@ async def test_cockroach_asyncpg_select_to_storage_guards_unsafe_selects(
     monkeypatch: pytest.MonkeyPatch, sql: str, read_only_session: bool
 ) -> None:
     """Unsafe SELECT statements bypass native EXPORT and raise on read-only sessions."""
-    conn = SimpleNamespace(is_in_transaction=lambda: False)
+    conn: Any = SimpleNamespace(is_in_transaction=lambda: False)
     driver = CockroachAsyncpgDriver(
         conn,
         statement_config=default_statement_config,
@@ -315,7 +315,7 @@ async def test_cockroach_asyncpg_select_to_storage_sanitizes_telemetry_but_binds
 ) -> None:
     """Driver select_to_storage binds full URI to SQL while recording sanitized telemetry destination."""
     raw_uri = "s3://user:pass@bucket/prefix?AWS_ACCESS_KEY_ID=key&AWS_SECRET_ACCESS_KEY=secret"
-    conn = SimpleNamespace(is_in_transaction=lambda: False)
+    conn: Any = SimpleNamespace(is_in_transaction=lambda: False)
     driver = CockroachAsyncpgDriver(
         conn, statement_config=default_statement_config, driver_features={"enable_native_storage": True}
     )

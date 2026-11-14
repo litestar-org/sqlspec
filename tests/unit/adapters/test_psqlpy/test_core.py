@@ -449,7 +449,7 @@ def test_psqlpy_driver_prepare_driver_parameters_is_many_serializes_string_scala
     driver = PsqlpyDriver(connection=cast("Any", SimpleNamespace()), statement_config=stmt_config)
     stmt = driver.prepare_statement(
         "INSERT INTO events (payload) VALUES ($1::jsonb)",
-        [("123",), ('{"a": 1}',)],
+        cast("Any", [("123",), ('{"a": 1}',)]),
         statement_config=stmt_config,
         kwargs={"is_many": True},
     )

@@ -111,7 +111,7 @@ def test_optimizer_passes_rules_tuple_and_omits_optimizer_settings(monkeypatch: 
         ),
         (
             {"optimize_predicates": False, "simplify_expressions": False},
-            tuple(rule for rule in RULES if rule not in {_pushdown_predicates_rule, _simplify_rule}),
+            tuple(rule for rule in RULES if rule is not _pushdown_predicates_rule and rule is not _simplify_rule),
         ),
     ],
 )

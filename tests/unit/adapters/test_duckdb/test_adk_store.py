@@ -11,6 +11,8 @@ import duckdb
 import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
+from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc.adk import AdbcADKStore
 from sqlspec.adapters.duckdb.adk import DuckDBADKMemoryStore, DuckDBADKStore
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.duckdb.litestar.store import DuckDBStore
@@ -403,14 +405,14 @@ def test_duckdb_companions_restore_dropped_session_index(tmp_path: Path) -> None
         store.create_session("s1", "app", "user", {})
 
         with config.provide_session() as driver:
-            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.execute("DROP INDEX idx_adk_session_app_user")
             driver.commit()
             store.reconcile_companion_objects_sync(driver)
             store.reconcile_companion_objects_sync(driver)
             driver.commit()
             rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
 
-        assert "idx_adk_session_update_time" in {str(row["index_name"]) for row in rows}
+        assert "idx_adk_session_app_user" in {str(row["index_name"]) for row in rows}
         session = store.get_session("app", "user", "s1")
         assert session is not None and session["id"] == "s1"
     finally:
@@ -426,14 +428,14 @@ def test_duckdb_companions_do_not_commit(tmp_path: Path) -> None:
         store.create_tables()
 
         with config.provide_session() as driver:
-            driver.execute("DROP INDEX idx_adk_session_update_time")
+            driver.execute("DROP INDEX idx_adk_session_app_user")
             driver.commit()
             driver.begin()
             store.reconcile_companion_objects_sync(driver)
             driver.rollback()
             rows = driver.select("SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", ("adk_session",))
 
-        assert "idx_adk_session_update_time" not in {str(row["index_name"]) for row in rows}
+        assert "idx_adk_session_app_user" not in {str(row["index_name"]) for row in rows}
     finally:
         config.close_pool()
 
@@ -794,12 +796,13 @@ def test_duckdb_append_event_and_update_state_validates_scope_and_orders_update_
 
 
 def test_duckdb_delete_session_is_scoped_and_rolls_back_on_failure(tmp_path: Path) -> None:
-    """delete_session leaves another user's events untouched and rolls back event deletion if session delete fails."""
+    """delete_session preserves cross-tenant sessions, cascades events on DuckDB 2.0, and fails cleanly on external FK pins."""
     config = DuckDBConfig(connection_config={"database": str(tmp_path / "delete_tx.duckdb")})
     try:
         store = DuckDBADKStore(config)
         store.create_tables()
         store.create_session("s1", "app", "user_b", {"owner": "b"})
+        store.create_session("s2", "app", "user_b", {"owner": "b"})
         now = datetime.now(UTC)
         store.append_event({
             "id": "e_b",
@@ -809,6 +812,15 @@ def test_duckdb_delete_session_is_scoped_and_rolls_back_on_failure(tmp_path: Pat
             "invocation_id": "inv_b",
             "timestamp": now,
             "event_data": {"text": "keep"},
+        })
+        store.append_event({
+            "id": "e_s2",
+            "app_name": "app",
+            "user_id": "user_b",
+            "session_id": "s2",
+            "invocation_id": "inv_s2",
+            "timestamp": now,
+            "event_data": {"text": "cascade"},
         })
         with config.provide_connection() as conn:
             conn.execute(
@@ -824,6 +836,10 @@ def test_duckdb_delete_session_is_scoped_and_rolls_back_on_failure(tmp_path: Pat
         assert store.get_session("app", "user_b", "s1") is not None
         assert [item["id"] for item in store.get_events("app", "user_b", "s1")] == ["e_b"]
 
+        store.delete_session("app", "user_b", "s2")
+        assert store.get_session("app", "user_b", "s2") is None
+        assert store.get_events("app", "user_b", "s2") == []
+
         with config.provide_connection() as conn:
             conn.execute("CREATE TABLE session_pin (sid VARCHAR REFERENCES adk_session(id))")
             conn.execute("INSERT INTO session_pin VALUES ('s1')")
@@ -832,9 +848,53 @@ def test_duckdb_delete_session_is_scoped_and_rolls_back_on_failure(tmp_path: Pat
         with pytest.raises(Exception):
             store.delete_session("app", "user_b", "s1")
 
-        assert [item["id"] for item in store.get_events("app", "user_b", "s1")] == ["e_b"]
+        assert store.get_session("app", "user_b", "s1") is not None
     finally:
         config.close_pool()
+
+
+def test_duckdb_delete_idle_sessions_cascades_events_on_duckdb(tmp_path: Path) -> None:
+    """_delete_idle_sessions deletes child events and parent sessions across both DuckDB and ADBC DuckDB."""
+    cutoff = datetime(2030, 1, 1, tzinfo=UTC)
+    event_ts = datetime(2026, 1, 1, tzinfo=UTC)
+
+    duckdb_cfg = DuckDBConfig(connection_config={"database": str(tmp_path / "idle_duck.duckdb")})
+    adbc_cfg = AdbcConfig(connection_config={"driver_name": "duckdb", "path": str(tmp_path / "idle_adbc.duckdb")})
+    try:
+        duck_store = DuckDBADKStore(duckdb_cfg)
+        duck_store.create_tables()
+        duck_store.create_session("s1", "app", "user_1", {})
+        duck_store.append_event({
+            "id": "e1",
+            "app_name": "app",
+            "user_id": "user_1",
+            "session_id": "s1",
+            "invocation_id": "inv1",
+            "timestamp": event_ts,
+            "event_data": {"text": "old"},
+        })
+        assert duck_store.delete_idle_sessions(cutoff) == 1
+        assert duck_store.get_session("app", "user_1", "s1") is None
+        assert duck_store.get_events("app", "user_1", "s1") == []
+
+        adbc_store = AdbcADKStore(adbc_cfg)
+        adbc_store.create_tables()
+        adbc_store.create_session("s1", "app", "user_1", {})
+        adbc_store.append_event({
+            "id": "e1",
+            "app_name": "app",
+            "user_id": "user_1",
+            "session_id": "s1",
+            "invocation_id": "inv1",
+            "timestamp": event_ts,
+            "event_data": {"text": "old"},
+        })
+        assert adbc_store.delete_idle_sessions(cutoff) == 1
+        assert adbc_store.get_session("app", "user_1", "s1") is None
+        assert adbc_store.get_events("app", "user_1", "s1") == []
+    finally:
+        duckdb_cfg.close_pool()
+        adbc_cfg.close_pool()
 
 
 @pytest.mark.parametrize(
@@ -1008,3 +1068,112 @@ def test_duckdb_fts_search_isolates_applications(tmp_path: Path) -> None:
         assert [row["id"] for row in results] == ["m_a"]
     finally:
         config.close_pool()
+
+
+def test_duckdb_repeated_event_appends_and_state_updates_preserve_fk_integrity(tmp_path: Path) -> None:
+    """Repeated session updates after child events exist satisfy DuckDB 2.0 foreign key checks."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "fk_repeated.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        store.create_session("s1", "app", "user", {"step": 0})
+
+        event_1 = {
+            "id": "e1",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-1",
+            "author": "user",
+            "timestamp": base,
+            "event_data": {"id": "e1", "author": "user"},
+        }
+        event_2 = {
+            "id": "e2",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-2",
+            "author": "agent",
+            "timestamp": datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC),
+            "event_data": {"id": "e2", "author": "agent"},
+        }
+        event_3 = {
+            "id": "e3",
+            "session_id": "s1",
+            "app_name": "app",
+            "user_id": "user",
+            "invocation_id": "inv-3",
+            "author": "agent",
+            "timestamp": datetime(2026, 1, 1, 12, 0, 2, tzinfo=UTC),
+            "event_data": {"id": "e3", "author": "agent"},
+        }
+
+        store.append_event_and_update_state(cast("Any", event_1), "app", "user", "s1", {"step": 1})
+        store.append_event_and_update_state(cast("Any", event_2), "app", "user", "s1", {"step": 2})
+        store.update_session_state("app", "user", "s1", {"step": 3})
+        renewed = store.get_session("app", "user", "s1", renew_for=60)
+        assert renewed is not None
+        assert renewed["state"] == {"step": 3}
+
+        store.append_event_and_update_state(cast("Any", event_3), "app", "user", "s1", {"step": 4})
+        events = store.get_events("app", "user", "s1")
+        assert [event["id"] for event in events] == ["e1", "e2", "e3"]
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("limit", "after_ts", "expected_ids"),
+    [
+        (3, None, ["e3", "e4", "e5"]),
+        (2, None, ["e4", "e5"]),
+        (2, datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC), ["e4", "e5"]),
+        (5, None, ["e1", "e2", "e3", "e4", "e5"]),
+    ],
+)
+def test_duckdb_get_events_limit_returns_newest_in_chronological_order(
+    tmp_path: Path, limit: int, after_ts: datetime | None, expected_ids: list[str]
+) -> None:
+    """get_events(limit=N) returns the newest N events in chronological order, including tied timestamps."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "newest_events.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.create_session("s1", "app", "user", {})
+        tied_ts = datetime(2026, 1, 1, 12, 0, 2, tzinfo=UTC)
+        seed_events = [
+            ("e1", datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)),
+            ("e2", datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)),
+            ("e3", tied_ts),
+            ("e4", tied_ts),
+            ("e5", datetime(2026, 1, 1, 12, 0, 3, tzinfo=UTC)),
+        ]
+        _seed_event(store, seed_events[0][0], seed_events[0][1])
+        _seed_event(store, seed_events[1][0], seed_events[1][1])
+        _seed_event(store, seed_events[2][0], seed_events[2][1])
+        _seed_event(store, seed_events[3][0], seed_events[3][1])
+        _seed_event(store, seed_events[4][0], seed_events[4][1])
+        events = store.get_events("app", "user", "s1", after_timestamp=after_ts, limit=limit)
+        assert [event["id"] for event in events] == expected_ids
+    finally:
+        config.close_pool()
+
+
+def _seed_event(store: DuckDBADKStore, event_id: str, ts: datetime) -> None:
+    store.append_event(
+        cast(
+            "Any",
+            {
+                "id": event_id,
+                "session_id": "s1",
+                "app_name": "app",
+                "user_id": "user",
+                "invocation_id": f"inv-{event_id}",
+                "author": "agent",
+                "timestamp": ts,
+                "event_data": {"id": event_id},
+            },
+        )
+    )

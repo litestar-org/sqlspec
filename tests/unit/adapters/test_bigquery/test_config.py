@@ -277,7 +277,7 @@ def test_bigquery_session_context_rolls_back_active_script_transaction(
     if body_raises:
         with pytest.raises(ValueError, match="bq body failed") as caught, ctx:
             raise ValueError("bq body failed")
-        assert caught.value is not rollback_err
+        assert caught.value is not cast("BaseException", rollback_err)
     elif rollback_fails:
         with pytest.raises(RuntimeError, match="bq rollback failed"), ctx:
             pass

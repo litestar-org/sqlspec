@@ -605,4 +605,4 @@ def test_adbc_atomic_connection_toggles_autocommit_for_duckdb_and_teradata(
         store = AdbcADKStore(cfg)
         store.delete_session("app", "u1", "s1")
         assert toggles == [False, True]
-        assert native_commits == ["native_commit"]
+        assert native_commits == ["native_commit", "native_commit"]

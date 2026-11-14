@@ -167,7 +167,7 @@ _ORDER_PARSING_CORPUS = [
 
 
 def _parse_column_oracle(value: str) -> exp.Expr:
-    parsed = exp.maybe_parse(value) or exp.column(value)
+    parsed: exp.Expr = exp.maybe_parse(value) or exp.column(value)
     if isinstance(parsed, exp.Binary):
         return exp.Paren(this=parsed)
     return parsed

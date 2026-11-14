@@ -890,9 +890,8 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     if isinstance(uri, str) and driver_kind == "sqlite" and uri.lower().startswith("sqlite://"):
         config["uri"] = uri[9:]
-    if isinstance(uri, str) and driver_kind == "duckdb" and uri.lower().startswith("duckdb://"):
-        config["path"] = uri[9:]
-        config.pop("uri", None)
+    if driver_kind == "duckdb" or str(config.get("entrypoint", "")).strip().lower() == "duckdb_adbc_init":
+        _normalize_and_validate_duckdb_config(config, uri)
     if isinstance(uri, str) and driver_kind == "db2" and not uri.lower().startswith("db2://"):
         _normalize_db2_cli_dsn(config, uri)
 
@@ -2812,6 +2811,56 @@ def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | N
                 db_kwargs_dict.setdefault(field, config.pop(field))
         if db_kwargs_dict:
             config["db_kwargs"] = db_kwargs_dict
+
+
+def _normalize_duckdb_memory_path(value: str) -> str:
+    stripped = value.strip()
+    if stripped in {":memory:", "/:memory:"}:
+        return ":memory:"
+    if stripped.startswith((":memory:", "/:memory:")):
+        msg = "DuckDB ADBC does not support named ':memory:<name>' identifiers; use ':memory:' instead."
+        raise ImproperConfigurationError(msg)
+    return value
+
+
+def _normalize_and_validate_duckdb_config(config: "dict[str, Any]", uri: Any) -> None:
+    if isinstance(config.get("uri"), str):
+        raw_uri = config.pop("uri")
+        raw_path = raw_uri[9:] if raw_uri.lower().startswith("duckdb://") else raw_uri
+        if raw_path.startswith("/:memory:"):
+            raw_path = raw_path[1:]
+        if "path" not in config:
+            config["path"] = raw_path
+    elif "uri" in config:
+        config.pop("uri", None)
+
+    path_value = config.get("path")
+    if isinstance(path_value, str):
+        config["path"] = _normalize_duckdb_memory_path(path_value)
+
+    db_kwargs = config.get("db_kwargs")
+    if isinstance(db_kwargs, dict):
+        updated_kwargs = dict(db_kwargs)
+        changed = False
+        for key in ("path", "uri"):
+            nested_val = updated_kwargs.get(key)
+            if isinstance(nested_val, str):
+                candidate = (
+                    nested_val[9:] if key == "uri" and nested_val.lower().startswith("duckdb://") else nested_val
+                )
+                if candidate.startswith("/:memory:"):
+                    candidate = candidate[1:]
+                normalized = _normalize_duckdb_memory_path(candidate)
+                if normalized != nested_val:
+                    updated_kwargs[key] = normalized
+                    changed = True
+        if changed:
+            config["db_kwargs"] = updated_kwargs
+    elif isinstance(uri, str) and uri.lower().startswith("duckdb://") and "path" not in config:
+        raw_path = uri[9:]
+        if raw_path.startswith("/:memory:"):
+            raw_path = raw_path[1:]
+        config["path"] = _normalize_duckdb_memory_path(raw_path)
 
 
 driver_profile: Final[DriverParameterProfile] = build_profile()

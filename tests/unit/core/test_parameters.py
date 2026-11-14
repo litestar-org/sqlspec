@@ -3538,10 +3538,14 @@ def test_static_literal_rejects_unknown_string_dialect() -> None:
 
 def test_type_coercion_dispatcher_cache_is_bounded() -> None:
     """Global type coercion dispatcher cache stays bounded by _FALLBACK_CACHE_MAX_SIZE."""
+
+    def _make_coercer(idx: int) -> Callable[[Any], int]:
+        return lambda _value: idx
+
     _processor_module._TYPE_COERCION_DISPATCHERS.clear()
     _processor_module._TYPE_COERCION_DISPATCHERS_BY_ID.clear()
     _ = [
-        _processor_module.type_coercion_dispatcher(((int, lambda value, idx=i: idx),))
+        _processor_module.type_coercion_dispatcher(((int, _make_coercer(i)),))
         for i in range(_processor_module._FALLBACK_CACHE_MAX_SIZE + 50)
     ]
     assert len(_processor_module._TYPE_COERCION_DISPATCHERS) <= _processor_module._FALLBACK_CACHE_MAX_SIZE
@@ -3773,3 +3777,81 @@ def test_warm_cache_execute_many_mapping_rebinds_match_cold_order(
     warm_sql, warm_params = SQL(sql, test_rows, statement_config=config, is_many=True).compile()
     assert warm_sql == cold_sql
     assert [tuple(row) for row in warm_params] == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql", "params", "style", "expected_params", "expected_placeholders"),
+    [
+        (
+            "postgres",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.NUMERIC,
+            (1, 2, 3),
+            ("$1", "$2", "$3"),
+        ),
+        (
+            "postgres",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.NAMED_PYFORMAT,
+            {"a": 1, "b": 2, "c": 3},
+            ("%(a)s", "%(b)s", "%(c)s"),
+        ),
+        (
+            "postgres",
+            "INSERT INTO t VALUES ($1,$2,$3)",
+            (1, 2, 3),
+            ParameterStyle.NUMERIC,
+            [1, 2, 3],
+            ("$1", "$2", "$3"),
+        ),
+        (
+            "duckdb",
+            "INSERT INTO t VALUES (:a,:b,:c)",
+            {"a": 1, "b": 2, "c": 3},
+            ParameterStyle.QMARK,
+            (1, 2, 3),
+            ("?",),
+        ),
+        ("duckdb", "INSERT INTO t VALUES ($1,$2,$3)", (1, 2, 3), ParameterStyle.QMARK, [1, 2, 3], ("?",)),
+        ("sqlite", "SELECT :a+:b,:c", {"a": 1, "b": 2, "c": 3}, ParameterStyle.QMARK, (1, 2, 3), ("?",)),
+    ],
+)
+def test_adjacent_placeholders_without_whitespace_compile_cleanly(
+    dialect: str,
+    sql: str,
+    params: Any,
+    style: ParameterStyle,
+    expected_params: Any,
+    expected_placeholders: tuple[str, ...],
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={
+                ParameterStyle.QMARK,
+                ParameterStyle.NAMED_COLON,
+                ParameterStyle.NUMERIC,
+                ParameterStyle.NAMED_PYFORMAT,
+            },
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    stmt = (
+        SQL(sql, params, statement_config=config)
+        if isinstance(params, dict)
+        else SQL(sql, *params, statement_config=config)
+    )
+    compiled_sql, compiled_params = stmt.compile()
+    assert compiled_params == expected_params
+    assert all(token in compiled_sql for token in expected_placeholders)
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "sqlite", "duckdb", "mysql", "oracle", "snowflake", "bigquery"])
+def test_extract_parameters_detects_adjacent_named_placeholders_without_whitespace(dialect: str | None) -> None:
+    validator = ParameterValidator()
+    extracted = validator.extract_parameters("INSERT INTO t VALUES (:a,:b,:c)", dialect=dialect)
+    assert [info.name for info in extracted] == ["a", "b", "c"]

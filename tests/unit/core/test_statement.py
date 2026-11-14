@@ -1956,3 +1956,70 @@ def test_static_script_compilation_does_not_cache_embedded_parameter_values() ->
         assert parameters is None
         observed.add(tuple((entry["size"], entry["parse_size"]) for entry in get_pipeline_metrics()))
     assert len(observed) == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "args", "kwargs", "dialect", "explain_kwargs", "expected_params", "expected_tokens"),
+    [
+        (
+            "SELECT * FROM users WHERE id = ? AND status = ?",
+            (42, "active"),
+            {},
+            "sqlite",
+            {},
+            (42, "active"),
+            ("EXPLAIN QUERY PLAN", "?"),
+        ),
+        (
+            "SELECT * FROM users WHERE id = $1",
+            ([42],),
+            {},
+            "postgres",
+            {"analyze": True, "format": "json"},
+            (42,),
+            ("EXPLAIN", "ANALYZE", "FORMAT JSON", "$1"),
+        ),
+        (
+            "SELECT * FROM users WHERE id = ? AND org = :org",
+            (7,),
+            {"org": "acme"},
+            "postgres",
+            {},
+            (7, "acme"),
+            ("EXPLAIN", "$1", "$2"),
+        ),
+    ],
+)
+def test_sql_explain_preserves_positional_and_mixed_parameters(
+    text: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    dialect: str,
+    explain_kwargs: dict[str, Any],
+    expected_params: tuple[Any, ...],
+    expected_tokens: tuple[str, ...],
+) -> None:
+    numeric_config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+            default_execution_parameter_style=ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK,
+            supported_execution_parameter_styles={
+                ParameterStyle.NUMERIC if dialect == "postgres" else ParameterStyle.QMARK
+            },
+        ),
+    )
+    stmt = SQL(text, *args, statement_config=numeric_config, **kwargs)
+    explained = stmt.explain(**explain_kwargs)
+    compiled_sql, compiled_params = explained.compile()
+    assert tuple(compiled_params) == expected_params
+    assert all(token in compiled_sql for token in expected_tokens)
+
+
+def test_sql_explain_preserves_execute_many_positional_parameters() -> None:
+    stmt = SQL("INSERT INTO t (a, b) VALUES (?, ?)", [(1, 2), (3, 4)], is_many=True)
+    explained = stmt.explain()
+    compiled_sql, compiled_params = explained.compile()
+    assert compiled_sql.startswith("EXPLAIN")
+    assert compiled_params == [(1, 2), (3, 4)]

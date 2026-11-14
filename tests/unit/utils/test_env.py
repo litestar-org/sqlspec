@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, assert_type
+from typing import Any, assert_type, cast
 
 import pytest
 
@@ -201,8 +201,8 @@ def test_get_env_parse_errors_omit_raw_values(
 
     with pytest.raises(ValueError, match=key) as exc_info:
         if type_hint is None:
-            get_env(key, default)()
+            cast("Callable[[], Any]", get_env(key, default))()
         else:
-            get_env(key, default, type_hint)()
+            cast("Callable[[], Any]", get_env(key, default, type_hint))()
 
     assert raw_value not in str(exc_info.value)

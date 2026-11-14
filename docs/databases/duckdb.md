@@ -11,7 +11,7 @@ Choose `DuckDBConfig` for embedded OLAP analytics, local lakehouse queries over 
 | **Adapter Config** | `DuckDBConfig` (`sqlspec.adapters.duckdb`) |
 | **Driver Extra** | `sqlspec[duckdb]` (`duckdb`, `pyarrow`) |
 | **Execution Mode** | Synchronous |
-| **Pool Architecture** | `DuckDBConnectionPool` (thread-local cursor/connection manager with `pool_recycle_seconds`, `health_check_interval`, `:memory:shared_db` normalization) |
+| **Pool Architecture** | `DuckDBConnectionPool` (thread-local cursor/connection manager with `pool_recycle_seconds`, `health_check_interval`, per-config `:memory:sqlspec_<uuid>` isolation and private spill cleanup) |
 | **Extensions & Storage** | Declarative `DuckDBExtensionConfig`, `DuckDBSecretConfig`, zero-copy Arrow `select_to_arrow()` / `load_from_arrow()`, ADK FTS + cosine similarity |
 
 ## Installation & Quickstart
@@ -70,14 +70,14 @@ For persistent analytical databases, set `"database": "var/analytics.duckdb"` (a
 ### Connection and Pool Parameters
 
 > [!NOTE]
-> `DuckDBConnectionPool` is a thread-local connection manager configured via `pool_recycle_seconds` and `health_check_interval` on `DuckDBPoolParams`. When `database` is omitted or set to `":memory:"`, `DuckDBConfig` normalizes it to `":memory:shared_db"` so all pooled checkouts share the same in-memory catalog. In Linux containers, `DuckDBConfig` also clamps default memory limits to cgroup v1/v2 container quotas automatically.
+> `DuckDBConnectionPool` is a thread-local connection manager configured via `pool_recycle_seconds` and `health_check_interval` on `DuckDBPoolParams`. When `database` is omitted, empty, or set to `":memory:"`, `DuckDBConfig` assigns an isolated `:memory:sqlspec_<uuid>` identifier per config instance so pooled checkouts share one catalog within that config without leaking state across separate configs; explicit `:memory:<name>` identifiers remain shared across configs using the same name. When an in-memory `DuckDBConfig` omits `temp_directory`, `DuckDBConfig` allocates a private temporary spill directory and removes it in `close_pool()`. In Linux containers, `DuckDBConfig` also clamps default memory limits to cgroup v1/v2 container quotas automatically.
 
 Pass `DuckDBConnectionParams` and `DuckDBPoolParams` keys inside `connection_config={...}` on `DuckDBConfig`:
 
 <!-- GENERATED:START config-table:sqlspec.adapters.duckdb.config.DuckDBConnectionParams,sqlspec.adapters.duckdb.config.DuckDBPoolParams -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `database` | `str` | - | Database file path, `':memory:shared_db'` shared memory identifier, or MotherDuck URI. |
+| `database` | `str` | - | Database file path, `':memory:'` / `':memory:<name>'` memory identifier, or MotherDuck URI. |
 | `read_only` | `bool` | - | Open the database file in read-only mode without taking a write lock. |
 | `config` | `dict[str, Any]` | - | Raw DuckDB engine configuration dictionary merged with modeled settings. |
 | `memory_limit` | `str` | - | Maximum buffer-manager memory ceiling (for example `'4GB'`). |

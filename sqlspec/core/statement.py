@@ -1107,7 +1107,14 @@ class SQL:
         options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
 
         explain_builder = Explain(self, dialect=self._dialect, options=options)
-        return explain_builder.build()
+        explained = explain_builder.build()
+        if self._positional_parameters:
+            explained._positional_parameters = self._positional_parameters.copy()
+            explained._original_parameters = self._original_parameters
+            explained._is_many = self._is_many
+            explained._declared_parameters = self._declared_parameters
+            explained._hash = None
+        return explained
 
     def builder(self, dialect: "DialectType | None" = None) -> "QueryBuilder":
         """Create a query builder seeded from this SQL statement.

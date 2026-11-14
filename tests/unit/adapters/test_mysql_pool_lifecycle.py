@@ -84,8 +84,10 @@ async def test_mysql_checkin_rolls_back_iff_autocommit_off_ignoring_clear_status
         raw_cnx = MagicMock()
         conn = MagicMock(_cnx=raw_cnx, autocommit=autocommit, in_transaction=False)
         pool_mock = MagicMock(get_connection=MagicMock(return_value=conn))
-        config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": True}, connection_instance=pool_mock)
-        with config.provide_connection() as acquired:
+        config_sync = MysqlConnectorSyncConfig(
+            connection_config={"pool_reset_session": True}, connection_instance=pool_mock
+        )
+        with config_sync.provide_connection() as acquired:
             assert acquired is conn
         assert conn.rollback.call_count == expected_calls
         conn.close.assert_called_once()

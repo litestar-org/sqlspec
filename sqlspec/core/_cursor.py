@@ -2,13 +2,15 @@
 
 import base64
 import binascii
+import datetime as dt
 import hashlib
 import hmac
 import json
 import math
 import re
+import secrets
+import time
 from collections.abc import Callable, Sequence
-from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -20,6 +22,7 @@ __all__ = (
     "DecodedCursor",
     "decode_cursor",
     "encode_cursor",
+    "normalize_cursor_ttl",
     "order_fingerprint",
     "register_cursor_type",
 )
@@ -28,6 +31,14 @@ CURSOR_TOKEN_MAX_LENGTH = 4096
 _DECIMAL_MAX_EXPONENT = 6144
 _TIMEDELTA_MAX_DAYS = 999_999_999
 _ENTRY_LENGTH = 2
+_NONCE_LENGTH = 16
+_HASH_BLOCK_SIZE = 32
+_SIGNED_PART_COUNT = 2
+_ENCRYPTED_PART_COUNT = 3
+_ENCRYPTED_FORMAT = "e1"
+_ENC_KEY_INFO = b"sqlspec-cursor-enc-v1"
+_MAC_KEY_INFO = b"sqlspec-cursor-mac-v1"
+_B64_PART_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class DecodedCursor:
@@ -46,11 +57,39 @@ _ENCODERS: dict[type, tuple[str, Callable[[Any], str]]] = {
     bytes: ("y", lambda value: base64.b64encode(value).decode("ascii")),
     Decimal: ("d", str),
     UUID: ("u", str),
-    datetime: ("dt", lambda value: value.isoformat()),
-    date: ("da", lambda value: value.isoformat()),
-    time: ("t", lambda value: value.isoformat()),
-    timedelta: ("td", lambda value: f"{value.days}:{value.seconds}:{value.microseconds}"),
+    dt.datetime: ("dt", lambda value: value.isoformat()),
+    dt.date: ("da", lambda value: value.isoformat()),
+    dt.time: ("t", lambda value: value.isoformat()),
+    dt.timedelta: ("td", lambda value: f"{value.days}:{value.seconds}:{value.microseconds}"),
 }
+
+
+def normalize_cursor_ttl(ttl: "float | dt.timedelta | None") -> "float | None":
+    """Validate and normalize a cursor TTL value into positive finite seconds.
+
+    Args:
+        ttl: Lifetime in seconds, timedelta, or None.
+
+    Returns:
+        Positive finite seconds, or None when ttl is None.
+
+    Raises:
+        TypeError: TTL is an unsupported type.
+        ValueError: TTL is non-positive or non-finite.
+    """
+    if ttl is None:
+        return None
+    if isinstance(ttl, dt.timedelta):
+        seconds = ttl.total_seconds()
+    elif isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        msg = "ttl must be a positive finite duration"
+        raise TypeError(msg)
+    else:
+        seconds = float(ttl)
+    if not math.isfinite(seconds) or seconds <= 0:
+        msg = "ttl must be positive and finite"
+        raise ValueError(msg)
+    return seconds
 
 
 def register_cursor_type(
@@ -95,7 +134,13 @@ def order_fingerprint(parts: Sequence[tuple[str, str, str | None]]) -> str:
 
 
 def encode_cursor(
-    values: Sequence[Any], fingerprint: str, *, backward: bool = False, secret: bytes | None = None
+    values: Sequence[Any],
+    fingerprint: str,
+    *,
+    backward: bool = False,
+    secret: bytes | None = None,
+    ttl: float | dt.timedelta | None = None,
+    encrypt: bool = False,
 ) -> str:
     """Encode sort keys into an opaque URL-safe token.
 
@@ -103,65 +148,112 @@ def encode_cursor(
         values: Sort-key values in declared order.
         fingerprint: Digest of the declared ordering.
         backward: Whether the token traverses backward.
-        secret: Optional signing key.
+        secret: Optional signing or encryption key.
+        ttl: Optional positive finite expiration duration in seconds or timedelta.
+        encrypt: Encrypt the payload using HMAC-SHA256 CTR + Encrypt-then-MAC.
 
     Returns:
         The cursor token.
 
     Raises:
         TypeError: A value type has no registered encoder.
-        ValueError: A key or resulting token exceeds supported bounds.
+        ValueError: Secret, TTL, key, or resulting token fails validation.
     """
-    payload = {"v": 1, "d": "b" if backward else "f", "o": fingerprint, "k": [_encode_value(value) for value in values]}
-    body = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-    token = (
-        body if secret is None else body + "." + _b64(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
-    )
+    ttl_seconds = normalize_cursor_ttl(ttl)
+    if secret is not None and not secret:
+        msg = "secret must not be empty"
+        raise ValueError(msg)
+    if encrypt and not secret:
+        msg = "secret must be non-empty when encrypt=True"
+        raise ValueError(msg)
+
+    payload: dict[str, Any] = {
+        "v": 1,
+        "d": "b" if backward else "f",
+        "o": fingerprint,
+        "k": [_encode_value(value) for value in values],
+    }
+    if ttl_seconds is not None:
+        issued_at = time.time()
+        expires_at = issued_at + ttl_seconds
+        if not math.isfinite(expires_at):
+            msg = "ttl exceeds maximum representable expiration timestamp"
+            raise ValueError(msg)
+        payload["i"] = issued_at
+        payload["e"] = expires_at
+
+    plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if encrypt:
+        assert secret is not None
+        enc_key, mac_key = _derive_encryption_keys(secret)
+        nonce = secrets.token_bytes(_NONCE_LENGTH)
+        ciphertext = _xor_keystream(enc_key, nonce, plaintext)
+        sealed = _b64(nonce + ciphertext)
+        mac_input = f"{_ENCRYPTED_FORMAT}.{sealed}".encode("ascii")
+        mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
+        token = f"{_ENCRYPTED_FORMAT}.{sealed}.{mac}"
+    else:
+        body = _b64(plaintext)
+        token = (
+            body
+            if secret is None
+            else body + "." + _b64(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
+        )
     if len(token) > CURSOR_TOKEN_MAX_LENGTH:
         msg = "Cursor token exceeds maximum length"
         raise ValueError(msg)
     return token
 
 
-def decode_cursor(token: object, fingerprint: str, key_count: int, *, secret: bytes | None = None) -> DecodedCursor:
+def decode_cursor(
+    token: object,
+    fingerprint: str,
+    key_count: int,
+    *,
+    secret: bytes | None = None,
+    ttl: float | dt.timedelta | None = None,
+    encrypt: bool = False,
+) -> DecodedCursor:
     """Validate a cursor and recover its sort keys.
 
     Args:
         token: Client-provided cursor token.
         fingerprint: Expected ordering digest.
         key_count: Expected number of sort keys.
-        secret: Optional required signing key.
+        secret: Optional required signing or encryption key.
+        ttl: Optional maximum cursor lifetime enforced against issued-at/expiration claims.
+        encrypt: Require encrypted ``e1`` tokens when True and reject them when False.
 
     Returns:
         Typed sort-key values and traversal direction.
 
     Raises:
-        InvalidCursorError: The token is malformed, mismatched, or incorrectly signed.
+        ValueError: Invalid secret or ttl configuration.
+        InvalidCursorError: The token is malformed, expired, mismatched, or invalid.
     """
-    if (
-        not isinstance(token, str)
-        or not token
-        or len(token) > CURSOR_TOKEN_MAX_LENGTH
-        or not re.fullmatch(r"[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?", token)
-    ):
+    ttl_seconds = normalize_cursor_ttl(ttl)
+    if secret is not None and not secret:
+        msg = "secret must not be empty"
+        raise ValueError(msg)
+    if encrypt and not secret:
+        msg = "secret must be non-empty when encrypt=True"
+        raise ValueError(msg)
+    if not isinstance(token, str) or not token or len(token) > CURSOR_TOKEN_MAX_LENGTH:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)
-    body = token
-    if secret is None and "." in token:
-        msg = "Invalid pagination cursor: unexpected signature"
+
+    parts = token.split(".")
+    if len(parts) == _ENCRYPTED_PART_COUNT:
+        raw_bytes = _decode_encrypted_parts(parts, secret=secret, encrypt=encrypt)
+    elif len(parts) in {1, _SIGNED_PART_COUNT}:
+        raw_bytes = _decode_v1_parts(parts, secret=secret, encrypt=encrypt)
+    else:
+        msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg)
-    if secret is not None:
-        if "." not in token:
-            msg = "Invalid pagination cursor: missing signature"
-            raise InvalidCursorError(msg)
-        body, signature = token.split(".")
-        expected = _b64(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
-        if not hmac.compare_digest(expected.encode("ascii"), signature.encode("ascii")):
-            msg = "Invalid pagination cursor: signature mismatch"
-            raise InvalidCursorError(msg)
+
     try:
-        payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8"))
-    except (binascii.Error, UnicodeDecodeError, ValueError, RecursionError) as exc:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg) from exc
     if (
@@ -177,9 +269,10 @@ def decode_cursor(token: object, fingerprint: str, key_count: int, *, secret: by
     if payload["o"] != fingerprint or len(payload["k"]) != key_count:
         msg = "Invalid pagination cursor: ordering mismatch"
         raise InvalidCursorError(msg)
+    _validate_payload_timestamps(payload, ttl_seconds)
     try:
         values = tuple(_decode_value(entry) for entry in payload["k"])
-    except (ValueError, TypeError, ArithmeticError) as exc:
+    except (ValueError, TypeError, ArithmeticError, LookupError) as exc:
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg) from exc
     return DecodedCursor(values, payload["d"] == "b")
@@ -201,12 +294,12 @@ def _decimal(value: str) -> Decimal:
     return result
 
 
-def _timedelta(value: str) -> timedelta:
+def _timedelta(value: str) -> dt.timedelta:
     days, seconds, microseconds = (int(part) for part in value.split(":"))
     if abs(days) > _TIMEDELTA_MAX_DAYS:
         msg = "Out-of-range cursor timedelta"
         raise ValueError(msg)
-    return timedelta(days=days, seconds=seconds, microseconds=microseconds)
+    return dt.timedelta(days=days, seconds=seconds, microseconds=microseconds)
 
 
 _DECODERS: dict[str, Callable[[str], Any]] = {
@@ -215,11 +308,121 @@ _DECODERS: dict[str, Callable[[str], Any]] = {
     "y": lambda value: base64.b64decode(value, validate=True),
     "d": _decimal,
     "u": UUID,
-    "dt": datetime.fromisoformat,
-    "da": date.fromisoformat,
-    "t": time.fromisoformat,
+    "dt": dt.datetime.fromisoformat,
+    "da": dt.date.fromisoformat,
+    "t": dt.time.fromisoformat,
     "td": _timedelta,
 }
+
+
+def _derive_encryption_keys(secret: bytes) -> "tuple[bytes, bytes]":
+    enc_key = hmac.new(secret, _ENC_KEY_INFO, hashlib.sha256).digest()
+    mac_key = hmac.new(secret, _MAC_KEY_INFO, hashlib.sha256).digest()
+    return enc_key, mac_key
+
+
+def _xor_keystream(enc_key: bytes, nonce: bytes, data: bytes) -> bytes:
+    length = len(data)
+    output = bytearray(length)
+    offset = 0
+    counter = 0
+    while offset < length:
+        block = hmac.new(enc_key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
+        chunk_len = min(_HASH_BLOCK_SIZE, length - offset)
+        for idx in range(chunk_len):
+            output[offset + idx] = data[offset + idx] ^ block[idx]
+        offset += chunk_len
+        counter += 1
+    return bytes(output)
+
+
+def _decode_v1_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
+    for part in parts:
+        if _B64_PART_PATTERN.fullmatch(part) is None:
+            msg = "Invalid pagination cursor: malformed token"
+            raise InvalidCursorError(msg)
+    if encrypt:
+        msg = "Invalid pagination cursor: encryption required"
+        raise InvalidCursorError(msg)
+    body = parts[0]
+    has_signature = len(parts) == _SIGNED_PART_COUNT
+    if secret is None and has_signature:
+        msg = "Invalid pagination cursor: unexpected signature"
+        raise InvalidCursorError(msg)
+    if secret is not None:
+        if not has_signature:
+            msg = "Invalid pagination cursor: missing signature"
+            raise InvalidCursorError(msg)
+        expected = _b64(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
+        if not hmac.compare_digest(expected.encode("ascii"), parts[1].encode("ascii")):
+            msg = "Invalid pagination cursor: signature mismatch"
+            raise InvalidCursorError(msg)
+    try:
+        return base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+    except binascii.Error as exc:
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg) from exc
+
+
+def _decode_encrypted_parts(parts: "list[str]", *, secret: bytes | None, encrypt: bool) -> bytes:
+    if (
+        parts[0] != _ENCRYPTED_FORMAT
+        or _B64_PART_PATTERN.fullmatch(parts[1]) is None
+        or _B64_PART_PATTERN.fullmatch(parts[2]) is None
+    ):
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg)
+    if secret is None:
+        msg = "Invalid pagination cursor: missing secret"
+        raise InvalidCursorError(msg)
+    if not encrypt:
+        msg = "Invalid pagination cursor: unexpected encrypted token"
+        raise InvalidCursorError(msg)
+    enc_key, mac_key = _derive_encryption_keys(secret)
+    mac_input = f"{_ENCRYPTED_FORMAT}.{parts[1]}".encode("ascii")
+    expected_mac = _b64(hmac.new(mac_key, mac_input, hashlib.sha256).digest())
+    if not hmac.compare_digest(expected_mac.encode("ascii"), parts[2].encode("ascii")):
+        msg = "Invalid pagination cursor: signature mismatch"
+        raise InvalidCursorError(msg)
+    try:
+        sealed = base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
+    except binascii.Error as exc:
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg) from exc
+    if len(sealed) < _NONCE_LENGTH:
+        msg = "Invalid pagination cursor: malformed token"
+        raise InvalidCursorError(msg)
+    nonce = sealed[:_NONCE_LENGTH]
+    ciphertext = sealed[_NONCE_LENGTH:]
+    return _xor_keystream(enc_key, nonce, ciphertext)
+
+
+def _validate_payload_timestamps(payload: dict[str, Any], ttl_seconds: "float | None") -> None:
+    issued_at: float | None = None
+    expires_at: float | None = None
+    if "i" in payload:
+        raw_issued = payload["i"]
+        if type(raw_issued) is bool or not isinstance(raw_issued, (int, float)) or not math.isfinite(float(raw_issued)):
+            msg = "Invalid pagination cursor: malformed token"
+            raise InvalidCursorError(msg)
+        issued_at = float(raw_issued)
+    if "e" in payload:
+        raw_expires = payload["e"]
+        if (
+            type(raw_expires) is bool
+            or not isinstance(raw_expires, (int, float))
+            or not math.isfinite(float(raw_expires))
+        ):
+            msg = "Invalid pagination cursor: malformed token"
+            raise InvalidCursorError(msg)
+        expires_at = float(raw_expires)
+    now = time.time()
+    if expires_at is not None and now >= expires_at:
+        msg = "Invalid pagination cursor: expired"
+        raise InvalidCursorError(msg)
+    if ttl_seconds is not None and (issued_at is None or expires_at is None or now >= issued_at + ttl_seconds):
+        msg = "Invalid pagination cursor: expired"
+        raise InvalidCursorError(msg)
 
 
 def _encode_value(value: Any) -> list[Any]:

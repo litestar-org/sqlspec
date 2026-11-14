@@ -1,6 +1,10 @@
 """DuckDB database configuration with connection pooling."""
 
+import shutil
+import tempfile
+import threading
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection, DuckDBCursor, DuckDBSessionContext
@@ -20,6 +24,7 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
@@ -37,13 +42,15 @@ EXTENSION_FLAG_KEYS: "tuple[str, ...]" = (
     "allow_unsigned_extensions",
     "enable_external_access",
 )
+_TEMP_DIR_LOCK = threading.Lock()
+_MANAGED_MEMORY_TEMP_DIRS: "dict[str, tuple[str, int]]" = {}
 
 
 class DuckDBConnectionParams(TypedDict):
     """DuckDB connection parameters forwarded to ``duckdb.connect`` or its ``config`` dictionary."""
 
     database: NotRequired[str]
-    """Database file path, ``':memory:shared_db'`` shared memory identifier, or MotherDuck URI."""
+    """Database file path, ``':memory:'`` / ``':memory:<name>'`` memory identifier, or MotherDuck URI."""
     read_only: NotRequired[bool]
     """Open the database file in read-only mode without taking a write lock."""
     config: NotRequired["dict[str, Any]"]
@@ -239,7 +246,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     Supports extensions, secrets, Arrow transfers, and direct file queries.
     Connections recycle after 24 hours by default; set recycling to 0 to disable.
-    Shared memory databases use ``:memory:shared_db``.
+    Omitted, empty, or ``':memory:'`` databases are assigned an isolated ``:memory:sqlspec_<uuid>`` catalog per config while explicit ``:memory:<name>`` databases remain shared.
 
     Set ``driver_features["json_serializer"]`` to a serializer that returns text
     for dict/list parameters. The default is ``sqlspec.utils.serializers.to_json``.
@@ -303,15 +310,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         )
         if database is not None:
             connection_config["database"] = database
-        connection_config.setdefault("database", ":memory:shared_db")
 
-        if connection_config.get("database") in {":memory:", ""}:
-            connection_config["database"] = ":memory:shared_db"
+        if connection_config.get("database") in {None, ":memory:", ""}:
+            connection_config["database"] = f":memory:sqlspec_{uuid4().hex}"
 
         features: dict[str, Any] = dict(driver_features) if driver_features else {}
         self._user_connection_hook = cast(
             "Callable[[DuckDBConnection], DuckDBConnection | None] | None", features.pop("on_connection_create", None)
         )
+        self._managed_temp_directory: str | None = None
+        self._managed_temp_directory_key: str | None = None
         features.setdefault("enable_uuid_conversion", True)
         serializer = features.setdefault("json_serializer", to_json)
 
@@ -409,6 +417,21 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
     def _create_pool(self) -> DuckDBConnectionPool:
         """Create connection pool from configuration."""
         connection_config = build_connection_config(self.connection_config)
+        database = str(connection_config.get("database", ""))
+        is_memory_db = database.startswith(":memory:") or database == ""
+        nested_config = connection_config.get("config")
+        has_explicit_temp_dir = isinstance(nested_config, dict) and bool(nested_config.get("temp_directory"))
+        if is_memory_db and not has_explicit_temp_dir:
+            managed_temp_dir = self._managed_temp_directory
+            if managed_temp_dir is None or not Path(managed_temp_dir).is_dir():
+                if self._managed_temp_directory_key is not None:
+                    _release_managed_temp_dir(self._managed_temp_directory_key)
+                managed_temp_dir = _acquire_managed_temp_dir(database)
+                self._managed_temp_directory = managed_temp_dir
+                self._managed_temp_directory_key = database
+            nested_copy = dict(nested_config) if isinstance(nested_config, dict) else {}
+            nested_copy["temp_directory"] = managed_temp_dir
+            connection_config["config"] = nested_copy
 
         extensions = cast("list[dict[str, Any]] | None", self.driver_features.get("extensions", None))
         secrets = cast("list[dict[str, Any]] | None", self.driver_features.get("secrets", None))
@@ -434,11 +457,47 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
     def _close_pool(self) -> None:
         """Close the connection pool."""
-        if self.connection_instance:
-            self.connection_instance.close()
+        try:
+            if self.connection_instance:
+                self.connection_instance.close()
+        finally:
+            managed_key = self._managed_temp_directory_key
+            self._managed_temp_directory_key = None
+            self._managed_temp_directory = None
+            if managed_key is not None:
+                _release_managed_temp_dir(managed_key)
 
     def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
         driver = super()._prepare_driver(driver)
         if self.connection_instance is not None:
             driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
         return driver
+
+
+def _acquire_managed_temp_dir(database_key: str) -> str:
+    with _TEMP_DIR_LOCK:
+        existing = _MANAGED_MEMORY_TEMP_DIRS.get(database_key)
+        if existing is not None:
+            path, count = existing
+            if Path(path).is_dir():
+                _MANAGED_MEMORY_TEMP_DIRS[database_key] = (path, count + 1)
+                return path
+        path = tempfile.mkdtemp(prefix="sqlspec_duckdb_")
+        _MANAGED_MEMORY_TEMP_DIRS[database_key] = (path, 1)
+        return path
+
+
+def _release_managed_temp_dir(database_key: str) -> None:
+    path_to_remove: str | None = None
+    with _TEMP_DIR_LOCK:
+        existing = _MANAGED_MEMORY_TEMP_DIRS.get(database_key)
+        if existing is None:
+            return
+        path, count = existing
+        if count <= 1:
+            del _MANAGED_MEMORY_TEMP_DIRS[database_key]
+            path_to_remove = path
+        else:
+            _MANAGED_MEMORY_TEMP_DIRS[database_key] = (path, count - 1)
+    if path_to_remove is not None:
+        shutil.rmtree(path_to_remove, ignore_errors=True)

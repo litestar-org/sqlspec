@@ -223,7 +223,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
         The event insert and state update succeed together or fail together
         within a single DuckDB transaction; the updated StoredSession is
-        returned via UPDATE...RETURNING.
+        returned after committing or selecting the updated row.
 
         Args:
             event_record: Event record to store.
@@ -305,8 +305,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
     def _session_index_statements(self) -> list[str]:
         """Return canonical CREATE INDEX statements for the sessions table."""
         return [
-            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'app_user')} ON {self._session_table}(app_name, user_id)",
-            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'update_time')} ON {self._session_table}(update_time DESC)",
+            f"CREATE INDEX IF NOT EXISTS {_duckdb_index_name(self._session_table, 'app_user')} ON {self._session_table}(app_name, user_id)"
         ]
 
     def _event_generated_column_index_statements(self) -> list[str]:
@@ -506,25 +505,24 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         read: bool = False,
     ) -> "StoredSession | None":
         """Synchronous implementation of get_session."""
-        if self._should_renew(renew_for):
-            sql = f"""
-            UPDATE {self._session_table}
-            SET update_time = ?
-            WHERE app_name = ? AND user_id = ? AND id = ?
-            RETURNING id, app_name, user_id, state, create_time, update_time
-            """
-            params: list[Any] = [datetime.now(UTC), app_name, user_id, session_id]
-        else:
-            sql = f"""
-            SELECT id, app_name, user_id, state, create_time, update_time
-            FROM {self._session_table}
-            WHERE app_name = ? AND user_id = ? AND id = ?
-            """
-            params = [app_name, user_id, session_id]
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = ? AND user_id = ? AND id = ?
+        """
+        params: list[Any] = [app_name, user_id, session_id]
 
         try:
             with self._provide_read_connection(primary=not read) as conn:
-                cursor = conn.execute(sql, params)
+                if self._should_renew(renew_for):
+                    renew_sql = f"""
+                    UPDATE {self._session_table}
+                    SET update_time = ?
+                    WHERE app_name = ? AND user_id = ? AND id = ?
+                    """
+                    conn.execute(renew_sql, [datetime.now(UTC), app_name, user_id, session_id])
+                    conn.commit()
+                cursor = conn.execute(select_sql, params)
                 row = cursor.fetchone()
 
                 if row is None:
@@ -564,13 +562,18 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Synchronous implementation of delete_session."""
+        owner_check_sql = f"SELECT 1 FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = ? AND user_id = ? AND session_id = ?"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
+            if conn.execute(owner_check_sql, (app_name, user_id, session_id)).fetchone() is None:
+                return
             conn.begin()
             try:
                 conn.execute(delete_events_sql, (app_name, user_id, session_id))
+                conn.commit()
+                conn.begin()
                 conn.execute(delete_session_sql, (app_name, user_id, session_id))
                 conn.commit()
             except Exception:
@@ -695,7 +698,11 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         UPDATE {self._session_table}
         SET state = ?, update_time = ?
         WHERE app_name = ? AND user_id = ? AND id = ?
-        RETURNING id, app_name, user_id, state, create_time, update_time
+        """
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = ? AND user_id = ? AND id = ?
         """
         app_upsert_sql = f"""
         INSERT INTO {self._app_state_table} (app_name, state, update_time)
@@ -715,8 +722,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         with self._config.provide_connection() as conn:
             try:
                 conn.execute("BEGIN TRANSACTION")
-                cursor = conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
-                row = cursor.fetchone()
+                conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
+                row = conn.execute(select_sql, (app_name, user_id, session_id)).fetchone()
                 if row is None:
                     _raise_session_not_found(session_id)
                 assert row is not None
@@ -774,20 +781,26 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             params.append(after_timestamp)
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
+            order_and_limit = "ORDER BY e.timestamp DESC, e.rowid DESC LIMIT ?"
+        else:
+            order_and_limit = "ORDER BY e.timestamp ASC"
 
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
         JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_and_limit}
         """
 
         try:
             with self._provide_read_connection(primary=not read) as conn:
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -840,6 +853,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         try:
             with self._config.provide_connection() as conn:
                 conn.execute(delete_events_sql, params)
+                conn.commit()
                 cursor = conn.execute(delete_sessions_sql, params)
                 count = len(cursor.fetchall())
                 conn.commit()

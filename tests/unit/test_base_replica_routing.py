@@ -260,10 +260,12 @@ async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous:
     try:
         with pytest.raises(RuntimeError, match="session_end boom"):
             if isinstance(config, AiosqliteConfig):
-                async with _RuntimeAsyncContext(config.provide_session(), end_boom_runtime, config) as session:
-                    captured.append(session)
+                async_ctx: Any = _RuntimeAsyncContext(config.provide_session(), end_boom_runtime, config)
+                async with async_ctx as async_session:
+                    captured.append(async_session)
             else:
-                with _RuntimeSyncContext(config.provide_session(), end_boom_runtime, config) as session:
+                sync_ctx: Any = _RuntimeSyncContext(config.provide_session(), end_boom_runtime, config)
+                with sync_ctx as session:
                     captured.append(session)
         assert len(destroyed) == 1
         assert captured[0].connection is _DETACHED_CONNECTION

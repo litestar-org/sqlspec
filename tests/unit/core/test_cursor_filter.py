@@ -1,10 +1,12 @@
 """Keyset traversal, SQL generation, and cursor validation contracts."""
 
 import copy
+import datetime as dt
 import pickle
 import random
 import sqlite3
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlglot import exp
@@ -320,3 +322,40 @@ def test_cursor_key_rejects_malformed_field_names(field_name: str) -> None:
     """Qualified field names need nonempty segments and at most four parts."""
     with pytest.raises(ValueError, match="field_name"):
         CursorKey(field_name, result_name="id")
+
+
+def test_cursor_filter_ttl_and_encrypt_roundtrip() -> None:
+    keys = [CursorKey("id")]
+    with patch("sqlspec.core._cursor.time.time", side_effect=[1000.0, 1020.0, 1060.0]):
+        flt = CursorFilter(keys, 10, secret="my-secret", ttl=dt.timedelta(seconds=60), encrypt=True)
+        token = flt.encode({"id": 5}, backward=False)
+        assert token.startswith("e1.")
+
+        decoded_filter = CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=True)
+        assert decoded_filter.values == (5,)
+
+        with pytest.raises(InvalidCursorError):
+            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=False)
+
+        with pytest.raises(InvalidCursorError, match="expired"):
+            CursorFilter(keys, 10, cursor=token, secret="my-secret", ttl=60, encrypt=True)
+
+
+def test_cursor_filter_cache_key_and_serialization_with_ttl_encrypt() -> None:
+    keys = [CursorKey("id")]
+    f1 = CursorFilter(keys, 10, secret="s1", ttl=60, encrypt=True)
+    f2 = CursorFilter(keys, 10, secret="s2", ttl=120, encrypt=False)
+
+    cache_key = f1.get_cache_key()
+    assert cache_key == f2.get_cache_key()
+    assert "s1" not in repr(cache_key)
+
+    copied = copy.deepcopy(f1)
+    assert copied.ttl == 60
+    assert copied.encrypt is True
+    assert copied.encode({"id": 7}, backward=False).startswith("e1.")
+
+    unpickled = pickle.loads(pickle.dumps(f1))
+    assert unpickled.ttl == 60
+    assert unpickled.encrypt is True
+    assert unpickled.encode({"id": 7}, backward=False).startswith("e1.")

@@ -1391,8 +1391,8 @@ def test_expression_override_skips_reparse_on_placeholder_conversion(
         ("VALUES (1, (@ -5))", "postgres"),
     ],
 )
-def test_unparseable_row_returning_statements_stay_non_read_only(sql: str, dialect: str) -> None:
-    """Unparseable row-returning SQL returns rows while failing closed on read-only checks."""
+def test_unparsable_row_returning_statements_stay_non_read_only(sql: str, dialect: str) -> None:
+    """Unparsable row-returning SQL returns rows while failing closed on read-only checks."""
     config = StatementConfig(dialect=dialect)
     statement = SQL(sql, statement_config=config)
 
@@ -1401,7 +1401,7 @@ def test_unparseable_row_returning_statements_stay_non_read_only(sql: str, diale
     assert statement.operation_type == "COMMAND"
 
 
-def test_unparseable_keyword_without_operand_does_not_return_rows() -> None:
+def test_unparsable_keyword_without_operand_does_not_return_rows() -> None:
     assert SQLProcessor._statement_text_returns_rows("SELECT") is False
     assert SQLProcessor._statement_text_returns_rows("-- only a comment") is False
     assert SQLProcessor._statement_text_returns_rows("/* unclosed") is False

@@ -219,7 +219,7 @@ def test_correlation_extractor_truncates_at_line_break() -> None:
     assert extractor.extract(headers.get) == "abc"
 
 
-@pytest.mark.parametrize("invalid_value", ["abc';--", "a b", "caf\xe9", "\r\nleading-newline"])
+@pytest.mark.parametrize("invalid_value", ["abc';--", "a b", "foo\xe9", "\r\nleading-newline"])
 def test_correlation_extractor_falls_through_on_disallowed_characters(invalid_value: str) -> None:
     """Invalid characters advance to the next configured header or fall back to a generated UUID."""
     extractor = CorrelationExtractor()

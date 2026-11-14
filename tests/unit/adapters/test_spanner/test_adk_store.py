@@ -1320,9 +1320,14 @@ async def test_spanner_memory_deduplicates_by_composite_owner_tuple(is_async: bo
         database = config.get_database.return_value
 
         def _run_sync_txn(job: Any) -> Any:
+            def _record_update(_sql: str, params: Any = None, param_types: Any = None) -> int:
+                del param_types
+                executed_writes.append(params or {})
+                return 1
+
             txn = MagicMock()
             txn.execute_sql = lambda *_a, **_k: [("app-a", "u1", "shared-event")]
-            txn.execute_update = lambda _sql, params=None, param_types=None: executed_writes.append(params or {}) or 1
+            txn.execute_update = _record_update
             return job(txn)
 
         database.run_in_transaction.side_effect = _run_sync_txn

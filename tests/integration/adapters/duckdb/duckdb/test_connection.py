@@ -224,12 +224,12 @@ def test_config_with_connection_config_parameter(tmp_path: Path) -> None:
 
 
 def test_config_memory_database_shared_conversion() -> None:
-    """Test that :memory: databases are converted to shared memory."""
+    """Test that :memory: databases are converted to isolated per-config memory catalogs."""
 
     config = DuckDBConfig(connection_config=DuckDBPoolParams(database=":memory:"))
 
     try:
-        assert config.connection_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"].startswith(":memory:sqlspec_")
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'memory_test' as test")
@@ -237,16 +237,16 @@ def test_config_memory_database_shared_conversion() -> None:
             assert result.get_data()[0]["test"] == "memory_test"
 
     finally:
-        config._close_pool()
+        config.close_pool()
 
 
 def test_config_empty_database_conversion() -> None:
-    """Test that empty database string is converted to shared memory."""
+    """Test that empty database string is converted to an isolated per-config memory catalog."""
 
     config = DuckDBConfig(connection_config=DuckDBPoolParams(database=""))
 
     try:
-        assert config.connection_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"].startswith(":memory:sqlspec_")
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'empty_test' as test")
@@ -254,16 +254,16 @@ def test_config_empty_database_conversion() -> None:
             assert result.get_data()[0]["test"] == "empty_test"
 
     finally:
-        config._close_pool()
+        config.close_pool()
 
 
 def test_config_default_database_shared() -> None:
-    """Test that default database is shared memory."""
+    """Test that default database is an isolated per-config memory catalog."""
 
     config = DuckDBConfig()
 
     try:
-        assert config.connection_config["database"] == ":memory:shared_db"
+        assert config.connection_config["database"].startswith(":memory:sqlspec_")
 
         with config.provide_session() as session:
             result = session.execute("SELECT 'default_test' as test")
@@ -271,7 +271,7 @@ def test_config_default_database_shared() -> None:
             assert result.get_data()[0]["test"] == "default_test"
 
     finally:
-        config._close_pool()
+        config.close_pool()
 
 
 def test_config_consistency_with_other_adapters(tmp_path: Path) -> None:

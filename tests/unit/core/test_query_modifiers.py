@@ -709,7 +709,7 @@ def test_condition_factories_accept_expression_operand(factory: Any, expected: s
         ("---", "p_param"),
         ("", "p_param"),
         ("order total ($)", "order_total"),
-        ("caf\u00e9", "caf"),
+        ("foo\u00e9", "foo"),
     ],
 )
 def test_sanitize_parameter_name(name: str, expected: str) -> None:

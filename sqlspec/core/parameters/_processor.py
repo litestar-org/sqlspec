@@ -36,6 +36,7 @@ _OCCURRENCE_KEYED_STYLE_VALUES: "frozenset[str]" = frozenset({
     ParameterStyle.QMARK.value,
     ParameterStyle.POSITIONAL_PYFORMAT.value,
 })
+_DOLLAR_PARSE_STYLES: "frozenset[ParameterStyle]" = frozenset({ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR})
 
 __all__ = (
     "ParameterProcessor",
@@ -835,7 +836,9 @@ class ParameterProcessor:
         """Normalize SQL for sqlglot parsing by converting unsupported parameter styles.
 
         When a parameter style is not in config.supported_parameter_styles (what sqlglot
-        can parse for this dialect), convert it to config.default_parameter_style.
+        can parse for this dialect), convert it to config.default_parameter_style. Also
+        separates adjacent ``$``-prefixed placeholders from preceding non-whitespace characters
+        so sqlglot does not misread them as dollar-quoted string delimiters.
 
         Args:
             sql: SQL string with parameters.
@@ -847,8 +850,13 @@ class ParameterProcessor:
             SQL string with parameters converted to a sqlglot-compatible style.
         """
         if not self._needs_parse_normalization(param_info, config):
-            return sql
+            return _separate_adjacent_dollar_placeholders(sql, param_info)
         target_style = config.default_parameter_style
+        if target_style in _DOLLAR_PARSE_STYLES:
+            normalized_sql, _, converted_info = self._converter._convert_with_metadata(  # pyright: ignore[reportPrivateUsage]
+                sql, None, target_style, is_many=False, param_info=param_info, dialect=dialect
+            )
+            return _separate_adjacent_dollar_placeholders(normalized_sql, converted_info)
         normalized_sql, _ = self._converter.convert_placeholder_style(
             sql, None, target_style, is_many=False, param_info=param_info, dialect=dialect
         )
@@ -1570,3 +1578,24 @@ def _mapping_rows_to_positional(
     if isinstance(parameters, Mapping):
         return _mapping_row_to_positional(parameters, cached_param_info)
     return parameters
+
+
+def _separate_adjacent_dollar_placeholders(sql: str, param_info: "Sequence[ParameterInfo]") -> str:
+    """Insert a separating space before non-whitespace-preceded ``$`` placeholders for sqlglot parsing."""
+    if "$" not in sql or not param_info:
+        return sql
+    insert_positions = [
+        info.position
+        for info in param_info
+        if info.style in _DOLLAR_PARSE_STYLES and info.position > 0 and not sql[info.position - 1].isspace()
+    ]
+    if not insert_positions:
+        return sql
+    segments: list[str] = []
+    last = 0
+    for pos in insert_positions:
+        segments.append(sql[last:pos])
+        segments.append(" ")
+        last = pos
+    segments.append(sql[last:])
+    return "".join(segments)

@@ -1,13 +1,20 @@
 """arrow-odbc configuration surface: connection string merging, encoding, pooling, SQLSTATE."""
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 pytest.importorskip("arrow_odbc")
 
-from arrow_odbc import Error as ArrowOdbcError
 from arrow_odbc import TextEncoding
+
+if TYPE_CHECKING:
+
+    class ArrowOdbcError(Exception):
+        pass
+
+else:
+    from arrow_odbc import Error as ArrowOdbcError
 
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
 from sqlspec.adapters.arrow_odbc import (

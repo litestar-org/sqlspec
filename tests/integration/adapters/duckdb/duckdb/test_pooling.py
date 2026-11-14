@@ -50,7 +50,7 @@ def test_regular_memory_auto_conversion() -> None:
     assert config.connection_config["pool_max_size"] == 10
 
     database = config.connection_config["database"]
-    assert database == ":memory:shared_db"
+    assert database.startswith(":memory:sqlspec_")
 
     with config.provide_session() as session1:
         session1.execute_script("""
@@ -110,12 +110,11 @@ def test_connection_pool_health_checks() -> None:
 
 
 def test_empty_database_conversion() -> None:
-    """Test that empty database string gets converted properly."""
+    """Test that empty database string gets converted to an isolated memory catalog."""
     config = DuckDBConfig(connection_config={"database": ""})
 
     database = config.connection_config["database"]
-    assert database.startswith(":memory:")
-    assert len(database) == len(":memory:shared_db")
+    assert database.startswith(":memory:sqlspec_")
 
     with config.provide_session() as session:
         result = session.execute("SELECT 'empty_test' as test").get_data()
@@ -123,12 +122,11 @@ def test_empty_database_conversion() -> None:
 
 
 def test_default_config_conversion() -> None:
-    """Test that default config (no connection_config) works with shared memory."""
+    """Test that default config (no connection_config) gets an isolated memory catalog."""
     config = DuckDBConfig()
 
     database = config.connection_config["database"]
-    assert database.startswith(":memory:shared_db")
-    assert len(database) == len(":memory:shared_db")
+    assert database.startswith(":memory:sqlspec_")
 
     with config.provide_session() as session:
         result = session.execute("SELECT 'default_test' as test").get_data()
@@ -161,3 +159,23 @@ def test_duckdb_pool_concurrency() -> None:
     config.close_pool()
 
     assert len(unique_pools) == 1, f"Race condition detected! {len(unique_pools)} unique DuckDB pools created."
+
+
+def test_default_memory_pool_shares_within_config_and_isolates_across_configs() -> None:
+    """Same DuckDBConfig ':memory:' pool shares state across sessions while distinct configs remain isolated."""
+    config_a = DuckDBConfig(connection_config={"database": ":memory:", "pool_min_size": 1, "pool_max_size": 3})
+    config_b = DuckDBConfig(connection_config={"database": ":memory:", "pool_min_size": 1, "pool_max_size": 3})
+    try:
+        with config_a.provide_session() as s1:
+            s1.execute("CREATE TABLE pool_iso (id INTEGER)")
+            s1.execute("INSERT INTO pool_iso VALUES (99)")
+
+        with config_a.provide_session() as s2:
+            assert s2.select_value("SELECT id FROM pool_iso") == 99
+
+        with config_b.provide_session() as s3:
+            count = s3.select_value("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'pool_iso'")
+            assert count == 0
+    finally:
+        config_a.close_pool()
+        config_b.close_pool()

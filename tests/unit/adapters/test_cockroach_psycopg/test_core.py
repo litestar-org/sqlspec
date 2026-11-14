@@ -225,7 +225,7 @@ def test_build_connection_config_merges_managed_options() -> None:
 
 def test_cockroach_psycopg_sync_load_from_storage_rejects_read_only_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sync load_from_storage fails closed on read-only sessions even on idle autocommit connections."""
-    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    conn: Any = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     driver = CockroachPsycopgSyncDriver(
         conn,
         statement_config=build_statement_config(),
@@ -251,7 +251,7 @@ async def test_cockroach_psycopg_async_load_from_storage_rejects_read_only_sessi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Async load_from_storage fails closed on read-only sessions even on idle autocommit connections."""
-    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    conn: Any = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     driver = CockroachPsycopgAsyncDriver(
         conn,
         statement_config=build_statement_config(),
@@ -280,7 +280,7 @@ def test_cockroach_psycopg_sync_select_to_storage_guards_unsafe_selects(
     monkeypatch: pytest.MonkeyPatch, sql: str, read_only_session: bool
 ) -> None:
     """Unsafe SELECT statements bypass native EXPORT on sync driver and raise on read-only sessions."""
-    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    conn: Any = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     driver = CockroachPsycopgSyncDriver(
         conn,
         statement_config=build_statement_config(),
@@ -316,7 +316,7 @@ async def test_cockroach_psycopg_async_select_to_storage_guards_unsafe_selects(
     monkeypatch: pytest.MonkeyPatch, sql: str, read_only_session: bool
 ) -> None:
     """Unsafe SELECT statements bypass native EXPORT on async driver and raise on read-only sessions."""
-    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    conn: Any = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     driver = CockroachPsycopgAsyncDriver(
         conn,
         statement_config=build_statement_config(),
@@ -359,7 +359,7 @@ async def test_cockroach_psycopg_select_to_storage_sanitizes_telemetry_but_binds
 ) -> None:
     """Driver select_to_storage binds full URI to SQL while recording sanitized telemetry destination."""
     raw_uri = "gs://user:pass@bucket/prefix?CREDENTIALS=secret_blob"
-    conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    conn: Any = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
     driver_cls = CockroachPsycopgAsyncDriver if asynchronous else CockroachPsycopgSyncDriver
     driver: Any = driver_cls(
         conn, statement_config=build_statement_config(), driver_features={"enable_native_storage": True}

@@ -48,7 +48,7 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
 === "URI Scheme Resolution"
 
     ```python
-    from sqlspec import SQLSpec, StatementConfig
+    from sqlspec import SQLSpec
     from sqlspec.adapters.adbc import AdbcConfig
 
     spec = SQLSpec()
@@ -56,11 +56,12 @@ Choose `AdbcConfig` when your primary workload extracts or ingests Arrow, Polars
         AdbcConfig(
             connection_config={
                 "uri": "postgresql://app:secret@localhost:5432/prod"
-            },
-            statement_config=StatementConfig(dialect="postgres"),
+            }
         )
     )
     ```
+
+    Omitting `statement_config` lets `AdbcConfig` infer both the SQL dialect and native parameter style from the URI (such as `$1` numeric placeholders for PostgreSQL or `?` placeholders for SQLite and DuckDB), so bound parameters execute without manual overrides. For in-memory DuckDB via ADBC, pass `":memory:"` rather than named `":memory:<name>"` identifiers.
 
 === "Short Driver Alias"
 
