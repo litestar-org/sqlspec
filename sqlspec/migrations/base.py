@@ -229,6 +229,14 @@ class BaseMigrationTracker(Generic[DriverT]):
         """Remove a migration record."""
         ...
 
+    def catalog_schema_name(self) -> "str | None":
+        """Return the tracking table's schema in the form data dictionary getters accept.
+
+        Returns:
+            Schema name for metadata lookups, or None when the table is unqualified.
+        """
+        return self.version_table_schema
+
     @staticmethod
     def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
         """Split a ``schema.table`` value into unquoted ``(table, schema)`` names."""
@@ -247,14 +255,6 @@ class BaseMigrationTracker(Generic[DriverT]):
         if version_table_schema:
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
-
-    def catalog_schema_name(self) -> "str | None":
-        """Return the tracking table's schema in the form data dictionary getters accept.
-
-        Returns:
-            Schema name for metadata lookups, or None when the table is unqualified.
-        """
-        return self.version_table_schema
 
     def _tracking_schema_target(self) -> SchemaTarget:
         """Return the schema target that compares the tracking table's columns with its DDL.
@@ -567,6 +567,13 @@ class BaseMigrationTracker(Generic[DriverT]):
             if isinstance(lock_code, int) and lock_code < 0:
                 msg = f"Failed to acquire SQL Server migration lock {lock_name!r} (code {lock_code})"
                 raise MigrationError(msg)
+
+    @staticmethod
+    def _validate_mysql_lock_result(lock_name: str, timeout_seconds: int, lock_result: Any) -> None:
+        """Raise ``MigrationError`` when MySQL ``GET_LOCK`` does not acquire ownership."""
+        if lock_result != 1:
+            msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
+            raise MigrationError(msg)
 
     def _detect_missing_columns(self, existing_columns: "set[str]") -> "set[str]":
         """Detect which columns are missing from the current schema.

@@ -98,6 +98,28 @@ class BaseMigrationRunner:
         self.summary_only = summary_only
         self.use_logger = use_logger
 
+    @staticmethod
+    def verify_migration_checksum(content: str, recorded_checksum: str) -> bool:
+        """Verify migration content against a stored SHA-256 or legacy MD5 checksum.
+
+        Args:
+            content: The migration file content.
+            recorded_checksum: Hex digest recorded in the migration tracking table.
+
+        Returns:
+            True when the canonicalized content digest matches ``recorded_checksum``.
+        """
+        if not recorded_checksum or not recorded_checksum.isascii():
+            return False
+        canonical_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
+        if len(recorded_checksum) == _MD5_HEX_LENGTH and all(
+            ch in "0123456789abcdefABCDEF" for ch in recorded_checksum
+        ):
+            expected = hashlib.md5(canonical_bytes, usedforsecurity=False).hexdigest()
+        else:
+            expected = hashlib.sha256(canonical_bytes).hexdigest()
+        return hmac.compare_digest(expected.encode("ascii"), recorded_checksum.lower().encode("ascii"))
+
     def set_summary_only(self, value: bool) -> None:
         """Set summary-only logging behavior for migration runner."""
         self.summary_only = value
@@ -148,28 +170,6 @@ class BaseMigrationRunner:
         for extension_loader in self._extension_sql_loaders.values():
             extension_loader.clear_cache()
         self._metadata_cache.clear()
-
-    @staticmethod
-    def verify_migration_checksum(content: str, recorded_checksum: str) -> bool:
-        """Verify migration content against a stored SHA-256 or legacy MD5 checksum.
-
-        Args:
-            content: The migration file content.
-            recorded_checksum: Hex digest recorded in the migration tracking table.
-
-        Returns:
-            True when the canonicalized content digest matches ``recorded_checksum``.
-        """
-        if not recorded_checksum or not recorded_checksum.isascii():
-            return False
-        canonical_bytes = BaseMigrationRunner._canonicalize_migration_content(content).encode("utf-8")
-        if len(recorded_checksum) == _MD5_HEX_LENGTH and all(
-            ch in "0123456789abcdefABCDEF" for ch in recorded_checksum
-        ):
-            expected = hashlib.md5(canonical_bytes, usedforsecurity=False).hexdigest()
-        else:
-            expected = hashlib.sha256(canonical_bytes).hexdigest()
-        return hmac.compare_digest(expected.encode("ascii"), recorded_checksum.lower().encode("ascii"))
 
     def calculate_checksum(self, content: str) -> str:
         """Calculate SHA-256 checksum of migration content.
@@ -962,6 +962,84 @@ class SyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
+    def execute_reconciliation(
+        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension reconcile(context) callback synchronously.
+
+        Args:
+            driver: Active synchronous database driver.
+            descriptor: Extension reconciler descriptor to execute.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return self._execute_reconciler_step(driver, descriptor, direction="up")
+
+    def execute_reconciliation_downgrade(
+        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension downgrade(context) callback synchronously.
+
+        Args:
+            driver: Active synchronous database driver.
+            descriptor: Extension reconciler descriptor to downgrade.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return self._execute_reconciler_step(driver, descriptor, direction="down")
+
+    def load_all_migrations(self) -> "dict[str, SQL]":
+        """Load all migrations into a single namespace for bulk operations.
+
+        Returns:
+            Dictionary mapping query names to SQL objects.
+        """
+        all_queries: dict[str, SQL] = {}
+        migrations = self.get_migration_files()
+        loaded_core_sql = False
+
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = self.load_migration(file_path, version)
+                    up_sql = self._migration_sql(migration, "up")
+                    down_sql = self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+                    continue
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    self.loader.load_sql(file_path)
+                loaded_core_sql = True
+            else:
+                context_to_use = self._migration_context(file_path)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
+                )
+
+                try:
+                    up_sql = _load_migration_sql(loader, file_path, "up")
+                    down_sql = _load_migration_sql(loader, file_path, "down")
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+
+                except Exception as e:
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
+
+        if loaded_core_sql:
+            for query_name in self.loader.list_queries():
+                all_queries[query_name] = self.loader.get_sql(query_name)
+
+        return all_queries
+
     def _commit_nontransactional_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
         if self._has_active_implicit_transaction(driver):
@@ -1091,84 +1169,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
             span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
         )
         return execution_time
-
-    def execute_reconciliation(
-        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
-    ) -> int:
-        """Execute an extension reconcile(context) callback synchronously.
-
-        Args:
-            driver: Active synchronous database driver.
-            descriptor: Extension reconciler descriptor to execute.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
-        return self._execute_reconciler_step(driver, descriptor, direction="up")
-
-    def execute_reconciliation_downgrade(
-        self, driver: "SyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
-    ) -> int:
-        """Execute an extension downgrade(context) callback synchronously.
-
-        Args:
-            driver: Active synchronous database driver.
-            descriptor: Extension reconciler descriptor to downgrade.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
-        return self._execute_reconciler_step(driver, descriptor, direction="down")
-
-    def load_all_migrations(self) -> "dict[str, SQL]":
-        """Load all migrations into a single namespace for bulk operations.
-
-        Returns:
-            Dictionary mapping query names to SQL objects.
-        """
-        all_queries: dict[str, SQL] = {}
-        migrations = self.get_migration_files()
-        loaded_core_sql = False
-
-        for version, file_path in migrations:
-            if file_path.suffix == ".sql":
-                if self._migration_sql_loader(file_path, version) is not self.loader:
-                    migration = self.load_migration(file_path, version)
-                    up_sql = self._migration_sql(migration, "up")
-                    down_sql = self._migration_sql(migration, "down")
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
-                    continue
-                if not self.loader.has_query(f"migrate-{version}-up"):
-                    self.loader.load_sql(file_path)
-                loaded_core_sql = True
-            else:
-                context_to_use = self._migration_context(file_path)
-                loader = get_migration_loader(
-                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
-                )
-
-                try:
-                    up_sql = _load_migration_sql(loader, file_path, "up")
-                    down_sql = _load_migration_sql(loader, file_path, "down")
-
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
-
-                except Exception as e:
-                    self._log_migration_event(
-                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
-                    )
-
-        if loaded_core_sql:
-            for query_name in self.loader.list_queries():
-                all_queries[query_name] = self.loader.get_sql(query_name)
-
-        return all_queries
 
     def _execute_migration_sql(
         self,
@@ -1463,6 +1463,84 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
+    async def execute_reconciliation(
+        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension reconcile(context) callback asynchronously.
+
+        Args:
+            driver: Active asynchronous database driver.
+            descriptor: Extension reconciler descriptor to execute.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return await self._execute_reconciler_step(driver, descriptor, direction="up")
+
+    async def execute_reconciliation_downgrade(
+        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
+    ) -> int:
+        """Execute an extension downgrade(context) callback asynchronously.
+
+        Args:
+            driver: Active asynchronous database driver.
+            descriptor: Extension reconciler descriptor to downgrade.
+
+        Returns:
+            Elapsed execution time in milliseconds.
+        """
+        return await self._execute_reconciler_step(driver, descriptor, direction="down")
+
+    async def load_all_migrations(self) -> "dict[str, SQL]":
+        """Load all migrations into a single namespace for bulk operations.
+
+        Returns:
+            Dictionary mapping query names to SQL objects.
+        """
+        all_queries: dict[str, SQL] = {}
+        migrations = await self.get_migration_files()
+        loaded_core_sql = False
+
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = await self.load_migration(file_path, version)
+                    up_sql = await self._migration_sql(migration, "up")
+                    down_sql = await self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+                    continue
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    await async_(self.loader.load_sql)(file_path)
+                loaded_core_sql = True
+            else:
+                context_to_use = self._migration_context(file_path)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
+                )
+
+                try:
+                    up_sql = await loader.get_up_sql(file_path)
+                    down_sql = await loader.get_down_sql(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+
+                except Exception as e:
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
+
+        if loaded_core_sql:
+            for query_name in self.loader.list_queries():
+                all_queries[query_name] = self.loader.get_sql(query_name)
+
+        return all_queries
+
     async def _commit_nontransactional_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Commit an open implicit DBAPI transaction when running outside explicit transaction mode."""
         if self._has_active_implicit_transaction(driver):
@@ -1588,84 +1666,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             span, driver, reconcile_meta, "reconcile", "migration.reconcile", execution_time
         )
         return execution_time
-
-    async def execute_reconciliation(
-        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
-    ) -> int:
-        """Execute an extension reconcile(context) callback asynchronously.
-
-        Args:
-            driver: Active asynchronous database driver.
-            descriptor: Extension reconciler descriptor to execute.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
-        return await self._execute_reconciler_step(driver, descriptor, direction="up")
-
-    async def execute_reconciliation_downgrade(
-        self, driver: "AsyncDriverAdapterBase", descriptor: "ExtensionReconcilerDescriptor"
-    ) -> int:
-        """Execute an extension downgrade(context) callback asynchronously.
-
-        Args:
-            driver: Active asynchronous database driver.
-            descriptor: Extension reconciler descriptor to downgrade.
-
-        Returns:
-            Elapsed execution time in milliseconds.
-        """
-        return await self._execute_reconciler_step(driver, descriptor, direction="down")
-
-    async def load_all_migrations(self) -> "dict[str, SQL]":
-        """Load all migrations into a single namespace for bulk operations.
-
-        Returns:
-            Dictionary mapping query names to SQL objects.
-        """
-        all_queries: dict[str, SQL] = {}
-        migrations = await self.get_migration_files()
-        loaded_core_sql = False
-
-        for version, file_path in migrations:
-            if file_path.suffix == ".sql":
-                if self._migration_sql_loader(file_path, version) is not self.loader:
-                    migration = await self.load_migration(file_path, version)
-                    up_sql = await self._migration_sql(migration, "up")
-                    down_sql = await self._migration_sql(migration, "down")
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
-                    continue
-                if not self.loader.has_query(f"migrate-{version}-up"):
-                    await async_(self.loader.load_sql)(file_path)
-                loaded_core_sql = True
-            else:
-                context_to_use = self._migration_context(file_path)
-                loader = get_migration_loader(
-                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
-                )
-
-                try:
-                    up_sql = await loader.get_up_sql(file_path)
-                    down_sql = await loader.get_down_sql(file_path)
-
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
-
-                except Exception as e:
-                    self._log_migration_event(
-                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
-                    )
-
-        if loaded_core_sql:
-            for query_name in self.loader.list_queries():
-                all_queries[query_name] = self.loader.get_sql(query_name)
-
-        return all_queries
 
     async def _execute_migration_sql(
         self,

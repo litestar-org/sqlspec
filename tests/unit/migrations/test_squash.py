@@ -852,9 +852,9 @@ def test_sql_templates_and_squash_keep_headers_single_line(
         "version": "0001\nDROP TABLE x;",
         "description": raw_text,
     })
-    for line in rendered_template.splitlines():
-        if line.strip() and line != "SELECT 1;":
-            assert line.startswith("-- "), line
+    assert all(
+        line.startswith("-- ") for line in rendered_template.splitlines() if line.strip() and line != "SELECT 1;"
+    )
     assert f"-- {expected_snippet}" in rendered_template
     assert f"-- Description: {expected_snippet}" in rendered_template
 
@@ -868,9 +868,7 @@ def test_sql_templates_and_squash_keep_headers_single_line(
         schema="app\nDROP TABLE y;",
     )
     squashed = squasher.generate_squashed_content(plan, ["SELECT 1;"], [])
-    for line in squashed.splitlines():
-        if line.strip() and line != "SELECT 1;":
-            assert line.startswith("-- "), line
+    assert all(line.startswith("-- ") for line in squashed.splitlines() if line.strip() and line != "SELECT 1;")
     assert f"-- Description: {expected_snippet}" in squashed
     assert "-- schema: app DROP TABLE y;" in squashed
     assert "DROP TABLE x;" not in [ln.strip() for ln in squashed.splitlines() if not ln.startswith("-- ")]

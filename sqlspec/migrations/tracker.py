@@ -284,13 +284,11 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
             return
 
-        if lock_kind == "mysql":
+        elif lock_kind == "mysql":
             lock_result = driver.select_value(
                 "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
             )
-            if lock_result != 1:
-                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
-                raise MigrationError(msg)
+            self._validate_mysql_lock_result(lock_name, timeout_seconds, lock_result)
             lock_error = None
             try:
                 yield
@@ -305,7 +303,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
             return
 
-        if lock_kind == "mssql":
+        elif lock_kind == "mssql":
             timeout_ms = max(timeout_seconds, 0) * 1000
             try:
                 ms_result = driver.execute(
@@ -331,7 +329,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
             return
 
-        if lock_kind == "sqlite":
+        elif lock_kind == "sqlite":
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 yield
                 return
@@ -355,8 +353,6 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 driver.commit()
             return
-
-        yield
 
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.
@@ -701,13 +697,11 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             await driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": lock_id})
             return
 
-        if lock_kind == "mysql":
+        elif lock_kind == "mysql":
             lock_result = await driver.select_value(
                 "SELECT GET_LOCK(:lock_name, :timeout)", {"lock_name": lock_name, "timeout": max(timeout_seconds, 0)}
             )
-            if lock_result != 1:
-                msg = f"Failed to acquire MySQL migration lock {lock_name!r} within {timeout_seconds}s"
-                raise MigrationError(msg)
+            self._validate_mysql_lock_result(lock_name, timeout_seconds, lock_result)
             lock_error = None
             try:
                 yield
@@ -722,7 +716,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             await driver.execute("SELECT RELEASE_LOCK(:lock_name)", {"lock_name": lock_name})
             return
 
-        if lock_kind == "mssql":
+        elif lock_kind == "mssql":
             timeout_ms = max(timeout_seconds, 0) * 1000
             try:
                 ms_result = await driver.execute(
@@ -748,7 +742,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             await driver.execute(self._MSSQL_RELEASE_LOCK_SQL, {"lock_name": lock_name})
             return
 
-        if lock_kind == "sqlite":
+        elif lock_kind == "sqlite":
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 yield
                 return
@@ -772,8 +766,6 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
                 await driver.commit()
             return
-
-        yield
 
     async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.

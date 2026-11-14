@@ -1439,6 +1439,14 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     return database_group
 
 
+def __getattr__(name: str) -> Any:
+    """Lazily construct the root Click command group for CLI documentation tools."""
+    if name == "cli":
+        return add_migration_commands()
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 _BACKTICK_QUOTE_DIALECTS: frozenset[str] = frozenset({"mysql", "mariadb", "bigquery", "spanner"})
 _BRACKET_QUOTE_DIALECTS: frozenset[str] = frozenset({"tsql", "mssql", "sybase"})
 _UPPERCASE_QUOTE_DIALECTS: frozenset[str] = frozenset({"oracle", "db2", "snowflake", "teradata", "vantage"})
@@ -1594,14 +1602,6 @@ def _quote_verified_table_identifier(config: Any, memory_table: str, dialect: st
         if adapter_name == "sqlanywhere":
             return _quote_identifier_for_dialect(f'"DBA".{cleaned_table}', dialect)
     return _quote_identifier_for_dialect(memory_table, dialect)
-
-
-def __getattr__(name: str) -> Any:
-    """Lazily construct the root Click command group for CLI documentation tools."""
-    if name == "cli":
-        return add_migration_commands()
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
 
 
 def _safe_group_command(
