@@ -811,3 +811,35 @@ async def test_starlette_armed_and_unarmed_session_finalization(
 
     committed = (tx.commit.await_count > 0) if adapter_kind == "asyncpg" else (conn.commit.await_count > 0)
     assert committed is expect_commit
+
+
+@pytest.mark.anyio
+async def test_starlette_autocommit_dispatch_rolls_back_on_cancellation() -> None:
+    """SQLSpecAutocommitMiddleware.dispatch rolls back the connection on asyncio.CancelledError."""
+    conn = AsyncMock(_conn=None, autocommit=False, in_transaction=True)
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    config.provide_connection = MagicMock(return_value=_AsyncConnCtx(conn))  # type: ignore[method-assign]
+    state = _make_state(config, "autocommit")
+    middleware = SQLSpecAutocommitMiddleware(lambda scope, receive, send: None, state)
+    request = Request({"type": "http", "app": SimpleNamespace(state=SimpleNamespace(**{state.pool_key: object()}))})
+
+    async def cancelled_call_next(req: Request) -> Response:
+        await acquire_pending_connection_async(req, state)
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await middleware.dispatch(request, cancelled_call_next)
+
+    conn.rollback.assert_awaited_once()
+    conn.commit.assert_not_awaited()
+
+
+class _AsyncConnCtx:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> Any:
+        return self._conn
+
+    async def __aexit__(self, *args: object) -> None:
+        return None

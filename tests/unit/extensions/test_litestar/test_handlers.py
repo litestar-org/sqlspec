@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from litestar.constants import HTTP_RESPONSE_START
 from litestar.datastructures import State
+from litestar.utils.scope.state import ScopeState
 
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.adapters.duckdb.config import DuckDBConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.handlers import (
@@ -1424,3 +1426,48 @@ async def test_session_provider_prepares_arms_and_emits_session_start(
     positional_sessions: list[Any] = [sess async for sess in provider(MagicMock())]
     assert len(positional_sessions) == 1
     assert positional_sessions[0] is not sessions[0]
+
+
+@pytest.mark.parametrize("exit_mode", ["exception", "response_started", "websocket"])
+async def test_connection_provider_direct_exit_emits_session_end_and_detaches_session(
+    tmp_path: Path, exit_mode: str
+) -> None:
+    """Direct exit from connection_provider_maker emits on_session_end once and detaches the driver session."""
+    ended_sessions: list[Any] = []
+
+    async def _on_end(ctx: dict[str, Any]) -> None:
+        ended_sessions.append(ctx["session"])
+
+    obs = ObservabilityConfig(lifecycle=cast("LifecycleConfig", {"on_session_end": [_on_end]}))
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / f"direct_{exit_mode}.db")}, observability_config=obs
+    )
+    conn_provider = connection_provider_maker(config, "db_pool", "db_connection")
+    sess_provider = session_provider_maker(config, "db_connection", session_scope_key="db_session_instance")
+
+    state = State({"db_pool": await config.create_pool()})
+    scope_type = "websocket" if exit_mode == "websocket" else "http"
+    scope = cast("Scope", {"type": scope_type})
+    if exit_mode == "response_started":
+        ScopeState.from_scope(scope).response_started = True
+
+    conn_gen = conn_provider(state, scope)
+    try:
+        conn = await anext(conn_gen)
+        sess_gen = sess_provider(db_connection=conn, scope=scope)
+        session = await anext(sess_gen)
+        await sess_gen.aclose()
+        if exit_mode == "exception":
+            with pytest.raises(RuntimeError, match="route failure"):
+                await conn_gen.athrow(RuntimeError("route failure"))
+        else:
+            with pytest.raises(StopAsyncIteration):
+                await anext(conn_gen)
+
+        assert ended_sessions == [session]
+        assert session.connection is _DETACHED_CONNECTION
+        assert get_sqlspec_scope_state(scope, "db_connection_session") is None
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            _ = session.connection.cursor
+    finally:
+        await config.close_pool()

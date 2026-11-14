@@ -235,3 +235,35 @@ def test_litestar_disabled_routing_middleware_and_outer_context_precedence(tmp_p
         create_test_client([origin], plugins=[SQLSpecPlugin(default_primary_config)]) as client,
     ):
         assert client.get("/origin").json() == {"origin": "replica"}
+
+
+@pytest.mark.anyio
+async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(tmp_path: Any) -> None:
+    """Unawaited DeferredAsyncSession handles from primary, read, and routing accessors cannot run post-request."""
+    primary, replica = seed_routing_databases(tmp_path)
+    config = AiosqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        extension_config={"litestar": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    plugin = SQLSpecPlugin(config)
+    leaked: list[DeferredAsyncSession] = []
+
+    @get("/leaked")
+    async def leaked_route(request: Request) -> dict[str, bool]:
+        primary_deferred = plugin.provide_request_session("db_session", request.app.state, request.scope)
+        read_deferred = plugin.get_read_session(request)
+        routing_deferred = plugin.get_routing_session(request, "router")
+        assert isinstance(primary_deferred, DeferredAsyncSession)
+        assert isinstance(read_deferred, DeferredAsyncSession)
+        assert isinstance(routing_deferred, DeferredAsyncSession)
+        leaked.extend([primary_deferred, read_deferred, routing_deferred])
+        return {"ok": True}
+
+    with create_test_client([leaked_route], plugins=[plugin]) as client:
+        assert client.get("/leaked").json() == {"ok": True}
+
+    assert len(leaked) == 3
+    for handle in leaked:
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await handle.select_value("SELECT 1")

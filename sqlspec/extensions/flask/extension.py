@@ -447,7 +447,9 @@ class SQLSpecPlugin:
             ),
             read_connection_key=flask_config.get(
                 "read_connection_key",
-                "read_connection" if session_key == DEFAULT_SESSION_KEY else f"{connection_key}_read",
+                "read_connection"
+                if connection_key == f"sqlspec_connection_{DEFAULT_SESSION_KEY}"
+                else f"{connection_key}_read",
             ),
             routing_session_key=flask_config.get("routing_session_key"),
             default_routing_mode=flask_config.get("default_routing_mode", "auto"),
@@ -587,8 +589,14 @@ class SQLSpecPlugin:
                 has_captured_payload = has_context_value(g, payload_key)
                 captured_payload = pop_context_value(g, payload_key)
                 entries.append((config_state, session, connection, conn_ctx, captured_payload, has_captured_payload))
-            if entries:
-                release = _StreamedResponseRelease(self, response.status_code, entries)
+            raw_contexts = pop_context_value(g, _RESOURCE_CONTEXTS_KEY) or []
+            resource_contexts = list(reversed(raw_contexts))
+            for _, resource_key, _, _, _ in resource_contexts:
+                pop_context_value(g, resource_key)
+            if entries or resource_contexts:
+                release = _StreamedResponseRelease(
+                    self, response.status_code, entries, resource_contexts=resource_contexts
+                )
                 response.response = release.track(response.response)
                 response.call_on_close(release)
             return response
@@ -981,7 +989,7 @@ class SQLSpecPlugin:
                 self._call_portal(config_state, target.commit)
             else:
                 target.commit()
-        except Exception as exc:
+        except BaseException as exc:
             log_with_context(
                 logger,
                 logging.ERROR,
@@ -1036,12 +1044,20 @@ class SQLSpecPlugin:
 class _StreamedResponseRelease:
     """Finalize and release request connections when a streamed response closes."""
 
-    __slots__ = ("_completed", "_entries", "_plugin", "_status_code")
+    __slots__ = ("_completed", "_entries", "_plugin", "_resource_contexts", "_status_code")
 
-    def __init__(self, plugin: SQLSpecPlugin, status_code: int, entries: "list[tuple[Any, ...]]") -> None:
+    def __init__(
+        self,
+        plugin: SQLSpecPlugin,
+        status_code: int,
+        entries: "list[tuple[Any, ...]]",
+        *,
+        resource_contexts: "list[tuple[Any, ...]] | None" = None,
+    ) -> None:
         self._plugin = plugin
         self._status_code = status_code
         self._entries = entries
+        self._resource_contexts = resource_contexts or []
         self._completed = False
 
     def track(self, iterable: "Iterable[Any]") -> "Iterator[Any]":
@@ -1056,11 +1072,36 @@ class _StreamedResponseRelease:
 
     def __call__(self) -> None:
         """Finalize transactions and release connections once when the response closes."""
-        if not self._entries:
+        if not self._entries and not self._resource_contexts:
             return
         entries = list(self._entries)
         self._entries.clear()
+        resource_contexts = list(self._resource_contexts)
+        self._resource_contexts.clear()
         primary_exc: BaseException | None = None
+        for config_state, resource_key, context, resource, captured_payload in resource_contexts:
+            try:
+                try:
+                    if (
+                        resource_key == config_state.routing_session_key
+                        and config_state.commit_mode != "manual"
+                        and resource.pinned_to_primary
+                    ):
+                        if self._completed and config_state.should_commit(self._status_code):
+                            self._plugin._execute_commit(resource, config_state)
+                        else:
+                            self._plugin._execute_rollback(resource, config_state)
+                finally:
+                    if config_state.is_async:
+                        self._plugin._call_portal(
+                            config_state, context.__aexit__, None, None, None, tenant_override=captured_payload
+                        )
+                    else:
+                        with TenantContext.bind(captured_payload):
+                            context.__exit__(None, None, None)
+            except BaseException as exc:
+                if primary_exc is None or (isinstance(primary_exc, Exception) and not isinstance(exc, Exception)):
+                    primary_exc = exc
         for config_state, session, connection, conn_ctx, captured_payload, has_captured_payload in entries:
             try:
                 try:

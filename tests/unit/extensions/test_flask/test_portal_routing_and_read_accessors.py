@@ -1,6 +1,7 @@
 """Flask request routing and portal context receipts with real embedded drivers."""
 
 import asyncio
+import sqlite3
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -206,3 +207,84 @@ def test_flask_signed_cookie_and_redirect_commit_policy_on_routing_session(tmp_p
     finally:
         plugin.shutdown()
         config.close_pool()
+
+
+def test_flask_custom_connection_key_derives_read_connection_key(tmp_path: Path) -> None:
+    """Customizing connection_key without overriding session_key avoids read_connection_key collisions."""
+    app = Flask(__name__)
+    config_a = SqliteConfig(
+        connection_config={"database": str(tmp_path / "a.db")}, extension_config={"flask": {"connection_key": "conn_a"}}
+    )
+    config_b = SqliteConfig(
+        connection_config={"database": str(tmp_path / "b.db")},
+        extension_config={"flask": {"session_key": "sess_b", "connection_key": "conn_b"}},
+    )
+    plugin = SQLSpecPlugin([config_a, config_b], app)
+    try:
+        assert plugin._config_states[0].read_connection_key == "conn_a_read"
+        assert plugin._config_states[1].read_connection_key == "conn_b_read"
+    finally:
+        plugin.shutdown()
+        config_a.close_pool()
+        config_b.close_pool()
+
+
+@pytest.mark.parametrize("async_config", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("fully_iterated", "status", "expected_present"),
+    [(True, 200, True), (False, 200, False), (True, 500, False)],
+    ids=["completed_200_commits", "abandoned_200_rolls_back", "completed_500_rolls_back"],
+)
+def test_flask_streamed_response_finalizes_and_releases_routing_session(
+    tmp_path: Path, async_config: bool, fully_iterated: bool, status: int, expected_present: bool
+) -> None:
+    """Streamed Flask responses keep routing sessions open past teardown, commit only on full 200 completion, and exit on close."""
+    primary, replica = seed_routing_databases(tmp_path)
+    config_type = AiosqliteConfig if async_config else SqliteConfig
+    config: Any = config_type(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        bind_key="shop",
+        extension_config={"flask": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.get("/stream-route")
+    def stream_route() -> Response:
+        router = plugin.get_routing_session()
+        before = router.select_value("SELECT origin FROM notes WHERE id=1")
+        router.execute("INSERT INTO notes VALUES (4, 'streamed')")
+
+        def generate() -> "Iterator[bytes]":
+            after = router.select_value("SELECT origin FROM notes WHERE id=1")
+            yield f"{before}:".encode()
+            yield f"{after}".encode()
+
+        return Response(generate(), status=status, mimetype="text/plain")
+
+    try:
+        response = app.test_client().get("/stream-route", buffered=False)
+        try:
+            assert response.status_code == status
+            iterator = iter(response.response)
+            first_chunk = next(iterator)
+            assert first_chunk == b"replica:"
+            if fully_iterated:
+                assert next(iterator) == b"primary"
+                with pytest.raises(StopIteration):
+                    next(iterator)
+        finally:
+            response.close()
+    finally:
+        plugin.shutdown()
+        if not async_config:
+            config.close_pool()
+
+    with sqlite3.connect(primary) as conn:
+        row = conn.execute("SELECT origin FROM notes WHERE id=4").fetchone()
+    if expected_present:
+        assert row == ("streamed",)
+    else:
+        assert row is None
+    assert RoutingContext.current() is None

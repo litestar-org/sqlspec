@@ -433,7 +433,12 @@ class SQLSpecPlugin:
             try:
                 if key == state.routing_session_key and state.commit_mode != "manual" and resource.pinned_to_primary:
                     if error is None and state.should_commit(self._response_status_code(response)):
-                        await ensure_async_(resource.commit)()
+                        try:
+                            await ensure_async_(resource.commit)()
+                        except BaseException:
+                            with contextlib.suppress(Exception):
+                                await ensure_async_(resource.rollback)()
+                            raise
                     else:
                         await ensure_async_(resource.rollback)()
             except BaseException as finalization_error:
@@ -448,8 +453,13 @@ class SQLSpecPlugin:
                     primary_error = _select_teardown_exception(primary_error, cleanup_error)
                 finally:
                     pop_context_value(request.ctx, key)
-                    pop_context_value(request.ctx, f"{key}_deferred")
+                    _detach_deferred_session(pop_context_value(request.ctx, f"{key}_deferred"))
                     pop_context_value(request.ctx, f"{key}_lock")
+        for state in self._config_states:
+            for resource_key in (state.read_connection_key, state.read_session_key, state.routing_session_key):
+                if resource_key is not None:
+                    _detach_deferred_session(pop_context_value(request.ctx, f"{resource_key}_deferred"))
+                    pop_context_value(request.ctx, f"{resource_key}_lock")
         if primary_error is not None:
             raise primary_error
 
@@ -747,6 +757,13 @@ class SQLSpecPlugin:
                             )
                     except BaseException as exc:
                         primary_exc = _select_teardown_exception(primary_exc, exc)
+            else:
+                for config_state in self._config_states:
+                    if not config_state.disable_di:
+                        pop_context_value(target_request.ctx, self._deferred_key(config_state))
+                        _detach_deferred_session(
+                            pop_context_value(target_request.ctx, self._deferred_session_key(config_state))
+                        )
             try:
                 await self._close_read_routing_resources(target_request, None, cancelled=True)
             except BaseException as error:
@@ -1075,8 +1092,7 @@ class SQLSpecPlugin:
         pop_context_value(request.ctx, self._deferred_key(config_state))
         connection = get_context_value(request.ctx, config_state.connection_key, None)
         if connection is None:
-            if has_context_value(request.ctx, self._connection_manager_key(config_state)):
-                await self._release_request_connection(request, config_state)
+            await self._release_request_connection(request, config_state)
             return
 
         exc_override: BaseException | None = None
@@ -1402,3 +1418,11 @@ def _select_teardown_exception(current: BaseException | None, candidate: BaseExc
     if isinstance(current, Exception) and not isinstance(candidate, Exception):
         return candidate
     return current
+
+
+def _detach_deferred_session(deferred: Any) -> None:
+    """Detach an unawaited deferred session handle when present."""
+    if deferred is not None:
+        detach = getattr(deferred, "_detach_connection", None)
+        if detach is not None:
+            detach()

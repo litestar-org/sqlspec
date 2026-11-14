@@ -546,6 +546,9 @@ async def _release_request_session(
     """Emit session end, detach the session, exit the connection context, and clear scope state."""
     connection_cm = get_sqlspec_scope_state(scope, f"{connection_scope_key}_ctx", pop=True)
     session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
+    if session is None:
+        session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+    delete_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
     try:
         try:
             if session is not None:
@@ -619,17 +622,25 @@ async def _exit_connection_context(
         if connection_key is not None
         else None
     )
-    try:
-        with TenantContext.bind(payload):
-            if isinstance(connection_cm, AbstractAsyncContextManager):
-                await connection_cm.__aexit__(*exit_args)
-            elif isinstance(connection_cm, AbstractContextManager):
-                await with_ensure_async_(connection_cm).__aexit__(*exit_args)
-            else:
-                await ensure_async_(connection.close)()
-    finally:
-        if connection_key is not None:
-            delete_sqlspec_scope_state(scope, f"{connection_key}_session")
+    session = (
+        get_sqlspec_scope_state(scope, f"{connection_key}_session", pop=True) if connection_key is not None else None
+    )
+    if session is not None:
+        try:
+            runtime = getattr(session, "observability", None)
+            if runtime is not None and not runtime.is_idle:
+                await runtime.emit_session_end_async(session)
+        finally:
+            detach = getattr(session, "_detach_connection", None)
+            if detach is not None:
+                detach()
+    with TenantContext.bind(payload):
+        if isinstance(connection_cm, AbstractAsyncContextManager):
+            await connection_cm.__aexit__(*exit_args)
+        elif isinstance(connection_cm, AbstractContextManager):
+            await with_ensure_async_(connection_cm).__aexit__(*exit_args)
+        else:
+            await ensure_async_(connection.close)()
 
 
 def _capture_connection_tenant_sync(config: Any, scope: "Scope", connection_key: str) -> TenantContextPayload | None:

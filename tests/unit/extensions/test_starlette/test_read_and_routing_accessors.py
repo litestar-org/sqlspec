@@ -16,6 +16,7 @@ from starlette.testclient import TestClient
 from sqlspec import sign_write_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.adapters.sqlite.driver import SqliteDriver
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions._deferred_session import DeferredAsyncSession
@@ -253,3 +254,81 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
         assert verify_b.select_value("SELECT origin FROM notes WHERE id=4") == "b"
     config_a.close_pool()
     config_b.close_pool()
+
+
+@pytest.mark.anyio
+async def test_starlette_unawaited_deferred_sessions_are_detached_after_response(tmp_path: Path) -> None:
+    """Unawaited DeferredAsyncSession handles in Starlette are detached when the request finishes."""
+    primary, replica = seed_routing_databases(tmp_path)
+    config = AiosqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        extension_config={"starlette": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    leaked: list[DeferredAsyncSession] = []
+
+    async def leaked_route(request: Request) -> JSONResponse:
+        primary_deferred = plugin.get_session(request)
+        read_deferred = plugin.get_read_session(request)
+        routing_deferred = plugin.get_routing_session(request)
+        assert isinstance(primary_deferred, DeferredAsyncSession)
+        assert isinstance(read_deferred, DeferredAsyncSession)
+        assert isinstance(routing_deferred, DeferredAsyncSession)
+        leaked.extend([primary_deferred, read_deferred, routing_deferred])
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/leaked", leaked_route)])
+    plugin = SQLSpecPlugin(config, app)
+
+    with TestClient(app) as client:
+        assert client.get("/leaked").json() == {"ok": True}
+
+    assert len(leaked) == 3
+    for handle in leaked:
+        with pytest.raises(ImproperConfigurationError, match="already closed"):
+            await handle.select_value("SELECT 1")
+
+
+def test_starlette_primary_commit_failure_still_rolls_back_routing_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If primary transaction commit fails in _finalize, a pinned routing session still rolls back."""
+    primary, replica = seed_routing_databases(tmp_path)
+    config = SqliteConfig(
+        connection_config={"database": primary},
+        replicas=[{"database": replica}],
+        extension_config={"starlette": {"routing_session_key": "router", "commit_mode": "autocommit"}},
+    )
+    routing_rollbacks = 0
+    orig_routing_rollback = SyncRoutingSession.rollback
+
+    def tracking_routing_rollback(self: SyncRoutingSession) -> None:
+        nonlocal routing_rollbacks
+        routing_rollbacks += 1
+        orig_routing_rollback(self)
+
+    def fail_commit(_self: SqliteDriver) -> None:
+        raise RuntimeError("primary commit failed")
+
+    monkeypatch.setattr(SqliteDriver, "commit", fail_commit)
+    monkeypatch.setattr(SyncRoutingSession, "rollback", tracking_routing_rollback)
+
+    async def handler(request: Request) -> JSONResponse:
+        plugin.get_session(request)
+        router: Any = plugin.get_routing_session(request)
+        router.execute("INSERT INTO notes VALUES (4,'routing_uncommitted')")
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/fail", handler, methods=["POST"])])
+    plugin = SQLSpecPlugin(config, app)
+
+    with (
+        TestClient(app, raise_server_exceptions=True) as client,
+        pytest.raises(RuntimeError, match="primary commit failed"),
+    ):
+        client.post("/fail")
+
+    assert routing_rollbacks == 1
+    with config.provide_session() as verify:
+        assert verify.select_value_or_none("SELECT origin FROM notes WHERE id=4") is None
+    config.close_pool()

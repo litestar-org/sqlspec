@@ -168,6 +168,7 @@ class SQLSpecRequestLeaseMiddleware:
                     for state in self.config_states:
                         pop_state_value(request.state, _response_owner_key(state.connection_key))
                         pop_state_value(request.state, _pending_connection_key(state.connection_key))
+                        _clear_deferred_session(request, deferred_session_key(state))
                         for resource_key in (
                             state.read_connection_key,
                             state.read_session_key,
@@ -176,34 +177,44 @@ class SQLSpecRequestLeaseMiddleware:
                             if resource_key is not None:
                                 pop_state_value(request.state, _resource_slot_key(resource_key))
                                 pop_state_value(request.state, resource_key)
-                                pop_state_value(request.state, f"{resource_key}_deferred")
+                                _clear_deferred_session(request, f"{resource_key}_deferred")
 
     async def _finalize(self, request: "Request", state: "SQLSpecConfigState", commit: bool) -> None:
         if state.commit_mode == "manual":
             return
+        primary_error: BaseException | None = None
         connection = get_state_value(request.state, state.connection_key, None)
-        if connection is not None:
-            if commit:
-                try:
-                    await _finalize_request_transaction(request, state, connection, commit=True)
-                except BaseException:
-                    with suppress(Exception):
-                        await _finalize_request_transaction(request, state, connection, commit=False)
-                    raise
-            else:
-                await _finalize_request_transaction(request, state, connection, commit=False)
-        if state.routing_session_key is not None:
-            facade = get_state_value(request.state, state.routing_session_key, None)
-            if facade is not None and facade.pinned_to_primary:
+        try:
+            if connection is not None:
                 if commit:
                     try:
-                        await ensure_async_(facade.commit)()
+                        await _finalize_request_transaction(request, state, connection, commit=True)
                     except BaseException:
                         with suppress(Exception):
-                            await ensure_async_(facade.rollback)()
+                            await _finalize_request_transaction(request, state, connection, commit=False)
                         raise
                 else:
-                    await ensure_async_(facade.rollback)()
+                    await _finalize_request_transaction(request, state, connection, commit=False)
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            if state.routing_session_key is not None:
+                facade = get_state_value(request.state, state.routing_session_key, None)
+                if facade is not None and facade.pinned_to_primary:
+                    if commit and primary_error is None:
+                        try:
+                            await ensure_async_(facade.commit)()
+                        except BaseException:
+                            with suppress(Exception):
+                                await ensure_async_(facade.rollback)()
+                            raise
+                    else:
+                        try:
+                            await ensure_async_(facade.rollback)()
+                        except BaseException:
+                            if primary_error is None:
+                                raise
 
 
 class SQLSpecManualMiddleware(SQLSpecRequestLeaseMiddleware):
@@ -293,7 +304,7 @@ class SQLSpecAutocommitMiddleware(SQLSpecRequestLeaseMiddleware):
                     await _finalize_request_transaction(
                         request, self.config_state, active_connection, commit=self._should_commit(response.status_code)
                     )
-            except Exception:
+            except BaseException:
                 active_connection = get_state_value(request.state, self.config_state.connection_key, None)
                 if active_connection is not None:
                     await _finalize_request_transaction(request, self.config_state, active_connection, commit=False)
@@ -812,6 +823,7 @@ async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "R
             yield None
         finally:
             pop_state_value(request.state, pending_key)
+            _clear_deferred_session(request, deferred_session_key(config_state))
 
 
 async def _finalize_request_transaction(
@@ -912,3 +924,12 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
     if authenticated:
         raise HTTPException(status_code=403, detail="An authorized tenant is required")
     raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def _clear_deferred_session(request: "Request", key: str) -> None:
+    """Pop one deferred session key from request state and detach any held handle."""
+    deferred = pop_state_value(request.state, key)
+    if deferred is not None:
+        detach = getattr(deferred, "_detach_connection", None)
+        if callable(detach):
+            detach()

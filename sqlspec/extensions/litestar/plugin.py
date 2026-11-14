@@ -415,16 +415,17 @@ class ConnectionCleanupMiddleware:
             try:
                 ctx_scope_key = f"{target.connection_key}_ctx"
                 session_scope_key = f"{target.session_key}_instance"
-                deferred_scope_key = f"{target.connection_key}_deferred"
+                deferred_scope_key = f"{target.session_key}_deferred"
+                stream_deferred_scope_key = f"{target.connection_key}_stream_deferred"
                 lock_scope_key = f"{target.connection_key}_lock"
                 connection = get_sqlspec_scope_state(scope, target.connection_key)
                 connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key)
 
                 if connection is None and connection_cm is None:
                     delete_sqlspec_scope_state(scope, session_scope_key)
-                    delete_sqlspec_scope_state(scope, deferred_scope_key)
+                    _detach_and_delete_scope_state(scope, deferred_scope_key)
                     delete_sqlspec_scope_state(scope, lock_scope_key)
-                    delete_sqlspec_scope_state(scope, f"{target.connection_key}_stream_deferred")
+                    _detach_and_delete_scope_state(scope, stream_deferred_scope_key)
                     continue
 
                 if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
@@ -464,7 +465,8 @@ class ConnectionCleanupMiddleware:
                             scope, target.connection_key, session_scope_key, connection, exc_override=exc_override
                         )
                     finally:
-                        delete_sqlspec_scope_state(scope, deferred_scope_key)
+                        _detach_and_delete_scope_state(scope, deferred_scope_key)
+                        _detach_and_delete_scope_state(scope, stream_deferred_scope_key)
                         delete_sqlspec_scope_state(scope, lock_scope_key)
             except BaseException as exc:
                 primary_exc = _select_teardown_exception(primary_exc, exc)
@@ -1926,3 +1928,12 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
     if uuid_utils_uuid is not None:
         decoders.append((lambda t: t is uuid_utils_uuid, lambda t, v: t(str(v))))
     return decoders
+
+
+def _detach_and_delete_scope_state(scope: "Scope", key: str) -> None:
+    """Pop one scope entry and detach it if it is a deferred or active session."""
+    value = get_sqlspec_scope_state(scope, key, pop=True)
+    if value is not None:
+        detach = getattr(value, "_detach_connection", None)
+        if detach is not None:
+            detach()
