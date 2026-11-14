@@ -150,7 +150,7 @@ jobs:
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            pip install {package} --no-build-isolation &&
+            pip install -c {project}/build-constraints.txt {package} --no-build-isolation &&
             pip install -c {project}/build-constraints.txt anyio pyarrow aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
             python {project}/tools/scripts/pgo_training.py &&
             pip uninstall -y sqlspec &&

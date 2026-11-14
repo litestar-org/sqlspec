@@ -49,9 +49,9 @@ jobs:
             HATCH_BUILD_HOOKS_ENABLE=1
             HATCH_MYPYC_BUILD_DIR="$BUILD_DIR"
             MYPYC_OPT_LEVEL=3 MYPYC_DEBUG_LEVEL=0 MYPYC_MULTI_FILE=1
-            pip install {package} --no-build-isolation &&
+            pip install -c {project}/build-constraints.txt {package} --no-build-isolation &&
             pip install -c {project}/build-constraints.txt anyio pyarrow oracledb asyncpg aiosqlite duckdb adbc-driver-sqlite adbc-driver-manager &&
-            python /project/tools/scripts/pgo_training.py &&
+            python {project}/tools/scripts/pgo_training.py &&
             pip uninstall -y sqlspec &&
             rm -rf "$BUILD_DIR/build" "$BUILD_DIR/tmp"
 
@@ -62,7 +62,7 @@ jobs:
             CFLAGS="-fprofile-use=/tmp/sqlspec-pgo -fprofile-correction -Wno-error=missing-profile -Wno-error=coverage-mismatch"
 
           CIBW_TEST_COMMAND: >-
-            python /project/tools/scripts/mypyc_smoke.py --require-compiled
+            python {project}/tools/scripts/mypyc_smoke.py --require-compiled
 
       - name: List built wheels
         run: ls -la wheelhouse/
