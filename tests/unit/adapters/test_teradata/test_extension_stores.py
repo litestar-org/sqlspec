@@ -124,10 +124,16 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
     config = TeradataConfig(connection_config={"host": "localhost"})
     store = TeradataADKStore(config)
     now = datetime.now(UTC)
-    cursor.fetchone.return_value = ("session", "app", "user", '{"count":1}', now, now)
+    cursor.fetchone.side_effect = [
+        ("session", "app", "user", '{"count":1}', now, now),
+        None,
+        None,
+        ("session", "app", "user", '{"count":1}', now, now),
+    ]
     assert store.create_session("session", "app", "user", {"count": 1})["state"] == {"count": 1}
     session = store.get_session("app", "user", "session")
     assert session and session["id"] == "session"
+    cursor.fetchone.side_effect = None
     store.update_session_state("app", "user", "session", {"count": 2})
     assert cursor.execute.call_args.args[1][0] == '{"count":2}'
     cursor.fetchone.return_value = ('{"active":true}',)
@@ -148,10 +154,18 @@ def test_teradata_adk_crud_and_cleanup(teradata_connection) -> None:
         "timestamp": now,
         "event_data": {"text": "hello"},
     }
+    cursor.fetchone.return_value = (1,)
     store.append_event(event)
-    cursor.fetchall.return_value = [("event", "app", "user", "session", "invoke", now, '{"text":"hello"}')]
-    assert store.get_events("app", "user", "session", limit=2)[0]["event_data"] == {"text": "hello"}
+    t2 = now + timedelta(seconds=1)
+    cursor.fetchall.return_value = [
+        ("event-2", "app", "user", "session", "invoke", t2, '{"text":"later"}'),
+        ("event", "app", "user", "session", "invoke", now, '{"text":"hello"}'),
+    ]
+    events = store.get_events("app", "user", "session", limit=2)
+    assert [ev["id"] for ev in events] == ["event", "event-2"]
+    assert events[0]["event_data"] == {"text": "hello"}
     assert "TOP 2" in cursor.execute.call_args.args[0]
+    assert "ORDER BY e.timestamp DESC, e.id DESC" in cursor.execute.call_args.args[0]
     assert 'JOIN "ADK_SESSION" s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id' in (
         " ".join(cursor.execute.call_args.args[0].split())
     )
@@ -343,8 +357,9 @@ def test_teradata_adk_atomic_event_state_and_owner(teradata_connection) -> None:
     )
     store = TeradataADKStore(config)
     now = datetime.now(UTC)
-    cursor.fetchone.return_value = ("session", "app", "user", '{"count":2}', now, now)
-    assert store.create_session("session", "app", "user", {"count": 2}, owner_id=5)["state"] == {"count": 2}
+    cursor.fetchone.side_effect = [("session", "app", "user", '{"count":2}', now, now), ('{"app:existing":0}',), None]
+    created = store.create_session("session", "app", "user", {"count": 2}, owner_id=5)
+    assert created["state"] == {"count": 2, "app:existing": 0}
     event: StoredEvent = {
         "id": "event",
         "session_id": "session",
@@ -354,11 +369,23 @@ def test_teradata_adk_atomic_event_state_and_owner(teradata_connection) -> None:
         "timestamp": now,
         "event_data": {"text": "hello"},
     }
+    cursor.fetchone.side_effect = [
+        ("session", "app", "user", '{"count":2}', now, now),
+        ('{"app:existing":0}', now),
+        None,
+    ]
     result = store.append_event_and_update_state(
-        event, "app", "user", "session", {"count": 2}, app_state={"app": 1}, user_state={"user": 1}
+        event,
+        "app",
+        "user",
+        "session",
+        {"count": 2},
+        app_state_delta={"app:flag": False, "app:cleared": None},
+        user_state_delta={"user:k": 1},
     )
-    assert result["state"] == {"count": 2}
+    assert result["state"] == {"count": 2, "app:existing": 0, "app:flag": False, "app:cleared": None, "user:k": 1}
     assert conn.autocommit is True
+    cursor.fetchone.side_effect = None
     cursor.fetchone.return_value = None
     missing_event: StoredEvent = {**event, "session_id": "missing"}
     with pytest.raises(ValueError, match="not found"):
@@ -367,6 +394,53 @@ def test_teradata_adk_atomic_event_state_and_owner(teradata_connection) -> None:
     assert conn.autocommit is True
     with pytest.raises(RuntimeError, match="Failed to fetch"):
         store.create_session("missing", "app", "user", {})
+
+
+def test_teradata_adk_cas_conflict_retry_and_exhaustion(teradata_connection) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlspec.exceptions import SerializationConflictError
+
+    conn, cursor = teradata_connection
+    store = TeradataADKStore(TeradataConfig(connection_config={"host": "localhost"}))
+    now = datetime.now(UTC)
+    later = now + timedelta(seconds=1)
+    event: StoredEvent = {
+        "id": "event",
+        "session_id": "session",
+        "app_name": "app",
+        "user_id": "user",
+        "invocation_id": "invoke",
+        "timestamp": now,
+        "event_data": {"text": "hello"},
+    }
+    session_row = ("session", "app", "user", '{"count":2}', now, now)
+    cursor.fetchone.side_effect = [session_row, ('{"app:a":1}', now), session_row, ('{"app:a":1,"app:b":2}', later)]
+    rowcounts = iter([0, 1])
+
+    def _exec(sql: str, params: Any = ()) -> None:
+        del params
+        normalized_sql = sql.strip().lower()
+        if normalized_sql.startswith("update") and "adk_app_state" in normalized_sql:
+            cursor.rowcount = next(rowcounts)
+        else:
+            cursor.rowcount = 1
+
+    cursor.execute.side_effect = _exec
+
+    merged = store.append_event_and_update_state(
+        event, "app", "user", "session", {"count": 2}, app_state_delta={"app:c": 3}
+    )
+
+    assert merged["state"] == {"count": 2, "app:a": 1, "app:b": 2, "app:c": 3}
+    assert conn.rollback.call_count == 1
+
+    cursor.fetchone.side_effect = [session_row, ('{"app:a":1}', now)] * 8
+    cursor.execute.side_effect = lambda sql, _p=(): setattr(
+        cursor, "rowcount", 0 if (sql.strip().lower().startswith("update") and "adk_app_state" in sql.lower()) else 1
+    )
+    with pytest.raises(SerializationConflictError, match="CAS attempts"):
+        store.append_event_and_update_state(event, "app", "user", "session", {"count": 2}, app_state_delta={"app:c": 3})
 
 
 def test_teradata_memory_disabled_missing_and_duplicates(teradata_connection) -> None:

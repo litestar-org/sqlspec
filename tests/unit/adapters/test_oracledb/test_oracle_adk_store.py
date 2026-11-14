@@ -1483,3 +1483,148 @@ async def test_oracle_adk_memory_delete_entries_by_session_scopes_owner_predicat
     sql, params = cursor.execute.call_args.args
     assert sql == f"DELETE FROM adk_memory WHERE {expected_where}"
     assert params == expected_params
+
+
+def test_oracle_normalize_event_data_docstring_has_no_version_tag() -> None:
+    """_normalize_event_data_for_storage preserves behavior without stale version wording."""
+    from sqlspec.adapters.oracledb.adk.store import _normalize_event_data_for_storage
+
+    doc = _normalize_event_data_for_storage.__doc__ or ""
+    assert "ADK 2.2" not in doc
+    assert _normalize_event_data_for_storage({"actions": None, "text": "ok"}) == {"text": "ok"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expect_for_update"),
+    [
+        pytest.param(None, None, {"local": 1, "app:seed": "a", "user:seed": "u"}, False, id="none-deltas"),
+        pytest.param({}, {}, {"local": 1, "app:seed": "a", "user:seed": "u"}, False, id="empty-deltas"),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0},
+            {"local": 1, "app:seed": "a", "app:flag": False, "app:cleared": None, "user:seed": "u", "user:zero": 0},
+            True,
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+async def test_oracle_adk_create_session_merges_and_reads_scoped_state(
+    is_async: bool,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expect_for_update: bool,
+) -> None:
+    """create_session keeps session table session-only and returns merged scoped state."""
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    store, conn, cursor = _oracle_session_store_with_mocks(
+        is_async=is_async,
+        fetchone_values=[('{"app:seed":"a"}',), ('{"user:seed":"u"}',), ("s1", "app", "u1", '{"local":1}', now, now)],
+    )
+
+    maybe = store.create_session(
+        "s1", "app", "u1", {"local": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+    created = await maybe if isawaitable(maybe) else maybe
+
+    assert created["state"] == expected_state
+    executed_sql = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert any("FOR UPDATE" in sql for sql in executed_sql) is expect_for_update
+    assert conn.commit.call_count == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_adk_append_event_and_update_state_locks_and_retries_ora00001(is_async: bool) -> None:
+    """append_event_and_update_state uses FOR UPDATE locks and retries ORA-00001 unique insert races."""
+    from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
+
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    store, conn, cursor = _oracle_session_store_with_mocks(is_async=is_async)
+    fetchone_iter = iter([
+        ("s1", "app", "u1", '{"turn":1}', now, now),
+        None,
+        ('{"app:peer":true}',),
+        ('{"user:seed":1}',),
+    ])
+    ora00001 = OracleDatabaseError(SimpleNamespace(code=1, message="ORA-00001: unique constraint violated"))
+    seen_app_inserts = 0
+
+    def _exec_sync(sql: str, params: Any = None) -> None:
+        nonlocal seen_app_inserts
+        del params
+        if sql.lstrip().startswith("INSERT INTO adk_app_state"):
+            seen_app_inserts += 1
+            if seen_app_inserts == 1:
+                raise ora00001
+
+    if is_async:
+
+        async def _exec_async(sql: str, params: Any = None) -> None:
+            _exec_sync(sql, params)
+
+        cursor.execute = AsyncMock(side_effect=_exec_async)
+        cursor.fetchone = AsyncMock(side_effect=lambda: next(fetchone_iter))
+    else:
+        cursor.execute = MagicMock(side_effect=_exec_sync)
+        cursor.fetchone = MagicMock(side_effect=lambda: next(fetchone_iter))
+
+    maybe = store.append_event_and_update_state(
+        _oracle_event(),
+        "app",
+        "u1",
+        "s1",
+        {"turn": 1},
+        app_state_delta={"app:flag": False, "app:cleared": None},
+        user_state_delta={"user:zero": 0},
+    )
+    updated = await maybe if isawaitable(maybe) else maybe
+
+    assert seen_app_inserts == 1
+    assert conn.commit.call_count == 1
+    assert conn.rollback.call_count == 0
+    executed_sql = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert "SELECT state FROM adk_app_state WHERE app_name = :app_name FOR UPDATE" in executed_sql
+    assert (
+        "SELECT state FROM adk_user_state WHERE app_name = :app_name AND user_id = :user_id FOR UPDATE" in executed_sql
+    )
+    assert updated["state"] == {
+        "turn": 1,
+        "app:peer": True,
+        "app:flag": False,
+        "app:cleared": None,
+        "user:seed": 1,
+        "user:zero": 0,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_oracle_adk_get_events_limit_reverses_desc_rows_to_chronological(is_async: bool) -> None:
+    """Bounded get_events queries descending rows and restores chronological ascending order."""
+    t1 = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    t2 = datetime(2026, 5, 10, 12, 1, tzinfo=UTC)
+    rows = [("e2", "s1", "inv-2", t2, '{"step":2}', "app", "u1"), ("e1", "s1", "inv-1", t1, '{"step":1}', "app", "u1")]
+    store, _conn, cursor = _oracle_session_store_with_mocks(is_async=is_async)
+    if is_async:
+        cursor.fetchall = AsyncMock(return_value=rows)
+    else:
+        cursor.fetchall.return_value = rows
+
+    maybe = store.get_events("app", "u1", "s1", limit=2)
+    events = await maybe if isawaitable(maybe) else maybe
+
+    assert [event["id"] for event in events] == ["e1", "e2"]
+    assert "ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST 2 ROWS ONLY" in _normalized(
+        cursor.execute.call_args.args[0]
+    )
+    with pytest.raises(ValueError, match="non-negative"):
+        maybe_neg = store.get_events("app", "u1", "s1", limit=-1)
+        if isawaitable(maybe_neg):
+            await maybe_neg
+    with pytest.raises(ValueError, match="non-negative"):
+        maybe_bool = store.get_events("app", "u1", "s1", limit=True)
+        if isawaitable(maybe_bool):
+            await maybe_bool

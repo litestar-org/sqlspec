@@ -15,6 +15,7 @@ from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -86,9 +87,17 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         self.reconcile_schema(assume_existing=True)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and atomically apply/read scoped state."""
         owner_column = f", {quote_bracket_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
         sql = f"""
@@ -103,11 +112,89 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             params = (session_id, app_name, user_id, owner_id, to_json(state))
         else:
             params = (session_id, app_name, user_id, to_json(state))
-        row = self._execute_fetchone(sql, params, commit=True)
-        if row is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return _session_record_from_row(row)
+
+        app_lock_sql = (
+            f"SELECT state FROM {_table_ref(self._app_state_table)} WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+        )
+        app_read_sql = f"SELECT state FROM {_table_ref(self._app_state_table)} WHERE app_name = ?"
+        app_update_sql = f"""
+        UPDATE {_table_ref(self._app_state_table)}
+        SET state = ?, update_time = SYSUTCDATETIME()
+        WHERE app_name = ?
+        """
+        app_insert_sql = f"""
+        INSERT INTO {_table_ref(self._app_state_table)} (app_name, state, update_time)
+        VALUES (?, ?, SYSUTCDATETIME())
+        """
+
+        user_lock_sql = (
+            f"SELECT state FROM {_table_ref(self._user_state_table)} WITH (UPDLOCK, HOLDLOCK) "
+            "WHERE app_name = ? AND user_id = ?"
+        )
+        user_read_sql = f"SELECT state FROM {_table_ref(self._user_state_table)} WHERE app_name = ? AND user_id = ?"
+        user_update_sql = f"""
+        UPDATE {_table_ref(self._user_state_table)}
+        SET state = ?, update_time = SYSUTCDATETIME()
+        WHERE app_name = ? AND user_id = ?
+        """
+        user_insert_sql = f"""
+        INSERT INTO {_table_ref(self._user_state_table)} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, SYSUTCDATETIME())
+        """
+
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
+        with self._config.provide_connection() as conn:
+            restore_autocommit = False
+            if getattr(conn, "autocommit", None) is True:
+                conn.autocommit = False
+                restore_autocommit = True
+            try:
+                with MssqlPythonCursor(conn) as cursor:
+                    cursor.execute(sql, params)
+                    row = cursor.fetchone()
+                    row = _require_created_session_row(row)
+
+                    if app_state_delta:
+                        cursor.execute(app_lock_sql, (app_name,))
+                        app_row = cursor.fetchone()
+                        if app_row is not None:
+                            merged_app_state = {**_json_dict(_row_value(app_row, "state", 0)), **app_state_delta}
+                            cursor.execute(app_update_sql, (to_json(merged_app_state), app_name))
+                        else:
+                            merged_app_state = dict(app_state_delta)
+                            cursor.execute(app_insert_sql, (app_name, to_json(merged_app_state)))
+                    else:
+                        cursor.execute(app_read_sql, (app_name,))
+                        app_row = cursor.fetchone()
+                        merged_app_state = _json_dict(_row_value(app_row, "state", 0)) if app_row is not None else None
+
+                    if user_state_delta:
+                        cursor.execute(user_lock_sql, (app_name, user_id))
+                        user_row = cursor.fetchone()
+                        if user_row is not None:
+                            merged_user_state = {**_json_dict(_row_value(user_row, "state", 0)), **user_state_delta}
+                            cursor.execute(user_update_sql, (to_json(merged_user_state), app_name, user_id))
+                        else:
+                            merged_user_state = dict(user_state_delta)
+                            cursor.execute(user_insert_sql, (app_name, user_id, to_json(merged_user_state)))
+                    else:
+                        cursor.execute(user_read_sql, (app_name, user_id))
+                        user_row = cursor.fetchone()
+                        merged_user_state = (
+                            _json_dict(_row_value(user_row, "state", 0)) if user_row is not None else None
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if restore_autocommit:
+                    conn.autocommit = True
+
+        session = _session_record_from_row(row)
+        session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -220,10 +307,10 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically append an event and update durable session/scoped state."""
+        """Atomically append an event and merge scoped state deltas."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
         update_sql = f"""
         UPDATE {_table_ref(self._session_table)}
@@ -231,22 +318,76 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
-        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+        app_lock_sql = (
+            f"SELECT state FROM {_table_ref(self._app_state_table)} WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+        )
+        app_update_sql = f"""
+        UPDATE {_table_ref(self._app_state_table)}
+        SET state = ?, update_time = SYSUTCDATETIME()
+        WHERE app_name = ?
+        """
+        app_insert_sql = f"""
+        INSERT INTO {_table_ref(self._app_state_table)} (app_name, state, update_time)
+        VALUES (?, ?, SYSUTCDATETIME())
+        """
+        user_lock_sql = (
+            f"SELECT state FROM {_table_ref(self._user_state_table)} WITH (UPDLOCK, HOLDLOCK) "
+            "WHERE app_name = ? AND user_id = ?"
+        )
+        user_update_sql = f"""
+        UPDATE {_table_ref(self._user_state_table)}
+        SET state = ?, update_time = SYSUTCDATETIME()
+        WHERE app_name = ? AND user_id = ?
+        """
+        user_insert_sql = f"""
+        INSERT INTO {_table_ref(self._user_state_table)} (app_name, user_id, state, update_time)
+        VALUES (?, ?, ?, SYSUTCDATETIME())
+        """
+
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
+        with self._config.provide_connection() as conn:
+            restore_autocommit = False
+            if getattr(conn, "autocommit", None) is True:
+                conn.autocommit = False
+                restore_autocommit = True
             try:
-                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
-                row = cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-                if app_state is not None:
-                    cursor.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
-                if user_state is not None:
-                    cursor.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
+                with MssqlPythonCursor(conn) as cursor:
+                    cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                    row = cursor.fetchone()
+                    if row is None:
+                        _raise_session_not_found(session_id)
+                    cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    if app_state_delta:
+                        cursor.execute(app_lock_sql, (app_name,))
+                        app_row = cursor.fetchone()
+                        if app_row is not None:
+                            merged_app_state = {**_json_dict(_row_value(app_row, "state", 0)), **app_state_delta}
+                            cursor.execute(app_update_sql, (to_json(merged_app_state), app_name))
+                        else:
+                            merged_app_state = dict(app_state_delta)
+                            cursor.execute(app_insert_sql, (app_name, to_json(merged_app_state)))
+                    if user_state_delta:
+                        cursor.execute(user_lock_sql, (app_name, user_id))
+                        user_row = cursor.fetchone()
+                        if user_row is not None:
+                            merged_user_state = {**_json_dict(_row_value(user_row, "state", 0)), **user_state_delta}
+                            cursor.execute(user_update_sql, (to_json(merged_user_state), app_name, user_id))
+                        else:
+                            merged_user_state = dict(user_state_delta)
+                            cursor.execute(user_insert_sql, (app_name, user_id, to_json(merged_user_state)))
+                conn.commit()
             except Exception:
                 conn.rollback()
                 raise
-            conn.commit()
-        return _session_record_from_row(row)
+            finally:
+                if restore_autocommit:
+                    conn.autocommit = True
+
+        session = _session_record_from_row(row)
+        if merged_app_state is not None or merged_user_state is not None:
+            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     def get_events(
         self,
@@ -256,7 +397,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
-        """Return events for a scoped session ordered by event timestamp."""
+        """Return events for a scoped session ordered chronologically ascending."""
         if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
@@ -266,6 +407,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             if _is_mssql_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -924,13 +1067,14 @@ def _events_query(
     if after_timestamp is not None:
         after_clause = " AND e.timestamp > ?"
         params.append(after_timestamp)
+    order_direction = "DESC" if limit is not None else "ASC"
     sql = f"""
     SELECT {top_clause}e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
     FROM {_table_ref(events_table)} e
     JOIN {_table_ref(session_table)} s
         ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
     WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause}
-    ORDER BY e.timestamp ASC
+    ORDER BY e.timestamp {order_direction}
     """
     return sql, tuple(params)
 
@@ -1063,6 +1207,13 @@ def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_
 def _raise_session_not_found(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row
 
 
 def _raise_session_not_found_for_scope(session_id: str, app_name: str, user_id: str) -> NoReturn:

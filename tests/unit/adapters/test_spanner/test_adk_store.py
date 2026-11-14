@@ -114,6 +114,14 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
             executed_writes.extend(stmts)
             return SimpleNamespace(code=0, message=""), [1] * len(stmts)
 
+        async def _empty_sql(*_args: Any, **_kwargs: Any) -> Any:
+            async def _rows() -> Any:
+                if False:
+                    yield ()
+
+            return _rows()
+
+        txn.execute_sql = _empty_sql
         txn.execute_update = _exec_update
         txn.batch_update = _batch_update
         return job(txn)
@@ -619,7 +627,7 @@ async def test_async_adk_store_create_tables_with_async_generator_list_tables() 
 async def test_async_adk_store_create_get_list_delete_session() -> None:
     """Verify SpannerAsyncADKStore CRUD operations over async snapshots and transactions."""
     config = _mock_config()
-    database = MagicMock()
+    database = config.get_database.return_value
     executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     async def _run_in_txn(job: Any) -> Any:
@@ -633,6 +641,14 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
             executed_writes.extend(stmts)
             return SimpleNamespace(code=0, message=""), [1] * len(stmts)
 
+        async def _empty_sql(*_args: Any, **_kwargs: Any) -> Any:
+            async def _rows() -> Any:
+                if False:
+                    yield ()
+
+            return _rows()
+
+        txn.execute_sql = _empty_sql
         txn.execute_update = _exec_update
         txn.batch_update = _batch_update
         return await job(txn)
@@ -687,7 +703,7 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
 async def test_async_adk_store_append_event_and_update_state_and_get_events() -> None:
     """Verify SpannerAsyncADKStore atomic append_event_and_update_state and get_events."""
     config = _mock_config()
-    database = MagicMock()
+    database = config.get_database.return_value
     executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     async def _run_in_txn(job: Any) -> Any:
@@ -701,6 +717,14 @@ async def test_async_adk_store_append_event_and_update_state_and_get_events() ->
             executed_writes.extend(stmts)
             return SimpleNamespace(code=0, message=""), [1] * len(stmts)
 
+        async def _empty_sql(*_args: Any, **_kwargs: Any) -> Any:
+            async def _rows() -> Any:
+                if False:
+                    yield ()
+
+            return _rows()
+
+        txn.execute_sql = _empty_sql
         txn.execute_update = _exec_update
         txn.batch_update = _batch_update
         return await job(txn)
@@ -1391,3 +1415,288 @@ async def test_spanner_memory_delete_entries_by_session_scopes_owner_predicates(
     assert deleted == 1
     assert sql == f"DELETE FROM adk_memory WHERE {expected_where}"
     assert params == expected_params
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(False, id="sync"), pytest.param(True, id="async")])
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expected_write_count"),
+    [
+        pytest.param(None, None, {"local": 1, "app:seed": "a", "user:seed": "u"}, 1, id="none-deltas"),
+        pytest.param({}, {}, {"local": 1, "app:seed": "a", "user:seed": "u"}, 1, id="empty-deltas"),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0},
+            {"local": 1, "app:seed": "a", "app:flag": False, "app:cleared": None, "user:seed": "u", "user:zero": 0},
+            3,
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+async def test_spanner_create_session_merges_and_reads_scoped_state(
+    is_async: bool,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expected_write_count: int,
+) -> None:
+    """create_session reads scoped tables inside the rw transaction and merges deltas without mutating inputs."""
+    config = _mock_config()
+    database = config.get_database.return_value
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    app_input = dict(app_delta) if app_delta is not None else None
+    user_input = dict(user_delta) if user_delta is not None else None
+
+    if is_async:
+
+        async def _run_in_txn(job: Any) -> Any:
+            txn = MagicMock()
+
+            async def _exec_sql(sql: str, **_kwargs: Any) -> Any:
+                async def _rows() -> Any:
+                    if "adk_app_state" in sql:
+                        yield ('{"app:seed":"a"}',)
+                    elif "adk_user_state" in sql:
+                        yield ('{"user:seed":"u"}',)
+
+                return _rows()
+
+            async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                executed_writes.append((sql, params, param_types))
+                return 1
+
+            async def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+                executed_writes.extend(stmts)
+                return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            txn.batch_update = _batch_update
+            return await job(txn)
+
+        database.run_in_transaction = _run_in_txn
+        config.get_database = AsyncMock(return_value=database)
+        store: Any = SpannerAsyncADKStore(config)
+        created = await store.create_session(
+            "s1", "app", "u1", {"local": 1}, app_state_delta=app_input, user_state_delta=user_input
+        )
+    else:
+
+        def _run_in_txn_sync(job: Any) -> Any:
+            txn = MagicMock()
+
+            def _exec_sql(sql: str, **_kwargs: Any) -> list[tuple[str]]:
+                if "adk_app_state" in sql:
+                    return [('{"app:seed":"a"}',)]
+                if "adk_user_state" in sql:
+                    return [('{"user:seed":"u"}',)]
+                return []
+
+            def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                executed_writes.append((sql, params, param_types))
+                return 1
+
+            def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+                executed_writes.extend(stmts)
+                return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            txn.batch_update = _batch_update
+            return job(txn)
+
+        database.run_in_transaction.side_effect = _run_in_txn_sync
+        sync_store = SpannerSyncADKStore(config)
+        created = sync_store.create_session(
+            "s1", "app", "u1", {"local": 1}, app_state_delta=app_input, user_state_delta=user_input
+        )
+
+    assert created["state"] == expected_state
+    assert len(executed_writes) == expected_write_count
+    assert executed_writes[0][1]["state"] == '{"local":1}'
+    if app_delta is not None:
+        assert app_input == app_delta
+    if user_delta is not None:
+        assert user_input == user_delta
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(False, id="sync"), pytest.param(True, id="async")])
+async def test_spanner_append_event_and_update_state_merges_and_retries_cleanly(is_async: bool) -> None:
+    """append_event_and_update_state merges scoped deltas on Aborted retry without mutating caller dicts."""
+    config = _mock_config()
+    database = MagicMock() if is_async else config.get_database.return_value
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    attempt = 0
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    app_delta = {"app:flag": False, "app:cleared": None}
+    user_delta = {"user:zero": 0}
+    session_arg = {"turn": 1}
+    event: StoredEvent = {
+        "id": "e1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"content": "hello"},
+    }
+
+    if is_async:
+
+        async def _run_in_txn(job: Any) -> Any:
+            nonlocal attempt
+            executed_writes.clear()
+            txn = MagicMock()
+
+            async def _exec_sql(sql: str, **_kwargs: Any) -> Any:
+                current = attempt
+
+                async def _rows() -> Any:
+                    if "adk_app_state" in sql:
+                        yield ('{"app:peer":true}' if current > 0 else '{"app:old":1}',)
+                    elif "adk_user_state" in sql:
+                        yield ('{"user:name":"alice"}',)
+
+                return _rows()
+
+            async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                executed_writes.append((sql, params, param_types))
+                return 1
+
+            async def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+                executed_writes.extend(stmts)
+                return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            txn.batch_update = _batch_update
+            await job(txn)
+            attempt += 1
+            return await job(txn)
+
+        database.run_in_transaction = _run_in_txn
+        snapshot = MagicMock()
+
+        async def _snap_sql(*_args: Any, **_kwargs: Any) -> Any:
+            async def _rows() -> Any:
+                yield ("s1", "app", "u1", '{"turn":1}', now, now)
+
+            return _rows()
+
+        snapshot.execute_sql = _snap_sql
+        snap_ctx = MagicMock()
+        snap_ctx.__aenter__ = AsyncMock(return_value=snapshot)
+        snap_ctx.__aexit__ = AsyncMock(return_value=None)
+        config.provide_connection.return_value = snap_ctx
+        config.get_database = AsyncMock(return_value=database)
+        store: Any = SpannerAsyncADKStore(config)
+        updated = await store.append_event_and_update_state(
+            event, "app", "u1", "s1", session_arg, app_state_delta=app_delta, user_state_delta=user_delta
+        )
+    else:
+
+        def _run_in_txn_sync(job: Any) -> Any:
+            nonlocal attempt
+            executed_writes.clear()
+            txn = MagicMock()
+
+            def _exec_sql(sql: str, **_kwargs: Any) -> list[tuple[str]]:
+                if "adk_app_state" in sql:
+                    return [('{"app:peer":true}',) if attempt > 0 else ('{"app:old":1}',)]
+                if "adk_user_state" in sql:
+                    return [('{"user:name":"alice"}',)]
+                return []
+
+            def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+                executed_writes.append((sql, params, param_types))
+                return 1
+
+            def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+                executed_writes.extend(stmts)
+                return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+            txn.execute_sql = _exec_sql
+            txn.execute_update = _exec_update
+            txn.batch_update = _batch_update
+            job(txn)
+            attempt += 1
+            return job(txn)
+
+        database.run_in_transaction.side_effect = _run_in_txn_sync
+        snapshot = MagicMock()
+        snapshot.execute_sql.return_value = [("s1", "app", "u1", '{"turn":1}', now, now)]
+        snap_ctx = MagicMock()
+        snap_ctx.__enter__.return_value = snapshot
+        snap_ctx.__exit__.return_value = None
+        config.provide_connection.return_value = snap_ctx
+        sync_store = SpannerSyncADKStore(config)
+        updated = sync_store.append_event_and_update_state(
+            event, "app", "u1", "s1", session_arg, app_state_delta=app_delta, user_state_delta=user_delta
+        )
+
+    assert attempt == 1
+    assert app_delta == {"app:flag": False, "app:cleared": None}
+    assert user_delta == {"user:zero": 0}
+    assert session_arg == {"turn": 1}
+    assert updated["state"] == {
+        "turn": 1,
+        "app:peer": True,
+        "app:flag": False,
+        "app:cleared": None,
+        "user:name": "alice",
+        "user:zero": 0,
+    }
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(False, id="sync"), pytest.param(True, id="async")])
+async def test_spanner_get_events_limit_reverses_desc_rows_to_chronological(is_async: bool) -> None:
+    """Bounded get_events queries descending rows and restores chronological ascending order."""
+    config = _mock_config()
+    t1 = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    t2 = datetime(2026, 5, 10, 12, 1, tzinfo=UTC)
+    rows = [("e2", "s1", "inv-2", t2, '{"step":2}', "app", "u1"), ("e1", "s1", "inv-1", t1, '{"step":1}', "app", "u1")]
+    seen_sql: list[str] = []
+
+    if is_async:
+        snapshot = MagicMock()
+
+        async def _exec_sql(sql: str, **_kwargs: Any) -> Any:
+            seen_sql.append(" ".join(sql.split()))
+
+            async def _iter() -> Any:
+                yield rows[0]
+                yield rows[1]
+
+            return _iter()
+
+        snapshot.execute_sql = _exec_sql
+        snap_ctx = MagicMock()
+        snap_ctx.__aenter__ = AsyncMock(return_value=snapshot)
+        snap_ctx.__aexit__ = AsyncMock(return_value=None)
+        config.provide_connection.return_value = snap_ctx
+        store: Any = SpannerAsyncADKStore(config)
+        events = await store.get_events("app", "u1", "s1", limit=2)
+        with pytest.raises(ValueError, match="non-negative"):
+            await store.get_events("app", "u1", "s1", limit=-1)
+        with pytest.raises(ValueError, match="non-negative"):
+            await store.get_events("app", "u1", "s1", limit=True)
+    else:
+        snapshot = MagicMock()
+
+        def _exec_sql_sync(sql: str, **_kwargs: Any) -> list[Any]:
+            seen_sql.append(" ".join(sql.split()))
+            return rows
+
+        snapshot.execute_sql = _exec_sql_sync
+        snap_ctx = MagicMock()
+        snap_ctx.__enter__.return_value = snapshot
+        snap_ctx.__exit__.return_value = None
+        config.provide_connection.return_value = snap_ctx
+        sync_store = SpannerSyncADKStore(config)
+        events = sync_store.get_events("app", "u1", "s1", limit=2)
+        with pytest.raises(ValueError, match="non-negative"):
+            sync_store.get_events("app", "u1", "s1", limit=-1)
+        with pytest.raises(ValueError, match="non-negative"):
+            sync_store.get_events("app", "u1", "s1", limit=True)
+
+    assert [event["id"] for event in events] == ["e1", "e2"]
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT @limit" in seen_sql[0]

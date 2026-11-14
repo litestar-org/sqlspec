@@ -766,3 +766,61 @@ def test_adk_memory_delete_entries_by_session_matches_modulo_placeholder(
 
     assert _normalized(calls["mssql"][0]) == _normalized(_qmark(calls["pymssql"][0]))
     assert calls["mssql"][1] == calls["pymssql"][1]
+
+
+def test_adk_scoped_state_create_and_append_sql_match_modulo_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create_session and append_event_and_update_state lock and merge SQL match across SQL Server drivers."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    mssql_conn = MagicMock()
+    mssql_conn.autocommit = False
+    mssql_cursor = mssql_conn.cursor.return_value
+    mssql_cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"a": 1}',),
+        None,
+        ("s1", "app", "u1", '{"turn": 2}', now, now),
+        None,
+        ('{"u": 1}',),
+    ]
+    pymssql_conn = MagicMock()
+    pymssql_conn.autocommit_state = False
+    pymssql_cursor = pymssql_conn.cursor.return_value
+    pymssql_cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"a": 1}',),
+        None,
+        ("s1", "app", "u1", '{"turn": 2}', now, now),
+        None,
+        ('{"u": 1}',),
+    ]
+
+    monkeypatch.setattr(MssqlPythonConfig, "provide_connection", lambda _self: nullcontext(mssql_conn))
+    monkeypatch.setattr(PymssqlConfig, "provide_connection", lambda _self: nullcontext(pymssql_conn))
+
+    mssql_store = MssqlPythonADKStore(MssqlPythonConfig(extension_config={"adk": {"native_json": False}}))
+    pymssql_store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {}}))
+    event = cast(
+        "StoredEvent",
+        {
+            "id": "evt-1",
+            "app_name": "app",
+            "user_id": "u1",
+            "session_id": "s1",
+            "invocation_id": "inv-1",
+            "timestamp": now,
+            "event_data": {"text": "hello"},
+        },
+    )
+
+    mssql_store.create_session("s1", "app", "u1", {"turn": 1}, app_state_delta={"k": 1})
+    pymssql_store.create_session("s1", "app", "u1", {"turn": 1}, app_state_delta={"k": 1})
+    mssql_store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"x": 2}, user_state_delta={"y": 3}
+    )
+    pymssql_store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"x": 2}, user_state_delta={"y": 3}
+    )
+
+    mssql_calls = [(_normalized(c.args[0]), c.args[1]) for c in mssql_cursor.execute.call_args_list]
+    pymssql_calls = [(_normalized(_qmark(c.args[0])), c.args[1]) for c in pymssql_cursor.execute.call_args_list]
+    assert mssql_calls == pymssql_calls

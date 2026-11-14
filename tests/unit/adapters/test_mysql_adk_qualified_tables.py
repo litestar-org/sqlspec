@@ -101,7 +101,7 @@ class _AsyncCursorHandle:
 class _AsyncCursor:
     """Asynchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_cursor_rowcount", "_log", "_rows", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_last_sql", "_log", "_rows", "_session_row", "description", "rowcount")
 
     def __init__(
         self,
@@ -115,16 +115,19 @@ class _AsyncCursor:
         self._log = log
         self._session_row = session_row
         self._cursor_rowcount = cursor_rowcount
+        self._last_sql = ""
         self._rows = list(rows or [])
         self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
         self.description = description
 
     async def execute(self, sql: str, params: Any = None) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
 
     async def executemany(self, sql: str, params_list: Any) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
@@ -132,6 +135,8 @@ class _AsyncCursor:
             self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     async def fetchone(self) -> tuple[Any, ...] | None:
+        if "SELECT state FROM " in " ".join(self._last_sql.split()):
+            return ('{"existing": 1}',)
         return self._session_row
 
     async def fetchall(self) -> list[Any]:
@@ -187,6 +192,10 @@ class _AsyncDriver:
     async def execute_script(self, sql: str, *args: Any, **kwargs: Any) -> None:
         self._log.record(sql)
 
+    async def select(self, sql: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self._log.record(sql)
+        return []
+
     async def commit(self) -> None:
         return None
 
@@ -200,7 +209,7 @@ class _AsyncDriver:
 class _SyncCursor:
     """Synchronous cursor fake recording statements and yielding dummy rows."""
 
-    __slots__ = ("_cursor_rowcount", "_log", "_rows", "_session_row", "description", "rowcount")
+    __slots__ = ("_cursor_rowcount", "_last_sql", "_log", "_rows", "_session_row", "description", "rowcount")
 
     def __init__(
         self,
@@ -214,16 +223,19 @@ class _SyncCursor:
         self._log = log
         self._session_row = session_row
         self._cursor_rowcount = cursor_rowcount
+        self._last_sql = ""
         self._rows = list(rows or [])
         self.rowcount = 1 if cursor_rowcount is None else cursor_rowcount
         self.description = description
 
     def execute(self, sql: str, params: Any = None) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
 
     def executemany(self, sql: str, params_list: Any) -> None:
+        self._last_sql = sql
         self._log.record(sql)
         if self._cursor_rowcount is not None:
             self.rowcount = self._cursor_rowcount
@@ -231,6 +243,8 @@ class _SyncCursor:
             self.rowcount = len(params_list) if hasattr(params_list, "__len__") else 1
 
     def fetchone(self) -> tuple[Any, ...] | None:
+        if "SELECT state FROM " in " ".join(self._last_sql.split()):
+            return ('{"existing": 1}',)
         return self._session_row
 
     def fetchall(self) -> list[Any]:
@@ -283,6 +297,10 @@ class _SyncDriver:
 
     def execute_script(self, sql: str, *args: Any, **kwargs: Any) -> None:
         self._log.record(sql)
+
+    def select(self, sql: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        self._log.record(sql)
+        return []
 
     def commit(self) -> None:
         return None
@@ -362,6 +380,16 @@ class _DMLCase:
 _DML_CASES: list[_DMLCase] = [
     _DMLCase("create_session", False, "create_session", lambda: ("s", "a", "u", {}), dict, None, True, ("`app`.`t`",)),
     _DMLCase(
+        "create_session_scoped_deltas",
+        False,
+        "create_session",
+        lambda: ("s", "a", "u", {}),
+        lambda: {"app_state_delta": {"theme": "dark"}, "user_state_delta": {"lang": "en"}},
+        None,
+        True,
+        ("`app`.`t`", "`app`.`a`", "`app`.`u`"),
+    ),
+    _DMLCase(
         "create_session_owner",
         False,
         "create_session",
@@ -406,6 +434,16 @@ _DML_CASES: list[_DMLCase] = [
         None,
         True,
         ("`app`.`e`", "`app`.`t`"),
+    ),
+    _DMLCase(
+        "append_event_and_update_state_scoped_deltas",
+        False,
+        "append_event_and_update_state",
+        lambda: (_SAMPLE_EVENT, "a", "u", "s", {}),
+        lambda: {"app_state_delta": {"theme": "dark"}, "user_state_delta": {"lang": "en"}},
+        None,
+        True,
+        ("`app`.`e`", "`app`.`t`", "`app`.`a`", "`app`.`u`"),
     ),
     _DMLCase("get_events", False, "get_events", lambda: ("a", "u", "s"), dict, None, False, ("`app`.`e`", "`app`.`t`")),
     _DMLCase(

@@ -11,7 +11,7 @@ analytics stream into BigQuery.
 
 import math
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NotRequired, cast
 
 from typing_extensions import TypedDict
 
@@ -21,8 +21,10 @@ from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception, resolve_dataset_id
 from sqlspec.adapters.bigquery.events.store import _bigquery_additive_target
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import SerializationConflictError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -33,7 +35,8 @@ if TYPE_CHECKING:
 
 __all__ = ("BigQueryADKConfig", "BigQueryADKRetentionConfig", "BigQueryADKStore")
 
-_DEFAULT_LOOKUP_WINDOW_DAYS = 30
+_DEFAULT_LOOKUP_WINDOW_DAYS: Final[int] = 30
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
 
 
 class BigQueryADKRetentionConfig(TypedDict):
@@ -118,10 +121,26 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         self._create_tables()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Create or refresh a session row for the analytics replica."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        return self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -164,8 +183,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Append an event and then update analytics-replica state.
 
@@ -174,7 +193,13 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         a replay/analytics replica rather than live state storage.
         """
         return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     def get_events(
@@ -267,9 +292,18 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return bigquery.ScalarQueryParameter(name, "JSON", normalized)
 
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         now = datetime.now(UTC)
+        session_state = dict(state)
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_select = ", @owner_id AS owner_id" if self._owner_id_column_name else ""
         owner_update = f", {self._owner_id_column_name} = source.owner_id" if self._owner_id_column_name else ""
@@ -291,7 +325,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             self._query_param("id", session_id),
             self._query_param("app_name", app_name),
             self._query_param("user_id", user_id),
-            self._json_param("state", state),
+            self._json_param("state", session_state),
             self._query_param("create_time", now, bq_type="TIMESTAMP"),
             self._query_param("update_time", now, bq_type="TIMESTAMP"),
         ]
@@ -299,11 +333,19 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             owner_bq_type = "INT64" if isinstance(owner_id, int) and not isinstance(owner_id, bool) else "STRING"
             params.append(self._query_param("owner_id", owner_id, bq_type=owner_bq_type))
         self._run_query(sql, params)
+        current_app_state = (
+            self._merge_app_state_delta(app_name, app_state_delta) if app_state_delta else self._get_app_state(app_name)
+        )
+        current_user_state = (
+            self._merge_user_state_delta(app_name, user_id, user_state_delta)
+            if user_state_delta
+            else self._get_user_state(app_name, user_id)
+        )
         return {
             "id": session_id,
             "app_name": app_name,
             "user_id": user_id,
-            "state": state,
+            "state": merge_scoped_state(session_state, current_app_state, current_user_state),
             "create_time": now,
             "update_time": now,
         }
@@ -470,21 +512,23 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
-        self._update_session_state(app_name, user_id, session_id, state)
+        session_state = dict(state)
+        self._update_session_state(app_name, user_id, session_id, session_state)
         record = self._get_session(app_name, user_id, session_id)
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
 
         self._insert_event_row(event_record)
-        if app_state is not None:
-            self._upsert_app_state(app_name, app_state)
-        if user_state is not None:
-            self._upsert_user_state(app_name, user_id, user_state)
+        merged_app_state = self._merge_app_state_delta(app_name, app_state_delta) if app_state_delta else None
+        merged_user_state = (
+            self._merge_user_state_delta(app_name, user_id, user_state_delta) if user_state_delta else None
+        )
+        record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
         return record
 
     def _get_events(
@@ -517,11 +561,14 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if after_timestamp is not None:
             sql += " AND e.timestamp > @after_timestamp"
             params.append(self._query_param("after_timestamp", after_timestamp, bq_type="TIMESTAMP"))
-        sql += " ORDER BY e.timestamp ASC"
         if limit is not None:
-            sql += " LIMIT @row_limit"
+            sql += " ORDER BY e.timestamp DESC, e.id DESC LIMIT @row_limit"
             params.append(self._query_param("row_limit", limit, bq_type="INT64"))
+        else:
+            sql += " ORDER BY e.timestamp ASC, e.id ASC"
         rows = self._run_query(sql, params, read=read)
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -602,6 +649,91 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
                 self._json_param("state", state),
             ],
         )
+
+    def _merge_app_state_delta(self, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._merge_scoped_state_cas(
+            table=self._app_state_table,
+            where_sql="app_name = @app_name",
+            insert_cols="app_name",
+            insert_vals="@app_name",
+            key_params=[self._query_param("app_name", app_name)],
+            delta=delta,
+            label=f"app_state for app={app_name!r}",
+        )
+
+    def _merge_user_state_delta(self, app_name: str, user_id: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._merge_scoped_state_cas(
+            table=self._user_state_table,
+            where_sql="app_name = @app_name AND user_id = @user_id",
+            insert_cols="app_name, user_id",
+            insert_vals="@app_name, @user_id",
+            key_params=[self._query_param("app_name", app_name), self._query_param("user_id", user_id)],
+            delta=delta,
+            label=f"user_state for app={app_name!r}, user={user_id!r}",
+        )
+
+    def _merge_scoped_state_cas(
+        self,
+        *,
+        table: str,
+        where_sql: str,
+        insert_cols: str,
+        insert_vals: str,
+        key_params: "list[Any]",
+        delta: "dict[str, Any]",
+        label: str,
+    ) -> "dict[str, Any]":
+        qualified = self._qualified(table)
+        for _ in range(_MAX_STATE_MERGE_ATTEMPTS):
+            rows = self._run_query(f"SELECT state, update_time FROM {qualified} WHERE {where_sql} LIMIT 1", key_params)
+            if not rows:
+                merged = dict(delta)
+                now = datetime.now(UTC)
+                insert_sql = (
+                    f"INSERT INTO {qualified} ({insert_cols}, state, update_time) "
+                    f"SELECT {insert_vals}, @state, @update_time "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {qualified} WHERE {where_sql})"
+                )
+                self._last_dml_affected_rows = 0
+                self._run_query(
+                    insert_sql,
+                    [
+                        *key_params,
+                        self._json_param("state", merged),
+                        self._query_param("update_time", now, bq_type="TIMESTAMP"),
+                    ],
+                )
+                if self._last_dml_affected_rows > 0:
+                    return merged
+                continue
+            existing = self._decode_json(rows[0]["state"], deserializer=self._json_deserializer) or {}
+            expected_update_time = rows[0].get("update_time")
+            merged = {**existing, **delta}
+            new_update_time = _next_monotonic_timestamp(expected_update_time)
+            update_params = [
+                *key_params,
+                self._json_param("state", merged),
+                self._query_param("new_update_time", new_update_time, bq_type="TIMESTAMP"),
+            ]
+            if expected_update_time is None:
+                update_sql = (
+                    f"UPDATE {qualified} SET state = @state, update_time = @new_update_time "
+                    f"WHERE {where_sql} AND update_time IS NULL"
+                )
+            else:
+                update_sql = (
+                    f"UPDATE {qualified} SET state = @state, update_time = @new_update_time "
+                    f"WHERE {where_sql} AND update_time = @expected_update_time"
+                )
+                update_params.append(
+                    self._query_param("expected_update_time", expected_update_time, bq_type="TIMESTAMP")
+                )
+            self._last_dml_affected_rows = 0
+            self._run_query(update_sql, update_params)
+            if self._last_dml_affected_rows > 0:
+                return merged
+        msg = f"Failed to merge {label} after {_MAX_STATE_MERGE_ATTEMPTS} compare-and-swap attempts."
+        raise SerializationConflictError(msg)
 
     def _get_metadata(self, key: str) -> "str | None":
         sql = f"SELECT value FROM {self._qualified(self._metadata_table)} WHERE key = @key LIMIT 1"
@@ -747,6 +879,16 @@ def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_
     if record_scope != expected_scope:
         msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
         raise ValueError(msg)
+
+
+def _next_monotonic_timestamp(previous: "datetime | None") -> datetime:
+    now = datetime.now(UTC)
+    if previous is None:
+        return now
+    comparable = previous if previous.tzinfo is not None else previous.replace(tzinfo=UTC)
+    if now <= comparable:
+        return comparable + timedelta(microseconds=1)
+    return now
 
 
 def _resolve_config_dataset_id(config: BigQueryConfig) -> str | None:

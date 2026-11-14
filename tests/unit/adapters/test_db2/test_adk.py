@@ -16,7 +16,14 @@ from sqlspec.exceptions import SQLParsingError, SQLSpecError
 from sqlspec.extensions.adk import StoredEvent
 from sqlspec.extensions.adk._config_utils import _adk_adapter_store_class
 from sqlspec.extensions.adk.memory import StoredMemory
-from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeDb2Cursor, db2_description, db2_error
+from tests.unit.adapters.test_db2._fakes import (
+    DriverMode,
+    FakeDb2Connection,
+    FakeDb2Cursor,
+    FakeDb2IntegrityError,
+    db2_description,
+    db2_error,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -128,19 +135,125 @@ async def test_append_event_and_update_state_binds_utc(db2_mode: DriverMode) -> 
         "u1",
         "s1",
         {"step": 3},
-        app_state={"a": 1},
-        user_state={"u": 1},
+        app_state_delta={"a": 1},
+        user_state_delta={"u": 1},
     )
 
-    update, _, insert, app_merge, user_merge = config.executed
+    update, _, insert, app_lock, app_insert, user_lock, user_insert = config.executed
     _assert_no_server_clock(config.executed)
     _assert_naive_utc_near(update[1][1], _utc_naive_now())
     assert insert[1][5] == datetime(2026, 9, 24, 12, 30)
-    assert app_merge[1][:2] == ("app", '{"a":1}')
-    _assert_naive_utc_near(app_merge[1][2], _utc_naive_now())
-    assert user_merge[1][:3] == ("app", "u1", '{"u":1}')
-    _assert_naive_utc_near(user_merge[1][3], _utc_naive_now())
+    assert "FOR UPDATE WITH RS" in app_lock[0]
+    assert app_insert[1][:2] == ("app", '{"a":1}')
+    _assert_naive_utc_near(app_insert[1][2], _utc_naive_now())
+    assert "FOR UPDATE WITH RS" in user_lock[0]
+    assert user_insert[1][:3] == ("app", "u1", '{"u":1}')
+    _assert_naive_utc_near(user_insert[1][3], _utc_naive_now())
     assert config.connection.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expected_executes"),
+    [
+        pytest.param(None, None, {"step": 1, "app:seed": "a", "user:seed": "u"}, 1, id="none-deltas"),
+        pytest.param({}, {}, {"step": 1, "app:seed": "a", "user:seed": "u"}, 1, id="empty-deltas"),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0},
+            {"step": 1, "app:seed": "a", "app:flag": False, "app:cleared": None, "user:seed": "u", "user:zero": 0},
+            3,
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+async def test_db2_create_session_merges_and_reads_scoped_state(
+    db2_mode: DriverMode,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expected_executes: int,
+) -> None:
+    """create_session keeps adk_session session-only and returns merged scoped state."""
+    app_cursor = FakeDb2Cursor(rows=[('{"app:seed":"a"}',)], description=db2_description("STATE"))
+    user_cursor = FakeDb2Cursor(rows=[('{"user:seed":"u"}',)], description=db2_description("STATE"))
+    cursors: list[FakeDb2Cursor] = [FakeDb2Cursor(), _session_row(), app_cursor]
+    if app_delta:
+        cursors.append(FakeDb2Cursor())
+    cursors.append(user_cursor)
+    if user_delta:
+        cursors.append(FakeDb2Cursor())
+    store, config = _session_store(db2_mode, *cursors)
+
+    created = await db2_mode.call(
+        store.create_session, "s1", "app", "u1", {"step": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert created["state"] == expected_state
+    assert (
+        len([sql for sql, _ in config.executed if sql.lstrip().startswith(("INSERT", "UPDATE"))]) == expected_executes
+    )
+
+
+async def test_db2_append_event_retries_unique_race_and_merges_existing_state(db2_mode: DriverMode) -> None:
+    """append_event_and_update_state retries missing-row race and preserves falsy/null keys."""
+    dup_error = db2_error(-803, "23505", "duplicate key", FakeDb2IntegrityError)
+    cursors = [
+        FakeDb2Cursor(),
+        _session_row(),
+        FakeDb2Cursor(),
+        FakeDb2Cursor(rows=[], description=db2_description("STATE")),
+        FakeDb2Cursor(error=dup_error),
+        FakeDb2Cursor(),
+        _session_row(),
+        FakeDb2Cursor(),
+        FakeDb2Cursor(rows=[('{"app:peer":true}',)], description=db2_description("STATE")),
+        FakeDb2Cursor(),
+    ]
+    store, config = _session_store(db2_mode, *cursors)
+    event = StoredEvent(
+        id="e1",
+        app_name="app",
+        user_id="u1",
+        session_id="s1",
+        invocation_id="i1",
+        timestamp=datetime(2026, 9, 24, 12, 30, tzinfo=UTC),
+        event_data={"text": "hi"},
+    )
+
+    updated = await db2_mode.call(
+        store.append_event_and_update_state,
+        event,
+        "app",
+        "u1",
+        "s1",
+        {"step": 1},
+        app_state_delta={"app:flag": False, "app:cleared": None},
+    )
+
+    assert config.connection.rollbacks == 1
+    assert config.connection.commits == 1
+    assert updated["state"] == {"step": 1, "app:peer": True, "app:flag": False, "app:cleared": None}
+
+
+async def test_db2_get_events_limit_reverses_desc_rows_to_chronological(db2_mode: DriverMode) -> None:
+    """Bounded get_events queries descending rows and restores chronological ascending order."""
+    t1 = datetime(2026, 9, 24, 12, 0, 0)
+    t2 = datetime(2026, 9, 24, 12, 1, 0)
+    event_desc = db2_description("id", "app_name", "user_id", "session_id", "invocation_id", "timestamp", "event_data")
+    cursor = FakeDb2Cursor(
+        rows=[("e2", "app", "u1", "s1", "i2", t2, '{"step":2}'), ("e1", "app", "u1", "s1", "i1", t1, '{"step":1}')],
+        description=event_desc,
+    )
+    store, config = _session_store(db2_mode, cursor)
+
+    events = await db2_mode.call(store.get_events, "app", "u1", "s1", limit=2)
+
+    assert [event["id"] for event in events] == ["e1", "e2"]
+    assert "ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST 2 ROWS ONLY" in " ".join(config.executed[0][0].split())
+    with pytest.raises(ValueError, match="non-negative"):
+        await db2_mode.call(store.get_events, "app", "u1", "s1", limit=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        await db2_mode.call(store.get_events, "app", "u1", "s1", limit=True)
 
 
 async def test_upsert_app_state_binds_utc(db2_mode: DriverMode) -> None:

@@ -6,7 +6,7 @@ import struct
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Never, NotRequired, cast
 
 from sqlspec.adapters.adbc._typing import AdbcNativeError, AdbcNotSupportedError
 from sqlspec.adapters.adbc.core import (
@@ -28,8 +28,9 @@ from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_
 from sqlspec.config import ADKConfig
 from sqlspec.core.parameters import ParameterStyle, ParameterValidator
 from sqlspec.data_dictionary import normalize_dialect_name
-from sqlspec.exceptions import ImproperConfigurationError, TransactionError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, TransactionError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index, run_drop_statements_sync
 from sqlspec.utils.logging import get_logger
@@ -82,6 +83,26 @@ DIALECT_TERADATA: Final = "teradata"
 
 _DB2_WITH_DEFAULT_RE: Final[re.Pattern[str]] = re.compile(r"\bWITH\s+DEFAULT\b", re.IGNORECASE)
 _SCHEMA_TARGET_PARSE_DIALECTS: Final[dict[str, str]] = {DIALECT_POSTGRESQL: "postgres", DIALECT_MSSQL: "tsql"}
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
+_MAX_DUCKDB_MERGE_ATTEMPTS: Final[int] = 32
+_DUCKDB_RETRYABLE_PATTERNS: Final = (
+    "conflict",
+    "serialization",
+    "write-write",
+    "transactioncontext",
+    "duplicate",
+    "unique",
+    "primary key",
+)
+_ORACLE_UNIQUE_PATTERNS: Final = ("ora-00001", "unique constraint")
+_DB2_UNIQUE_PATTERNS: Final = ("23505", "-803", "sql0803n", "unique", "duplicate")
+_MSSQL_UNIQUE_PATTERNS: Final = ("2627", "2601", "23000", "unique", "duplicate")
+_GENERIC_UNIQUE_PATTERNS: Final = ("23505", "2802", "unique", "duplicate", "constraint", "primary key")
+_SQLITE_BUSY_PATTERNS: Final = ("database is locked", "busy", "sqlite_busy")
+_ROW_LOCK_SELECT_SQL_TEMPLATES: Final[dict[str, str]] = {
+    DIALECT_DB2: "SELECT state FROM {table} WHERE {where_clause} FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS",
+    DIALECT_MSSQL: "SELECT TOP 1 state FROM {table} WITH (UPDLOCK, HOLDLOCK) WHERE {where_clause}",
+}
 
 ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "no such table",
@@ -189,10 +210,26 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         self._create_tables()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        return self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -235,12 +272,18 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     def get_events(
@@ -1175,66 +1218,137 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(insert_cols)}) VALUES ({insert_vals})"
         )
 
+    def _session_insert_sql_and_params(
+        self, session_id: str, app_name: str, user_id: str, state_json: str, now_val: Any, owner_id: "Any | None"
+    ) -> "tuple[str, tuple[Any, ...]]":
+        """Build dialect-specific INSERT SQL and parameters for session creation."""
+        state_placeholder = self._json_placeholder()
+        if self._owner_id_column_name:
+            columns = f"id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time"
+            params: tuple[Any, ...] = (session_id, app_name, user_id, owner_id, state_json, now_val, now_val)
+            values_expr = f"?, ?, ?, ?, {state_placeholder}, ?, ?"
+        else:
+            columns = "id, app_name, user_id, state, create_time, update_time"
+            params = (session_id, app_name, user_id, state_json, now_val, now_val)
+            values_expr = f"?, ?, ?, {state_placeholder}, ?, ?"
+        if self._dialect == DIALECT_SNOWFLAKE:
+            sql = f"INSERT INTO {self._session_table} ({columns}) SELECT {values_expr}"
+        else:
+            sql = f"INSERT INTO {self._session_table} ({columns}) VALUES ({values_expr})"
+        return sql, params
+
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and atomically merge any scoped state deltas.
 
         Args:
             session_id: Unique session identifier.
             app_name: Application name.
             user_id: User identifier.
-            state: Initial session state.
-            owner_id: Optional owner ID value for owner_id_column (can be None for nullable columns).
+            state: Initial session-only state dictionary.
+            owner_id: Optional owner ID value for owner_id_column.
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
 
         Returns:
-            Created session record.
+            Created session record with merged effective state view.
         """
         state_json = self._serialize_state(state)
-        state_placeholder = self._json_placeholder()
-        now_val = self._encode_timestamp(datetime.now(UTC))
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {self._session_table}
+        WHERE app_name = ? AND user_id = ? AND id = ?
+        """
 
-        params: tuple[Any, ...]
-        if self._owner_id_column_name:
-            if self._dialect == DIALECT_SNOWFLAKE:
-                sql = (
-                    f"INSERT INTO {self._session_table} "
-                    f"(id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time) "
-                    f"SELECT ?, ?, ?, ?, {state_placeholder}, ?, ?"
-                )
-            else:
-                sql = f"""
-                INSERT INTO {self._session_table}
-                (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-                VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
-                """
-            params = (session_id, app_name, user_id, owner_id, state_json, now_val, now_val)
-        else:
-            if self._dialect == DIALECT_SNOWFLAKE:
-                sql = (
-                    f"INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time) "
-                    f"SELECT ?, ?, ?, {state_placeholder}, ?, ?"
-                )
-            else:
-                sql = f"""
-                INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-                VALUES (?, ?, ?, {state_placeholder}, ?, ?)
-                """
-            params = (session_id, app_name, user_id, state_json, now_val, now_val)
+        if self._dialect == DIALECT_BIGQUERY:
+            now_dt = datetime.now(UTC)
+            now_val = self._encode_timestamp(now_dt)
+            sql, params = self._session_insert_sql_and_params(
+                session_id, app_name, user_id, state_json, now_val, owner_id
+            )
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, sql, params)
+                    conn.commit()
+                finally:
+                    cursor.close()
+            merged_app = self._bigquery_scoped_state(
+                self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
+            )
+            merged_user = self._bigquery_scoped_state(
+                self._user_state_table, ("app_name", "user_id"), (app_name, user_id), user_state_delta, now_dt
+            )
+            result = self._get_session(app_name, user_id, session_id)
+            if result is None:
+                msg = "Failed to fetch created session"
+                raise RuntimeError(msg)
+            return StoredSession(
+                id=result["id"],
+                app_name=result["app_name"],
+                user_id=result["user_id"],
+                state=merge_scoped_state(result["state"], merged_app, merged_user),
+                create_time=result["create_time"],
+                update_time=result["update_time"],
+            )
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        max_attempts = self._max_state_merge_attempts()
+        for attempt in range(max_attempts):
             try:
-                self._execute(cursor, sql, params)
-                conn.commit()
-            finally:
-                cursor.close()
+                with _adbc_state_transaction(self._config, self._dialect) as conn:
+                    cursor = conn.cursor()
+                    try:
+                        now_dt = datetime.now(UTC)
+                        now_val = self._encode_timestamp(now_dt)
+                        sql, params = self._session_insert_sql_and_params(
+                            session_id, app_name, user_id, state_json, now_val, owner_id
+                        )
+                        self._execute(cursor, sql, params)
+                        merged_app = self._resolve_scoped_state_in_cursor(
+                            cursor, self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
+                        )
+                        merged_user = self._resolve_scoped_state_in_cursor(
+                            cursor,
+                            self._user_state_table,
+                            ("app_name", "user_id"),
+                            (app_name, user_id),
+                            user_state_delta,
+                            now_dt,
+                        )
+                        self._execute(cursor, select_sql, (app_name, user_id, session_id))
+                        row = cursor.fetchone()
+                        conn.commit()
+                    finally:
+                        cursor.close()
+                if row is None:
+                    _raise_missing_created_session()
+                return StoredSession(
+                    id=row[0],
+                    app_name=row[1],
+                    user_id=row[2],
+                    state=merge_scoped_state(self._deserialize_state(row[3]), merged_app, merged_user),
+                    create_time=self._decode_timestamp(row[4]),
+                    update_time=self._decode_timestamp(row[5]),
+                )
+            except Exception as exc:
+                if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
+                    continue
+                if isinstance(exc, _StateCasConflictError) or self._is_retryable_tx_error(exc):
+                    msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
+                    raise SerializationConflictError(msg) from exc
+                raise
 
-        result = self._get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return result
+        msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
+        raise SerializationConflictError(msg)
 
     def _get_session(
         self,
@@ -1499,26 +1613,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically insert an event and update the session's durable state.
-
-        The event insert, state update, and refresh-SELECT are executed within
-        a single connection and committed together. ADBC drivers wrap a
-        variety of backends (Postgres, SQLite, DuckDB, ...) so we use a
-        SELECT-after-UPDATE rather than relying on RETURNING which not every
-        backend supports.
+        """Atomically insert an event, update session state, and merge scoped state deltas.
 
         Args:
             event_record: Event record to store.
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
-            app_state: Optional app-scoped state snapshot.
-            user_state: Optional user-scoped state snapshot.
+            state: Post-append durable session-only state snapshot.
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
+
+        Returns:
+            Updated session record with merged effective state view.
         """
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
@@ -1553,87 +1663,404 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         FROM {self._session_table}
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
-        delete_app_state_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
-        insert_app_state_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (?, {self._json_placeholder()}, ?)
-        """
-        delete_user_state_sql = f"DELETE FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?"
-        insert_user_state_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (?, ?, {self._json_placeholder()}, ?)
-        """
         state_json = self._serialize_state(state)
         event_data = self._serialize_json_field(event_record["event_data"])
-        now_val = self._encode_timestamp(datetime.now(UTC))
-
-        with _adbc_atomic_connection(self._config, self._dialect) as conn:
-            cursor = conn.cursor()
-            try:
-                self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
-                self._execute(cursor, select_sql, (app_name, user_id, session_id))
-                row = cursor.fetchone()
-                if row is not None:
-                    self._execute(
-                        cursor,
-                        insert_sql,
-                        (
-                            event_record["id"],
-                            event_record["app_name"],
-                            event_record["user_id"],
-                            event_record["session_id"],
-                            event_record["invocation_id"],
-                            self._encode_timestamp(event_record["timestamp"]),
-                            event_data,
-                        ),
-                    )
-                    if app_state is not None:
-                        serialized_app_state = self._serialize_state(app_state)
-                        if self._dialect == DIALECT_SNOWFLAKE:
-                            self._execute(
-                                cursor,
-                                self._snowflake_state_merge_sql(self._app_state_table, ("app_name",)),
-                                (app_name, serialized_app_state, now_val),
-                            )
-                        else:
-                            self._execute(cursor, delete_app_state_sql, (app_name,))
-                            self._execute(cursor, insert_app_state_sql, (app_name, serialized_app_state, now_val))
-                    if user_state is not None:
-                        serialized_user_state = self._serialize_state(user_state)
-                        if self._dialect == DIALECT_SNOWFLAKE:
-                            self._execute(
-                                cursor,
-                                self._snowflake_state_merge_sql(self._user_state_table, ("app_name", "user_id")),
-                                (app_name, user_id, serialized_user_state, now_val),
-                            )
-                        else:
-                            self._execute(cursor, delete_user_state_sql, (app_name, user_id))
-                            self._execute(
-                                cursor, insert_user_state_sql, (app_name, user_id, serialized_user_state, now_val)
-                            )
-                    conn.commit()
-                else:
-                    with contextlib.suppress(Exception):
-                        conn.rollback()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    conn.rollback()
-                raise
-            finally:
-                cursor.close()
-
-        if row is None:
-            msg = f"Session {session_id} not found during append_event_and_update_state."
-            raise ValueError(msg)
-
-        return StoredSession(
-            id=row[0],
-            app_name=row[1],
-            user_id=row[2],
-            state=self._deserialize_state(row[3]),
-            create_time=self._decode_timestamp(row[4]),
-            update_time=self._decode_timestamp(row[5]),
+        event_params = (
+            event_record["id"],
+            event_record["app_name"],
+            event_record["user_id"],
+            event_record["session_id"],
+            event_record["invocation_id"],
+            self._encode_timestamp(event_record["timestamp"]),
+            event_data,
         )
+
+        if self._dialect == DIALECT_BIGQUERY:
+            now_dt = datetime.now(UTC)
+            now_val = self._encode_timestamp(now_dt)
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
+                    self._execute(cursor, select_sql, (app_name, user_id, session_id))
+                    row = cursor.fetchone()
+                    if row is None:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                        msg = f"Session {session_id} not found during append_event_and_update_state."
+                        raise ValueError(msg)
+                    self._execute(cursor, insert_sql, event_params)
+                    conn.commit()
+                finally:
+                    cursor.close()
+            merged_app = self._bigquery_scoped_state(
+                self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
+            )
+            merged_user = self._bigquery_scoped_state(
+                self._user_state_table, ("app_name", "user_id"), (app_name, user_id), user_state_delta, now_dt
+            )
+            return StoredSession(
+                id=row[0],
+                app_name=row[1],
+                user_id=row[2],
+                state=merge_scoped_state(self._deserialize_state(row[3]), merged_app, merged_user),
+                create_time=self._decode_timestamp(row[4]),
+                update_time=self._decode_timestamp(row[5]),
+            )
+
+        max_attempts = self._max_state_merge_attempts()
+        for attempt in range(max_attempts):
+            try:
+                with _adbc_state_transaction(self._config, self._dialect) as conn:
+                    cursor = conn.cursor()
+                    try:
+                        now_dt = datetime.now(UTC)
+                        now_val = self._encode_timestamp(now_dt)
+                        self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
+                        self._execute(cursor, select_sql, (app_name, user_id, session_id))
+                        row = cursor.fetchone()
+                        if row is None:
+                            with contextlib.suppress(Exception):
+                                conn.rollback()
+                            msg = f"Session {session_id} not found during append_event_and_update_state."
+                            raise ValueError(msg)
+                        self._execute(cursor, insert_sql, event_params)
+                        merged_app = self._resolve_scoped_state_in_cursor(
+                            cursor, self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
+                        )
+                        merged_user = self._resolve_scoped_state_in_cursor(
+                            cursor,
+                            self._user_state_table,
+                            ("app_name", "user_id"),
+                            (app_name, user_id),
+                            user_state_delta,
+                            now_dt,
+                        )
+                        conn.commit()
+                    finally:
+                        cursor.close()
+                return StoredSession(
+                    id=row[0],
+                    app_name=row[1],
+                    user_id=row[2],
+                    state=merge_scoped_state(self._deserialize_state(row[3]), merged_app, merged_user),
+                    create_time=self._decode_timestamp(row[4]),
+                    update_time=self._decode_timestamp(row[5]),
+                )
+            except Exception as exc:
+                if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
+                    continue
+                if isinstance(exc, _StateCasConflictError) or self._is_retryable_tx_error(exc):
+                    msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
+                    raise SerializationConflictError(msg) from exc
+                raise
+
+        msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
+        raise SerializationConflictError(msg)
+
+    def _max_state_merge_attempts(self) -> int:
+        """Return bounded retry budget for atomic state merges on the active dialect."""
+        return _MAX_DUCKDB_MERGE_ATTEMPTS if self._dialect == DIALECT_DUCKDB else _MAX_STATE_MERGE_ATTEMPTS
+
+    def _is_retryable_tx_error(self, exc: Exception) -> bool:
+        """Return True when an exception indicates a retryable lock, conflict, or CAS race."""
+        if isinstance(exc, _StateCasConflictError):
+            return True
+        if self._dialect == DIALECT_DUCKDB:
+            return _is_error_matching(exc, _DUCKDB_RETRYABLE_PATTERNS)
+        if self._dialect == DIALECT_SQLITE:
+            return _is_error_matching(exc, _SQLITE_BUSY_PATTERNS)
+        if self._dialect == DIALECT_DB2:
+            return _is_error_matching(exc, _DB2_UNIQUE_PATTERNS)
+        if self._dialect == DIALECT_MSSQL:
+            return _is_error_matching(exc, _MSSQL_UNIQUE_PATTERNS)
+        if self._dialect == DIALECT_TERADATA:
+            return _is_error_matching(exc, _GENERIC_UNIQUE_PATTERNS) or _is_error_matching(
+                exc, _DUCKDB_RETRYABLE_PATTERNS
+            )
+        return _is_error_matching(exc, _GENERIC_UNIQUE_PATTERNS)
+
+    def _next_monotonic_timestamp(self, now_dt: datetime, expected_raw_time: Any) -> datetime:
+        """Compute a monotonic UTC timestamp strictly greater than ``expected_raw_time``."""
+        current_dt = self._decode_timestamp(expected_raw_time)
+        candidate = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
+        minimum_next = current_dt + timedelta(microseconds=1)
+        return max(minimum_next, candidate)
+
+    def _resolve_scoped_state_in_cursor(
+        self,
+        cursor: Any,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any] | None",
+        now_dt: datetime,
+    ) -> "dict[str, Any]":
+        """Read scoped state when delta is empty, otherwise merge delta using dialect strategy."""
+        if not delta:
+            return self._read_scoped_state_in_cursor(cursor, table, key_columns, key_values)
+        return self._merge_scoped_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+
+    def _read_scoped_state_in_cursor(
+        self, cursor: Any, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any]":
+        """Read current scoped state dictionary within an active cursor."""
+        where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
+        self._execute(cursor, f"SELECT state FROM {table} WHERE {where_clause}", key_values)
+        row = cursor.fetchone()
+        return self._deserialize_state(row[0]) if row is not None else {}
+
+    def _merge_scoped_state_in_cursor(
+        self,
+        cursor: Any,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+        now_dt: datetime,
+    ) -> "dict[str, Any]":
+        """Atomically merge delta into app or user state using dialect locking or CAS."""
+        where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
+        cols_sql = ", ".join(key_columns)
+        key_placeholders = ", ".join("?" for _ in key_columns)
+        now_val = self._encode_timestamp(now_dt)
+
+        if self._dialect == DIALECT_POSTGRESQL:
+            sql = (
+                f"INSERT INTO {table} ({cols_sql}, state, update_time) "
+                f"VALUES ({key_placeholders}, ?::jsonb, ?) "
+                f"ON CONFLICT ({cols_sql}) DO UPDATE "
+                f"SET state = COALESCE({table}.state, '{{}}'::jsonb) || EXCLUDED.state, "
+                "update_time = EXCLUDED.update_time "
+                "RETURNING state"
+            )
+            self._execute(cursor, sql, (*key_values, self._serialize_state(delta), now_val))
+            row = cursor.fetchone()
+            return self._deserialize_state(row[0]) if row is not None else dict(delta)
+
+        if self._dialect == DIALECT_SQLITE:
+            self._execute(cursor, f"SELECT state FROM {table} WHERE {where_clause}", key_values)
+            row = cursor.fetchone()
+            if row is not None:
+                merged = self._deserialize_state(row[0])
+                merged.update(delta)
+                self._execute(
+                    cursor,
+                    f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_clause}",
+                    (self._serialize_state(merged), now_val, *key_values),
+                )
+                return merged
+            merged = dict(delta)
+            self._execute(
+                cursor,
+                f"INSERT INTO {table} ({cols_sql}, state, update_time) VALUES ({key_placeholders}, ?, ?)",
+                (*key_values, self._serialize_state(merged), now_val),
+            )
+            return merged
+
+        if self._dialect == DIALECT_ORACLE:
+            select_locked = f"SELECT state FROM {table} WHERE {where_clause} FOR UPDATE"
+            self._execute(cursor, select_locked, key_values)
+            row = cursor.fetchone()
+            if row is None:
+                merged = dict(delta)
+                insert_sql = f"INSERT INTO {table} ({cols_sql}, state, update_time) VALUES ({key_placeholders}, ?, ?)"
+                try:
+                    self._execute(cursor, insert_sql, (*key_values, self._serialize_state(merged), now_val))
+                except Exception as exc:
+                    if not _is_error_matching(exc, _ORACLE_UNIQUE_PATTERNS):
+                        raise
+                    self._execute(cursor, select_locked, key_values)
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise
+                else:
+                    return merged
+            merged = self._deserialize_state(row[0])
+            merged.update(delta)
+            self._execute(
+                cursor,
+                f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_clause}",
+                (self._serialize_state(merged), now_val, *key_values),
+            )
+            return merged
+
+        if self._dialect in _ROW_LOCK_SELECT_SQL_TEMPLATES:
+            select_locked = _ROW_LOCK_SELECT_SQL_TEMPLATES[self._dialect].format(table=table, where_clause=where_clause)
+            unique_patterns = _DB2_UNIQUE_PATTERNS if self._dialect == DIALECT_DB2 else _MSSQL_UNIQUE_PATTERNS
+            self._execute(cursor, select_locked, key_values)
+            row = cursor.fetchone()
+            if row is not None:
+                merged = self._deserialize_state(row[0])
+                merged.update(delta)
+                self._execute(
+                    cursor,
+                    f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_clause}",
+                    (self._serialize_state(merged), now_val, *key_values),
+                )
+                return merged
+            merged = dict(delta)
+            try:
+                self._execute(
+                    cursor,
+                    f"INSERT INTO {table} ({cols_sql}, state, update_time) VALUES ({key_placeholders}, ?, ?)",
+                    (*key_values, self._serialize_state(merged), now_val),
+                )
+            except Exception as exc:
+                if _is_error_matching(exc, unique_patterns):
+                    raise _StateCasConflictError from exc
+                raise
+            return merged
+
+        if self._dialect == DIALECT_DUCKDB:
+            return self._merge_duckdb_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+
+        return self._merge_cas_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+
+    def _merge_duckdb_state_in_cursor(
+        self,
+        cursor: Any,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+        now_dt: datetime,
+    ) -> "dict[str, Any]":
+        """Merge scoped state on DuckDB using ON CONFLICT insert and update_time CAS."""
+        where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
+        cols_sql = ", ".join(key_columns)
+        key_placeholders = ", ".join("?" for _ in key_columns)
+        now_val = self._encode_timestamp(now_dt)
+
+        insert_sql = (
+            f"INSERT INTO {table} ({cols_sql}, state, update_time) "
+            f"VALUES ({key_placeholders}, ?, ?) "
+            f"ON CONFLICT ({cols_sql}) DO NOTHING RETURNING state"
+        )
+        self._execute(cursor, insert_sql, (*key_values, self._serialize_state(delta), now_val))
+        inserted_row = cursor.fetchone()
+        if inserted_row is not None:
+            return self._deserialize_state(inserted_row[0])
+
+        self._execute(cursor, f"SELECT state, update_time FROM {table} WHERE {where_clause}", key_values)
+        existing = cursor.fetchone()
+        if existing is None:
+            raise _StateCasConflictError
+
+        expected_raw_time = existing[1]
+        next_dt = self._next_monotonic_timestamp(now_dt, expected_raw_time)
+        merged = self._deserialize_state(existing[0])
+        merged.update(delta)
+        update_sql = (
+            f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_clause} AND update_time = ? RETURNING state"
+        )
+        self._execute(
+            cursor,
+            update_sql,
+            (self._serialize_state(merged), self._encode_timestamp(next_dt), *key_values, expected_raw_time),
+        )
+        updated_row = cursor.fetchone()
+        if updated_row is None:
+            raise _StateCasConflictError
+        return self._deserialize_state(updated_row[0])
+
+    def _merge_cas_state_in_cursor(
+        self,
+        cursor: Any,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+        now_dt: datetime,
+    ) -> "dict[str, Any]":
+        """Merge scoped state using update_time compare-and-swap on warehouse/generic dialects."""
+        where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
+        cols_sql = ", ".join(key_columns)
+        key_placeholders = ", ".join("?" for _ in key_columns)
+        now_val = self._encode_timestamp(now_dt)
+
+        self._execute(cursor, f"SELECT state, update_time FROM {table} WHERE {where_clause}", key_values)
+        row = cursor.fetchone()
+        if row is None:
+            merged = dict(delta)
+            serialized = self._serialize_state(merged)
+            if self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
+                insert_sql = (
+                    f"INSERT INTO {table} ({cols_sql}, state, update_time) "
+                    f"SELECT {key_placeholders}, {self._json_placeholder()}, ? "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {where_clause})"
+                )
+                self._execute(cursor, insert_sql, (*key_values, serialized, now_val, *key_values))
+                self._verify_cas_write(cursor, table, where_clause, key_values, now_dt)
+                return merged
+
+            insert_sql = (
+                f"INSERT INTO {table} ({cols_sql}, state, update_time) "
+                f"VALUES ({key_placeholders}, {self._json_placeholder()}, ?)"
+            )
+            try:
+                self._execute(cursor, insert_sql, (*key_values, serialized, now_val))
+            except Exception as exc:
+                if _is_error_matching(exc, _GENERIC_UNIQUE_PATTERNS):
+                    raise _StateCasConflictError from exc
+                raise
+            return merged
+
+        raw_state, expected_raw_time = row[0], row[1]
+        next_dt = self._next_monotonic_timestamp(now_dt, expected_raw_time)
+        next_val = self._encode_timestamp(next_dt)
+        merged = self._deserialize_state(raw_state)
+        merged.update(delta)
+        update_sql = (
+            f"UPDATE {table} SET state = {self._json_placeholder()}, update_time = ? "
+            f"WHERE {where_clause} AND update_time = ?"
+        )
+        self._execute(cursor, update_sql, (self._serialize_state(merged), next_val, *key_values, expected_raw_time))
+        self._verify_cas_write(cursor, table, where_clause, key_values, next_dt)
+        return merged
+
+    def _verify_cas_write(
+        self, cursor: Any, table: str, where_clause: str, key_values: "tuple[Any, ...]", expected_dt: datetime
+    ) -> None:
+        """Raise ``_StateCasConflictError`` when a CAS DML statement applied to zero rows."""
+        rowcount = getattr(cursor, "rowcount", None)
+        if isinstance(rowcount, int) and rowcount == 0:
+            raise _StateCasConflictError
+        if isinstance(rowcount, int) and rowcount < 0:
+            self._execute(cursor, f"SELECT update_time FROM {table} WHERE {where_clause}", key_values)
+            check_row = cursor.fetchone()
+            if check_row is None or self._decode_timestamp(check_row[0]) != expected_dt:
+                raise _StateCasConflictError
+
+    def _bigquery_scoped_state(
+        self,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any] | None",
+        now_dt: datetime,
+    ) -> "dict[str, Any]":
+        """Execute independent BigQuery scoped-state read or CAS retry outside session/event writes."""
+        for attempt in range(_MAX_STATE_MERGE_ATTEMPTS):
+            try:
+                with self._config.provide_connection() as conn:
+                    cursor = conn.cursor()
+                    try:
+                        merged = self._resolve_scoped_state_in_cursor(
+                            cursor, table, key_columns, key_values, delta, now_dt
+                        )
+                        conn.commit()
+                        return merged
+                    finally:
+                        cursor.close()
+            except _StateCasConflictError as exc:
+                if attempt + 1 < _MAX_STATE_MERGE_ATTEMPTS:
+                    now_dt = datetime.now(UTC)
+                    continue
+                msg = f"Failed to merge scoped state after {_MAX_STATE_MERGE_ATTEMPTS} attempts"
+                raise SerializationConflictError(msg) from exc
+        msg = f"Failed to merge scoped state after {_MAX_STATE_MERGE_ATTEMPTS} attempts"
+        raise SerializationConflictError(msg)
 
     def _get_events(
         self,
@@ -1645,7 +2072,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         *,
         read: bool = False,
     ) -> "list[StoredEvent]":
-        """List events for a session ordered by timestamp.
+        """List events for a session ordered chronologically ascending.
+
+        When ``limit`` is set, selects the ``limit`` most recent events before
+        re-ordering them chronologically ascending.
 
         Args:
             read: Whether this call permits offloading a pure read.
@@ -1656,7 +2086,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             limit: Maximum number of events to return.
 
         Returns:
-            List of event records ordered by timestamp ASC.
+            List of event records ordered chronologically ascending.
         """
         if limit is not None and (isinstance(limit, bool) or limit < 0):
             msg = "limit must be a non-negative integer"
@@ -1672,6 +2102,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             params.append(self._encode_timestamp(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
+        order_direction = "DESC" if limit is not None else "ASC"
         limit_clause = ""
         if limit is not None:
             if self._dialect == DIALECT_TERADATA:
@@ -1687,7 +2118,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         FROM {self._events_table} e
         JOIN {self._session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        ORDER BY e.timestamp {order_direction}, e.id {order_direction}{limit_clause}
         """
 
         try:
@@ -1696,6 +2127,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 try:
                     self._execute(cursor, sql, params)
                     rows = cursor.fetchall()
+                    if limit is not None:
+                        rows = list(reversed(rows))
 
                     return [
                         StoredEvent(
@@ -3565,3 +3998,111 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
                         set_autocommit(True)
                 else:
                     set_autocommit(True)
+
+
+class _StateCasConflictError(Exception):
+    """Internal sentinel raised when a compare-and-swap state update conflicts."""
+
+
+class _AdbcSqlTransactionConnection:
+    """Wrap an ADBC connection whose SQL transaction lifecycle is managed explicitly."""
+
+    __slots__ = ("_connection",)
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def cursor(self) -> Any:
+        return self._connection.cursor()
+
+    def commit(self) -> None:
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute("COMMIT")
+        finally:
+            cursor.close()
+
+    def rollback(self) -> None:
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute("ROLLBACK")
+        finally:
+            cursor.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
+def _is_error_matching(exc: Exception, patterns: "tuple[str, ...]") -> bool:
+    """Return True when the lowercase exception text contains any target pattern."""
+    message = str(exc).lower()
+    return any(pattern in message for pattern in patterns)
+
+
+@contextlib.contextmanager
+def _adbc_state_transaction(config: "AdbcConfig", dialect: str) -> Iterator[Any]:
+    """Open a transaction for scoped-state merges with SQLite immediate write locking.
+
+    Yields:
+        Active connection or transaction wrapper for the scoped state merge.
+    """
+    if dialect != DIALECT_SQLITE:
+        with _adbc_atomic_connection(config, dialect) as conn:
+            try:
+                yield conn
+            except BaseException:
+                conn_rollback = getattr(conn, "rollback", None)
+                if callable(conn_rollback):
+                    with contextlib.suppress(Exception):
+                        conn_rollback()
+                raise
+        return
+
+    with config.provide_connection() as conn:
+        native = getattr(conn, "adbc_connection", None)
+        set_autocommit = getattr(native, "set_autocommit", None)
+        get_option = getattr(native, "get_option", None)
+        mode = None
+        if callable(get_option):
+            with contextlib.suppress(Exception):
+                mode = get_option("adbc.connection.autocommit")
+        previous = mode == "true" if mode in {"true", "false"} else getattr(conn, "_autocommit", None)
+        if not callable(set_autocommit) or not isinstance(previous, bool):
+            try:
+                yield conn
+            except BaseException:
+                conn_rollback = getattr(conn, "rollback", None)
+                if callable(conn_rollback):
+                    with contextlib.suppress(Exception):
+                        conn_rollback()
+                raise
+            return
+
+        if previous is False:
+            set_autocommit(True)
+        began = False
+        wrapped = _AdbcSqlTransactionConnection(conn)
+        try:
+            cursor = conn.cursor()
+            try:
+                with contextlib.suppress(Exception):
+                    cursor.execute("PRAGMA busy_timeout = 5000")
+                cursor.execute("BEGIN IMMEDIATE")
+                began = True
+            finally:
+                cursor.close()
+            yield wrapped
+        except BaseException:
+            if began:
+                with contextlib.suppress(Exception):
+                    wrapped.rollback()
+            raise
+        finally:
+            if previous is False:
+                with contextlib.suppress(Exception):
+                    set_autocommit(False)
+
+
+def _raise_missing_created_session() -> Never:
+    msg = "Failed to fetch created session"
+    raise RuntimeError(msg)

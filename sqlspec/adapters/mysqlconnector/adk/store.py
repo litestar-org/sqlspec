@@ -14,8 +14,8 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
-from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.migrations.schema import metadata_has_index
 from sqlspec.protocols import HasErrnoProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -37,6 +37,11 @@ __all__ = (
 )
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+_MYSQL_SESSION_IDENTITY_COLUMNS: Final = ("id", "app_name", "user_id")
+_MYSQL_EVENT_IDENTITY_COLUMNS: Final = ("id", "app_name", "user_id", "session_id")
+_MYSQL_APP_STATE_IDENTITY_COLUMNS: Final = ("app_name",)
+_MYSQL_USER_STATE_IDENTITY_COLUMNS: Final = ("app_name", "user_id")
+_MYSQL_MEMORY_IDENTITY_COLUMNS: Final = ("id", "session_id", "app_name", "user_id", "event_id")
 
 _ADK_MEMORY_TABLE_DDL_TEMPLATE = ",\n            {0}"
 
@@ -188,8 +193,35 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         await self.reconcile_schema(assume_existing=True)
 
     async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing session and event secondary indexes on the active migration driver."""
+        """Reconcile legacy column collations and missing session/event secondary indexes."""
         adk_config = _adk_config(self._config)
+        fk_targets = (
+            (self._session_table, _MYSQL_SESSION_IDENTITY_COLUMNS),
+            (self._events_table, _MYSQL_EVENT_IDENTITY_COLUMNS),
+        )
+        fk_alter_statements: list[str] = []
+        for table_name, columns in fk_targets:
+            sql, params = _mysql_columns_query(table_name)
+            column_rows = await driver.select(sql, *params)
+            fk_alter_statements.extend(_mysql_column_alter_statements(table_name, columns, list(column_rows)))
+        if fk_alter_statements:
+            await driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+            try:
+                for statement in fk_alter_statements:
+                    await driver.execute(statement)
+            finally:
+                await driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+
+        other_targets: tuple[tuple[str, tuple[str, ...]], ...] = (
+            (self._app_state_table, _MYSQL_APP_STATE_IDENTITY_COLUMNS),
+            (self._user_state_table, _MYSQL_USER_STATE_IDENTITY_COLUMNS),
+        )
+        for state_table_name, state_columns in other_targets:
+            sql, params = _mysql_columns_query(state_table_name)
+            column_rows = await driver.select(sql, *params)
+            for statement in _mysql_column_alter_statements(state_table_name, state_columns, list(column_rows)):
+                await driver.execute(statement)
+
         session_db, session_bare = _mysql_split_table(self._session_table)
         session_rows = await driver.data_dictionary.get_indexes(driver, table=session_bare, schema=session_db)
         for statement in _mysql_missing_index_statements(
@@ -205,10 +237,19 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             await driver.execute(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         params: tuple[Any, ...]
         state_json = self._json_serializer(state)
+        empty_state_json = self._json_serializer({})
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
@@ -222,20 +263,86 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             """
             params = (session_id, app_name, user_id, state_json)
 
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {_mysql_table_ref(self._session_table)}
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        """
+
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
+                await cursor.execute("BEGIN")
                 await cursor.execute(sql, params)
+                await cursor.execute(select_sql, (app_name, user_id, session_id))
+                row = await cursor.fetchone()
+                row = _require_created_session_row(row)
+
+                if app_state_delta:
+                    await cursor.execute(
+                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
+                    )
+                    await cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
+                    app_row = await cursor.fetchone()
+                    current_app = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer) or {}
+                        if app_row is not None
+                        else {}
+                    )
+                    merged_app_state = {**current_app, **app_state_delta}
+                    await cursor.execute(
+                        _mysql_update_app_state_sql(self._app_state_table),
+                        (self._json_serializer(merged_app_state), app_name),
+                    )
+                else:
+                    await cursor.execute(_mysql_select_app_state_sql(self._app_state_table), (app_name,))
+                    app_row = await cursor.fetchone()
+                    merged_app_state = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer)
+                        if app_row is not None
+                        else None
+                    )
+
+                if user_state_delta:
+                    await cursor.execute(
+                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                        (app_name, user_id, empty_state_json),
+                    )
+                    await cursor.execute(
+                        _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
+                    )
+                    user_row = await cursor.fetchone()
+                    current_user = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer) or {}
+                        if user_row is not None
+                        else {}
+                    )
+                    merged_user_state = {**current_user, **user_state_delta}
+                    await cursor.execute(
+                        _mysql_update_user_state_sql(self._user_state_table),
+                        (self._json_serializer(merged_user_state), app_name, user_id),
+                    )
+                else:
+                    await cursor.execute(_mysql_select_user_state_sql(self._user_state_table), (app_name, user_id))
+                    user_row = await cursor.fetchone()
+                    merged_user_state = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer)
+                        if user_row is not None
+                        else None
+                    )
+
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
             finally:
                 await cursor.close()
-            await conn.commit()
 
-        with adk_primary_read_scope():
-            result = await self.get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return result
+        session = _session_record_from_row(row, deserializer=self._json_deserializer)
+        session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -377,8 +484,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
@@ -392,6 +499,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             )
             raise ValueError(msg)
 
+        empty_state_json = self._json_serializer({})
         insert_sql = f"""
         INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -407,9 +515,12 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         FROM {_mysql_table_ref(self._session_table)}
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
+                await cursor.execute("BEGIN")
                 await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
@@ -427,14 +538,40 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                         _json_for_storage(event_record["event_data"], serializer=self._json_serializer),
                     ),
                 )
-                if app_state is not None:
+                if app_state_delta:
                     await cursor.execute(
-                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(app_state))
+                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
                     )
-                if user_state is not None:
+                    await cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
+                    app_row = await cursor.fetchone()
+                    current_app = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer) or {}
+                        if app_row is not None
+                        else {}
+                    )
+                    merged_app_state = {**current_app, **app_state_delta}
                     await cursor.execute(
-                        _mysql_upsert_user_state_sql(self._user_state_table),
-                        (app_name, user_id, self._json_serializer(user_state)),
+                        _mysql_update_app_state_sql(self._app_state_table),
+                        (self._json_serializer(merged_app_state), app_name),
+                    )
+                if user_state_delta:
+                    await cursor.execute(
+                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                        (app_name, user_id, empty_state_json),
+                    )
+                    await cursor.execute(
+                        _mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id)
+                    )
+                    user_row = await cursor.fetchone()
+                    current_user = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer) or {}
+                        if user_row is not None
+                        else {}
+                    )
+                    merged_user_state = {**current_user, **user_state_delta}
+                    await cursor.execute(
+                        _mysql_update_user_state_sql(self._user_state_table),
+                        (self._json_serializer(merged_user_state), app_name, user_id),
                     )
                 await conn.commit()
             except Exception:
@@ -442,7 +579,10 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 raise
             finally:
                 await cursor.close()
-        return _session_record_from_row(row, deserializer=self._json_deserializer)
+        session = _session_record_from_row(row, deserializer=self._json_deserializer)
+        if merged_app_state is not None or merged_user_state is not None:
+            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     async def get_events(
         self,
@@ -461,6 +601,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         if after_timestamp is not None:
             where_clauses.append("e.timestamp > %s")
             params.append(after_timestamp)
+        order_direction = "DESC" if limit is not None else "ASC"
         limit_clause = ""
         if limit is not None:
             limit_clause = " LIMIT %s"
@@ -472,7 +613,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         JOIN {_mysql_table_ref(self._session_table)} s
             ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {" AND ".join(where_clauses)}
-        ORDER BY e.timestamp ASC{limit_clause}
+        ORDER BY e.timestamp {order_direction}{limit_clause}
         """
 
         try:
@@ -483,6 +624,8 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     rows = await cursor.fetchall()
                 finally:
                     await cursor.close()
+            if limit is not None:
+                rows = list(reversed(rows))
             return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
@@ -613,8 +756,35 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         self.reconcile_schema(assume_existing=True)
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing session and event secondary indexes on the active migration driver."""
+        """Reconcile legacy column collations and missing session/event secondary indexes."""
         adk_config = _adk_config(self._config)
+        fk_targets = (
+            (self._session_table, _MYSQL_SESSION_IDENTITY_COLUMNS),
+            (self._events_table, _MYSQL_EVENT_IDENTITY_COLUMNS),
+        )
+        fk_alter_statements: list[str] = []
+        for table_name, columns in fk_targets:
+            sql, params = _mysql_columns_query(table_name)
+            column_rows = driver.select(sql, *params)
+            fk_alter_statements.extend(_mysql_column_alter_statements(table_name, columns, list(column_rows)))
+        if fk_alter_statements:
+            driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+            try:
+                for statement in fk_alter_statements:
+                    driver.execute(statement)
+            finally:
+                driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+
+        other_targets: tuple[tuple[str, tuple[str, ...]], ...] = (
+            (self._app_state_table, _MYSQL_APP_STATE_IDENTITY_COLUMNS),
+            (self._user_state_table, _MYSQL_USER_STATE_IDENTITY_COLUMNS),
+        )
+        for state_table_name, state_columns in other_targets:
+            sql, params = _mysql_columns_query(state_table_name)
+            column_rows = driver.select(sql, *params)
+            for statement in _mysql_column_alter_statements(state_table_name, state_columns, list(column_rows)):
+                driver.execute(statement)
+
         session_db, session_bare = _mysql_split_table(self._session_table)
         session_rows = driver.data_dictionary.get_indexes(driver, table=session_bare, schema=session_db)
         for statement in _mysql_missing_index_statements(
@@ -630,11 +800,20 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             driver.execute(statement)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session."""
+        """Create a new session and atomically apply/read scoped state."""
         params: tuple[Any, ...]
         state_json = self._json_serializer(state)
+        empty_state_json = self._json_serializer({})
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {_mysql_table_ref(self._session_table)} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
@@ -648,20 +827,84 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             """
             params = (session_id, app_name, user_id, state_json)
 
+        select_sql = f"""
+        SELECT id, app_name, user_id, state, create_time, update_time
+        FROM {_mysql_table_ref(self._session_table)}
+        WHERE app_name = %s AND user_id = %s AND id = %s
+        """
+
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
+                cursor.execute("BEGIN")
                 cursor.execute(sql, params)
+                cursor.execute(select_sql, (app_name, user_id, session_id))
+                row = cursor.fetchone()
+                row = _require_created_session_row(row)
+
+                if app_state_delta:
+                    cursor.execute(
+                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
+                    )
+                    cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
+                    app_row = cursor.fetchone()
+                    current_app = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer) or {}
+                        if app_row is not None
+                        else {}
+                    )
+                    merged_app_state = {**current_app, **app_state_delta}
+                    cursor.execute(
+                        _mysql_update_app_state_sql(self._app_state_table),
+                        (self._json_serializer(merged_app_state), app_name),
+                    )
+                else:
+                    cursor.execute(_mysql_select_app_state_sql(self._app_state_table), (app_name,))
+                    app_row = cursor.fetchone()
+                    merged_app_state = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer)
+                        if app_row is not None
+                        else None
+                    )
+
+                if user_state_delta:
+                    cursor.execute(
+                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                        (app_name, user_id, empty_state_json),
+                    )
+                    cursor.execute(_mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id))
+                    user_row = cursor.fetchone()
+                    current_user = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer) or {}
+                        if user_row is not None
+                        else {}
+                    )
+                    merged_user_state = {**current_user, **user_state_delta}
+                    cursor.execute(
+                        _mysql_update_user_state_sql(self._user_state_table),
+                        (self._json_serializer(merged_user_state), app_name, user_id),
+                    )
+                else:
+                    cursor.execute(_mysql_select_user_state_sql(self._user_state_table), (app_name, user_id))
+                    user_row = cursor.fetchone()
+                    merged_user_state = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer)
+                        if user_row is not None
+                        else None
+                    )
+
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 cursor.close()
-            conn.commit()
 
-        with adk_primary_read_scope():
-            result = self.get_session(app_name, user_id, session_id)
-        if result is None:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
-        return result
+        session = _session_record_from_row(row, deserializer=self._json_deserializer)
+        session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -807,10 +1050,10 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically append an event and update the session's durable state."""
+        """Atomically append an event and merge scoped state deltas."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
             user_id,
@@ -823,6 +1066,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             )
             raise ValueError(msg)
 
+        empty_state_json = self._json_serializer({})
         insert_sql = f"""
         INSERT INTO {_mysql_table_ref(self._events_table)} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -839,9 +1083,12 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
+        merged_app_state: dict[str, Any] | None = None
+        merged_user_state: dict[str, Any] | None = None
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
+                cursor.execute("BEGIN")
                 cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
                 cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
@@ -859,14 +1106,38 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                         _json_for_storage(event_record["event_data"], serializer=self._json_serializer),
                     ),
                 )
-                if app_state is not None:
+                if app_state_delta:
                     cursor.execute(
-                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(app_state))
+                        _mysql_insert_ignore_app_state_sql(self._app_state_table), (app_name, empty_state_json)
                     )
-                if user_state is not None:
+                    cursor.execute(_mysql_select_app_state_for_update_sql(self._app_state_table), (app_name,))
+                    app_row = cursor.fetchone()
+                    current_app = (
+                        _json_dict(_row_first_value(app_row, "state"), deserializer=self._json_deserializer) or {}
+                        if app_row is not None
+                        else {}
+                    )
+                    merged_app_state = {**current_app, **app_state_delta}
                     cursor.execute(
-                        _mysql_upsert_user_state_sql(self._user_state_table),
-                        (app_name, user_id, self._json_serializer(user_state)),
+                        _mysql_update_app_state_sql(self._app_state_table),
+                        (self._json_serializer(merged_app_state), app_name),
+                    )
+                if user_state_delta:
+                    cursor.execute(
+                        _mysql_insert_ignore_user_state_sql(self._user_state_table),
+                        (app_name, user_id, empty_state_json),
+                    )
+                    cursor.execute(_mysql_select_user_state_for_update_sql(self._user_state_table), (app_name, user_id))
+                    user_row = cursor.fetchone()
+                    current_user = (
+                        _json_dict(_row_first_value(user_row, "state"), deserializer=self._json_deserializer) or {}
+                        if user_row is not None
+                        else {}
+                    )
+                    merged_user_state = {**current_user, **user_state_delta}
+                    cursor.execute(
+                        _mysql_update_user_state_sql(self._user_state_table),
+                        (self._json_serializer(merged_user_state), app_name, user_id),
                     )
                 conn.commit()
             except Exception:
@@ -875,7 +1146,10 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             finally:
                 cursor.close()
 
-        return _session_record_from_row(row, deserializer=self._json_deserializer)
+        session = _session_record_from_row(row, deserializer=self._json_deserializer)
+        if merged_app_state is not None or merged_user_state is not None:
+            session["state"] = merge_scoped_state(session["state"], merged_app_state, merged_user_state)
+        return session
 
     def get_events(
         self,
@@ -895,6 +1169,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         if after_timestamp is not None:
             where_clauses.append("e.timestamp > %s")
             params.append(after_timestamp)
+        order_direction = "DESC" if limit is not None else "ASC"
         limit_clause = ""
         if limit is not None:
             limit_clause = " LIMIT %s"
@@ -906,7 +1181,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         JOIN {_mysql_table_ref(self._session_table)} s
             ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {" AND ".join(where_clauses)}
-        ORDER BY e.timestamp ASC{limit_clause}
+        ORDER BY e.timestamp {order_direction}{limit_clause}
         """
 
         try:
@@ -917,6 +1192,8 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
+            if limit is not None:
+                rows = list(reversed(rows))
             return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
@@ -1054,9 +1331,16 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         await self.reconcile_schema(assume_existing=True)
 
     async def reconcile_companion_objects_async(self, driver: Any) -> None:
-        """Create missing memory ordinary and FULLTEXT indexes on the active migration driver."""
+        """Reconcile legacy memory identity collations and missing ordinary/FULLTEXT indexes."""
         if not self._enabled:
             return
+        sql, params = _mysql_columns_query(self._memory_table)
+        column_rows = await driver.select(sql, *params)
+        for statement in _mysql_column_alter_statements(
+            self._memory_table, _MYSQL_MEMORY_IDENTITY_COLUMNS, list(column_rows)
+        ):
+            await driver.execute(statement)
+
         memory_db, memory_bare = _mysql_split_table(self._memory_table)
         memory_rows = await driver.data_dictionary.get_indexes(driver, table=memory_bare, schema=memory_db)
         for statement in _mysql_missing_index_statements(
@@ -1312,9 +1596,16 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         self.reconcile_schema(assume_existing=True)
 
     def reconcile_companion_objects_sync(self, driver: Any) -> None:
-        """Create missing memory ordinary and FULLTEXT indexes on the active migration driver."""
+        """Reconcile legacy memory identity collations and missing ordinary/FULLTEXT indexes."""
         if not self._enabled:
             return
+        sql, params = _mysql_columns_query(self._memory_table)
+        column_rows = driver.select(sql, *params)
+        for statement in _mysql_column_alter_statements(
+            self._memory_table, _MYSQL_MEMORY_IDENTITY_COLUMNS, list(column_rows)
+        ):
+            driver.execute(statement)
+
         memory_db, memory_bare = _mysql_split_table(self._memory_table)
         memory_rows = driver.data_dictionary.get_indexes(driver, table=memory_bare, schema=memory_db)
         for statement in _mysql_missing_index_statements(
@@ -1649,6 +1940,13 @@ def _raise_session_not_found(session_id: str) -> None:
     raise ValueError(msg)
 
 
+def _require_created_session_row(row: Any) -> Any:
+    if row is None:
+        msg = "Failed to fetch created session"
+        raise RuntimeError(msg)
+    return row
+
+
 async def _async_delete_before(
     store: MysqlConnectorAsyncADKStore,
     table_name: str,
@@ -1959,6 +2257,118 @@ def _mysql_upsert_metadata_sql(metadata_table: str) -> str:
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE value = VALUES(value)
         """
+
+
+def _row_first_value(row: Any, key: str) -> Any:
+    if isinstance(row, Mapping):
+        return row[key]
+    return row[0]
+
+
+def _mysql_insert_ignore_app_state_sql(app_state_table: str) -> str:
+    return f"""
+        INSERT IGNORE INTO {_mysql_table_ref(app_state_table)} (app_name, state, update_time)
+        VALUES (%s, %s, UTC_TIMESTAMP(6))
+        """
+
+
+def _mysql_select_app_state_sql(app_state_table: str) -> str:
+    return f"SELECT state FROM {_mysql_table_ref(app_state_table)} WHERE app_name = %s"
+
+
+def _mysql_select_app_state_for_update_sql(app_state_table: str) -> str:
+    return f"SELECT state FROM {_mysql_table_ref(app_state_table)} WHERE app_name = %s FOR UPDATE"
+
+
+def _mysql_update_app_state_sql(app_state_table: str) -> str:
+    return f"""
+        UPDATE {_mysql_table_ref(app_state_table)}
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s
+        """
+
+
+def _mysql_insert_ignore_user_state_sql(user_state_table: str) -> str:
+    return f"""
+        INSERT IGNORE INTO {_mysql_table_ref(user_state_table)} (app_name, user_id, state, update_time)
+        VALUES (%s, %s, %s, UTC_TIMESTAMP(6))
+        """
+
+
+def _mysql_select_user_state_sql(user_state_table: str) -> str:
+    return f"SELECT state FROM {_mysql_table_ref(user_state_table)} WHERE app_name = %s AND user_id = %s"
+
+
+def _mysql_select_user_state_for_update_sql(user_state_table: str) -> str:
+    return f"SELECT state FROM {_mysql_table_ref(user_state_table)} WHERE app_name = %s AND user_id = %s FOR UPDATE"
+
+
+def _mysql_update_user_state_sql(user_state_table: str) -> str:
+    return f"""
+        UPDATE {_mysql_table_ref(user_state_table)}
+        SET state = %s, update_time = UTC_TIMESTAMP(6)
+        WHERE app_name = %s AND user_id = %s
+        """
+
+
+def _mysql_columns_query(table: str) -> "tuple[str, tuple[Any, ...]]":
+    database_name, bare_table = _mysql_split_table(table)
+    if database_name is None:
+        return (
+            """
+            SELECT COLUMN_NAME AS column_name, COLUMN_TYPE AS column_type, COLLATION_NAME AS collation_name
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+            """,
+            (bare_table,),
+        )
+    return (
+        """
+        SELECT COLUMN_NAME AS column_name, COLUMN_TYPE AS column_type, COLLATION_NAME AS collation_name
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        """,
+        (database_name, bare_table),
+    )
+
+
+def _mysql_row_field(row: Mapping[str, Any], name: str) -> Any:
+    if name in row:
+        return row[name]
+    upper_name = name.upper()
+    if upper_name in row:
+        return row[upper_name]
+    lower_name = name.lower()
+    for key, value in row.items():
+        if str(key).lower() == lower_name:
+            return value
+    return None
+
+
+def _mysql_column_alter_statements(table: str, target_columns: "tuple[str, ...]", rows: "list[Any]") -> "list[str]":
+    by_name: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        raw_name = _mysql_row_field(row, "column_name")
+        if isinstance(raw_name, str):
+            by_name[raw_name.lower()] = row
+
+    table_ref = _mysql_table_ref(table)
+    statements: list[str] = []
+    for col_name in target_columns:
+        row = by_name.get(col_name.lower())
+        if row is None:
+            continue
+        collation = _mysql_row_field(row, "collation_name")
+        if isinstance(collation, str) and collation.lower() == "utf8mb4_bin":
+            continue
+        col_type = _mysql_row_field(row, "column_type")
+        resolved_type = str(col_type).strip() if isinstance(col_type, str) and col_type.strip() else "VARCHAR(128)"
+        statements.append(
+            f"ALTER TABLE {table_ref} MODIFY COLUMN {col_name} {resolved_type} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL"
+        )
+    return statements
 
 
 def _build_mysql_scope_where(

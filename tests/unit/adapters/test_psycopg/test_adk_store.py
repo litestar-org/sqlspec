@@ -357,20 +357,35 @@ def test_sync_get_events_limit_zero_returns_empty_without_query() -> None:
     assert cursor.execute_calls == []
 
 
+class _QueuedSyncCursor(_DummyCursor):
+    def __init__(self, fetchone_queue: "list[dict[str, Any] | None]") -> None:
+        super().__init__()
+        self._queue = list(fetchone_queue)
+
+    def fetchone(self) -> "dict[str, Any] | None":
+        return self._queue.pop(0) if self._queue else None
+
+
 def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() -> None:
-    """append_event_and_update_state must use event_data and optional scoped state."""
+    """append_event_and_update_state atomically locks, merges deltas, and preserves untouched keys."""
     base_time = datetime(2026, 1, 1, tzinfo=UTC)
-    rows = [
-        {
-            "id": "session-1",
-            "app_name": "app",
-            "user_id": "user",
-            "state": {"session": True},
-            "create_time": base_time,
-            "update_time": base_time,
-        }
-    ]
-    store, cursor, connection = _build_store(rows)
+    session_row = {
+        "id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "state": {"session": True},
+        "create_time": base_time,
+        "update_time": base_time,
+    }
+    cursor = _QueuedSyncCursor([
+        session_row,
+        {"state": {"app:keep": "ok", "app:clear": "old"}},
+        {"state": {"user:lang": "en"}},
+    ])
+    connection = _DummyConnection(cursor)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: connection
+    store = PsycopgSyncADKStore(config)
     event_record = {
         "id": "event-1",
         "app_name": "app",
@@ -387,25 +402,37 @@ def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() ->
         "user",
         "session-1",
         {"session": True},
-        app_state={},
-        user_state={"user:theme": "dark"},
+        app_state_delta={"app:mode": "prod", "app:clear": None},
+        user_state_delta={"user:theme": "dark"},
     )
 
     assert result["id"] == "session-1"
-    assert len(cursor.execute_calls) == 4
-    _, update_params = cursor.execute_calls[0]
-    _, insert_params = cursor.execute_calls[1]
-    _, app_state_params = cursor.execute_calls[2]
-    _, user_state_params = cursor.execute_calls[3]
-    assert insert_params[0] == "event-1"
-    assert insert_params[1:3] == ("app", "user")
-    assert isinstance(insert_params[6], Jsonb)
-    assert getattr(update_params[0], "obj", None) == {"session": True}
-    assert update_params[1:4] == ("app", "user", "session-1")
-    assert app_state_params[0] == "app"
-    assert getattr(app_state_params[1], "obj", None) == {}
-    assert user_state_params[:2] == ("app", "user")
-    assert getattr(user_state_params[2], "obj", None) == {"user:theme": "dark"}
+    assert result["state"] == {
+        "session": True,
+        "app:keep": "ok",
+        "app:mode": "prod",
+        "app:clear": None,
+        "user:lang": "en",
+        "user:theme": "dark",
+    }
+    assert len(cursor.execute_calls) == 8
+    assert _rendered(cursor.execute_calls[0][0]).startswith('UPDATE "adk_session"')
+    assert _rendered(cursor.execute_calls[1][0]).startswith('INSERT INTO "adk_event"')
+    assert 'INSERT INTO "adk_app_state"' in _rendered(cursor.execute_calls[2][0])
+    assert "ON CONFLICT" in _rendered(cursor.execute_calls[2][0])
+    assert 'SELECT state FROM "adk_app_state"' in _rendered(cursor.execute_calls[3][0])
+    assert "FOR UPDATE" in _rendered(cursor.execute_calls[3][0])
+    assert 'UPDATE "adk_app_state" SET state = %s' in _rendered(cursor.execute_calls[4][0])
+    assert getattr(cursor.execute_calls[4][1][0], "obj", None) == {
+        "app:keep": "ok",
+        "app:clear": None,
+        "app:mode": "prod",
+    }
+    assert 'INSERT INTO "adk_user_state"' in _rendered(cursor.execute_calls[5][0])
+    assert 'SELECT state FROM "adk_user_state"' in _rendered(cursor.execute_calls[6][0])
+    assert "FOR UPDATE" in _rendered(cursor.execute_calls[6][0])
+    assert 'UPDATE "adk_user_state" SET state = %s' in _rendered(cursor.execute_calls[7][0])
+    assert getattr(cursor.execute_calls[7][1][0], "obj", None) == {"user:lang": "en", "user:theme": "dark"}
     assert connection.commit_called
 
 
@@ -1326,3 +1353,149 @@ async def test_psycopg_memory_ddl_and_dml_quote_identifiers_consistently(
     await _await_if_needed(store.search_entries("hello", "app", "u1"))
     search_sql = _rendered(cursor.execute_calls[0][0])
     assert f"FROM {expected_dml}" in search_sql
+
+
+class _QueuedAsyncCursor(_AsyncDummyCursor):
+    def __init__(self, fetchone_queue: "list[dict[str, Any] | None]") -> None:
+        super().__init__()
+        self._queue = list(fetchone_queue)
+
+    async def fetchone(self) -> "dict[str, Any] | None":
+        return self._queue.pop(0) if self._queue else None
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "queue_rows", "expected_state", "expect_for_update"),
+    [
+        pytest.param(
+            None,
+            None,
+            [{"state": {"app:kept": "yes"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "user:kept": 1},
+            False,
+            id="untouched-reads",
+        ),
+        pytest.param(
+            {"app:added": 2, "app:null": None},
+            {"user:flag": False},
+            [{"state": {"app:kept": "yes", "app:null": "old"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "app:added": 2, "app:null": None, "user:kept": 1, "user:flag": False},
+            True,
+            id="delta-merges",
+        ),
+    ],
+)
+async def test_psycopg_create_session_scoped_state_contract(
+    store_cls: Any,
+    is_async: bool,
+    _companion: str,
+    app_delta: "dict[str, Any] | None",
+    user_delta: "dict[str, Any] | None",
+    queue_rows: "list[dict[str, Any]]",
+    expected_state: "dict[str, Any]",
+    expect_for_update: bool,
+) -> None:
+    """create_session reads untouched scope rows or locks and merges deltas atomically."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 1},
+        "create_time": now,
+        "update_time": now,
+    }
+    cursor: Any = (
+        _QueuedAsyncCursor([session_row, *queue_rows]) if is_async else _QueuedSyncCursor([session_row, *queue_rows])
+    )
+    connection: Any = _AsyncDummyConnection(cursor) if is_async else _DummyConnection(cursor)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: connection
+    store = store_cls(config)
+
+    created = await _await_if_needed(
+        store.create_session("s1", "app", "u1", {"s": 1}, app_state_delta=app_delta, user_state_delta=user_delta)
+    )
+
+    assert created["state"] == expected_state
+    joined_sql = " | ".join(_rendered(query) for query, _ in cursor.execute_calls)
+    assert ("FOR UPDATE" in joined_sql) is expect_for_update
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+async def test_psycopg_append_skips_untouched_and_empty_deltas(store_cls: Any, is_async: bool, _companion: str) -> None:
+    """append_event_and_update_state skips scope tables for None or empty deltas."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 2},
+        "create_time": now,
+        "update_time": now,
+    }
+    cursor: Any = _QueuedAsyncCursor([session_row]) if is_async else _QueuedSyncCursor([session_row])
+    connection: Any = _AsyncDummyConnection(cursor) if is_async else _DummyConnection(cursor)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: connection
+    store = store_cls(config)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {},
+    }
+
+    updated = await _await_if_needed(
+        store.append_event_and_update_state(
+            cast("Any", event_record), "app", "u1", "s1", {"s": 2}, app_state_delta={}, user_state_delta=None
+        )
+    )
+
+    assert updated["state"] == {"s": 2}
+    assert len(cursor.execute_calls) == 2
+
+
+@pytest.mark.parametrize(("store_cls", "is_async", "_companion"), _SESSION_STORE_MODES)
+async def test_psycopg_get_events_limit_queries_desc_and_reverses_to_asc(
+    store_cls: Any, is_async: bool, _companion: str
+) -> None:
+    """get_events(limit=N) queries newest N descending and reverses to ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    rows = [
+        {
+            "id": "evt-3",
+            "session_id": "s1",
+            "invocation_id": "i3",
+            "timestamp": t3,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+        {
+            "id": "evt-2",
+            "session_id": "s1",
+            "invocation_id": "i2",
+            "timestamp": t2,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+    ]
+    store, cursor, _ = _build_psycopg_session_store(store_cls, is_async=is_async, rows=rows)
+
+    events = await _await_if_needed(
+        store.get_events("app", "u1", "s1", after_timestamp=datetime(2026, 1, 1, tzinfo=UTC), limit=2)
+    )
+
+    query, params = cursor.execute_calls[0]
+    rendered = _rendered(query)
+    assert 'JOIN "adk_session" s' in rendered
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT %s" in rendered
+    assert params == ("app", "u1", "s1", datetime(2026, 1, 1, tzinfo=UTC), 2)
+    assert [e["id"] for e in events] == ["evt-2", "evt-3"]

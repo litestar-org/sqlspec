@@ -676,3 +676,82 @@ def test_mssql_python_memory_dedup_and_scoped_delete_entries_by_session(
     )
     assert deleted == 2
     assert delete_calls == [(expected_sql, expected_params)]
+
+
+def test_mssql_python_create_session_merges_and_reads_scoped_state() -> None:
+    """create_session locks app_state then user_state with UPDLOCK HOLDLOCK, reads untouched scopes, and merges."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit = True
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"app:existing": 1}',),
+        ('{"user:lang": "en"}',),
+    ]
+    store = MssqlPythonADKStore(config)
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert executed[0].startswith("INSERT INTO [dbo].[adk_session]")
+    assert executed[1] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+    assert (
+        executed[2] == "UPDATE [dbo].[adk_app_state] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ?"
+    )
+    assert executed[3] == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = ? AND user_id = ?"
+    assert conn.autocommit is True
+    conn.commit.assert_called_once()
+
+
+def test_mssql_python_append_event_and_update_state_atomic_merge_and_rejects_old_kwargs() -> None:
+    """append_event_and_update_state uses WITH (UPDLOCK, HOLDLOCK) in app->user order and drops legacy kwargs."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit = False
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [("s1", "app", "u1", '{"turn": 2}', now, now), ('{"app:a": 1}',), None]
+    store = MssqlPythonADKStore(config)
+    event = _event_fixture()
+
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:a2": 2}, user_state_delta={"user:u2": 3}
+    )
+
+    assert updated["state"] == {"turn": 2, "app:a": 1, "app:a2": 2, "user:u2": 3}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ?"
+    assert executed[3].startswith("UPDATE [dbo].[adk_app_state]")
+    assert executed[4] == (
+        "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = ? AND user_id = ?"
+    )
+    assert executed[5].startswith("INSERT INTO [dbo].[adk_user_state]")
+    conn.commit.assert_called_once()
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+
+def test_mssql_python_get_events_bounded_reverses_desc_rows(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """get_events(limit=N) orders TOP DESC in T-SQL and reverses rows to chronological ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    store, calls = _session_store_with_capture(monkeypatch)
+
+    def _fake_fetchall(
+        _store: MssqlPythonADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        calls.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", _fake_fetchall)
+
+    events = store.get_events("app", "u1", "s1", limit=2)
+
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC" in _normalized(calls[0][0])

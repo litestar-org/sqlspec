@@ -1406,6 +1406,14 @@ def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: 
         if normalized.startswith("SELECT id, app_name, user_id, state"):
             cursor.fetchone.return_value = ("s1", "app", "u1", MappingProxyType({"count": 1}), now, now)
             cursor.fetchall.return_value = [cursor.fetchone.return_value]
+        elif normalized.startswith((
+            "SELECT state FROM adk_app_state",
+            "SELECT state FROM adk_user_state",
+            "SELECT state, update_time FROM",
+        )):
+            cursor.fetchone.return_value = None
+        elif normalized.startswith(("INSERT INTO adk_app_state", "INSERT INTO adk_user_state")):
+            cursor.rowcount = 1
         elif normalized.startswith("SELECT e.id, e.session_id"):
             cursor.fetchall.return_value = [("e1", "s1", "inv1", now, bytearray(b'{"text":"hello"}'), "app", "u1")]
         elif normalized.startswith("SELECT app_name, user_id, event_id FROM adk_memory"):
@@ -1468,15 +1476,19 @@ def test_snowflake_adbc_adk_and_memory_variant_dml_merge_and_ilike(monkeypatch: 
 
     executed.clear()
     updated = store.append_event_and_update_state(
-        cast("Any", event), "app", "u1", "s1", {"count": 3}, app_state={"a": 1}, user_state={"u": 2}
+        cast("Any", event), "app", "u1", "s1", {"count": 3}, app_state_delta={"a": 1}, user_state_delta={"u": 2}
     )
-    assert updated["state"] == {"count": 1}
+    assert updated["state"] == {"count": 1, "a": 1, "u": 2}
     sql_batch = [stmt for stmt, _ in executed]
     assert "UPDATE adk_session SET state = PARSE_JSON(?), update_time = ?" in sql_batch[0]
     assert "INSERT INTO adk_event" in sql_batch[2] and "SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)" in sql_batch[2]
-    assert sql_batch[3].startswith("MERGE INTO adk_app_state t USING (SELECT ? AS app_name, PARSE_JSON(?) AS state")
     assert sql_batch[4].startswith(
-        "MERGE INTO adk_user_state t USING (SELECT ? AS app_name, ? AS user_id, PARSE_JSON(?) AS state"
+        "INSERT INTO adk_app_state (app_name, state, update_time) SELECT ?, PARSE_JSON(?), ? "
+        "WHERE NOT EXISTS (SELECT 1 FROM adk_app_state WHERE app_name = ?)"
+    )
+    assert sql_batch[6].startswith(
+        "INSERT INTO adk_user_state (app_name, user_id, state, update_time) SELECT ?, ?, PARSE_JSON(?), ? "
+        "WHERE NOT EXISTS (SELECT 1 FROM adk_user_state WHERE app_name = ? AND user_id = ?)"
     )
 
     executed.clear()

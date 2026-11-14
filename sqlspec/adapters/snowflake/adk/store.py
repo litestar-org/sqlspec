@@ -2,11 +2,12 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Final, Literal
 
 from sqlspec.adapters.snowflake.config import SnowflakeConfig
-from sqlspec.exceptions import NotFoundError, SQLSpecError
+from sqlspec.exceptions import NotFoundError, SerializationConflictError, SQLSpecError
 from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory._types import StoredMemory
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import BaseSyncADKStore, normalize_session_list_options
@@ -16,6 +17,7 @@ from sqlspec.utils.serializers import from_json, to_json
 __all__ = ("SnowflakeADKMemoryStore", "SnowflakeADKStore")
 
 logger = get_logger("sqlspec.adapters.snowflake.adk")
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
 
 
 class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
@@ -42,10 +44,19 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         self.reconcile_schema(assume_existing=True)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        """Insert and return a session with its initial durable state."""
+        """Insert and return a session with its merged durable state."""
         now = datetime.now(UTC)
+        session_state = dict(state)
         columns = ["id", "app_name", "user_id"]
         values = ["?", "?", "?"]
         parameters: list[Any] = [session_id, app_name, user_id]
@@ -55,14 +66,28 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             parameters.append(owner_id)
         columns.extend(("state", "create_time", "update_time"))
         values.extend(("PARSE_JSON(?)", "?", "?"))
-        parameters.extend((to_json(state), now, now))
-        with self._config.provide_session() as driver:
+        parameters.extend((to_json(session_state), now, now))
+        with self._config.provide_session() as driver, driver.transaction():
             driver.execute(
                 f"INSERT INTO {self._session_table} ({', '.join(columns)}) SELECT {', '.join(values)}", parameters
             )
-            driver.commit()
+            current_app_state = (
+                self._merge_state_delta(driver, self._app_state_table, app_name, app_state_delta)
+                if app_state_delta
+                else self._read_state(self._app_state_table, app_name, driver=driver)
+            )
+            current_user_state = (
+                self._merge_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
+                if user_state_delta
+                else self._read_state(self._user_state_table, app_name, user_id, driver=driver)
+            )
         return StoredSession(
-            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
+            id=session_id,
+            app_name=app_name,
+            user_id=user_id,
+            state=merge_scoped_state(session_state, current_app_state, current_user_state),
+            create_time=now,
+            update_time=now,
         )
 
     def get_session(
@@ -178,12 +203,13 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update session, app, and user state."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
         now = datetime.now(UTC)
+        session_state = dict(state)
         with self._config.provide_session() as driver, driver.transaction():
             row = driver.select_one_or_none(
                 f"SELECT create_time FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -195,18 +221,24 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             driver.execute(
                 f"UPDATE {self._session_table} SET state = PARSE_JSON(?), update_time = ? "
                 "WHERE app_name = ? AND user_id = ? AND id = ?",
-                (to_json(state), now, app_name, user_id, session_id),
+                (to_json(session_state), now, app_name, user_id, session_id),
             )
             self._insert_event(driver, event_record)
-            if app_state is not None:
-                self._merge_state(driver, self._app_state_table, app_name, app_state, now)
-            if user_state is not None:
-                self._merge_state(driver, self._user_state_table, app_name, user_state, now, user_id=user_id)
+            merged_app_state = (
+                self._merge_state_delta(driver, self._app_state_table, app_name, app_state_delta)
+                if app_state_delta
+                else None
+            )
+            merged_user_state = (
+                self._merge_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
+                if user_state_delta
+                else None
+            )
             return StoredSession(
                 id=session_id,
                 app_name=app_name,
                 user_id=user_id,
-                state=state,
+                state=merge_scoped_state(session_state, merged_app_state, merged_user_state),
                 create_time=_normalize_utc(_lower_row(row)["create_time"]),
                 update_time=now,
             )
@@ -220,7 +252,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         limit: int | None = None,
     ) -> list[StoredEvent]:
         """Read session events in ascending timestamp order."""
-        if limit is not None and limit < 0:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
             msg = "limit must be non-negative"
             raise ValueError(msg)
         if limit == 0:
@@ -235,13 +267,16 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         if after_timestamp is not None:
             sql += " AND e.timestamp > ?"
             parameters.append(after_timestamp)
-        sql += " ORDER BY e.timestamp ASC, e.id ASC"
         if limit is not None:
-            sql += " LIMIT ?"
+            sql += " ORDER BY e.timestamp DESC, e.id DESC LIMIT ?"
             parameters.append(limit)
+        else:
+            sql += " ORDER BY e.timestamp ASC, e.id ASC"
         try:
             with self._provide_read_session(primary=False) as driver:
                 rows = driver.select(sql, parameters)
+            if limit is not None:
+                rows = list(reversed(rows))
             events: list[StoredEvent] = []
             for raw in rows:
                 row = _lower_row(raw)
@@ -365,20 +400,72 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 return 0
             raise
 
-    def _read_state(self, table: str, app_name: str, user_id: str | None = None) -> dict[str, Any] | None:
+    def _read_state(
+        self, table: str, app_name: str, user_id: str | None = None, *, driver: Any | None = None
+    ) -> dict[str, Any] | None:
         sql = f"SELECT state FROM {table} WHERE app_name = ?"
         parameters: list[Any] = [app_name]
         if user_id is not None:
             sql += " AND user_id = ?"
             parameters.append(user_id)
         try:
-            with self._config.provide_session() as driver:
+            if driver is not None:
                 row = driver.select_one_or_none(sql, parameters)
+                return None if row is None else _decode_variant(_lower_row(row)["state"])
+            with self._config.provide_session() as session_driver:
+                row = session_driver.select_one_or_none(sql, parameters)
                 return None if row is None else _decode_variant(_lower_row(row)["state"])
         except SQLSpecError as exc:
             if _missing_table(exc):
                 return None
             raise
+
+    def _merge_state_delta(
+        self, driver: Any, table: str, app_name: str, delta: dict[str, Any], *, user_id: str | None = None
+    ) -> dict[str, Any]:
+        predicate = "app_name = ?"
+        columns = "app_name"
+        values = "?"
+        key_parameters: list[Any] = [app_name]
+        if user_id is not None:
+            predicate += " AND user_id = ?"
+            columns += ", user_id"
+            values += ", ?"
+            key_parameters.append(user_id)
+        for _ in range(_MAX_STATE_MERGE_ATTEMPTS):
+            row = driver.select_one_or_none(f"SELECT state, update_time FROM {table} WHERE {predicate}", key_parameters)
+            if row is None:
+                merged = dict(delta)
+                now = datetime.now(UTC)
+                result = driver.execute(
+                    f"INSERT INTO {table} ({columns}, state, update_time) "
+                    f"SELECT {values}, PARSE_JSON(?), ? WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {predicate})",
+                    (*key_parameters, to_json(merged), now, *key_parameters),
+                )
+                if max(result.get_affected_count(), 0) > 0:
+                    return merged
+                continue
+            lower = _lower_row(row)
+            existing = _decode_variant(lower.get("state"))
+            expected_update_time = lower.get("update_time")
+            merged = {**existing, **delta}
+            comparable_prev = _normalize_utc(expected_update_time) if expected_update_time is not None else None
+            new_update_time = _next_monotonic_timestamp(comparable_prev)
+            if expected_update_time is None:
+                result = driver.execute(
+                    f"UPDATE {table} SET state = PARSE_JSON(?), update_time = ? "
+                    f"WHERE {predicate} AND update_time IS NULL",
+                    (to_json(merged), new_update_time, *key_parameters),
+                )
+            else:
+                result = driver.execute(
+                    f"UPDATE {table} SET state = PARSE_JSON(?), update_time = ? WHERE {predicate} AND update_time = ?",
+                    (to_json(merged), new_update_time, *key_parameters, expected_update_time),
+                )
+            if max(result.get_affected_count(), 0) > 0:
+                return merged
+        msg = f"Failed to merge state into {table} after {_MAX_STATE_MERGE_ATTEMPTS} compare-and-swap attempts."
+        raise SerializationConflictError(msg)
 
     def _merge_state(
         self,
@@ -683,3 +770,13 @@ def _validate_event_record_scope(event_record: StoredEvent, app_name: str, user_
     if record_scope != expected_scope:
         msg = f"event_record scope {record_scope!r} does not match {expected_scope!r}"
         raise ValueError(msg)
+
+
+def _next_monotonic_timestamp(previous: datetime | None) -> datetime:
+    now = datetime.now(UTC)
+    if previous is None:
+        return now
+    comparable = previous if previous.tzinfo is not None else previous.replace(tzinfo=UTC)
+    if now <= comparable:
+        return comparable + timedelta(microseconds=1)
+    return now

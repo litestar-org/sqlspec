@@ -32,6 +32,7 @@ from sqlspec.extensions.adk import (
     normalize_session_list_options,
 )
 from sqlspec.extensions.adk._table_utils import ensure_table_name
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.migrations.schema import SchemaTarget, metadata_has_index
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -377,27 +378,6 @@ class _SpannerADKStoreMixin:
         """
         return (insert_sql, event_params, self._event_param_types())
 
-    def _build_append_event_and_update_state_statements(
-        self,
-        event_record: "StoredEvent",
-        app_name: str,
-        user_id: str,
-        session_id: str,
-        state: "dict[str, Any]",
-        *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
-    ) -> "list[tuple[str, dict[str, Any], dict[str, Any]]]":
-        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
-            self._build_update_session_state_statement(app_name, user_id, session_id, state),
-            self._build_insert_event_statement(event_record),
-        ]
-        if app_state is not None:
-            statements.append(self._build_upsert_app_state_statement(app_name, app_state))
-        if user_state is not None:
-            statements.append(self._build_upsert_user_state_statement(app_name, user_id, user_state))
-        return statements
-
     def _build_get_events_query(
         self,
         app_name: str,
@@ -406,6 +386,9 @@ class _SpannerADKStoreMixin:
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "tuple[str, dict[str, Any], dict[str, Any]] | None":
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
         if limit == 0:
             return None
 
@@ -429,11 +412,12 @@ class _SpannerADKStoreMixin:
             sql = f"{sql} AND e.timestamp > @after_timestamp"
             params["after_timestamp"] = after_timestamp
             types["after_timestamp"] = SPANNER_PARAM_TYPES.TIMESTAMP
-        sql = f"{sql} ORDER BY e.timestamp ASC"
         if limit is not None:
-            sql = f"{sql} LIMIT @limit"
+            sql = f"{sql} ORDER BY e.timestamp DESC, e.id DESC LIMIT @limit"
             params["limit"] = limit
             types["limit"] = SPANNER_PARAM_TYPES.INT64
+        else:
+            sql = f"{sql} ORDER BY e.timestamp ASC, e.id ASC"
         return (sql, params, types)
 
     def _decode_event_rows(self, rows: "Iterable[Any]") -> "list[StoredEvent]":
@@ -703,10 +687,26 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         self._create_tables()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Create a new session."""
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        return self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -763,12 +763,18 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     def get_events(
@@ -877,16 +883,40 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             raise create_mapped_exception(exc) from exc
 
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        self._run_write([self._build_create_session_statement(session_id, app_name, user_id, state, owner_id)])
+        session_state = dict(state)
+        job = _SpannerSyncCreateSessionJob(
+            session_stmt=self._build_create_session_statement(session_id, app_name, user_id, session_state, owner_id),
+            session_state=session_state,
+            app_query=self._build_get_app_state_query(app_name),
+            user_query=self._build_get_user_state_query(app_name, user_id),
+            app_state_delta=dict(app_state_delta) if app_state_delta else None,
+            user_state_delta=dict(user_state_delta) if user_state_delta else None,
+            app_upsert=lambda merged: self._build_upsert_app_state_statement(app_name, merged),
+            user_upsert=lambda merged: self._build_upsert_user_state_statement(app_name, user_id, merged),
+            decode_json=self._decode_json,
+        )
+        try:
+            merged_state = cast("dict[str, Any]", cast("Any", self._database()).run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
+        now = datetime.now(UTC)
         return {
             "id": session_id,
             "app_name": app_name,
             "user_id": user_id,
-            "state": state,
-            "create_time": datetime.now(UTC),
-            "update_time": datetime.now(UTC),
+            "state": merged_state,
+            "create_time": now,
+            "update_time": now,
         }
 
     def _get_session(
@@ -941,17 +971,29 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically update session state and insert an event in one transaction."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
-        statements = self._build_append_event_and_update_state_statements(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+        session_state = dict(state)
+        job = _SpannerSyncAppendAndUpdateJob(
+            update_statement=self._build_update_session_state_statement(app_name, user_id, session_id, session_state),
+            insert_event_statement=self._build_insert_event_statement(event_record),
+            session_id=session_id,
+            app_query=self._build_get_app_state_query(app_name),
+            user_query=self._build_get_user_state_query(app_name, user_id),
+            app_state_delta=dict(app_state_delta) if app_state_delta else None,
+            user_state_delta=dict(user_state_delta) if user_state_delta else None,
+            app_upsert=lambda merged: self._build_upsert_app_state_statement(app_name, merged),
+            user_upsert=lambda merged: self._build_upsert_user_state_statement(app_name, user_id, merged),
+            decode_json=self._decode_json,
         )
-        job = _SpannerSyncAppendAndUpdateJob(statements[0], statements[1:], session_id=session_id)
         try:
-            cast("Any", self._database()).run_in_transaction(job)
+            merged_app_state, merged_user_state = cast(
+                "tuple[dict[str, Any] | None, dict[str, Any] | None]",
+                cast("Any", self._database()).run_in_transaction(job),
+            )
         except SpannerGoogleAPICallError as exc:
             raise create_mapped_exception(exc) from exc
 
@@ -959,6 +1001,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
+        record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
         return record
 
     def _insert_event(self, event_record: "StoredEvent") -> None:
@@ -979,6 +1022,8 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             return []
         sql, params, types = query
         rows = self._run_read(sql, params, types, read=read)
+        if limit is not None:
+            rows = list(reversed(rows))
         return self._decode_event_rows(rows)
 
     def _append_event(self, event_record: StoredEvent) -> None:
@@ -1101,10 +1146,26 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         await self._create_tables()
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Create a new session."""
-        return await self._create_session(session_id, app_name, user_id, state, owner_id)
+        return await self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -1161,12 +1222,18 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state."""
         return await self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     async def get_events(
@@ -1277,16 +1344,41 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             raise create_mapped_exception(exc) from exc
 
     async def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        await self._run_write([self._build_create_session_statement(session_id, app_name, user_id, state, owner_id)])
+        session_state = dict(state)
+        database = await self._database()
+        job = _SpannerAsyncCreateSessionJob(
+            session_stmt=self._build_create_session_statement(session_id, app_name, user_id, session_state, owner_id),
+            session_state=session_state,
+            app_query=self._build_get_app_state_query(app_name),
+            user_query=self._build_get_user_state_query(app_name, user_id),
+            app_state_delta=dict(app_state_delta) if app_state_delta else None,
+            user_state_delta=dict(user_state_delta) if user_state_delta else None,
+            app_upsert=lambda merged: self._build_upsert_app_state_statement(app_name, merged),
+            user_upsert=lambda merged: self._build_upsert_user_state_statement(app_name, user_id, merged),
+            decode_json=self._decode_json,
+        )
+        try:
+            merged_state = cast("dict[str, Any]", await database.run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
+        now = datetime.now(UTC)
         return {
             "id": session_id,
             "app_name": app_name,
             "user_id": user_id,
-            "state": state,
-            "create_time": datetime.now(UTC),
-            "update_time": datetime.now(UTC),
+            "state": merged_state,
+            "create_time": now,
+            "update_time": now,
         }
 
     async def _get_session(
@@ -1343,18 +1435,29 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically update session state and insert an event in one transaction."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
-        statements = self._build_append_event_and_update_state_statements(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
-        )
+        session_state = dict(state)
         database = await self._database()
-        job = _SpannerAsyncAppendAndUpdateJob(statements[0], statements[1:], session_id=session_id)
+        job = _SpannerAsyncAppendAndUpdateJob(
+            update_statement=self._build_update_session_state_statement(app_name, user_id, session_id, session_state),
+            insert_event_statement=self._build_insert_event_statement(event_record),
+            session_id=session_id,
+            app_query=self._build_get_app_state_query(app_name),
+            user_query=self._build_get_user_state_query(app_name, user_id),
+            app_state_delta=dict(app_state_delta) if app_state_delta else None,
+            user_state_delta=dict(user_state_delta) if user_state_delta else None,
+            app_upsert=lambda merged: self._build_upsert_app_state_statement(app_name, merged),
+            user_upsert=lambda merged: self._build_upsert_user_state_statement(app_name, user_id, merged),
+            decode_json=self._decode_json,
+        )
         try:
-            await database.run_in_transaction(job)
+            merged_app_state, merged_user_state = cast(
+                "tuple[dict[str, Any] | None, dict[str, Any] | None]", await database.run_in_transaction(job)
+            )
         except SpannerGoogleAPICallError as exc:
             raise create_mapped_exception(exc) from exc
 
@@ -1362,6 +1465,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         if record is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
+        record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
         return record
 
     async def _insert_event(self, event_record: "StoredEvent") -> None:
@@ -1382,6 +1486,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             return []
         sql, params, types = query
         rows = await self._run_read(sql, params, types, read=read)
+        if limit is not None:
+            rows = list(reversed(rows))
         return self._decode_event_rows(rows)
 
     async def _append_event(self, event_record: StoredEvent) -> None:
@@ -2575,57 +2681,267 @@ class _SpannerAsyncAppendEventJob:
         await transaction.execute_update(sql, params=params, param_types=types)
 
 
-class _SpannerSyncAppendAndUpdateJob:
-    """Callable transaction work item updating session state before inserting an ADK event."""
+class _SpannerSyncCreateSessionJob:
+    """Callable transaction work item inserting an ADK session and merging/reading scoped state."""
 
-    __slots__ = ("_remaining_statements", "_session_id", "_update_statement")
+    __slots__ = (
+        "_app_query",
+        "_app_state_delta",
+        "_app_upsert",
+        "_decode_json",
+        "_session_state",
+        "_session_stmt",
+        "_user_query",
+        "_user_state_delta",
+        "_user_upsert",
+    )
 
     def __init__(
         self,
-        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
-        remaining_statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]",
         *,
+        session_stmt: "tuple[str, dict[str, Any], dict[str, Any]]",
+        session_state: "dict[str, Any]",
+        app_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        user_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+        app_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        user_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        decode_json: "Callable[[Any], Any]",
+    ) -> None:
+        self._session_stmt = session_stmt
+        self._session_state = session_state
+        self._app_query = app_query
+        self._user_query = user_query
+        self._app_state_delta = app_state_delta
+        self._user_state_delta = user_state_delta
+        self._app_upsert = app_upsert
+        self._user_upsert = user_upsert
+        self._decode_json = decode_json
+
+    def __call__(self, transaction: "SpannerTransaction") -> "dict[str, Any]":
+        reader = cast("_SpannerReadProtocol", transaction)
+        writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = [self._session_stmt]
+        app_sql, app_params, app_types = self._app_query
+        current_app = _decode_spanner_state_rows(
+            list(reader.execute_sql(app_sql, params=app_params, param_types=app_types)), self._decode_json
+        )
+        final_app: dict[str, Any] | None = current_app
+        if self._app_state_delta:
+            merged_app = {**(current_app or {}), **self._app_state_delta}
+            writes.append(self._app_upsert(merged_app))
+            final_app = merged_app
+        user_sql, user_params, user_types = self._user_query
+        current_user = _decode_spanner_state_rows(
+            list(reader.execute_sql(user_sql, params=user_params, param_types=user_types)), self._decode_json
+        )
+        final_user: dict[str, Any] | None = current_user
+        if self._user_state_delta:
+            merged_user = {**(current_user or {}), **self._user_state_delta}
+            writes.append(self._user_upsert(merged_user))
+            final_user = merged_user
+        _SpannerSyncWriteJob(writes)(transaction)
+        return merge_scoped_state(self._session_state, final_app, final_user)
+
+
+class _SpannerAsyncCreateSessionJob:
+    """Callable async transaction work item inserting an ADK session and merging/reading scoped state."""
+
+    __slots__ = (
+        "_app_query",
+        "_app_state_delta",
+        "_app_upsert",
+        "_decode_json",
+        "_session_state",
+        "_session_stmt",
+        "_user_query",
+        "_user_state_delta",
+        "_user_upsert",
+    )
+
+    def __init__(
+        self,
+        *,
+        session_stmt: "tuple[str, dict[str, Any], dict[str, Any]]",
+        session_state: "dict[str, Any]",
+        app_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        user_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+        app_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        user_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        decode_json: "Callable[[Any], Any]",
+    ) -> None:
+        self._session_stmt = session_stmt
+        self._session_state = session_state
+        self._app_query = app_query
+        self._user_query = user_query
+        self._app_state_delta = app_state_delta
+        self._user_state_delta = user_state_delta
+        self._app_upsert = app_upsert
+        self._user_upsert = user_upsert
+        self._decode_json = decode_json
+
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> "dict[str, Any]":
+        writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = [self._session_stmt]
+        app_sql, app_params, app_types = self._app_query
+        app_result = await cast("Any", transaction).execute_sql(app_sql, params=app_params, param_types=app_types)
+        current_app = _decode_spanner_state_rows([row async for row in app_result], self._decode_json)
+        final_app: dict[str, Any] | None = current_app
+        if self._app_state_delta:
+            merged_app = {**(current_app or {}), **self._app_state_delta}
+            writes.append(self._app_upsert(merged_app))
+            final_app = merged_app
+        user_sql, user_params, user_types = self._user_query
+        user_result = await cast("Any", transaction).execute_sql(user_sql, params=user_params, param_types=user_types)
+        current_user = _decode_spanner_state_rows([row async for row in user_result], self._decode_json)
+        final_user: dict[str, Any] | None = current_user
+        if self._user_state_delta:
+            merged_user = {**(current_user or {}), **self._user_state_delta}
+            writes.append(self._user_upsert(merged_user))
+            final_user = merged_user
+        await _SpannerAsyncWriteJob(writes)(transaction)
+        return merge_scoped_state(self._session_state, final_app, final_user)
+
+
+class _SpannerSyncAppendAndUpdateJob:
+    """Callable transaction work item updating session state, merging scoped deltas, and inserting an ADK event."""
+
+    __slots__ = (
+        "_app_query",
+        "_app_state_delta",
+        "_app_upsert",
+        "_decode_json",
+        "_insert_event_statement",
+        "_session_id",
+        "_update_statement",
+        "_user_query",
+        "_user_state_delta",
+        "_user_upsert",
+    )
+
+    def __init__(
+        self,
+        *,
+        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
+        insert_event_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
         session_id: str,
+        app_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        user_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+        app_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        user_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        decode_json: "Callable[[Any], Any]",
     ) -> None:
         self._update_statement = update_statement
-        self._remaining_statements = remaining_statements
+        self._insert_event_statement = insert_event_statement
         self._session_id = session_id
+        self._app_query = app_query
+        self._user_query = user_query
+        self._app_state_delta = app_state_delta
+        self._user_state_delta = user_state_delta
+        self._app_upsert = app_upsert
+        self._user_upsert = user_upsert
+        self._decode_json = decode_json
 
-    def __call__(self, transaction: "SpannerTransaction") -> None:
+    def __call__(self, transaction: "SpannerTransaction") -> "tuple[dict[str, Any] | None, dict[str, Any] | None]":
         writer = cast("_SpannerWriteTransactionProtocol", transaction)
+        reader = cast("_SpannerReadProtocol", transaction)
         update_sql, update_params, update_types = self._update_statement
         updated = writer.execute_update(update_sql, params=update_params, param_types=update_types)
         if updated == 0:
             msg = f"Session {self._session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
-        if self._remaining_statements:
-            _SpannerSyncWriteJob(self._remaining_statements)(transaction)
+        writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = [self._insert_event_statement]
+        merged_app: dict[str, Any] | None = None
+        if self._app_state_delta:
+            app_sql, app_params, app_types = self._app_query
+            current_app = _decode_spanner_state_rows(
+                list(reader.execute_sql(app_sql, params=app_params, param_types=app_types)), self._decode_json
+            )
+            merged_app = {**(current_app or {}), **self._app_state_delta}
+            writes.append(self._app_upsert(merged_app))
+        merged_user: dict[str, Any] | None = None
+        if self._user_state_delta:
+            user_sql, user_params, user_types = self._user_query
+            current_user = _decode_spanner_state_rows(
+                list(reader.execute_sql(user_sql, params=user_params, param_types=user_types)), self._decode_json
+            )
+            merged_user = {**(current_user or {}), **self._user_state_delta}
+            writes.append(self._user_upsert(merged_user))
+        _SpannerSyncWriteJob(writes)(transaction)
+        return merged_app, merged_user
 
 
 class _SpannerAsyncAppendAndUpdateJob:
-    """Callable async transaction work item updating session state before inserting an ADK event."""
+    """Callable async transaction work item updating session state, merging scoped deltas, and inserting an event."""
 
-    __slots__ = ("_remaining_statements", "_session_id", "_update_statement")
+    __slots__ = (
+        "_app_query",
+        "_app_state_delta",
+        "_app_upsert",
+        "_decode_json",
+        "_insert_event_statement",
+        "_session_id",
+        "_update_statement",
+        "_user_query",
+        "_user_state_delta",
+        "_user_upsert",
+    )
 
     def __init__(
         self,
-        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
-        remaining_statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]",
         *,
+        update_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
+        insert_event_statement: "tuple[str, dict[str, Any], dict[str, Any]]",
         session_id: str,
+        app_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        user_query: "tuple[str, dict[str, Any], dict[str, Any]]",
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+        app_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        user_upsert: "Callable[[dict[str, Any]], tuple[str, dict[str, Any], dict[str, Any]]]",
+        decode_json: "Callable[[Any], Any]",
     ) -> None:
         self._update_statement = update_statement
-        self._remaining_statements = remaining_statements
+        self._insert_event_statement = insert_event_statement
         self._session_id = session_id
+        self._app_query = app_query
+        self._user_query = user_query
+        self._app_state_delta = app_state_delta
+        self._user_state_delta = user_state_delta
+        self._app_upsert = app_upsert
+        self._user_upsert = user_upsert
+        self._decode_json = decode_json
 
-    async def __call__(self, transaction: "SpannerAsyncTransaction") -> None:
+    async def __call__(
+        self, transaction: "SpannerAsyncTransaction"
+    ) -> "tuple[dict[str, Any] | None, dict[str, Any] | None]":
         update_sql, update_params, update_types = self._update_statement
         updated = await transaction.execute_update(update_sql, params=update_params, param_types=update_types)
         if updated == 0:
             msg = f"Session {self._session_id} not found during append_event_and_update_state."
             raise ValueError(msg)
-        if self._remaining_statements:
-            await _SpannerAsyncWriteJob(self._remaining_statements)(transaction)
+        writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = [self._insert_event_statement]
+        merged_app: dict[str, Any] | None = None
+        if self._app_state_delta:
+            app_sql, app_params, app_types = self._app_query
+            app_result = await cast("Any", transaction).execute_sql(app_sql, params=app_params, param_types=app_types)
+            current_app = _decode_spanner_state_rows([row async for row in app_result], self._decode_json)
+            merged_app = {**(current_app or {}), **self._app_state_delta}
+            writes.append(self._app_upsert(merged_app))
+        merged_user: dict[str, Any] | None = None
+        if self._user_state_delta:
+            user_sql, user_params, user_types = self._user_query
+            user_result = await cast("Any", transaction).execute_sql(
+                user_sql, params=user_params, param_types=user_types
+            )
+            current_user = _decode_spanner_state_rows([row async for row in user_result], self._decode_json)
+            merged_user = {**(current_user or {}), **self._user_state_delta}
+            writes.append(self._user_upsert(merged_user))
+        await _SpannerAsyncWriteJob(writes)(transaction)
+        return merged_app, merged_user
 
 
 class _SpannerSyncMemoryInsertJob:
@@ -2738,3 +3054,10 @@ def _build_spanner_scope_where(
     params = {"app_name": app_name}
     types = {"app_name": SPANNER_PARAM_TYPES.STRING}
     return where, params, types
+
+
+def _decode_spanner_state_rows(rows: "list[Any]", decode_json: "Callable[[Any], Any]") -> "dict[str, Any] | None":
+    if not rows:
+        return None
+    decoded = decode_json(rows[0][0])
+    return dict(decoded) if isinstance(decoded, dict) else {}

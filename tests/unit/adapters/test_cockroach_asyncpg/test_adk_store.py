@@ -16,7 +16,7 @@ from sqlspec.adapters.cockroach_asyncpg.adk import (
 )
 from sqlspec.adapters.cockroach_asyncpg.adk.store import _cockroach_hash_shard_clause
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -608,3 +608,190 @@ async def test_cockroach_asyncpg_memory_delete_parses_status_rowcount_safely(sta
 
     assert await store.delete_entries_by_session("s1") == expected
     assert await store.delete_entries_older_than(7) == expected
+
+
+class _SequencedCockroachConnection(_RecordingConnection):
+    def __init__(
+        self,
+        *,
+        fetchrow_queue: "list[dict[str, Any] | Exception | None] | None" = None,
+        fetch_rows: "list[dict[str, Any]] | None" = None,
+    ) -> None:
+        super().__init__()
+        self._fetchrow_queue = list(fetchrow_queue or [])
+        self._fetch_rows = list(fetch_rows or [])
+
+    async def fetchrow(self, sql: str, *params: Any) -> "dict[str, Any] | None":
+        self.calls.append((sql, params))
+        item = self._fetchrow_queue.pop(0) if self._fetchrow_queue else None
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def fetch(self, sql: str, *params: Any) -> "list[Any]":
+        self.calls.append((sql, params))
+        return list(self._fetch_rows)
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "queue_rows", "expected_state", "expect_for_update"),
+    [
+        pytest.param(
+            None,
+            None,
+            [{"state": {"app:kept": "yes"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "user:kept": 1},
+            False,
+            id="untouched-reads",
+        ),
+        pytest.param(
+            {"app:added": 2, "app:null": None},
+            {"user:flag": False},
+            [{"state": {"app:kept": "yes", "app:null": "old"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "app:added": 2, "app:null": None, "user:kept": 1, "user:flag": False},
+            True,
+            id="delta-merges",
+        ),
+    ],
+)
+async def test_cockroach_asyncpg_create_session_scoped_state_contract(
+    app_delta: "dict[str, Any] | None",
+    user_delta: "dict[str, Any] | None",
+    queue_rows: "list[dict[str, Any]]",
+    expected_state: "dict[str, Any]",
+    expect_for_update: bool,
+) -> None:
+    """create_session reads untouched scopes or locks and merges deltas via ON CONFLICT DO NOTHING + FOR UPDATE."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 1},
+        "create_time": now,
+        "update_time": now,
+    }
+    conn = _SequencedCockroachConnection(fetchrow_queue=[session_row, *queue_rows])
+    config = _mock_config()
+    config.driver_features = {
+        "enable_auto_retry": True,
+        "max_retries": 2,
+        "retry_delay_base_ms": 0.0,
+        "retry_delay_max_ms": 0.0,
+    }
+    config.provide_connection = lambda *_a, **_k: conn
+    store = CockroachAsyncpgADKStore(config)
+
+    created = await store.create_session(
+        "s1", "app", "u1", {"s": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert created["state"] == expected_state
+    joined_sql = " | ".join(_normalized(sql) for sql, _ in conn.calls)
+    assert ("FOR UPDATE" in joined_sql) is expect_for_update
+    assert "UPSERT INTO" not in joined_sql
+
+
+async def test_cockroach_asyncpg_append_retries_on_40001_and_locks_deterministically() -> None:
+    """append_event_and_update_state retries full transaction on 40001 and locks app before user state."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 2},
+        "create_time": now,
+        "update_time": now,
+    }
+    conn = _SequencedCockroachConnection(
+        fetchrow_queue=[
+            session_row,
+            SerializationConflictError("restart transaction 40001"),
+            session_row,
+            {"state": {"app:keep": "a", "app:clear": "old"}},
+            {"state": {"user:lang": "en"}},
+        ]
+    )
+    config = _mock_config()
+    config.driver_features = {
+        "enable_auto_retry": True,
+        "max_retries": 2,
+        "retry_delay_base_ms": 0.0,
+        "retry_delay_max_ms": 0.0,
+        "enable_retry_logging": False,
+    }
+    config.provide_connection = lambda *_a, **_k: conn
+    store = CockroachAsyncpgADKStore(config)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+    }
+
+    updated = await store.append_event_and_update_state(
+        cast("Any", event_record),
+        "app",
+        "u1",
+        "s1",
+        {"s": 2},
+        app_state_delta={"app:new": 1, "app:clear": None},
+        user_state_delta={"user:mode": "fast"},
+    )
+
+    assert updated["state"] == {
+        "s": 2,
+        "app:keep": "a",
+        "app:new": 1,
+        "app:clear": None,
+        "user:lang": "en",
+        "user:mode": "fast",
+    }
+    sqls = [_normalized(sql) for sql, _ in conn.calls]
+    assert sum(1 for sql in sqls if sql.startswith("UPDATE adk_session")) == 2
+    assert not any("UPSERT INTO" in sql for sql in sqls)
+    assert "ON CONFLICT (app_name) DO NOTHING" in sqls[6]
+    assert "SELECT state FROM adk_app_state WHERE app_name = $1 FOR UPDATE" in sqls[7]
+    assert "ON CONFLICT (app_name, user_id) DO NOTHING" in sqls[9]
+    assert "SELECT state FROM adk_user_state WHERE app_name = $1 AND user_id = $2 FOR UPDATE" in sqls[10]
+
+
+async def test_cockroach_asyncpg_get_events_limit_queries_desc_and_reverses_to_asc() -> None:
+    """get_events(limit=N) queries newest N descending and reverses to ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    rows = [
+        {
+            "id": "evt-3",
+            "session_id": "s1",
+            "invocation_id": "i3",
+            "timestamp": t3,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+        {
+            "id": "evt-2",
+            "session_id": "s1",
+            "invocation_id": "i2",
+            "timestamp": t2,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+    ]
+    conn = _SequencedCockroachConnection(fetch_rows=rows)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = CockroachAsyncpgADKStore(config)
+
+    events = await store.get_events("app", "u1", "s1", after_timestamp=datetime(2026, 1, 1, tzinfo=UTC), limit=2)
+
+    sql, params = conn.calls[0]
+    assert "JOIN adk_session s" in _normalized(sql)
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT $5" in _normalized(sql)
+    assert params == ("app", "u1", "s1", datetime(2026, 1, 1, tzinfo=UTC), 2)
+    assert [e["id"] for e in events] == ["evt-2", "evt-3"]

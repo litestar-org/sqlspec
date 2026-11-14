@@ -253,7 +253,8 @@ def test_sybase_adk_events_use_top_for_bounded_queries(
         "JOIN [dbo].[adk_session] s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id" in sql
     )
     assert "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s" in sql
-    assert sql.endswith("ORDER BY e.timestamp ASC")
+    expected_order = "ORDER BY e.timestamp DESC" if limit is not None else "ORDER BY e.timestamp ASC"
+    assert sql.endswith(expected_order)
     expected: tuple[Any, ...] = ("app", "user", "session")
     if limit is not None:
         expected = (limit, *expected)
@@ -1844,3 +1845,64 @@ def test_sybase_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch
         assert hook_conn.closed is True
     finally:
         config.close_pool()
+
+
+def test_sybase_adk_create_session_and_append_event_holdlock_merge() -> None:
+    """SybaseADKStore locks app then user state with HOLDLOCK inside explicit tx and returns merged state."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit_state = True
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"app:existing": 1}',),
+        ('{"user:lang": "en"}',),
+        ("s1", "app", "u1", '{"turn": 2}', now, now),
+        None,
+        ('{"user:lang": "en"}',),
+    ]
+    store = SybaseADKStore(cast("Any", config))
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+
+    event = _sybase_event_fixture()
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:k": 1}, user_state_delta={"user:theme": "dark"}
+    )
+    assert updated["state"] == {"turn": 2, "app:k": 1, "user:lang": "en", "user:theme": "dark"}
+
+    executed = [" ".join(c.args[0].split()) for c in cursor.execute.call_args_list]
+    assert executed[0] == "BEGIN TRANSACTION"
+    assert "SELECT state FROM [dbo].[adk_app_state] HOLDLOCK WHERE app_name = %s" in executed
+    assert "SELECT state FROM [dbo].[adk_user_state] HOLDLOCK WHERE app_name = %s AND user_id = %s" in executed
+    assert executed.count("IF @@TRANCOUNT > 0 COMMIT TRANSACTION") == 2
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+
+def test_sybase_adk_get_events_bounded_reverses_desc_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SybaseADKStore.get_events(limit=N) reverses DESC rows to chronological ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    config = MagicMock()
+    config.extension_config = {"adk": {}}
+    captured: list[tuple[str, tuple[Any, ...]]] = []
+
+    def _fake_fetchall(
+        _store: SybaseADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        captured.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(SybaseADKStore, "_execute_fetchall", _fake_fetchall)
+
+    events = SybaseADKStore(cast("Any", config)).get_events("app", "u1", "s1", limit=2)
+
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC" in " ".join(captured[0][0].split())

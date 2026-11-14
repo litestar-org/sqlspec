@@ -14,7 +14,7 @@ from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKConfig, BigQueryADKRetentionConfig, BigQueryADKStore
 from sqlspec.adapters.bigquery.litestar import BigQueryStore
 from sqlspec.config import ADKConfig, ExtensionConfigs
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent
 
 
@@ -615,7 +615,7 @@ def test_bigquery_adk_append_event_and_update_state_stops_before_insert_when_ses
 
     with pytest.raises(ValueError, match="Session session not found during append_event_and_update_state"):
         store.append_event_and_update_state(
-            _sample_event(), "app", "user", "session", {"turn": 1}, app_state={"a": 1}, user_state={"u": 1}
+            _sample_event(), "app", "user", "session", {"turn": 1}, app_state_delta={"a": 1}, user_state_delta={"u": 1}
         )
 
     assert len(statements) == 2
@@ -647,3 +647,184 @@ def test_bigquery_adk_get_events_joins_sessions_on_composite_owner_and_validates
         "WHERE s.app_name = @app_name AND s.user_id = @user_id AND s.id = @session_id "
         "AND e.timestamp IS NOT NULL AND s.create_time IS NOT NULL"
     ) in sql
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT @row_limit" in sql
+
+
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expect_app_write", "expect_user_write"),
+    [
+        pytest.param(None, None, {"local": 1, "app:existing": "a", "user:existing": "u"}, False, False, id="none"),
+        pytest.param({}, {}, {"local": 1, "app:existing": "a", "user:existing": "u"}, False, False, id="empty"),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:count": 0, "user:empty": ""},
+            {
+                "local": 1,
+                "app:existing": "a",
+                "app:flag": False,
+                "app:cleared": None,
+                "user:existing": "u",
+                "user:count": 0,
+                "user:empty": "",
+            },
+            True,
+            True,
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+def test_bigquery_adk_create_session_reads_and_merges_scoped_state(
+    monkeypatch: pytest.MonkeyPatch,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expect_app_write: bool,
+    expect_user_write: bool,
+) -> None:
+    """create_session keeps session table session-only and merges scoped deltas into returned state."""
+    store = _make_store()
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    app_rows = [{"state": '{"app:existing": "a"}', "update_time": now}]
+    user_rows = [{"state": '{"user:existing": "u"}', "update_time": now}]
+    statements: list[tuple[str, list[Any]]] = []
+
+    def fake_run_query(
+        self: BigQueryADKStore, sql: str, parameters: Any = None, **_kwargs: Any
+    ) -> list[dict[str, Any]]:
+        normalized = _normalized(sql)
+        param_list = list(parameters or [])
+        statements.append((normalized, param_list))
+        if normalized.startswith("SELECT state") and "adk_app_state" in normalized:
+            return app_rows
+        if normalized.startswith("SELECT state") and "adk_user_state" in normalized:
+            return user_rows
+        if normalized.startswith("UPDATE "):
+            self._last_dml_affected_rows = 1
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", fake_run_query)
+
+    session = store.create_session(
+        "session", "app", "user", {"local": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+    )
+
+    assert session["state"] == expected_state
+    session_merge_params = statements[0][1]
+    assert next(p.value for p in session_merge_params if p.name == "state") == {"local": 1}
+    assert any(sql.startswith("UPDATE test_dataset.adk_app_state") for sql, _ in statements) is expect_app_write
+    assert any(sql.startswith("UPDATE test_dataset.adk_user_state") for sql, _ in statements) is expect_user_write
+
+
+def test_bigquery_adk_append_event_and_update_state_retries_cas_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """append_event_and_update_state retries app/user state CAS conflicts and merges falsy values."""
+    store = _make_store()
+    t1 = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+    t2 = datetime(2026, 5, 10, 12, 1, tzinfo=UTC)
+    app_reads = iter([
+        [{"state": '{"app:seed": 1}', "update_time": t1}],
+        [{"state": '{"app:seed": 1, "app:peer": true}', "update_time": t2}],
+    ])
+    app_update_attempts = 0
+    seen_app_payloads: list[dict[str, Any]] = []
+
+    def fake_run_query(
+        self: BigQueryADKStore, sql: str, parameters: Any = None, **_kwargs: Any
+    ) -> list[dict[str, Any]]:
+        nonlocal app_update_attempts
+        normalized = _normalized(sql)
+        params = list(parameters or [])
+        if "SELECT id, app_name, user_id, state" in normalized:
+            return [
+                {
+                    "id": "session",
+                    "app_name": "app",
+                    "user_id": "user",
+                    "state": '{"turn": 1}',
+                    "create_time": t1,
+                    "update_time": t1,
+                }
+            ]
+        if "SELECT state, update_time FROM test_dataset.adk_app_state" in normalized:
+            return next(app_reads)
+        if normalized.startswith("UPDATE test_dataset.adk_app_state"):
+            app_update_attempts += 1
+            seen_app_payloads.append(next(p.value for p in params if p.name == "state"))
+            self._last_dml_affected_rows = 1 if app_update_attempts > 1 else 0
+            return []
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", fake_run_query)
+
+    updated = store.append_event_and_update_state(
+        _sample_event(),
+        "app",
+        "user",
+        "session",
+        {"turn": 1},
+        app_state_delta={"app:flag": False, "app:cleared": None},
+        user_state_delta={},
+    )
+
+    assert app_update_attempts == 2
+    assert seen_app_payloads == [
+        {"app:seed": 1, "app:flag": False, "app:cleared": None},
+        {"app:seed": 1, "app:peer": True, "app:flag": False, "app:cleared": None},
+    ]
+    assert updated["state"] == {"turn": 1, "app:seed": 1, "app:peer": True, "app:flag": False, "app:cleared": None}
+
+
+def test_bigquery_adk_merge_cas_raises_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exhausted compare-and-swap retries raise SerializationConflictError."""
+    store = _make_store()
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
+
+    def fake_run_query(
+        self: BigQueryADKStore, sql: str, parameters: Any = None, **_kwargs: Any
+    ) -> list[dict[str, Any]]:
+        del parameters
+        if "SELECT state, update_time" in sql:
+            return [{"state": '{"seed": 1}', "update_time": now}]
+        self._last_dml_affected_rows = 0
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", fake_run_query)
+
+    with pytest.raises(SerializationConflictError, match="compare-and-swap attempts"):
+        store._merge_app_state_delta("app", {"k": "v"})
+
+
+def test_bigquery_adk_get_events_limit_reverses_desc_rows_to_chronological(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bounded get_events queries descending rows and reverses them into ascending order."""
+    store = _make_store()
+    t2 = datetime(2026, 5, 10, 12, 2, tzinfo=UTC)
+    t3 = datetime(2026, 5, 10, 12, 3, tzinfo=UTC)
+
+    def capture(_store: BigQueryADKStore, sql: str, parameters: Any = None, **_kwargs: Any) -> list[dict[str, Any]]:
+        del parameters
+        assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT @row_limit" in _normalized(sql)
+        return [
+            {
+                "id": "ev-3",
+                "app_name": "app",
+                "user_id": "user",
+                "session_id": "session",
+                "invocation_id": "inv-3",
+                "timestamp": t3,
+                "event_data": {"n": 3},
+            },
+            {
+                "id": "ev-2",
+                "app_name": "app",
+                "user_id": "user",
+                "session_id": "session",
+                "invocation_id": "inv-2",
+                "timestamp": t2,
+                "event_data": {"n": 2},
+            },
+        ]
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture)
+
+    events = store.get_events("app", "user", "session", limit=2)
+
+    assert [event["id"] for event in events] == ["ev-2", "ev-3"]

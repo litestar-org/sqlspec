@@ -1,6 +1,8 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (psycopg)."""
 
+import asyncio
 import re
+import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
@@ -8,6 +10,11 @@ from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as 
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_errors as errors
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_sql as pg_sql
+from sqlspec.adapters.cockroach_psycopg.core import (
+    CockroachPsycopgRetryConfig,
+    calculate_backoff_seconds,
+    is_retryable_error,
+)
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import (
@@ -17,12 +24,14 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
@@ -208,8 +217,17 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await driver.execute_script(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Create a new session and atomically apply optional scoped state deltas."""
         state_json = Jsonb(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -230,23 +248,37 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             """).format(table=_pg_table_identifier(self._session_table))
             params = (session_id, app_name, user_id, state_json)
 
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        async def _attempt(cur: Any) -> StoredSession:
             await cur.execute(query, params)
             row = await cur.fetchone()
-            await conn.commit()
+            if row is None:
+                msg = "Session creation failed"
+                raise RuntimeError(msg)
 
-        if row is None:
-            msg = "Session creation failed"
-            raise RuntimeError(msg)
+            resolved_app = (
+                await self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+                if app_state_delta
+                else await self._select_app_state_on_cur(cur, app_name)
+            )
+            resolved_user = (
+                await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else await self._select_user_state_on_cur(cur, app_name, user_id)
+            )
 
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
+
+        async with self._config.provide_connection() as conn:
+            return await _run_async_tx_with_retry(self._config, conn, _attempt)
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -399,9 +431,10 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Atomically append an event and update session plus optional scoped deltas."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
             user_id,
@@ -421,54 +454,45 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=_pg_table_identifier(self._session_table))
-        app_upsert_query = pg_sql.SQL("""
-        UPSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """).format(table=_pg_table_identifier(self._app_state_table))
-        user_upsert_query = pg_sql.SQL("""
-        UPSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """).format(table=_pg_table_identifier(self._user_state_table))
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                row = await cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                await cur.execute(
-                    insert_query,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                if app_state is not None:
-                    await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                rollback: Any = getattr(conn, "rollback", None)
-                if rollback is not None:
-                    await rollback()
-                raise
-            await conn.commit()
+        async def _attempt(cur: Any) -> StoredSession:
+            await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+            row = await cur.fetchone()
+            if row is None:
+                _raise_missing_session(session_id)
+            await cur.execute(
+                insert_query,
+                (
+                    event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            merged_app = await self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+            merged_user = (
+                await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else None
+            )
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
 
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+        async with self._config.provide_connection() as conn:
+            return await _run_async_tx_with_retry(self._config, conn, _attempt)
 
     async def get_events(
         self,
@@ -489,21 +513,23 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             params.append(after_timestamp)
 
         where_clause = pg_sql.SQL(" AND ").join(where_clauses)
-        limit_clause = pg_sql.SQL(" LIMIT %s" if limit is not None else "")
         if limit is not None:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp DESC, e.id DESC LIMIT %s")
             params.append(limit)
+        else:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp ASC, e.id ASC")
 
         query = pg_sql.SQL("""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {events_table} e
         JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """).format(
             events_table=_pg_table_identifier(self._events_table),
             session_table=_pg_table_identifier(self._session_table),
             where_clause=where_clause,
-            limit_clause=limit_clause,
+            order_clause=order_clause,
         )
 
         try:
@@ -512,6 +538,9 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                 rows = await cur.fetchall()
         except errors.UndefinedTable:
             return []
+
+        if limit is not None:
+            rows = list(reversed(rows))
 
         return [
             StoredEvent(
@@ -655,6 +684,61 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await cur.execute(query, (key, value))
             await conn.commit()
 
+    async def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    async def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_scoped_state_on_cur(
+            cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    async def _select_scoped_state_on_cur(
+        self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        select_query, _, _, _ = _cockroach_scoped_state_queries(table, key_columns)
+        await cur.execute(select_query, key_values)
+        row = await cur.fetchone() if hasattr(cur, "fetchone") else None
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    async def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._merge_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    async def _merge_user_state_on_cur(
+        self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._merge_scoped_state_on_cur(
+            cur,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    async def _merge_scoped_state_on_cur(
+        self,
+        cur: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        _, ensure_query, lock_query, update_query = _cockroach_scoped_state_queries(table, key_columns)
+        await cur.execute(ensure_query, (*key_values, Jsonb({})))
+        await cur.execute(lock_query, key_values)
+        row = await cur.fetchone() if hasattr(cur, "fetchone") else None
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+        await cur.execute(update_query, (Jsonb(merged), *key_values))
+        return merged
+
     async def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
         owner_id_line = ""
@@ -756,9 +840,17 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             driver.execute_script(statement)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session."""
+        """Create a new session and atomically apply optional scoped state deltas."""
         state_json = Jsonb(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -779,23 +871,37 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             """).format(table=_pg_table_identifier(self._session_table))
             params = (session_id, app_name, user_id, state_json)
 
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        def _attempt(cur: Any) -> StoredSession:
             cur.execute(query, params)
             row = cur.fetchone()
-            conn.commit()
+            if row is None:
+                msg = "Session creation failed"
+                raise RuntimeError(msg)
 
-        if row is None:
-            msg = "Session creation failed"
-            raise RuntimeError(msg)
+            resolved_app = (
+                self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+                if app_state_delta
+                else self._select_app_state_on_cur(cur, app_name)
+            )
+            resolved_user = (
+                self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                if user_state_delta
+                else self._select_user_state_on_cur(cur, app_name, user_id)
+            )
 
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
+
+        with self._config.provide_connection() as conn:
+            return _run_sync_tx_with_retry(self._config, conn, _attempt)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -912,10 +1018,10 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically append an event and update session + scoped state."""
+        """Atomically append an event and update session plus optional scoped deltas."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
             user_id,
@@ -935,54 +1041,43 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         WHERE app_name = %s AND user_id = %s AND id = %s
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=_pg_table_identifier(self._session_table))
-        app_upsert_query = pg_sql.SQL("""
-        UPSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        """).format(table=_pg_table_identifier(self._app_state_table))
-        user_upsert_query = pg_sql.SQL("""
-        UPSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        """).format(table=_pg_table_identifier(self._user_state_table))
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                row = cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                cur.execute(
-                    insert_query,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                if app_state is not None:
-                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                rollback = getattr(conn, "rollback", None)
-                if callable(rollback):
-                    rollback()
-                raise
-            conn.commit()
+        def _attempt(cur: Any) -> StoredSession:
+            cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+            row = cur.fetchone()
+            if row is None:
+                _raise_missing_session(session_id)
+            cur.execute(
+                insert_query,
+                (
+                    event_record["id"],
+                    event_record["app_name"],
+                    event_record["user_id"],
+                    event_record["session_id"],
+                    event_record["invocation_id"],
+                    event_record["timestamp"],
+                    jsonb_value,
+                ),
+            )
+            merged_app = self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+            merged_user = (
+                self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+            )
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=merged_state,
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
 
-        return StoredSession(
-            id=row["id"],
-            app_name=row["app_name"],
-            user_id=row["user_id"],
-            state=row["state"],
-            create_time=row["create_time"],
-            update_time=row["update_time"],
-        )
+        with self._config.provide_connection() as conn:
+            return _run_sync_tx_with_retry(self._config, conn, _attempt)
 
     def get_events(
         self,
@@ -1004,27 +1099,32 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             params.append(after_timestamp)
 
         where_clause = pg_sql.SQL(" AND ").join(where_clauses)
-        limit_clause = pg_sql.SQL(" LIMIT %s" if limit is not None else "")
         if limit is not None:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp DESC, e.id DESC LIMIT %s")
             params.append(limit)
+        else:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp ASC, e.id ASC")
 
         query = pg_sql.SQL("""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {events_table} e
         JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """).format(
             events_table=_pg_table_identifier(self._events_table),
             session_table=_pg_table_identifier(self._session_table),
             where_clause=where_clause,
-            limit_clause=limit_clause,
+            order_clause=order_clause,
         )
 
         try:
             with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
+
+            if limit is not None:
+                rows = list(reversed(rows))
 
             return [
                 StoredEvent(
@@ -1178,6 +1278,61 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (key, value))
             conn.commit()
+
+    def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return self._select_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return self._select_scoped_state_on_cur(
+            cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    def _select_scoped_state_on_cur(
+        self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        select_query, _, _, _ = _cockroach_scoped_state_queries(table, key_columns)
+        cur.execute(select_query, key_values)
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._merge_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    def _merge_user_state_on_cur(
+        self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return self._merge_scoped_state_on_cur(
+            cur,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    def _merge_scoped_state_on_cur(
+        self,
+        cur: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        _, ensure_query, lock_query, update_query = _cockroach_scoped_state_queries(table, key_columns)
+        cur.execute(ensure_query, (*key_values, Jsonb({})))
+        cur.execute(lock_query, key_values)
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+        cur.execute(update_query, (Jsonb(merged), *key_values))
+        return merged
 
     def _sessions_table_ddl(self) -> str:
         adk_config = _adk_config(self._config)
@@ -1997,3 +2152,125 @@ def _session_list_query(
         page=page_clause,
     )
     return query, tuple(params)
+
+
+def _resolve_retry_config(config: Any) -> "tuple[CockroachPsycopgRetryConfig, bool]":
+    driver_features = getattr(config, "driver_features", None)
+    if isinstance(driver_features, Mapping):
+        return (
+            CockroachPsycopgRetryConfig.from_features(driver_features),
+            bool(driver_features.get("enable_auto_retry", True)),
+        )
+    return CockroachPsycopgRetryConfig(), True
+
+
+async def _run_async_tx_with_retry(
+    config: Any, conn: Any, operation: "Callable[[Any], Awaitable[StoredSession]]"
+) -> StoredSession:
+    retry_config, enable_retry = _resolve_retry_config(config)
+    attempt = 0
+    while True:
+        tx_factory = getattr(conn, "transaction", None)
+        try:
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                async with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    return await operation(cur)
+            async with conn.cursor(row_factory=dict_row) as cur:
+                try:
+                    result = await operation(cur)
+                    await conn.commit()
+                except Exception as inner_exc:
+                    rollback: Any = getattr(conn, "rollback", None)
+                    if rollback is not None:
+                        try:
+                            await rollback()
+                        except Exception:
+                            raise inner_exc from None
+                    raise
+                else:
+                    return result
+        except Exception as exc:
+            if not enable_retry or not is_retryable_error(exc) or attempt >= retry_config.max_retries:
+                raise
+            delay = calculate_backoff_seconds(attempt, retry_config)
+            if retry_config.enable_logging:
+                logger.debug("CockroachDB ADK retry %s/%s after %.3fs", attempt + 1, retry_config.max_retries, delay)
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
+def _run_sync_tx_with_retry(config: Any, conn: Any, operation: "Callable[[Any], StoredSession]") -> StoredSession:
+    retry_config, enable_retry = _resolve_retry_config(config)
+    attempt = 0
+    while True:
+        tx_factory = getattr(conn, "transaction", None)
+        try:
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    return operation(cur)
+            with conn.cursor(row_factory=dict_row) as cur:
+                try:
+                    result = operation(cur)
+                    conn.commit()
+                except Exception as inner_exc:
+                    rollback = getattr(conn, "rollback", None)
+                    if callable(rollback):
+                        try:
+                            rollback()
+                        except Exception:
+                            raise inner_exc from None
+                    raise
+                else:
+                    return result
+        except Exception as exc:
+            if not enable_retry or not is_retryable_error(exc) or attempt >= retry_config.max_retries:
+                raise
+            delay = calculate_backoff_seconds(attempt, retry_config)
+            if retry_config.enable_logging:
+                logger.debug("CockroachDB ADK retry %s/%s after %.3fs", attempt + 1, retry_config.max_retries, delay)
+            time.sleep(delay)
+            attempt += 1
+
+
+def _cockroach_scoped_state_queries(
+    table: str, key_columns: "tuple[str, ...]"
+) -> "tuple[pg_sql.Composed, pg_sql.Composed, pg_sql.Composed, pg_sql.Composed]":
+    """Build parameterized CockroachDB queries for reading, ensuring, locking, and updating scoped state."""
+    table_ident = _pg_table_identifier(table)
+    where_clause = pg_sql.SQL(" AND ").join(
+        pg_sql.SQL("{col} = %s").format(col=pg_sql.Identifier(col)) for col in key_columns
+    )
+    cols = pg_sql.SQL(", ").join([
+        *(pg_sql.Identifier(col) for col in key_columns),
+        pg_sql.Identifier("state"),
+        pg_sql.Identifier("update_time"),
+    ])
+    placeholders = pg_sql.SQL(", ").join(pg_sql.SQL("%s") for _ in range(len(key_columns) + 1))
+    conflict_cols = pg_sql.SQL(", ").join(pg_sql.Identifier(col) for col in key_columns)
+
+    select_query = pg_sql.SQL("SELECT state FROM {table} WHERE {where_clause}").format(
+        table=table_ident, where_clause=where_clause
+    )
+    ensure_query = pg_sql.SQL(
+        "INSERT INTO {table} ({cols}) VALUES ({placeholders}, CURRENT_TIMESTAMP) "
+        "ON CONFLICT ({conflict_cols}) DO NOTHING"
+    ).format(table=table_ident, cols=cols, placeholders=placeholders, conflict_cols=conflict_cols)
+    lock_query = pg_sql.SQL("SELECT state FROM {table} WHERE {where_clause} FOR UPDATE").format(
+        table=table_ident, where_clause=where_clause
+    )
+    update_query = pg_sql.SQL(
+        "UPDATE {table} SET state = %s, update_time = CURRENT_TIMESTAMP WHERE {where_clause}"
+    ).format(table=table_ident, where_clause=where_clause)
+    return select_query, ensure_query, lock_query, update_query
+
+
+def _decode_json_state(raw: Any) -> "dict[str, Any]":
+    """Normalize a JSONB state value from CockroachDB psycopg into a dictionary."""
+    if isinstance(raw, str):
+        decoded = from_json(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}

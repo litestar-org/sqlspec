@@ -1161,6 +1161,147 @@ def test_duckdb_get_events_limit_returns_newest_in_chronological_order(
         config.close_pool()
 
 
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "expected_state", "expected_app_db", "expected_user_db"),
+    [
+        pytest.param(
+            None,
+            None,
+            {"local": 1, "app:seed": "a", "user:seed": "u"},
+            {"app:seed": "a"},
+            {"user:seed": "u"},
+            id="none-deltas",
+        ),
+        pytest.param(
+            {},
+            {},
+            {"local": 1, "app:seed": "a", "user:seed": "u"},
+            {"app:seed": "a"},
+            {"user:seed": "u"},
+            id="empty-deltas",
+        ),
+        pytest.param(
+            {"app:flag": False, "app:cleared": None},
+            {"user:zero": 0, "user:blank": ""},
+            {
+                "local": 1,
+                "app:seed": "a",
+                "app:flag": False,
+                "app:cleared": None,
+                "user:seed": "u",
+                "user:zero": 0,
+                "user:blank": "",
+            },
+            {"app:seed": "a", "app:flag": False, "app:cleared": None},
+            {"user:seed": "u", "user:zero": 0, "user:blank": ""},
+            id="falsy-and-null-deltas",
+        ),
+    ],
+)
+def test_duckdb_create_session_merges_and_preserves_falsy_scoped_state(
+    tmp_path: Path,
+    app_delta: dict[str, Any] | None,
+    user_delta: dict[str, Any] | None,
+    expected_state: dict[str, Any],
+    expected_app_db: dict[str, Any],
+    expected_user_db: dict[str, Any],
+) -> None:
+    """create_session keeps session rows session-only and merges scoped state cleanly."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "create_scoped.duckdb")})
+    try:
+        store = DuckDBADKStore(config)
+        store.create_tables()
+        store.upsert_app_state("app", {"app:seed": "a"})
+        store.upsert_user_state("app", "user", {"user:seed": "u"})
+
+        created = store.create_session(
+            "s1", "app", "user", {"local": 1}, app_state_delta=app_delta, user_state_delta=user_delta
+        )
+
+        assert created["state"] == expected_state
+        fetched = store.get_session("app", "user", "s1")
+        assert fetched is not None and fetched["state"] == {"local": 1}
+        assert store.get_app_state("app") == expected_app_db
+        assert store.get_user_state("app", "user") == expected_user_db
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_append_event_and_update_state_concurrent_cas_merges_all_keys(tmp_path: Path) -> None:
+    """Eight concurrent writers merge disjoint app and user state deltas without losing updates."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path = str(tmp_path / "concurrent_cas.duckdb")
+    seed_config = DuckDBConfig(connection_config={"database": db_path})
+    try:
+        seed_store = DuckDBADKStore(seed_config)
+        seed_store.create_tables()
+        seed_store.create_session("s0", "app", "user", {"session": 0})
+        seed_store.create_session("s1", "app", "user", {"session": 1})
+        seed_store.create_session("s2", "app", "user", {"session": 2})
+        seed_store.create_session("s3", "app", "user", {"session": 3})
+        seed_store.create_session("s4", "app", "user", {"session": 4})
+        seed_store.create_session("s5", "app", "user", {"session": 5})
+        seed_store.create_session("s6", "app", "user", {"session": 6})
+        seed_store.create_session("s7", "app", "user", {"session": 7})
+
+        def _worker(worker_id: int) -> dict[str, Any]:
+            worker_config = DuckDBConfig(connection_config={"database": db_path})
+            try:
+                worker_store = DuckDBADKStore(worker_config)
+                event = cast(
+                    "Any",
+                    {
+                        "id": f"ev-{worker_id}",
+                        "session_id": f"s{worker_id}",
+                        "app_name": "app",
+                        "user_id": "user",
+                        "invocation_id": f"inv-{worker_id}",
+                        "author": "agent",
+                        "timestamp": datetime(2026, 1, 1, 12, 0, worker_id, tzinfo=UTC),
+                        "event_data": {"worker": worker_id},
+                    },
+                )
+                return worker_store.append_event_and_update_state(
+                    event,
+                    "app",
+                    "user",
+                    f"s{worker_id}",
+                    {"session": worker_id},
+                    app_state_delta={f"app:w{worker_id}": False if worker_id == 0 else worker_id},
+                    user_state_delta={f"user:w{worker_id}": None if worker_id == 1 else worker_id},
+                )["state"]
+            finally:
+                worker_config.close_pool()
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(_worker, range(8)))
+
+        assert len(results) == 8
+        assert seed_store.get_app_state("app") == {
+            "app:w0": False,
+            "app:w1": 1,
+            "app:w2": 2,
+            "app:w3": 3,
+            "app:w4": 4,
+            "app:w5": 5,
+            "app:w6": 6,
+            "app:w7": 7,
+        }
+        assert seed_store.get_user_state("app", "user") == {
+            "user:w0": 0,
+            "user:w1": None,
+            "user:w2": 2,
+            "user:w3": 3,
+            "user:w4": 4,
+            "user:w5": 5,
+            "user:w6": 6,
+            "user:w7": 7,
+        }
+    finally:
+        seed_config.close_pool()
+
+
 def _seed_event(store: DuckDBADKStore, event_id: str, ts: datetime) -> None:
     store.append_event(
         cast(

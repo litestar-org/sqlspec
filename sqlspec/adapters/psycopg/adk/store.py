@@ -2,6 +2,7 @@
 
 import re
 import struct
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
@@ -21,13 +22,15 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.extensions.adk.store import adk_primary_read_scope
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -225,8 +228,17 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             await driver.execute_script(statement)
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Create a new session and atomically apply optional scoped state deltas."""
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -247,18 +259,37 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             params = (session_id, app_name, user_id, Jsonb(state))
 
         row: dict[str, Any] | None = None
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(query, params)
-            if hasattr(cur, "fetchone"):
-                row = await cur.fetchone()
-            await conn.commit()
+        resolved_app: dict[str, Any] | None = None
+        resolved_user: dict[str, Any] | None = None
+        async with self._config.provide_connection() as conn:
+            tx_factory = getattr(conn, "transaction", None)
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                async with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    row, resolved_app, resolved_user = await self._execute_create_session(
+                        cur, query, params, app_name, user_id, app_state_delta, user_state_delta
+                    )
+            else:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    try:
+                        row, resolved_app, resolved_user = await self._execute_create_session(
+                            cur, query, params, app_name, user_id, app_state_delta, user_state_delta
+                        )
+                    except Exception:
+                        rollback: Any = getattr(conn, "rollback", None)
+                        if rollback is not None:
+                            await rollback()
+                        raise
+                    await conn.commit()
 
         if row is not None:
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
             return StoredSession(
                 id=row["id"],
                 app_name=row["app_name"],
                 user_id=row["user_id"],
-                state=row["state"],
+                state=merged_state,
                 create_time=row["create_time"],
                 update_time=row["update_time"],
             )
@@ -268,6 +299,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
+        result["state"] = merge_scoped_state(_decode_json_state(result["state"]), resolved_app, resolved_user)
         return result
 
     async def get_session(
@@ -424,9 +456,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
+        """Atomically append an event and update session plus optional scoped deltas."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
             user_id,
@@ -448,22 +481,6 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=_pg_table_identifier(self._session_table))
 
-        app_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=_pg_table_identifier(self._app_state_table))
-
-        user_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=_pg_table_identifier(self._user_state_table))
-
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
@@ -472,49 +489,35 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             if callable(tx_factory) and getattr(conn, "autocommit", False):
                 tx_ctx: Any = tx_factory()
                 async with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                    row = await cur.fetchone()
-                    if row is None:
-                        _raise_missing_session(session_id)
-                    await cur.execute(
+                    row, merged_app, merged_user = await self._execute_append_event_and_update_state(
+                        cur,
+                        update_query,
                         insert_query,
-                        (
-                            event_record["id"],
-                            event_record["app_name"],
-                            event_record["user_id"],
-                            event_record["session_id"],
-                            event_record["invocation_id"],
-                            event_record["timestamp"],
-                            jsonb_value,
-                        ),
+                        event_record,
+                        app_name,
+                        user_id,
+                        session_id,
+                        state,
+                        jsonb_value,
+                        app_state_delta,
+                        user_state_delta,
                     )
-                    if app_state is not None:
-                        await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                    if user_state is not None:
-                        await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             else:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     try:
-                        await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        row = await cur.fetchone()
-                        if row is None:
-                            _raise_missing_session(session_id)
-                        await cur.execute(
+                        row, merged_app, merged_user = await self._execute_append_event_and_update_state(
+                            cur,
+                            update_query,
                             insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
+                            event_record,
+                            app_name,
+                            user_id,
+                            session_id,
+                            state,
+                            jsonb_value,
+                            app_state_delta,
+                            user_state_delta,
                         )
-                        if app_state is not None:
-                            await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
                     except Exception:
                         rollback: Any = getattr(conn, "rollback", None)
                         if rollback is not None:
@@ -522,11 +525,13 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                         raise
                     await conn.commit()
 
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -551,7 +556,10 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
 
         where_clause = pg_sql.SQL(" AND ").join(where_clauses)
         if limit is not None:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp DESC, e.id DESC LIMIT %s")
             params.append(limit)
+        else:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp ASC, e.id ASC")
 
         query = pg_sql.SQL(
             """
@@ -559,19 +567,22 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         FROM {events_table} e
         JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """
         ).format(
             events_table=_pg_table_identifier(self._events_table),
             session_table=_pg_table_identifier(self._session_table),
             where_clause=where_clause,
-            limit_clause=pg_sql.SQL(" LIMIT %s" if limit is not None else ""),
+            order_clause=order_clause,
         )
 
         try:
             async with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(query, tuple(params))
                 rows = await cur.fetchall()
+
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -724,6 +735,121 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             await cur.execute(query, (key, value))
             await conn.commit()
 
+    async def _execute_create_session(
+        self,
+        cur: Any,
+        insert_query: pg_sql.Composed,
+        insert_params: "tuple[Any, ...]",
+        app_name: str,
+        user_id: str,
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+    ) -> "tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]":
+        await cur.execute(insert_query, insert_params)
+        row = await cur.fetchone() if hasattr(cur, "fetchone") else None
+        resolved_app = (
+            await self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+            if app_state_delta
+            else await self._select_app_state_on_cur(cur, app_name)
+        )
+        resolved_user = (
+            await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+            if user_state_delta
+            else await self._select_user_state_on_cur(cur, app_name, user_id)
+        )
+        return row, resolved_app, resolved_user
+
+    async def _execute_append_event_and_update_state(
+        self,
+        cur: Any,
+        update_query: pg_sql.Composed,
+        insert_query: pg_sql.Composed,
+        event_record: StoredEvent,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        jsonb_value: Any,
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+    ) -> "tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]":
+        await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+        row = await cur.fetchone()
+        if row is None:
+            _raise_missing_session(session_id)
+        await cur.execute(
+            insert_query,
+            (
+                event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
+                event_record["session_id"],
+                event_record["invocation_id"],
+                event_record["timestamp"],
+                jsonb_value,
+            ),
+        )
+        merged_app = await self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+        merged_user = (
+            await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+        )
+        return row, merged_app, merged_user
+
+    async def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return await self._select_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    async def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return await self._select_scoped_state_on_cur(
+            cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    async def _select_scoped_state_on_cur(
+        self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        select_query, _, _, _ = _psycopg_scoped_state_queries(table, key_columns)
+        await cur.execute(select_query, key_values)
+        row = await cur.fetchone() if hasattr(cur, "fetchone") else None
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    async def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._merge_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    async def _merge_user_state_on_cur(
+        self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return await self._merge_scoped_state_on_cur(
+            cur,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    async def _merge_scoped_state_on_cur(
+        self,
+        cur: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        _, ensure_query, lock_query, update_query = _psycopg_scoped_state_queries(table, key_columns)
+        await cur.execute(ensure_query, (*key_values, Jsonb({})))
+        await cur.execute(lock_query, key_values)
+        row = await cur.fetchone() if hasattr(cur, "fetchone") else None
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+        await cur.execute(update_query, (Jsonb(merged), *key_values))
+        return merged
+
     async def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
         if self._owner_id_column_ddl:
@@ -820,9 +946,17 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             driver.execute_script(statement)
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session."""
+        """Create a new session and atomically apply optional scoped state deltas."""
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
@@ -843,18 +977,37 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             params = (session_id, app_name, user_id, Jsonb(state))
 
         row: dict[str, Any] | None = None
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(query, params)
-            if hasattr(cur, "fetchone"):
-                row = cur.fetchone()
-            conn.commit()
+        resolved_app: dict[str, Any] | None = None
+        resolved_user: dict[str, Any] | None = None
+        with self._config.provide_connection() as conn:
+            tx_factory = getattr(conn, "transaction", None)
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    row, resolved_app, resolved_user = self._execute_create_session(
+                        cur, query, params, app_name, user_id, app_state_delta, user_state_delta
+                    )
+            else:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    try:
+                        row, resolved_app, resolved_user = self._execute_create_session(
+                            cur, query, params, app_name, user_id, app_state_delta, user_state_delta
+                        )
+                    except Exception:
+                        rollback = getattr(conn, "rollback", None)
+                        if callable(rollback):
+                            rollback()
+                        raise
+                    conn.commit()
 
         if row is not None:
+            persisted_state = _decode_json_state(row["state"])
+            merged_state = merge_scoped_state(persisted_state, resolved_app, resolved_user)
             return StoredSession(
                 id=row["id"],
                 app_name=row["app_name"],
                 user_id=row["user_id"],
-                state=row["state"],
+                state=merged_state,
                 create_time=row["create_time"],
                 update_time=row["update_time"],
             )
@@ -864,6 +1017,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         if result is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
+        result["state"] = merge_scoped_state(_decode_json_state(result["state"]), resolved_app, resolved_user)
         return result
 
     def get_session(
@@ -983,10 +1137,10 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Atomically append an event and update session + scoped state."""
+        """Atomically append an event and update session plus optional scoped deltas."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
             app_name,
             user_id,
@@ -1008,22 +1162,6 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         RETURNING id, app_name, user_id, state, create_time, update_time
         """).format(table=_pg_table_identifier(self._session_table))
 
-        app_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, state, update_time)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=_pg_table_identifier(self._app_state_table))
-
-        user_upsert_query = pg_sql.SQL("""
-        INSERT INTO {table} (app_name, user_id, state, update_time)
-        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (app_name, user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            update_time = CURRENT_TIMESTAMP
-        """).format(table=_pg_table_identifier(self._user_state_table))
-
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
@@ -1032,49 +1170,35 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             if callable(tx_factory) and getattr(conn, "autocommit", False):
                 tx_ctx: Any = tx_factory()
                 with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                    row = cur.fetchone()
-                    if row is None:
-                        _raise_missing_session(session_id)
-                    cur.execute(
+                    row, merged_app, merged_user = self._execute_append_event_and_update_state(
+                        cur,
+                        update_query,
                         insert_query,
-                        (
-                            event_record["id"],
-                            event_record["app_name"],
-                            event_record["user_id"],
-                            event_record["session_id"],
-                            event_record["invocation_id"],
-                            event_record["timestamp"],
-                            jsonb_value,
-                        ),
+                        event_record,
+                        app_name,
+                        user_id,
+                        session_id,
+                        state,
+                        jsonb_value,
+                        app_state_delta,
+                        user_state_delta,
                     )
-                    if app_state is not None:
-                        cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                    if user_state is not None:
-                        cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             else:
                 with conn.cursor(row_factory=dict_row) as cur:
                     try:
-                        cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        row = cur.fetchone()
-                        if row is None:
-                            _raise_missing_session(session_id)
-                        cur.execute(
+                        row, merged_app, merged_user = self._execute_append_event_and_update_state(
+                            cur,
+                            update_query,
                             insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
+                            event_record,
+                            app_name,
+                            user_id,
+                            session_id,
+                            state,
+                            jsonb_value,
+                            app_state_delta,
+                            user_state_delta,
                         )
-                        if app_state is not None:
-                            cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
                     except Exception:
                         rollback = getattr(conn, "rollback", None)
                         if callable(rollback):
@@ -1082,11 +1206,13 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                         raise
                     conn.commit()
 
+        persisted_state = _decode_json_state(row["state"])
+        merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
             user_id=row["user_id"],
-            state=row["state"],
+            state=merged_state,
             create_time=row["create_time"],
             update_time=row["update_time"],
         )
@@ -1112,7 +1238,10 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
 
         where_clause = pg_sql.SQL(" AND ").join(where_clauses)
         if limit is not None:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp DESC, e.id DESC LIMIT %s")
             params.append(limit)
+        else:
+            order_clause = pg_sql.SQL("ORDER BY e.timestamp ASC, e.id ASC")
 
         query = pg_sql.SQL(
             """
@@ -1120,19 +1249,22 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         FROM {events_table} e
         JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
         WHERE {where_clause}
-        ORDER BY e.timestamp ASC{limit_clause}
+        {order_clause}
         """
         ).format(
             events_table=_pg_table_identifier(self._events_table),
             session_table=_pg_table_identifier(self._session_table),
             where_clause=where_clause,
-            limit_clause=pg_sql.SQL(" LIMIT %s" if limit is not None else ""),
+            order_clause=order_clause,
         )
 
         try:
             with self._provide_read_connection(primary=False) as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, tuple(params))
                 rows = cur.fetchall()
+
+                if limit is not None:
+                    rows = list(reversed(rows))
 
                 return [
                     StoredEvent(
@@ -1293,6 +1425,121 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, (key, value))
             conn.commit()
+
+    def _execute_create_session(
+        self,
+        cur: Any,
+        insert_query: pg_sql.Composed,
+        insert_params: "tuple[Any, ...]",
+        app_name: str,
+        user_id: str,
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+    ) -> "tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]":
+        cur.execute(insert_query, insert_params)
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        resolved_app = (
+            self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+            if app_state_delta
+            else self._select_app_state_on_cur(cur, app_name)
+        )
+        resolved_user = (
+            self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+            if user_state_delta
+            else self._select_user_state_on_cur(cur, app_name, user_id)
+        )
+        return row, resolved_app, resolved_user
+
+    def _execute_append_event_and_update_state(
+        self,
+        cur: Any,
+        update_query: pg_sql.Composed,
+        insert_query: pg_sql.Composed,
+        event_record: StoredEvent,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: "dict[str, Any]",
+        jsonb_value: Any,
+        app_state_delta: "dict[str, Any] | None",
+        user_state_delta: "dict[str, Any] | None",
+    ) -> "tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]":
+        cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+        row = cur.fetchone()
+        if row is None:
+            _raise_missing_session(session_id)
+        cur.execute(
+            insert_query,
+            (
+                event_record["id"],
+                event_record["app_name"],
+                event_record["user_id"],
+                event_record["session_id"],
+                event_record["invocation_id"],
+                event_record["timestamp"],
+                jsonb_value,
+            ),
+        )
+        merged_app = self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+        merged_user = (
+            self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+        )
+        return row, merged_app, merged_user
+
+    def _select_app_state_on_cur(self, cur: Any, app_name: str) -> "dict[str, Any] | None":
+        return self._select_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,)
+        )
+
+    def _select_user_state_on_cur(self, cur: Any, app_name: str, user_id: str) -> "dict[str, Any] | None":
+        return self._select_scoped_state_on_cur(
+            cur, table=self._user_state_table, key_columns=("app_name", "user_id"), key_values=(app_name, user_id)
+        )
+
+    def _select_scoped_state_on_cur(
+        self, cur: Any, *, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
+    ) -> "dict[str, Any] | None":
+        select_query, _, _, _ = _psycopg_scoped_state_queries(table, key_columns)
+        cur.execute(select_query, key_values)
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        if row is None:
+            return None
+        return _decode_json_state(row["state"])
+
+    def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._merge_scoped_state_on_cur(
+            cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
+        )
+
+    def _merge_user_state_on_cur(
+        self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any]":
+        return self._merge_scoped_state_on_cur(
+            cur,
+            table=self._user_state_table,
+            key_columns=("app_name", "user_id"),
+            key_values=(app_name, user_id),
+            delta=delta,
+        )
+
+    def _merge_scoped_state_on_cur(
+        self,
+        cur: Any,
+        *,
+        table: str,
+        key_columns: "tuple[str, ...]",
+        key_values: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any]":
+        _, ensure_query, lock_query, update_query = _psycopg_scoped_state_queries(table, key_columns)
+        cur.execute(ensure_query, (*key_values, Jsonb({})))
+        cur.execute(lock_query, key_values)
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        existing = _decode_json_state(row["state"]) if row is not None else {}
+        merged = dict(existing)
+        merged.update(delta)
+        cur.execute(update_query, (Jsonb(merged), *key_values))
+        return merged
 
     def _sessions_table_ddl(self) -> str:
         owner_id_line = ""
@@ -2422,6 +2669,48 @@ def _postgres_event_ddl_options(adk_config: PsycopgADKConfig) -> "tuple[str, str
 def _raise_missing_session(session_id: str) -> NoReturn:
     msg = f"Session {session_id} not found during append_event_and_update_state."
     raise ValueError(msg)
+
+
+def _psycopg_scoped_state_queries(
+    table: str, key_columns: "tuple[str, ...]"
+) -> "tuple[pg_sql.Composed, pg_sql.Composed, pg_sql.Composed, pg_sql.Composed]":
+    """Build parameterized psycopg queries for reading, ensuring, locking, and updating scoped state."""
+    table_ident = _pg_table_identifier(table)
+    where_clause = pg_sql.SQL(" AND ").join(
+        pg_sql.SQL("{col} = %s").format(col=pg_sql.Identifier(col)) for col in key_columns
+    )
+    cols = pg_sql.SQL(", ").join([
+        *(pg_sql.Identifier(col) for col in key_columns),
+        pg_sql.Identifier("state"),
+        pg_sql.Identifier("update_time"),
+    ])
+    placeholders = pg_sql.SQL(", ").join(pg_sql.SQL("%s") for _ in range(len(key_columns) + 1))
+    conflict_cols = pg_sql.SQL(", ").join(pg_sql.Identifier(col) for col in key_columns)
+
+    select_query = pg_sql.SQL("SELECT state FROM {table} WHERE {where_clause}").format(
+        table=table_ident, where_clause=where_clause
+    )
+    ensure_query = pg_sql.SQL(
+        "INSERT INTO {table} ({cols}) VALUES ({placeholders}, CURRENT_TIMESTAMP) "
+        "ON CONFLICT ({conflict_cols}) DO NOTHING"
+    ).format(table=table_ident, cols=cols, placeholders=placeholders, conflict_cols=conflict_cols)
+    lock_query = pg_sql.SQL("SELECT state FROM {table} WHERE {where_clause} FOR UPDATE").format(
+        table=table_ident, where_clause=where_clause
+    )
+    update_query = pg_sql.SQL(
+        "UPDATE {table} SET state = %s, update_time = CURRENT_TIMESTAMP WHERE {where_clause}"
+    ).format(table=table_ident, where_clause=where_clause)
+    return select_query, ensure_query, lock_query, update_query
+
+
+def _decode_json_state(raw: Any) -> "dict[str, Any]":
+    """Normalize a JSONB state value from psycopg into a dictionary."""
+    if isinstance(raw, str):
+        decoded = from_json(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}
 
 
 def _build_psycopg_scope_where(

@@ -368,7 +368,7 @@ def test_pymssql_events_join_and_delete_session_scoping(monkeypatch: "pytest.Mon
         "FROM [dbo].[adk_event] e JOIN [dbo].[adk_session] s "
         "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
         "WHERE s.app_name = %s AND s.user_id = %s AND s.id = %s AND e.timestamp > %s "
-        "ORDER BY e.timestamp ASC"
+        "ORDER BY e.timestamp DESC"
     ) in _normalized(events_sql)
     assert events_params == (5, "app", "u1", "s1", after)
 
@@ -461,3 +461,82 @@ def test_pymssql_memory_ddl_dedup_and_scoped_delete_entries_by_session(
         PymssqlADKMemoryStore(_mock_config()).delete_entries_by_session("s1", app_name=app_name, user_id=user_id) == 1
     )
     assert delete_calls == [(expected_sql, expected_params)]
+
+
+def test_pymssql_create_session_merges_and_reads_scoped_state_under_autocommit() -> None:
+    """create_session starts BEGIN TRANSACTION when autocommit_state=True, locks app then user, and merges."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit_state = True
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [
+        ("s1", "app", "u1", '{"turn": 1}', now, now),
+        ('{"app:existing": 1}',),
+        ('{"user:lang": "en"}',),
+    ]
+    store = PymssqlADKStore(config)
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert executed[0] == "BEGIN TRANSACTION"
+    assert executed[1].startswith("INSERT INTO [dbo].[adk_session]")
+    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s"
+    assert (
+        executed[3] == "UPDATE [dbo].[adk_app_state] SET state = %s, update_time = SYSUTCDATETIME() WHERE app_name = %s"
+    )
+    assert executed[4] == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = %s AND user_id = %s"
+    assert executed[-1] == "IF @@TRANCOUNT > 0 COMMIT TRANSACTION"
+
+
+def test_pymssql_append_event_and_update_state_atomic_merge_and_rejects_old_kwargs() -> None:
+    """append_event_and_update_state locks app then user state and removes app_state/user_state kwargs."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    conn.autocommit_state = False
+    cursor = conn.cursor.return_value
+    cursor.fetchone.side_effect = [("s1", "app", "u1", '{"turn": 2}', now, now), ('{"app:a": 1}',), None]
+    store = PymssqlADKStore(config)
+    event = _event_fixture()
+
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:a2": 2}, user_state_delta={"user:u2": 3}
+    )
+
+    assert updated["state"] == {"turn": 2, "app:a": 1, "app:a2": 2, "user:u2": 3}
+    executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
+    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s"
+    assert executed[3].startswith("UPDATE [dbo].[adk_app_state]")
+    assert executed[4] == (
+        "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND user_id = %s"
+    )
+    assert executed[5].startswith("INSERT INTO [dbo].[adk_user_state]")
+    conn.commit.assert_called_once()
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+
+def test_pymssql_get_events_bounded_reverses_desc_rows(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """get_events(limit=N) reverses DESC rows to chronological ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def _fake_fetchall(
+        _store: PymssqlADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        calls.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(PymssqlADKStore, "_execute_fetchall", _fake_fetchall)
+
+    events = PymssqlADKStore(_mock_config()).get_events("app", "u1", "s1", limit=2)
+
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC" in _normalized(calls[0][0])

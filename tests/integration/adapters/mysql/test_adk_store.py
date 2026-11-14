@@ -674,3 +674,237 @@ async def test_mysql_adk_companions_restore_dropped_index(mysql_adk_store_harnes
     )
     assert preserved is not None
     assert preserved["state"] == {"preserved": True}
+
+
+async def _run_custom_store_companions(harness: "MysqlAdkStoreHarness", config: Any, store: Any) -> list[str]:
+    """Run companion reconciliation once on a custom MySQL ADK store and return executed SQL."""
+    if harness.is_async:
+        async with config.provide_session() as driver:
+            proxy = _RecordingAsyncDriverProxy(driver)
+            await store.reconcile_companion_objects_async(proxy)
+            return proxy.executed_statements
+    with config.provide_session() as driver:
+        sync_proxy = _RecordingSyncDriverProxy(driver)
+        store.reconcile_companion_objects_sync(sync_proxy)
+        return sync_proxy.executed_statements
+
+
+async def _downgrade_columns_to_unicode_ci(
+    harness: "MysqlAdkStoreHarness", config: Any, table_columns: dict[str, tuple[str, ...]]
+) -> None:
+    """Convert listed columns to utf8mb4_unicode_ci on a single session with FK checks disabled."""
+    if harness.is_async:
+        async with config.provide_session() as driver:
+            await driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+            try:
+                for table_name, columns in table_columns.items():
+                    meta_rows = await driver.select(
+                        "SELECT COLUMN_NAME AS column_name, COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable "
+                        "FROM INFORMATION_SCHEMA.COLUMNS "
+                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name",
+                        table_name=table_name,
+                    )
+                    meta_by_col = {str(r["column_name"]): r for r in meta_rows}
+                    for column in columns:
+                        meta = meta_by_col[column]
+                        null_sql = "NULL" if str(meta["is_nullable"]).upper() == "YES" else "NOT NULL"
+                        await driver.execute(
+                            f"ALTER TABLE {table_name} MODIFY COLUMN {column} {meta['column_type']} "
+                            f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci {null_sql}"
+                        )
+            finally:
+                await driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+                await driver.commit()
+        return
+
+    with config.provide_session() as driver:
+        driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+        try:
+            for table_name, columns in table_columns.items():
+                meta_rows = driver.select(
+                    "SELECT COLUMN_NAME AS column_name, COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable "
+                    "FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name",
+                    table_name=table_name,
+                )
+                meta_by_col = {str(r["column_name"]): r for r in meta_rows}
+                for column in columns:
+                    meta = meta_by_col[column]
+                    null_sql = "NULL" if str(meta["is_nullable"]).upper() == "YES" else "NOT NULL"
+                    driver.execute(
+                        f"ALTER TABLE {table_name} MODIFY COLUMN {column} {meta['column_type']} "
+                        f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci {null_sql}"
+                    )
+        finally:
+            driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+            driver.commit()
+
+
+async def _fetch_table_collations(
+    harness: "MysqlAdkStoreHarness", config: Any, table_columns: dict[str, tuple[str, ...]]
+) -> dict[tuple[str, str], str]:
+    """Fetch INFORMATION_SCHEMA collations for the given table and column pairs."""
+    collations: dict[tuple[str, str], str] = {}
+    for table_name, columns in table_columns.items():
+        rows = await harness.select_rows(
+            config,
+            "SELECT COLUMN_NAME AS column_name, COLLATION_NAME AS collation_name "
+            "FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name",
+            table_name=table_name,
+        )
+        by_col = {str(row["column_name"]): str(row["collation_name"]) for row in rows}
+        for column in columns:
+            collations[(table_name, column)] = by_col[column]
+    return collations
+
+
+def _expected_bin_collations(table_columns: dict[str, tuple[str, ...]]) -> dict[tuple[str, str], str]:
+    """Build expected utf8mb4_bin collation mapping for identity columns."""
+    return {(table_name, column): "utf8mb4_bin" for table_name, columns in table_columns.items() for column in columns}
+
+
+async def _drop_tables_safely(harness: "MysqlAdkStoreHarness", config: Any, table_names: tuple[str, ...]) -> None:
+    """Drop test tables cleanly with FK checks disabled for teardown."""
+    if harness.is_async:
+        async with config.provide_session() as driver:
+            await driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+            try:
+                for table_name in table_names:
+                    await driver.execute(f"DROP TABLE IF EXISTS {table_name}")
+            finally:
+                await driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+                await driver.commit()
+        return
+
+    with config.provide_session() as driver:
+        driver.execute("SET FOREIGN_KEY_CHECKS = 0")
+        try:
+            for table_name in table_names:
+                driver.execute(f"DROP TABLE IF EXISTS {table_name}")
+        finally:
+            driver.execute("SET FOREIGN_KEY_CHECKS = 1")
+            driver.commit()
+
+
+async def test_mysql_adk_reconcile_legacy_utf8mb4_unicode_ci_upgrades_and_preserves_data(
+    mysql_adk_store_harness: "MysqlAdkStoreHarness", mysql_service: "MySQLService"
+) -> None:
+    """Verify legacy utf8mb4_unicode_ci tables upgrade to utf8mb4_bin, keep data, and distinguish case and spaces."""
+    import uuid
+
+    suffix = uuid.uuid4().hex[:8]
+    session_table = f"legacy_s_{suffix}"
+    events_table = f"legacy_e_{suffix}"
+    app_state_table = f"legacy_a_{suffix}"
+    user_state_table = f"legacy_u_{suffix}"
+    metadata_table = f"legacy_d_{suffix}"
+    memory_table = f"legacy_m_{suffix}"
+
+    table_settings: dict[str, Any] = {
+        "session_table": session_table,
+        "events_table": events_table,
+        "app_state_table": app_state_table,
+        "user_state_table": user_state_table,
+        "metadata_table": metadata_table,
+        "memory_table": memory_table,
+    }
+    identity_columns: dict[str, tuple[str, ...]] = {
+        session_table: ("id", "app_name", "user_id"),
+        events_table: ("id", "app_name", "user_id", "session_id"),
+        app_state_table: ("app_name",),
+        user_state_table: ("app_name", "user_id"),
+    }
+    memory_columns: dict[str, tuple[str, ...]] = {memory_table: ("id", "session_id", "app_name", "user_id")}
+
+    is_async, config, store = _build_mysql_adk_config_and_store(
+        mysql_service, mysql_adk_store_harness.driver_mode, table_settings
+    )
+    mem_store = _MEMORY_STORES[mysql_adk_store_harness.driver_mode](config)
+    try:
+        await _call(mysql_adk_store_harness, store.create_tables)
+        await _call(mysql_adk_store_harness, mem_store.create_tables)
+        await _downgrade_columns_to_unicode_ci(mysql_adk_store_harness, config, {**identity_columns, **memory_columns})
+
+        now = datetime.now(tz=UTC)
+        await _call(
+            mysql_adk_store_harness,
+            store.create_session,
+            "s-legacy",
+            "app",
+            "user",
+            {"origin": "legacy"},
+            app_state_delta={"app:tier": "base"},
+            user_state_delta={"user:lang": "en"},
+        )
+        legacy_event: StoredEvent = {
+            "id": "e-legacy",
+            "app_name": "app",
+            "user_id": "user",
+            "session_id": "s-legacy",
+            "invocation_id": "inv-legacy",
+            "timestamp": now,
+            "event_data": {"step": 1},
+        }
+        await _call(mysql_adk_store_harness, store.append_event, legacy_event)
+        legacy_mem: StoredMemory = {
+            "id": "m-legacy",
+            "session_id": "s-legacy",
+            "app_name": "app",
+            "user_id": "user",
+            "scope": "user",
+            "event_id": "e-legacy",
+            "author": "user",
+            "timestamp": now,
+            "content_json": {"text": "legacy memory"},
+            "content_text": "legacy memory",
+            "metadata_json": {"tag": "legacy"},
+            "inserted_at": now,
+            "embedding": None,
+        }
+        assert await _call(mysql_adk_store_harness, mem_store.insert_memory_entries, [legacy_mem]) == 1
+
+        first_ddl = await _run_custom_store_companions(mysql_adk_store_harness, config, store)
+        mem_ddl = await _run_custom_store_companions(mysql_adk_store_harness, config, mem_store)
+
+        assert any("ALTER TABLE" in stmt and "utf8mb4_bin" in stmt for stmt in first_ddl)
+        assert any("FOREIGN_KEY_CHECKS = 0" in stmt for stmt in first_ddl)
+        assert any("FOREIGN_KEY_CHECKS = 1" in stmt for stmt in first_ddl)
+        assert any("ALTER TABLE" in stmt and "utf8mb4_bin" in stmt for stmt in mem_ddl)
+
+        assert await _run_custom_store_companions(mysql_adk_store_harness, config, store) == []
+        assert await _run_custom_store_companions(mysql_adk_store_harness, config, mem_store) == []
+
+        actual_collations = await _fetch_table_collations(
+            mysql_adk_store_harness, config, {**identity_columns, **memory_columns}
+        )
+        assert actual_collations == _expected_bin_collations({**identity_columns, **memory_columns})
+
+        preserved_session = await _call(mysql_adk_store_harness, store.get_session, "app", "user", "s-legacy")
+        assert preserved_session is not None
+        assert preserved_session["state"] == {"origin": "legacy", "app:tier": "base", "user:lang": "en"}
+        preserved_events = await _call(mysql_adk_store_harness, store.get_events, "app", "user", "s-legacy")
+        assert [event["id"] for event in preserved_events] == ["e-legacy"]
+
+        upper_created = await _call(
+            mysql_adk_store_harness,
+            store.create_session,
+            "s-Upper",
+            "App",
+            "user ",
+            {"origin": "upper"},
+            app_state_delta={"app:tier": "pro"},
+            user_state_delta={"user:lang": "fr"},
+        )
+        assert upper_created["state"] == {"origin": "upper", "app:tier": "pro", "user:lang": "fr"}
+
+        lower_again = await _call(mysql_adk_store_harness, store.get_session, "app", "user", "s-legacy")
+        assert lower_again is not None
+        assert lower_again["state"] == {"origin": "legacy", "app:tier": "base", "user:lang": "en"}
+    finally:
+        await _drop_tables_safely(
+            mysql_adk_store_harness,
+            config,
+            (memory_table, events_table, session_table, app_state_table, user_state_table, metadata_table),
+        )
+        await _close_mysql_config(config, is_async=is_async)

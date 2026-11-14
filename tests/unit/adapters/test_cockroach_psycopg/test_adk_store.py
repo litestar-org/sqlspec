@@ -17,7 +17,7 @@ from sqlspec.adapters.cockroach_psycopg.adk import (
     CockroachPsycopgSyncADKStore,
 )
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -921,3 +921,209 @@ async def test_cockroach_psycopg_memory_ddl_and_dml_quote_identifiers_consistent
     await _await_if_needed(store.search_entries("hello", "app", "u1"))
     search_sql, _ = cursor.calls[0]
     assert f"FROM {expected_dml}" in search_sql
+
+
+class _QueuedCockroachSyncCursor(_RecordingCursor):
+    def __init__(self, fetchone_queue: "list[dict[str, Any] | Exception | None]") -> None:
+        super().__init__()
+        self._queue = list(fetchone_queue)
+
+    def fetchone(self) -> "dict[str, Any] | None":
+        item = self._queue.pop(0) if self._queue else None
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class _QueuedCockroachAsyncCursor(_RecordingAsyncCursor):
+    def __init__(self, fetchone_queue: "list[dict[str, Any] | Exception | None]") -> None:
+        super().__init__()
+        self._queue = list(fetchone_queue)
+
+    async def fetchone(self) -> "dict[str, Any] | None":
+        item = self._queue.pop(0) if self._queue else None
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+@pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_SESSION_MODES)
+@pytest.mark.parametrize(
+    ("app_delta", "user_delta", "queue_rows", "expected_state", "expect_for_update"),
+    [
+        pytest.param(
+            None,
+            None,
+            [{"state": {"app:kept": "yes"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "user:kept": 1},
+            False,
+            id="untouched-reads",
+        ),
+        pytest.param(
+            {"app:added": 2, "app:null": None},
+            {"user:flag": False},
+            [{"state": {"app:kept": "yes", "app:null": "old"}}, {"state": {"user:kept": 1}}],
+            {"s": 1, "app:kept": "yes", "app:added": 2, "app:null": None, "user:kept": 1, "user:flag": False},
+            True,
+            id="delta-merges",
+        ),
+    ],
+)
+async def test_cockroach_psycopg_create_session_scoped_state_contract(
+    store_cls: Any,
+    is_async: bool,
+    app_delta: "dict[str, Any] | None",
+    user_delta: "dict[str, Any] | None",
+    queue_rows: "list[dict[str, Any]]",
+    expected_state: "dict[str, Any]",
+    expect_for_update: bool,
+) -> None:
+    """create_session reads untouched scopes or locks and merges deltas cleanly."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 1},
+        "create_time": now,
+        "update_time": now,
+    }
+    cursor: Any = (
+        _QueuedCockroachAsyncCursor([session_row, *queue_rows])
+        if is_async
+        else _QueuedCockroachSyncCursor([session_row, *queue_rows])
+    )
+    connection: Any = _RecordingAsyncConnection(cursor) if is_async else _RecordingConnection(cursor)
+    config = _mock_config()
+    config.driver_features = {
+        "enable_auto_retry": True,
+        "max_retries": 2,
+        "retry_delay_base_ms": 0.0,
+        "retry_delay_max_ms": 0.0,
+    }
+    config.provide_connection = lambda *_a, **_k: connection
+    store = store_cls(config)
+
+    created = await _await_if_needed(
+        store.create_session("s1", "app", "u1", {"s": 1}, app_state_delta=app_delta, user_state_delta=user_delta)
+    )
+
+    assert created["state"] == expected_state
+    joined_sql = " | ".join(_normalized(sql) for sql, _ in cursor.calls)
+    assert ("FOR UPDATE" in joined_sql) is expect_for_update
+    assert "UPSERT INTO" not in joined_sql
+
+
+@pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_SESSION_MODES)
+async def test_cockroach_psycopg_append_retries_on_40001_and_locks_deterministically(
+    store_cls: Any, is_async: bool
+) -> None:
+    """append_event_and_update_state rolls back, retries on 40001, and locks app before user state."""
+    now = datetime.now(UTC)
+    session_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"s": 2},
+        "create_time": now,
+        "update_time": now,
+    }
+    queue: list[dict[str, Any] | Exception | None] = [
+        session_row,
+        SerializationConflictError("restart transaction 40001"),
+        session_row,
+        {"state": {"app:keep": "a", "app:clear": "old"}},
+        {"state": {"user:lang": "en"}},
+    ]
+    cursor: Any = _QueuedCockroachAsyncCursor(queue) if is_async else _QueuedCockroachSyncCursor(queue)
+    connection: Any = _RecordingAsyncConnection(cursor) if is_async else _RecordingConnection(cursor)
+    config = _mock_config()
+    config.driver_features = {
+        "enable_auto_retry": True,
+        "max_retries": 2,
+        "retry_delay_base_ms": 0.0,
+        "retry_delay_max_ms": 0.0,
+        "enable_retry_logging": False,
+    }
+    config.provide_connection = lambda *_a, **_k: connection
+    store = store_cls(config)
+    event_record = {
+        "id": "evt-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "s1",
+        "invocation_id": "inv-1",
+        "timestamp": now,
+        "event_data": {"author": "user"},
+    }
+
+    updated = await _await_if_needed(
+        store.append_event_and_update_state(
+            cast("Any", event_record),
+            "app",
+            "u1",
+            "s1",
+            {"s": 2},
+            app_state_delta={"app:new": 1, "app:clear": None},
+            user_state_delta={"user:mode": "fast"},
+        )
+    )
+
+    assert updated["state"] == {
+        "s": 2,
+        "app:keep": "a",
+        "app:new": 1,
+        "app:clear": None,
+        "user:lang": "en",
+        "user:mode": "fast",
+    }
+    assert connection.rollback_called
+    assert connection.commit_called
+    sqls = [_normalized(sql) for sql, _ in cursor.calls]
+    assert sum(1 for sql in sqls if sql.startswith('UPDATE "adk_session"')) == 2
+    assert not any("UPSERT INTO" in sql for sql in sqls)
+    assert 'SELECT state FROM "adk_app_state"' in sqls[7]
+    assert "FOR UPDATE" in sqls[7]
+    assert 'SELECT state FROM "adk_user_state"' in sqls[10]
+    assert "FOR UPDATE" in sqls[10]
+
+
+@pytest.mark.parametrize(("store_cls", "is_async"), _COCKROACH_PSYCOPG_SESSION_MODES)
+async def test_cockroach_psycopg_get_events_limit_queries_desc_and_reverses_to_asc(
+    store_cls: Any, is_async: bool
+) -> None:
+    """get_events(limit=N) queries newest N descending and reverses to ascending order."""
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    rows = [
+        {
+            "id": "evt-3",
+            "session_id": "s1",
+            "invocation_id": "i3",
+            "timestamp": t3,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+        {
+            "id": "evt-2",
+            "session_id": "s1",
+            "invocation_id": "i2",
+            "timestamp": t2,
+            "event_data": {},
+            "app_name": "app",
+            "user_id": "u1",
+        },
+    ]
+    store, cursor, _ = _build_cockroach_psycopg_store(store_cls, is_async=is_async, rows=rows)
+
+    events = await _await_if_needed(
+        store.get_events("app", "u1", "s1", after_timestamp=datetime(2026, 1, 1, tzinfo=UTC), limit=2)
+    )
+
+    sql, params = cursor.calls[0]
+    rendered = _normalized(sql)
+    assert 'JOIN "adk_session" s' in rendered
+    assert "ORDER BY e.timestamp DESC, e.id DESC LIMIT %s" in rendered
+    assert params == ("app", "u1", "s1", datetime(2026, 1, 1, tzinfo=UTC), 2)
+    assert [e["id"] for e in events] == ["evt-2", "evt-3"]

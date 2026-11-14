@@ -16,6 +16,7 @@ from sqlspec.extensions.adk.memory import StoredMemory
 from tests.integration.adapters._shared.adk_behaviors import (
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
+    assert_adk_concurrent_state_merge_contract,
     assert_adk_create_tables_idempotent_contract,
     assert_adk_delete_session_cascade_contract,
     assert_adk_get_events_filtering_contract,
@@ -38,6 +39,7 @@ ADK_CONTRACTS = (
     assert_adk_delete_session_cascade_contract,
     assert_adk_append_and_get_events_contract,
     assert_adk_append_event_and_update_state_contract,
+    assert_adk_concurrent_state_merge_contract,
     assert_adk_get_events_filtering_contract,
 )
 

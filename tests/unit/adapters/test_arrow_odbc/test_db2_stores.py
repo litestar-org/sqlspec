@@ -319,12 +319,21 @@ def test_db2_adk_session_roundtrip() -> None:
         ),
         ["app", "u", "s1"],
     )
+    assert calls[2] == ("SELECT state FROM adk_app_state WHERE app_name = ? FETCH FIRST 1 ROWS ONLY", ["app"])
     assert calls[3] == (
+        "SELECT state FROM adk_user_state WHERE app_name = ? AND user_id = ? FETCH FIRST 1 ROWS ONLY",
+        ["app", "u"],
+    )
+    assert calls[4] == (
+        "SELECT id, app_name, user_id, state, create_time, update_time FROM adk_session WHERE app_name = ? AND user_id = ? AND id = ? FETCH FIRST 1 ROWS ONLY",
+        ["app", "u", "s1"],
+    )
+    assert calls[5] == (
         "UPDATE adk_session SET state = ?, update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?",
         ['{"a":2}', DB2_TIMESTAMP, "app", "u", "s1"],
     )
-    assert calls[4][0].endswith("ORDER BY update_time DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY")
-    assert calls[4][1] == ["app", "u"]
+    assert calls[6][0].endswith("ORDER BY update_time DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY")
+    assert calls[6][1] == ["app", "u"]
 
 
 def test_db2_adk_state_upsert_uses_merge_without_holdlock() -> None:
@@ -388,7 +397,7 @@ def test_db2_adk_statements_use_fetch_first_not_top() -> None:
                 "SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data "
                 "FROM adk_event e JOIN adk_session s ON e.session_id = s.id AND e.app_name = s.app_name "
                 "AND e.user_id = s.user_id WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? "
-                "AND e.timestamp > ? ORDER BY e.timestamp ASC FETCH FIRST 4 ROWS ONLY"
+                "AND e.timestamp > ? ORDER BY e.timestamp DESC, e.id DESC FETCH FIRST 4 ROWS ONLY"
             ),
             ["app", "u", "s1", "2026-01-02 03:04:05.678901"],
         ),
@@ -406,11 +415,14 @@ def test_db2_adk_binds_utc_times() -> None:
     store = _adk_store(connection)
 
     store.get_session("app", "u", "s1", renew_for=60)
-    store.append_event_and_update_state(_event_record(), "app", "u", "s1", {"a": 3}, app_state={"g": 1})
+    updated = store.append_event_and_update_state(
+        _event_record(), "app", "u", "s1", {"a": 3}, app_state_delta={"g": 1, "flag": False, "cleared": None}
+    )
     deleted = store.delete_expired_events(_EVENT_TIME, app_name="app")
 
     calls = normalized_calls(connection)
     assert deleted == 2
+    assert updated["state"] == {"a": 1, "g": 1, "flag": False, "cleared": None}
     assert not [sql for sql, _ in calls if any(marker in sql.upper() for marker in _SERVER_CLOCK_MARKERS)]
     assert calls[0] == (
         "UPDATE adk_session SET update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?",
@@ -422,6 +434,17 @@ def test_db2_adk_binds_utc_times() -> None:
             "VALUES (?, ?, ?, ?, ?, ?, ?)"
         ),
         ["e1", "app", "u", "s1", "i1", "2026-01-02 03:04:05.678901", '{"x":1}'],
+    )
+    assert calls[5] == (
+        "SELECT state FROM adk_app_state WHERE app_name = ? FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS",
+        ["app"],
+    )
+    assert calls[6] == (
+        (
+            "INSERT INTO adk_app_state (app_name, state, update_time) "
+            "VALUES (CAST(? AS VARCHAR(128)), CAST(? AS CLOB(1M)), CAST(? AS TIMESTAMP))"
+        ),
+        ["app", '{"g":1,"flag":false,"cleared":null}', DB2_TIMESTAMP],
     )
     assert calls[-1] == (
         "DELETE FROM adk_event WHERE timestamp < ? AND app_name = ?",

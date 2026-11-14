@@ -1349,7 +1349,7 @@ def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pyt
         'FROM "DBA"."adk_event" e JOIN "DBA"."adk_session" s '
         "ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id "
         "WHERE s.app_name = ? AND s.user_id = ? AND s.id = ? AND e.timestamp > ? "
-        "ORDER BY e.timestamp ASC LIMIT ?"
+        "ORDER BY e.timestamp DESC LIMIT ?"
     ) in " ".join(events_sql.split())
     assert events_params == ("app", "u1", "s1", after, 5)
 
@@ -1577,3 +1577,63 @@ def test_sqlanywhere_hook_runtime_error_not_swallowed(monkeypatch: pytest.Monkey
         hook_conn.close.assert_called_once()
     finally:
         config.close_pool()
+
+
+class _QueueCursor(FakeCursor):
+    """FakeCursor returning queued fetchone results in execution order."""
+
+    def fetchone(self) -> Any:
+        return self.rows.pop(0) if self.rows else None
+
+
+def test_sqlanywhere_adk_create_append_and_get_events_chronological(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SqlanywhereADKStore locks app then user state with FOR UPDATE BY LOCK and reverses bounded newest-N events."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    cursor = _QueueCursor(
+        rows=[
+            ("s1", "app", "u1", '{"turn": 1}', now, now),
+            ('{"app:existing": 1}',),
+            ('{"user:lang": "en"}',),
+            ("s1", "app", "u1", '{"turn": 2}', now, now),
+            None,
+            ('{"user:lang": "en"}',),
+        ]
+    )
+    conn = FakeConnection(cursor)
+    monkeypatch.setattr(SqlanywhereConfig, "provide_connection", lambda _self: nullcontext(conn))
+    config = SqlanywhereConfig(connection_config={"user": "dba", "password": "sql", "database": "demo"})
+    store = SqlanywhereADKStore(config)
+
+    created = store.create_session(
+        "s1", "app", "u1", {"turn": 1}, app_state_delta={"app:added": 2}, user_state_delta=None
+    )
+    assert created["state"] == {"turn": 1, "app:existing": 1, "app:added": 2, "user:lang": "en"}
+
+    event = _sqlanywhere_event_fixture()
+    updated = store.append_event_and_update_state(
+        event, "app", "u1", "s1", {"turn": 2}, app_state_delta={"app:k": 1}, user_state_delta={"user:theme": "dark"}
+    )
+    assert updated["state"] == {"turn": 2, "app:k": 1, "user:lang": "en", "user:theme": "dark"}
+    assert conn.commits == 2
+
+    executed = [" ".join(sql.split()) for sql, _ in cursor.calls]
+    assert 'SELECT state FROM "DBA"."adk_app_state" WHERE app_name = ? FOR UPDATE BY LOCK' in executed
+    assert 'SELECT state FROM "DBA"."adk_user_state" WHERE app_name = ? AND user_id = ? FOR UPDATE BY LOCK' in executed
+
+    with pytest.raises(TypeError):
+        cast("Any", store).append_event_and_update_state(event, "app", "u1", "s1", {}, app_state={"a": 1})
+
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    captured: list[tuple[str, tuple[Any, ...]]] = []
+
+    def _fake_fetchall(
+        _store: SqlanywhereADKStore, sql: str, params: "tuple[Any, ...]", read: bool = False
+    ) -> "list[tuple[Any, ...]]":
+        captured.append((sql, params))
+        return [("e3", "app", "u1", "s1", "i", t3, "{}"), ("e2", "app", "u1", "s1", "i", t2, "{}")]
+
+    monkeypatch.setattr(SqlanywhereADKStore, "_execute_fetchall", _fake_fetchall)
+    events = store.get_events("app", "u1", "s1", limit=2)
+    assert [e["id"] for e in events] == ["e2", "e3"]
+    assert "ORDER BY e.timestamp DESC LIMIT ?" in " ".join(captured[0][0].split())

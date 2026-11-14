@@ -13,7 +13,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import SerializationConflictError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
@@ -31,6 +33,7 @@ __all__ = ("DuckDBADKConfig", "DuckDBADKFTSOptions", "DuckDBADKMemoryStore", "Du
 logger = get_logger("sqlspec.adapters.duckdb.adk.store")
 
 DUCKDB_TABLE_NOT_FOUND_ERROR: Final = "does not exist"
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 32
 DUCKDB_EVENT_PROJECTION_STRUCT: Final = "STRUCT(author VARCHAR, node_info STRUCT(path VARCHAR))"
 DUCKDB_FTS_ALLOWED_OPTIONS: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
 DUCKDB_FTS_CREATE_OPTION_ORDER: Final = ("stemmer", "stopwords", "ignore", "strip_accents", "lower", "overwrite")
@@ -120,9 +123,17 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         self._create_tables()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
-        """Create a new session.
+        """Create a new session and optionally merge scoped state deltas.
 
         Args:
             session_id: Unique session identifier.
@@ -130,11 +141,21 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             user_id: User identifier.
             state: Initial session state.
             owner_id: Optional owner ID value for owner_id_column (if configured).
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
 
         Returns:
-            Created session record.
+            Created session record with merged scoped state.
         """
-        return self._create_session(session_id, app_name, user_id, state, owner_id)
+        return self._create_session(
+            session_id,
+            app_name,
+            user_id,
+            state,
+            owner_id,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -216,27 +237,32 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update the session's durable state.
 
         The event insert and state update succeed together or fail together
         within a single DuckDB transaction; the updated StoredSession is
-        returned after committing or selecting the updated row.
+        returned with merged scoped state.
 
         Args:
             event_record: Event record to store.
             app_name: Application name.
             user_id: User identifier.
             session_id: Session identifier whose state should be updated.
-            state: Post-append durable state snapshot (``temp:`` keys already
-                stripped by the service layer).
-            app_state: Optional app-scoped state snapshot.
-            user_state: Optional user-scoped state snapshot.
+            state: Post-append durable session-scoped state snapshot.
+            app_state_delta: Optional app-scoped state delta to merge.
+            user_state_delta: Optional user-scoped state delta to merge.
         """
         return self._append_event_and_update_state(
-            event_record, app_name, user_id, session_id, state, app_state=app_state, user_state=user_state
+            event_record,
+            app_name,
+            user_id,
+            session_id,
+            state,
+            app_state_delta=app_state_delta,
+            user_state_delta=user_state_delta,
         )
 
     def get_events(
@@ -466,11 +492,20 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.commit()
 
     def _create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: "dict[str, Any]",
+        owner_id: "Any | None" = None,
+        *,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Synchronous implementation of create_session."""
         now = datetime.now(UTC)
-        state_json = to_json(state)
+        session_state = dict(state)
+        state_json = to_json(session_state)
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
@@ -487,13 +522,58 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             """
             params = (session_id, app_name, user_id, state_json, now, now)
 
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         with self._config.provide_connection() as conn:
-            conn.execute(sql, params)
-            conn.commit()
-
-        return StoredSession(
-            id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
-        )
+            for _ in range(max_attempts):
+                scoped_started = False
+                in_tx = False
+                try:
+                    conn.execute("BEGIN TRANSACTION")
+                    in_tx = True
+                    conn.execute(sql, params)
+                    scoped_started = True
+                    current_app_state = (
+                        self._merge_app_state_delta_tx(conn, app_name, app_state_delta)
+                        if app_state_delta
+                        else self._read_state_tx(
+                            conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,)
+                        )
+                    )
+                    current_user_state = (
+                        self._merge_user_state_delta_tx(conn, app_name, user_id, user_state_delta)
+                        if user_state_delta
+                        else self._read_state_tx(
+                            conn,
+                            f"SELECT state FROM {self._user_state_table} WHERE app_name = ? AND user_id = ?",
+                            (app_name, user_id),
+                        )
+                    )
+                    if (app_state_delta and current_app_state is None) or (
+                        user_state_delta and current_user_state is None
+                    ):
+                        conn.rollback()
+                        in_tx = False
+                        continue
+                    conn.commit()
+                    in_tx = False
+                    return StoredSession(
+                        id=session_id,
+                        app_name=app_name,
+                        user_id=user_id,
+                        state=merge_scoped_state(session_state, current_app_state, current_user_state),
+                        create_time=now,
+                        update_time=now,
+                    )
+                except Exception as exc:
+                    if in_tx:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                    if scoped_started and _is_duckdb_retryable_error(exc, allow_unique_conflict=has_deltas):
+                        continue
+                    raise
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def _get_session(
         self,
@@ -669,8 +749,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         session_id: str,
         state: "dict[str, Any]",
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state_delta: "dict[str, Any] | None" = None,
+        user_state_delta: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Synchronous implementation of append_event_and_update_state."""
         if (event_record["app_name"], event_record["user_id"], event_record["session_id"]) != (
@@ -684,8 +764,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             )
             raise ValueError(msg)
 
-        now = datetime.now(UTC)
-        state_json = to_json(state)
+        session_state = dict(state)
+        state_json = to_json(session_state)
         event_data_str = to_json(event_record["event_data"])
 
         insert_sql = f"""
@@ -704,60 +784,137 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
         FROM {self._session_table}
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
-        app_upsert_sql = f"""
-        INSERT INTO {self._app_state_table} (app_name, state, update_time)
-        VALUES (?, ?, ?)
-        ON CONFLICT(app_name) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
-        """
-        user_upsert_sql = f"""
-        INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(app_name, user_id) DO UPDATE SET
-            state = excluded.state,
-            update_time = excluded.update_time
-        """
 
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
         with self._config.provide_connection() as conn:
-            try:
-                conn.execute("BEGIN TRANSACTION")
-                conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
-                row = conn.execute(select_sql, (app_name, user_id, session_id)).fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                assert row is not None
-                conn.execute(
-                    insert_sql,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        event_data_str,
-                    ),
-                )
-                if app_state is not None:
-                    conn.execute(app_upsert_sql, (app_name, to_json(app_state), now))
-                if user_state is not None:
-                    conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+            for _ in range(max_attempts):
+                now = datetime.now(UTC)
+                in_tx = False
+                try:
+                    conn.execute("BEGIN TRANSACTION")
+                    in_tx = True
+                    conn.execute(update_sql, (state_json, now, app_name, user_id, session_id))
+                    row = conn.execute(select_sql, (app_name, user_id, session_id)).fetchone()
+                    if row is None:
+                        _raise_session_not_found(session_id)
+                    assert row is not None
+                    conn.execute(
+                        insert_sql,
+                        (
+                            event_record["id"],
+                            event_record["app_name"],
+                            event_record["user_id"],
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            event_record["timestamp"],
+                            event_data_str,
+                        ),
+                    )
+                    merged_app_state: dict[str, Any] | None = None
+                    if app_state_delta:
+                        merged_app_state = self._merge_app_state_delta_tx(conn, app_name, app_state_delta)
+                        if merged_app_state is None:
+                            conn.rollback()
+                            in_tx = False
+                            continue
+                    merged_user_state: dict[str, Any] | None = None
+                    if user_state_delta:
+                        merged_user_state = self._merge_user_state_delta_tx(conn, app_name, user_id, user_state_delta)
+                        if merged_user_state is None:
+                            conn.rollback()
+                            in_tx = False
+                            continue
+                    conn.commit()
+                    in_tx = False
+                    session_id_val, row_app_name, row_user_id, state_data, create_time, update_time = row
+                    stored_session_state = from_json(state_data) if isinstance(state_data, str) else state_data
+                    return StoredSession(
+                        id=session_id_val,
+                        app_name=row_app_name,
+                        user_id=row_user_id,
+                        state=merge_scoped_state(stored_session_state or {}, merged_app_state, merged_user_state),
+                        create_time=create_time,
+                        update_time=update_time,
+                    )
+                except Exception as exc:
+                    if in_tx:
+                        with contextlib.suppress(Exception):
+                            conn.rollback()
+                    if _is_duckdb_retryable_error(exc, allow_unique_conflict=has_deltas):
+                        continue
+                    raise
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
-        assert row is not None
-        session_id_val, app_name, user_id, state_data, create_time, update_time = row
-        return StoredSession(
-            id=session_id_val,
-            app_name=app_name,
-            user_id=user_id,
-            state=from_json(state_data) if isinstance(state_data, str) else state_data,
-            create_time=create_time,
-            update_time=update_time,
+    def _read_state_tx(self, conn: Any, sql: str, params: "tuple[Any, ...]") -> "dict[str, Any] | None":
+        try:
+            row = conn.execute(sql, params).fetchone()
+        except Exception as exc:
+            if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):
+                return None
+            raise
+        if row is None:
+            return None
+        return cast("dict[str, Any]", from_json(row[0]) if isinstance(row[0], str) else row[0])
+
+    def _merge_app_state_delta_tx(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any] | None":
+        return self._merge_scoped_state_tx(
+            conn,
+            table=self._app_state_table,
+            where_sql="app_name = ?",
+            insert_cols="app_name",
+            insert_vals="?",
+            conflict_cols="app_name",
+            key_params=(app_name,),
+            delta=delta,
         )
+
+    def _merge_user_state_delta_tx(
+        self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
+    ) -> "dict[str, Any] | None":
+        return self._merge_scoped_state_tx(
+            conn,
+            table=self._user_state_table,
+            where_sql="app_name = ? AND user_id = ?",
+            insert_cols="app_name, user_id",
+            insert_vals="?, ?",
+            conflict_cols="app_name, user_id",
+            key_params=(app_name, user_id),
+            delta=delta,
+        )
+
+    def _merge_scoped_state_tx(
+        self,
+        conn: Any,
+        *,
+        table: str,
+        where_sql: str,
+        insert_cols: str,
+        insert_vals: str,
+        conflict_cols: str,
+        key_params: "tuple[Any, ...]",
+        delta: "dict[str, Any]",
+    ) -> "dict[str, Any] | None":
+        row = conn.execute(f"SELECT state, update_time FROM {table} WHERE {where_sql}", key_params).fetchone()
+        if row is None:
+            merged = dict(delta)
+            now = datetime.now(UTC)
+            inserted = conn.execute(
+                f"INSERT INTO {table} ({insert_cols}, state, update_time) VALUES ({insert_vals}, ?, ?) "
+                f"ON CONFLICT({conflict_cols}) DO NOTHING RETURNING state",
+                (*key_params, to_json(merged), now),
+            ).fetchone()
+            return merged if inserted is not None else None
+        existing = cast("dict[str, Any]", from_json(row[0]) if isinstance(row[0], str) else (row[0] or {}))
+        expected_update_time = row[1]
+        merged = {**existing, **delta}
+        new_update_time = _next_monotonic_timestamp(expected_update_time)
+        updated = conn.execute(
+            f"UPDATE {table} SET state = ?, update_time = ? WHERE {where_sql} AND update_time = ? RETURNING state",
+            (to_json(merged), new_update_time, *key_params, expected_update_time),
+        ).fetchone()
+        return merged if updated is not None else None
 
     def _get_events(
         self,
@@ -1502,3 +1659,20 @@ def _session_list_query(
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
     return sql, tuple(params)
+
+
+def _next_monotonic_timestamp(previous: "datetime | None") -> datetime:
+    now = datetime.now(UTC)
+    if previous is None:
+        return now
+    comparable = previous if previous.tzinfo is not None else previous.replace(tzinfo=UTC)
+    if now <= comparable:
+        return comparable + timedelta(microseconds=1)
+    return now
+
+
+def _is_duckdb_retryable_error(exc: Exception, *, allow_unique_conflict: bool) -> bool:
+    message = str(exc).lower()
+    if "conflict" in message or "transactioncontext" in message:
+        return True
+    return allow_unique_conflict and ("duplicate key" in message or "constraint" in message)

@@ -1,5 +1,6 @@
 """IBM Db2 ADK stores for Google Agent Development Kit session and memory storage."""
 
+import contextlib
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
@@ -14,7 +15,7 @@ from sqlspec.adapters.db2.core import (
     utc_now,
 )
 from sqlspec.adapters.db2.migrations import build_guarded_drop_table
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SerializationConflictError, SQLSpecError, UniqueViolationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -23,6 +24,7 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk.converters import merge_scoped_state
 from sqlspec.extensions.adk.memory import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.migrations.schema import DropStatement, SchemaTarget, metadata_has_index
 from sqlspec.utils.serializers import from_json, to_json
@@ -35,6 +37,7 @@ __all__ = ("Db2AsyncADKMemoryStore", "Db2AsyncADKStore", "Db2SyncADKMemoryStore"
 
 JSON_COLUMN_TYPE: Final[str] = "CLOB(1M)"
 MISSING_OBJECT_SQLSTATE: Final[str] = "42704"
+_MAX_STATE_MERGE_ATTEMPTS: Final[int] = 8
 
 
 class _Db2ADKStoreMixin:
@@ -100,6 +103,24 @@ class _Db2ADKStoreMixin:
     def _upsert_user_state_sql(self) -> str:
         return _upsert_state_sql(self._user_state_table, ("app_name", "user_id"))
 
+    def _lock_app_state_select_sql(self) -> str:
+        return _lock_state_select_sql(self._app_state_table, ("app_name",))
+
+    def _lock_user_state_select_sql(self) -> str:
+        return _lock_state_select_sql(self._user_state_table, ("app_name", "user_id"))
+
+    def _insert_app_state_sql(self) -> str:
+        return _insert_state_sql(self._app_state_table, ("app_name",))
+
+    def _update_app_state_sql(self) -> str:
+        return _update_state_sql(self._app_state_table, ("app_name",))
+
+    def _insert_user_state_sql(self) -> str:
+        return _insert_state_sql(self._user_state_table, ("app_name", "user_id"))
+
+    def _update_user_state_sql(self) -> str:
+        return _update_state_sql(self._user_state_table, ("app_name", "user_id"))
+
     def _upsert_metadata_sql(self) -> str:
         return _upsert_metadata_sql(self._metadata_table)
 
@@ -142,17 +163,77 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             driver.commit()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and optionally merge scoped state deltas."""
+        session_state = dict(state)
         params = _session_insert_params(
-            session_id, app_name, user_id, state, self._owner_id_column_name is not None, owner_id
+            session_id, app_name, user_id, session_state, self._owner_id_column_name is not None, owner_id
         )
-        with self._config.provide_session() as driver:
-            driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
-            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
-            driver.commit()
-        return _created_session_record(row)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            with self._config.provide_session() as driver:
+                try:
+                    driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
+                    row = driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    scoped_started = True
+                    current_app_state = (
+                        self._merge_state_locked(
+                            driver,
+                            self._lock_app_state_select_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else self._read_state_on_driver(
+                            driver, _app_state_select_sql(self._app_state_table), (app_name,)
+                        )
+                    )
+                    current_user_state = (
+                        self._merge_state_locked(
+                            driver,
+                            self._lock_user_state_select_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else self._read_state_on_driver(
+                            driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
+                        )
+                    )
+                    driver.commit()
+                except UniqueViolationError:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+                else:
+                    record = _created_session_record(row)
+                    record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
@@ -239,27 +320,71 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
-        with self._config.provide_session() as driver:
-            driver.execute(
-                _update_session_state_sql(self._session_table),
-                (to_json(state), utc_now(), app_name, user_id, session_id),
-            )
-            row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
-            if row is None:
-                driver.rollback()
-                _raise_session_not_found(session_id)
-            driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-            if app_state is not None:
-                driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state), utc_now()))
-            if user_state is not None:
-                driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state), utc_now()))
-            driver.commit()
-        return _session_record_from_row(row)
+        session_state = dict(state)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            with self._config.provide_session() as driver:
+                try:
+                    driver.execute(
+                        _update_session_state_sql(self._session_table),
+                        (to_json(session_state), utc_now(), app_name, user_id, session_id),
+                    )
+                    row = driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    if row is None:
+                        driver.rollback()
+                        _raise_session_not_found(session_id)
+                    driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    scoped_started = True
+                    merged_app_state = (
+                        self._merge_state_locked(
+                            driver,
+                            self._lock_app_state_select_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else None
+                    )
+                    merged_user_state = (
+                        self._merge_state_locked(
+                            driver,
+                            self._lock_user_state_select_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else None
+                    )
+                    driver.commit()
+                except UniqueViolationError:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        driver.rollback()
+                    raise
+                else:
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     def get_events(
         self,
@@ -270,7 +395,10 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
         limit: int | None = None,
     ) -> list[StoredEvent]:
         """Return events for a scoped session ordered by event timestamp."""
-        if limit is not None and limit <= 0:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
@@ -279,6 +407,8 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             if _is_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
@@ -372,6 +502,36 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                 return None
             raise
 
+    def _read_state_on_driver(
+        self, driver: "Db2SyncDriver", sql: str, params: tuple[Any, ...]
+    ) -> dict[str, Any] | None:
+        try:
+            row = driver.select_one_or_none(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return None
+            raise
+        return _json_dict(row["state"]) if row is not None else None
+
+    def _merge_state_locked(
+        self,
+        driver: "Db2SyncDriver",
+        lock_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: tuple[Any, ...],
+        delta: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = driver.select_one_or_none(lock_sql, key_params)
+        if row is None:
+            merged = dict(delta)
+            driver.execute(insert_sql, (*key_params, to_json(merged), utc_now()))
+            return merged
+        existing = _json_dict(row["state"])
+        merged = {**existing, **delta}
+        driver.execute(update_sql, (to_json(merged), utc_now(), *key_params))
+        return merged
+
     def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
         """Delete the matching rows in a single session; a missing table deletes nothing."""
         _ = count_sql
@@ -425,19 +585,77 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             await driver.commit()
 
     async def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self,
+        session_id: str,
+        app_name: str,
+        user_id: str,
+        state: dict[str, Any],
+        owner_id: Any | None = None,
+        *,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
-        """Create a new ADK session."""
+        """Create a new ADK session and optionally merge scoped state deltas."""
+        session_state = dict(state)
         params = _session_insert_params(
-            session_id, app_name, user_id, state, self._owner_id_column_name is not None, owner_id
+            session_id, app_name, user_id, session_state, self._owner_id_column_name is not None, owner_id
         )
-        async with self._config.provide_session() as driver:
-            await driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
-            row = await driver.select_one_or_none(
-                _session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
-            await driver.commit()
-        return _created_session_record(row)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            async with self._config.provide_session() as driver:
+                try:
+                    await driver.execute(_insert_session_sql(self._session_table, self._owner_id_column_name), params)
+                    row = await driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    scoped_started = True
+                    current_app_state = (
+                        await self._merge_state_locked(
+                            driver,
+                            self._lock_app_state_select_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else await self._read_state_on_driver(
+                            driver, _app_state_select_sql(self._app_state_table), (app_name,)
+                        )
+                    )
+                    current_user_state = (
+                        await self._merge_state_locked(
+                            driver,
+                            self._lock_user_state_select_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else await self._read_state_on_driver(
+                            driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
+                        )
+                    )
+                    await driver.commit()
+                except UniqueViolationError:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    raise
+                else:
+                    record = _created_session_record(row)
+                    record["state"] = merge_scoped_state(record["state"], current_app_state, current_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during create_session after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
@@ -526,29 +744,71 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         session_id: str,
         state: dict[str, Any],
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state_delta: dict[str, Any] | None = None,
+        user_state_delta: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         _validate_event_record_scope(event_record, app_name, user_id, session_id)
-        async with self._config.provide_session() as driver:
-            await driver.execute(
-                _update_session_state_sql(self._session_table),
-                (to_json(state), utc_now(), app_name, user_id, session_id),
-            )
-            row = await driver.select_one_or_none(
-                _session_select_sql(self._session_table), (app_name, user_id, session_id)
-            )
-            if row is None:
-                await driver.rollback()
-                _raise_session_not_found(session_id)
-            await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
-            if app_state is not None:
-                await driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state), utc_now()))
-            if user_state is not None:
-                await driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state), utc_now()))
-            await driver.commit()
-        return _session_record_from_row(row)
+        session_state = dict(state)
+        has_deltas = bool(app_state_delta or user_state_delta)
+        max_attempts = _MAX_STATE_MERGE_ATTEMPTS if has_deltas else 1
+        for attempt in range(max_attempts):
+            scoped_started = False
+            async with self._config.provide_session() as driver:
+                try:
+                    await driver.execute(
+                        _update_session_state_sql(self._session_table),
+                        (to_json(session_state), utc_now(), app_name, user_id, session_id),
+                    )
+                    row = await driver.select_one_or_none(
+                        _session_select_sql(self._session_table), (app_name, user_id, session_id)
+                    )
+                    if row is None:
+                        await driver.rollback()
+                        _raise_session_not_found(session_id)
+                    await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                    scoped_started = True
+                    merged_app_state = (
+                        await self._merge_state_locked(
+                            driver,
+                            self._lock_app_state_select_sql(),
+                            self._insert_app_state_sql(),
+                            self._update_app_state_sql(),
+                            (app_name,),
+                            app_state_delta,
+                        )
+                        if app_state_delta
+                        else None
+                    )
+                    merged_user_state = (
+                        await self._merge_state_locked(
+                            driver,
+                            self._lock_user_state_select_sql(),
+                            self._insert_user_state_sql(),
+                            self._update_user_state_sql(),
+                            (app_name, user_id),
+                            user_state_delta,
+                        )
+                        if user_state_delta
+                        else None
+                    )
+                    await driver.commit()
+                except UniqueViolationError:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    if scoped_started and has_deltas and attempt + 1 < max_attempts:
+                        continue
+                    raise
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await driver.rollback()
+                    raise
+                else:
+                    record = _session_record_from_row(row)
+                    record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
+                    return record
+        msg = f"Failed to merge scoped state during append_event_and_update_state after {max_attempts} attempts."
+        raise SerializationConflictError(msg)
 
     async def get_events(
         self,
@@ -559,7 +819,10 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
         limit: int | None = None,
     ) -> list[StoredEvent]:
         """Return events for a scoped session ordered by event timestamp."""
-        if limit is not None and limit <= 0:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            msg = "limit must be non-negative"
+            raise ValueError(msg)
+        if limit == 0:
             return []
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
@@ -568,6 +831,8 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             if _is_table_missing(exc):
                 return []
             raise
+        if limit is not None:
+            rows = list(reversed(rows))
         return [_event_record_from_row(row) for row in rows]
 
     async def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
@@ -661,6 +926,36 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             if _is_table_missing(exc):
                 return None
             raise
+
+    async def _read_state_on_driver(
+        self, driver: "Db2AsyncDriver", sql: str, params: tuple[Any, ...]
+    ) -> dict[str, Any] | None:
+        try:
+            row = await driver.select_one_or_none(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return None
+            raise
+        return _json_dict(row["state"]) if row is not None else None
+
+    async def _merge_state_locked(
+        self,
+        driver: "Db2AsyncDriver",
+        lock_sql: str,
+        insert_sql: str,
+        update_sql: str,
+        key_params: tuple[Any, ...],
+        delta: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = await driver.select_one_or_none(lock_sql, key_params)
+        if row is None:
+            merged = dict(delta)
+            await driver.execute(insert_sql, (*key_params, to_json(merged), utc_now()))
+            return merged
+        existing = _json_dict(row["state"])
+        merged = {**existing, **delta}
+        await driver.execute(update_sql, (to_json(merged), utc_now(), *key_params))
+        return merged
 
     async def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
         """Delete the matching rows in a single session; a missing table deletes nothing."""
@@ -1112,6 +1407,22 @@ def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     """
 
 
+def _lock_state_select_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    where_clause = " AND ".join(f"{column} = ?" for column in key_columns)
+    return f"SELECT state FROM {table} WHERE {where_clause} FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS"
+
+
+def _insert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    columns = ", ".join((*key_columns, "state", "update_time"))
+    key_casts = ", ".join("CAST(? AS VARCHAR(128))" for _ in key_columns)
+    return f"INSERT INTO {table} ({columns}) VALUES ({key_casts}, CAST(? AS {JSON_COLUMN_TYPE}), CAST(? AS TIMESTAMP))"
+
+
+def _update_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
+    where_clause = " AND ".join(f"{column} = ?" for column in key_columns)
+    return f"UPDATE {table} SET state = CAST(? AS {JSON_COLUMN_TYPE}), update_time = CAST(? AS TIMESTAMP) WHERE {where_clause}"
+
+
 def _upsert_metadata_sql(table: str) -> str:
     return f"""
     MERGE INTO {table} AS target
@@ -1139,15 +1450,14 @@ def _events_query(
     if after_timestamp is not None:
         after_clause = " AND e.timestamp > ?"
         params.append(to_db_timestamp(after_timestamp))
-    limit_clause = ""
-    if limit is not None:
-        limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY"
+    limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY" if limit is not None else ""
+    order_by = "ORDER BY e.timestamp DESC, e.id DESC" if limit is not None else "ORDER BY e.timestamp ASC, e.id ASC"
     sql = f"""
     SELECT e.id, e.app_name, e.user_id, e.session_id, e.invocation_id, e.timestamp, e.event_data
     FROM {events_table} e
     JOIN {session_table} s ON e.session_id = s.id AND e.app_name = s.app_name AND e.user_id = s.user_id
     WHERE s.app_name = ? AND s.user_id = ? AND s.id = ?{after_clause}
-    ORDER BY e.timestamp ASC{limit_clause}
+    {order_by}{limit_clause}
     """
     return sql, tuple(params)
 

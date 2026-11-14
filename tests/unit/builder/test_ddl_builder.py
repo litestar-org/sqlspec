@@ -1,4 +1,4 @@
-"""Regression tests for DDL builder Wave 1 fixes."""
+"""Regression tests for DDL builder identifier and statement generation."""
 
 from typing import Any, cast
 

@@ -603,3 +603,143 @@ def test_aiosqlite_adk_fts_tokenize_rejects_trailing_newline() -> None:
         AiosqliteADKMemoryStore(
             AiosqliteConfig(extension_config={"adk": {"memory_use_fts": True, "fts_tokenize": "porter\n"}})
         )
+
+
+class _SpyAiosqliteConnection:
+    def __init__(self, real_conn: Any, executed_sql: "list[str]") -> None:
+        self._real = real_conn
+        self._executed_sql = executed_sql
+
+    async def execute(self, sql: str, params: Any = ()) -> Any:
+        self._executed_sql.append(sql)
+        return await self._real.execute(sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _SpyAiosqliteProvideConnection:
+    def __init__(self, orig_factory: Any, executed_sql: "list[str]") -> None:
+        self._orig_factory = orig_factory
+        self._executed_sql = executed_sql
+        self._cm: Any = None
+
+    def __call__(self, *args: Any, **kwargs: Any) -> "_SpyAiosqliteProvideConnection":
+        self._cm = self._orig_factory(*args, **kwargs)
+        return self
+
+    async def __aenter__(self) -> _SpyAiosqliteConnection:
+        return _SpyAiosqliteConnection(await self._cm.__aenter__(), self._executed_sql)
+
+    async def __aexit__(self, *exc: Any) -> Any:
+        return await self._cm.__aexit__(*exc)
+
+
+async def test_aiosqlite_adk_writes_use_begin_immediate_and_preserve_untouched_and_falsy_keys() -> None:
+    """AioSQLite write transactions issue BEGIN IMMEDIATE before reading/writing scoped state."""
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    store = AiosqliteADKStore(config)
+    executed_sql: list[str] = []
+    try:
+        await store.create_tables()
+        await store.upsert_app_state("app-a", {"app:keep": "ok", "app:drop": "old"})
+        orig_provide = config.provide_connection
+        config.provide_connection = _SpyAiosqliteProvideConnection(orig_provide, executed_sql)  # type: ignore[method-assign]
+
+        created = await store.create_session(
+            "s1",
+            "app-a",
+            "user-1",
+            {"sess": 1},
+            app_state_delta={"app:drop": None, "app:zero": 0},
+            user_state_delta=None,
+        )
+        assert created["state"] == {"sess": 1, "app:keep": "ok", "app:drop": None, "app:zero": 0}
+        create_statements = [s for s in executed_sql if not s.startswith("PRAGMA")]
+        assert create_statements[0] == "BEGIN IMMEDIATE"
+
+        executed_sql.clear()
+        now = datetime(2026, 1, 2, tzinfo=UTC)
+        event = StoredEvent(
+            id="evt-1",
+            app_name="app-a",
+            user_id="user-1",
+            session_id="s1",
+            invocation_id="inv-1",
+            timestamp=now,
+            event_data={"author": "user"},
+        )
+        updated = await store.append_event_and_update_state(
+            event, "app-a", "user-1", "s1", {"sess": 2}, app_state_delta={}, user_state_delta=None
+        )
+        assert updated["state"] == {"sess": 2}
+        append_statements = [s for s in executed_sql if not s.startswith("PRAGMA")]
+        assert append_statements[0] == "BEGIN IMMEDIATE"
+        assert not any("adk_app_state" in s or "adk_user_state" in s for s in append_statements)
+        config.provide_connection = orig_provide  # type: ignore[method-assign]
+        assert await store.get_user_state("app-a", "user-1") is None
+        assert await store.get_app_state("app-a") == {"app:keep": "ok", "app:drop": None, "app:zero": 0}
+    finally:
+        await config.close_pool()
+
+
+async def test_aiosqlite_adk_get_events_limit_returns_newest_in_chronological_order() -> None:
+    """get_events(limit=N) returns the newest N events in chronological ascending order."""
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    store = AiosqliteADKStore(config)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    try:
+        await store.create_tables()
+        await store.create_session("s1", "app-a", "user-1", {})
+        await store.append_event(
+            StoredEvent(
+                id="e1",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i1",
+                timestamp=base + timedelta(seconds=1),
+                event_data={},
+            )
+        )
+        await store.append_event(
+            StoredEvent(
+                id="e2",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i2",
+                timestamp=base + timedelta(seconds=2),
+                event_data={},
+            )
+        )
+        await store.append_event(
+            StoredEvent(
+                id="e3",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i3",
+                timestamp=base + timedelta(seconds=3),
+                event_data={},
+            )
+        )
+        await store.append_event(
+            StoredEvent(
+                id="e4",
+                app_name="app-a",
+                user_id="user-1",
+                session_id="s1",
+                invocation_id="i4",
+                timestamp=base + timedelta(seconds=4),
+                event_data={},
+            )
+        )
+
+        recent = await store.get_events("app-a", "user-1", "s1", limit=2)
+        assert [event["id"] for event in recent] == ["e3", "e4"]
+
+        filtered = await store.get_events("app-a", "user-1", "s1", after_timestamp=base + timedelta(seconds=1), limit=2)
+        assert [event["id"] for event in filtered] == ["e3", "e4"]
+    finally:
+        await config.close_pool()
