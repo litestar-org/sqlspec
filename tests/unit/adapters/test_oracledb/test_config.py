@@ -606,6 +606,7 @@ async def test_oracle_config_p12_wallet_tns_alias_and_existing_wallet_dir_preser
 
     user_wallet_dir = tmp_path / "user_wallet"
     user_wallet_dir.mkdir()
+    (user_wallet_dir / "ewallet.pem").write_bytes(b"pem-content")
     (user_wallet_dir / "ewallet.p12").write_bytes(p12_bytes)
     (user_wallet_dir / "tnsnames.ora").write_text(tns_text, encoding="utf-8")
     (user_wallet_dir / "sqlnet.ora").write_text("SSL_SERVER_DN_MATCH = OFF\n", encoding="utf-8")
@@ -2377,3 +2378,55 @@ async def test_oracle_failed_wallet_zip_init_cleans_up_without_dropping_shared_o
         active_cfg._close_pool()
     assert not expected_dir.exists()
     assert expected_dir.resolve() not in oracle_core_module._WALLET_DIR_REFCOUNTS
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("config_type", [OracleSyncConfig, OracleAsyncConfig], ids=["sync", "async"])
+async def test_oracle_p12_only_wallet_directory_isolates_temp_dir_and_cleans_on_close(
+    tmp_path: Path, config_type: Any
+) -> None:
+    """A p12-only source wallet directory is never mutated and uses a refcounted private temp dir."""
+    src_dir = tmp_path / "readonly_p12_wallet"
+    src_dir.mkdir()
+    (src_dir / "ewallet.p12").write_bytes(_make_p12_wallet_bytes(b"DirSecret123"))
+    (src_dir / "tnsnames.ora").write_text(
+        "isolated_tp = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=adb.oraclecloud.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=isolated_tp.adb.oraclecloud.com)))\n",
+        encoding="utf-8",
+    )
+
+    pool_mock = MagicMock()
+    if config_type is OracleAsyncConfig:
+        pool_mock.close = AsyncMock()
+
+    cfg = config_type(
+        connection_instance=pool_mock,
+        connection_config={
+            "user": "admin",
+            "password": "pw",
+            "wallet_zip": str(src_dir),
+            "wallet_password": "DirSecret123",
+            "tns_alias": "isolated_tp",
+        },
+    )
+
+    assert not (src_dir / "ewallet.pem").exists()
+    extracted_dir = cfg._extracted_wallet_dir
+    assert extracted_dir is not None
+    assert extracted_dir.resolve() != src_dir.resolve()
+    assert extracted_dir.is_dir()
+    assert (extracted_dir.stat().st_mode & 0o777) == 0o700
+    assert (extracted_dir / "ewallet.pem").is_file()
+    assert ((extracted_dir / "ewallet.pem").stat().st_mode & 0o777) == 0o600
+    assert cfg.connection_config["wallet_location"] == str(extracted_dir)
+    assert cfg.connection_config["config_dir"] == str(extracted_dir)
+    assert oracle_core_module._WALLET_DIR_REFCOUNTS.get(extracted_dir.resolve()) == 1
+
+    if config_type is OracleAsyncConfig:
+        await cfg.close_pool()
+    else:
+        cfg.close_pool()
+
+    assert not extracted_dir.exists()
+    assert (src_dir / "ewallet.p12").is_file()
+    assert not (src_dir / "ewallet.pem").exists()

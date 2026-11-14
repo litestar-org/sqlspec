@@ -388,9 +388,20 @@ def test_extract_oracle_wallet_zip_deterministic_hash_and_directory_input(tmp_pa
     )
 
     resolved_dir = extract_oracle_wallet_zip(wallet_dir, wallet_password="DirSecret")
-    assert resolved_dir == wallet_dir.resolve()
-    assert (wallet_dir / "ewallet.pem").is_file()
-    assert ((wallet_dir / "ewallet.pem").stat().st_mode & 0o777) == 0o600
+    try:
+        assert resolved_dir != wallet_dir.resolve()
+        assert not (wallet_dir / "ewallet.pem").exists()
+        assert (resolved_dir.stat().st_mode & 0o777) == 0o700
+        assert (resolved_dir / "ewallet.pem").is_file()
+        assert (resolved_dir / "tnsnames.ora").is_file()
+        assert ((resolved_dir / "ewallet.pem").stat().st_mode & 0o777) == 0o600
+    finally:
+        shutil.rmtree(resolved_dir, ignore_errors=True)
+
+    pre_pem_dir = tmp_path / "existing_pem_wallet"
+    pre_pem_dir.mkdir()
+    (pre_pem_dir / "ewallet.pem").write_bytes(b"existing-pem")
+    assert extract_oracle_wallet_zip(pre_pem_dir) == pre_pem_dir.resolve()
 
     empty_dir = tmp_path / "empty_wallet"
     empty_dir.mkdir()

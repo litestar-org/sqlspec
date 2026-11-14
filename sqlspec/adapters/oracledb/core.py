@@ -2428,9 +2428,9 @@ def extract_oracle_wallet_zip(
         wallet_zip: Path to a wallet ``.zip`` archive, raw archive bytes, or
             path to an existing extracted wallet directory.
         target_dir: Optional directory to extract into. When ``None``,
-            existing directories are validated in-place and ``.zip`` archives
-            use a deterministic content-hashed directory under the system
-            temp root.
+            ``.zip`` archives and ``ewallet.p12``-only directories materialize
+            into a deterministic content-hashed directory under the system
+            temp root without modifying the source directory.
         prefix: Temporary directory prefix when ``target_dir`` is omitted.
         wallet_password: Optional passphrase used to decrypt ``ewallet.p12``
             when ``ewallet.pem`` is not present.
@@ -4096,6 +4096,25 @@ def _copy_wallet_directory_into(src_dir: Path, dst_root: Path) -> None:
             _write_private_wallet_file(dest_file, item.read_bytes())
 
 
+def _compute_wallet_directory_digest(src_dir: Path, wallet_password: "str | bytes | None") -> str:
+    hasher = hashlib.sha256()
+    hasher.update(str(src_dir).encode("utf-8"))
+    for item in sorted(src_dir.iterdir(), key=lambda entry: entry.name):
+        if item.is_symlink():
+            msg = f"Unsafe symlink in Oracle wallet directory: {item.name!r}"
+            raise ImproperConfigurationError(msg)
+        if item.is_file():
+            hasher.update(b"\x00")
+            hasher.update(item.name.encode("utf-8"))
+            hasher.update(b"\x00")
+            hasher.update(item.read_bytes())
+    if wallet_password is not None:
+        pw_bytes = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        hasher.update(b"\x00")
+        hasher.update(pw_bytes)
+    return hasher.hexdigest()
+
+
 def _prepare_wallet_directory_source(
     src_dir: Path, *, target_dir: "Path | None", prefix: str, wallet_password: "str | bytes | None"
 ) -> Path:
@@ -4112,17 +4131,22 @@ def _prepare_wallet_directory_source(
 
     p12_bytes = (src_dir / "ewallet.p12").read_bytes()
     pem_bytes = _convert_p12_to_pem_bytes(p12_bytes, wallet_password)
+    digest = _compute_wallet_directory_digest(src_dir, wallet_password)
+    extract_dir = _default_temp_wallet_dir(prefix, digest)
+    if _is_prepared_wallet_dir(extract_dir, check_owner=True):
+        _track_atexit_wallet_dir(extract_dir)
+        return extract_dir
+    cleanup_on_error = not extract_dir.exists()
+    _ensure_private_wallet_dir(extract_dir, check_owner=True)
+    _track_atexit_wallet_dir(extract_dir)
     try:
-        _write_private_wallet_file(src_dir / "ewallet.pem", pem_bytes)
-    except OSError:
-        digest = _compute_wallet_digest(p12_bytes + str(src_dir).encode("utf-8"), wallet_password)
-        fallback_dir = _default_temp_wallet_dir(prefix, digest)
-        _ensure_private_wallet_dir(fallback_dir, check_owner=True)
-        _track_atexit_wallet_dir(fallback_dir)
-        _copy_wallet_directory_into(src_dir, fallback_dir.resolve())
-        _write_private_wallet_file(fallback_dir / "ewallet.pem", pem_bytes)
-        return fallback_dir
-    return src_dir
+        _copy_wallet_directory_into(src_dir, extract_dir.resolve())
+        _write_private_wallet_file(extract_dir / "ewallet.pem", pem_bytes)
+    except BaseException:
+        if cleanup_on_error:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        raise
+    return extract_dir
 
 
 def _extract_wallet_bytes_into(
