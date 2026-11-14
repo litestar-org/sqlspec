@@ -224,7 +224,6 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `retry_delay_max_ms` | `float` | - | Upper bound in milliseconds on exponential backoff delay between retries. |
     | `enable_retry_logging` | `bool` | - | Emit structured debug/warning logs when serialization retries occur. |
     | `enable_follower_reads` | `bool` | - | Allow `AS OF SYSTEM TIME` follower-read clauses on read queries. |
-    | `statement_timeout_ms` | `int` | - | Statement execution timeout forwarded to the managed libpq session option. |
     | `default_staleness` | `str` | - | Default `AS OF SYSTEM TIME` staleness expression (such as `'-5s'` or `follower_read_timestamp()`). |
     | `json_serializer` | `Callable[[Any], str]` | `to_json` | Custom JSON serializer applied to statement parameters (defaults to `to_json`). |
     | `json_deserializer` | `Callable[[str], Any]` | `from_json` | Custom JSON deserializer retained alongside `json_serializer` (defaults to `from_json`). |

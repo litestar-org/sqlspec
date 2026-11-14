@@ -238,7 +238,6 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_retry_logging",
         "enable_follower_reads",
         "default_staleness",
-        "statement_timeout_ms",
         "json_serializer",
         "json_deserializer",
         "on_connection_create",

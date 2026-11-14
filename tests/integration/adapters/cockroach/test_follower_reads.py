@@ -162,10 +162,10 @@ def test_sync_routing_facade_primary_checkout_disables_global_follower_mode(
 
 
 def test_sync_statement_timeout_feature_reaches_native_session(cockroach_psycopg_sync_config: Any) -> None:
-    config = type(cockroach_psycopg_sync_config)(
-        connection_config=dict(cockroach_psycopg_sync_config.connection_config),
-        driver_features={"statement_timeout_ms": 2500},
-    )
+    connection_config = dict(cockroach_psycopg_sync_config.connection_config)
+    existing_options = str(connection_config.get("options") or "").strip()
+    connection_config["options"] = f"{existing_options} -c statement_timeout=2500".strip()
+    config = type(cockroach_psycopg_sync_config)(connection_config=connection_config)
     try:
         with config.provide_session() as session:
             assert session.select_value("SHOW statement_timeout") == "2500"
@@ -174,10 +174,10 @@ def test_sync_statement_timeout_feature_reaches_native_session(cockroach_psycopg
 
 
 async def test_async_statement_timeout_feature_reaches_native_session(cockroach_psycopg_async_config: Any) -> None:
-    config = type(cockroach_psycopg_async_config)(
-        connection_config=dict(cockroach_psycopg_async_config.connection_config),
-        driver_features={"statement_timeout_ms": 2500},
-    )
+    connection_config = dict(cockroach_psycopg_async_config.connection_config)
+    existing_options = str(connection_config.get("options") or "").strip()
+    connection_config["options"] = f"{existing_options} -c statement_timeout=2500".strip()
+    config = type(cockroach_psycopg_async_config)(connection_config=connection_config)
     try:
         async with config.provide_session() as session:
             assert await session.select_value("SHOW statement_timeout") == "2500"
