@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+import sqlspec.adapters.sqlanywhere.core as sqlanywhere_core
 import sqlspec.adapters.sqlanywhere.pool as sqlanywhere_pool_module
 from sqlspec.adapters.sqlanywhere import (
     DEFAULT_SQLANYWHERE_PORT,
@@ -1118,6 +1119,8 @@ def test_sqlanywhere_build_connection_config_quotes_delimiter_values(raw_pwd: st
         {"user": "dba", "password": "bad\x00pwd"},
         {"user": "dba", "password": "bad\npwd"},
         {"user": "dba", "extra": {"bad;key": "1"}},
+        {"user": "dba", "extra": {"Server\n": "demo"}},
+        {"user": "dba", "links": "tcpip\n"},
         {"user": "dba", "host": "localhost", "port": 70000},
         {"user": "dba", "host": "localhost", "port": True},
     ],
@@ -1128,6 +1131,16 @@ def test_sqlanywhere_build_connection_config_rejects_invalid_keys_ports_and_cont
     """Invalid SQL Anywhere keys, out-of-range ports, and control characters raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
         build_connection_config(bad_config)
+
+
+@pytest.mark.parametrize(
+    ("pattern_name", "value"), [("_SQLANY_KEY_PATTERN", "Server\n"), ("_SQLANY_LINKS_PATTERN", "tcpip\n")]
+)
+def test_sqlanywhere_identifier_patterns_reject_trailing_newline(pattern_name: str, value: str) -> None:
+    """SQL Anywhere identifier regexes use full-string anchors and reject trailing newlines."""
+    pattern = getattr(sqlanywhere_core, pattern_name)
+    assert pattern.match(value) is None
+    assert pattern.fullmatch(value) is None
 
 
 def test_sqlanywhere_pool_checkin_rolls_back_and_retires_on_hook_or_rollback_failure(

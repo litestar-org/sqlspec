@@ -67,9 +67,9 @@ __all__ = (
     "validate_bulk_identifier",
 )
 
-_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
-_UNQUOTED_TSQL_IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_@#][A-Za-z0-9_@#$]*$")
+_UNQUOTED_TSQL_IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z_@#][A-Za-z0-9_@#$]*\Z")
 _MAX_BULK_QUALIFIED_PARTS: Final[int] = 2
 _MIN_QUOTED_LEN: Final[int] = 2
 

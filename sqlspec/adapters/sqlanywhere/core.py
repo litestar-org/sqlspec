@@ -63,10 +63,10 @@ _MAX_SQLANYWHERE_PORT: Final[int] = 65535
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _SQLANYDB_FULL_ARGS_LEN: Final[int] = 3
 _SQLANYDB_PAIR_ARGS_LEN: Final[int] = 2
-_SQLANY_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_SQLANY_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _SQLANY_LINKS_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?"
-    r"(?:,[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?)*$"
+    r"\A[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?"
+    r"(?:,[A-Za-z0-9_]+(?:\([^()'\";{}]+=(?:[^()'\";{}]+)(?:;[^()'\";{}]+=[^()'\";{}]+)*\))?)*\Z"
 )
 _SQLANY_QUOTE_CHARS: Final[frozenset[str]] = frozenset({";", "'", '"', "{", "}", "="})
 _POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({

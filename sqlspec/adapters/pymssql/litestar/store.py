@@ -280,7 +280,7 @@ def _validate_session_table_name(table_name: str) -> None:
     unwrapped: list[str] = []
     for raw_segment in raw_segments:
         segment = _unwrap_tsql_segment(raw_segment)
-        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.match(segment):
+        if segment is None or len(segment) > MAX_TABLE_NAME_LENGTH or not VALID_TABLE_NAME_PATTERN.fullmatch(segment):
             msg = f"Invalid table name: {table_name!r}"
             raise ValueError(msg)
         unwrapped.append(segment)

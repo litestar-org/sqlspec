@@ -77,18 +77,41 @@ def test_adk_session_list_query_matches_modulo_placeholder(monkeypatch: "pytest.
     assert calls["mssql"][1] == calls["pymssql"][1]
 
 
-def test_event_queue_ddl_matches() -> None:
-    """Event queue DDL statements match across drivers."""
-    mssql_cfg = MssqlPythonConfig(extension_config={"events": {}})
-    pymssql_cfg = PymssqlConfig(extension_config={"events": {}})
+@pytest.mark.parametrize(
+    ("queue_table", "expected_object_name"),
+    [
+        pytest.param("sqlspec_event_queue", "[sqlspec_event_queue]", id="default-unqualified"),
+        pytest.param("event_queue", "[event_queue]", id="custom-unqualified"),
+        pytest.param("app.app_events", "[app].[app_events]", id="qualified"),
+    ],
+)
+def test_event_queue_ddl_matches(queue_table: str, expected_object_name: str) -> None:
+    """Event queue DDL statements match across drivers and resolve unqualified tables via default schema."""
+    mssql_cfg = MssqlPythonConfig(extension_config={"events": {"queue_table": queue_table}})
+    pymssql_cfg = PymssqlConfig(extension_config={"events": {"queue_table": queue_table}})
 
-    assert (
-        MssqlPythonEventQueueStore(mssql_cfg).create_statements()
-        == PymssqlEventQueueStore(pymssql_cfg).create_statements()
-    )
-    assert (
-        MssqlPythonEventQueueStore(mssql_cfg).drop_statements() == PymssqlEventQueueStore(pymssql_cfg).drop_statements()
-    )
+    mssql_create = MssqlPythonEventQueueStore(mssql_cfg).create_statements()
+    pymssql_create = PymssqlEventQueueStore(pymssql_cfg).create_statements()
+    mssql_drop = MssqlPythonEventQueueStore(mssql_cfg).drop_statements()
+    pymssql_drop = PymssqlEventQueueStore(pymssql_cfg).drop_statements()
+
+    assert mssql_create == pymssql_create
+    assert mssql_drop == pymssql_drop
+    assert f"OBJECT_ID(N'{expected_object_name}', N'U')" in mssql_create[0]
+    assert f"OBJECT_ID(N'{expected_object_name}')" in mssql_create[1]
+    assert f"OBJECT_ID(N'{expected_object_name}', N'U')" in mssql_drop[0]
+
+
+@pytest.mark.parametrize("table_name", ["[sessions\n]", "dbo.[sessions\n]", '"sessions\n"'])
+def test_litestar_store_rejects_trailing_newline_in_table_name(table_name: str) -> None:
+    """Quoted T-SQL session table segments reject trailing newline characters."""
+    mssql_cfg = MssqlPythonConfig(extension_config={"litestar": {"session_table": table_name}})
+    pymssql_cfg = PymssqlConfig(extension_config={"litestar": {"session_table": table_name}})
+
+    with pytest.raises(ValueError, match="Invalid table name"):
+        MssqlPythonStore(mssql_cfg)
+    with pytest.raises(ValueError, match="Invalid table name"):
+        PymssqlStore(pymssql_cfg)
 
 
 def test_litestar_store_ddl_matches() -> None:

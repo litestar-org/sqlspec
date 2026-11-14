@@ -1,7 +1,7 @@
 """pymssql event queue store with T-SQL-specific DDL."""
 
 from sqlspec.adapters.pymssql.config import PymssqlConfig
-from sqlspec.adapters.pymssql.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
+from sqlspec.adapters.pymssql.core import escape_sql_literal, format_identifier
 from sqlspec.extensions.events import BaseEventQueueStore
 
 __all__ = ("PymssqlEventQueueStore",)
@@ -43,5 +43,4 @@ class PymssqlEventQueueStore(BaseEventQueueStore[PymssqlConfig]):
 
 
 def _object_name(table_name: str) -> str:
-    schema_name, bare_table_name = split_schema_and_table(table_name)
-    return f"{quote_bracket_identifier(schema_name)}.{quote_bracket_identifier(bare_table_name)}"
+    return format_identifier(table_name)

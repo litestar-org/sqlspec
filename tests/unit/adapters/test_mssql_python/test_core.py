@@ -3,6 +3,7 @@
 import pytest
 from mssql_python import Error as MssqlPythonError
 
+import sqlspec.adapters.mssql_python.core as mssql_core
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
 from sqlspec.adapters.mssql_python.core import (
     build_connection_config,
@@ -419,6 +420,7 @@ def test_build_connection_config_escapes_ms_odbcstr_values_and_roundtrips(
         {"server": "localhost", "pwd": "bad\rpwd"},
         {"server": "localhost", "extra": {"PWD=x;Trusted_Connection": "yes"}},
         {"server": "localhost", "extra": {"123bad": "val"}},
+        {"server": "localhost", "extra": {"Server\n": "localhost"}},
         {"connection_string": "Server=localhost;\nUID=sa;"},
     ],
 )
@@ -426,6 +428,16 @@ def test_build_connection_config_rejects_invalid_keys_and_control_chars(bad_para
     """Invalid ODBC keywords and NUL/CR/LF control characters raise ImproperConfigurationError."""
     with pytest.raises(ImproperConfigurationError):
         build_connection_config(bad_params)
+
+
+@pytest.mark.parametrize(
+    ("pattern_name", "value"), [("_ODBC_KEY_PATTERN", "Server\n"), ("_UNQUOTED_TSQL_IDENTIFIER_PATTERN", "users\n")]
+)
+def test_mssql_identifier_patterns_reject_trailing_newline(pattern_name: str, value: str) -> None:
+    """Identifier regexes use full-string anchors so trailing newlines never match."""
+    pattern = getattr(mssql_core, pattern_name)
+    assert pattern.match(value) is None
+    assert pattern.fullmatch(value) is None
 
 
 @pytest.mark.parametrize(
