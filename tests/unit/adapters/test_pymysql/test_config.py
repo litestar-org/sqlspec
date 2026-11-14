@@ -433,3 +433,12 @@ def test_provide_session_releases_and_detaches_when_prepare_driver_fails(monkeyp
         assert seen[0].connection is _DETACHED_CONNECTION
     finally:
         pool.close()
+
+
+def test_pymysql_pool_close_resets_checked_out() -> None:
+    raw_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    pool = PyMysqlConnectionPool({}, connection_factory=lambda: raw_conn)
+    pool.acquire()
+    assert pool.checked_out() == 1
+    pool.close()
+    assert pool.checked_out() == 0

@@ -102,9 +102,7 @@ class PymssqlConnectionPool:
         Yields:
             A thread-local database connection.
         """
-        depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
-        self._thread_local.depth = depth + 1
         body_failed = False
         try:
             yield connection
@@ -115,7 +113,6 @@ class PymssqlConnectionPool:
                     self._close_thread_connection()
             raise
         finally:
-            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             if body_failed:
                 with contextlib.suppress(Exception):
                     self.release(connection)
@@ -137,11 +134,14 @@ class PymssqlConnectionPool:
 
     def acquire(self) -> PymssqlConnection:
         connection = self._get_thread_connection()
+        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: PymssqlConnection) -> None:
+        if getattr(self._thread_local, "connection", None) is connection:
+            self._thread_local.depth = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
         try:
             self._rollback_on_checkin(connection)
         finally:
@@ -261,6 +261,8 @@ class PymssqlConnectionPool:
             return
         if getattr(self._thread_local, "connection", None) is not connection:
             return
+        if connection is None:
+            return
         if bool(connection.autocommit_state):
             return
         try:
@@ -278,3 +280,4 @@ class PymssqlConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
+        self._thread_local.depth = 0

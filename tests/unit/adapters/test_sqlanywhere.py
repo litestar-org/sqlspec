@@ -1416,3 +1416,27 @@ def test_sqlanywhere_session_context_cleans_up_on_prepare_and_exit_work_failures
         assert driver.connection is _DETACHED_CONNECTION
     finally:
         config.close_pool()
+
+
+def test_sqlanywhere_pool_nested_acquire_rolls_back_only_on_outermost_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nested SqlanywhereConnectionPool acquire/release calls roll back only on the outermost release."""
+    conn = FakeConnection()
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: conn))
+    pool = SqlanywhereConnectionPool(
+        {"user": "dba", "password": "sql", "database": "demo"}, recycle_seconds=0, health_check_interval=0
+    )
+    try:
+        outer = pool.acquire()
+        inner = pool.acquire()
+        assert inner is outer
+        assert pool.checked_out() == 2
+
+        pool.release(inner)
+        assert pool.checked_out() == 1
+        assert conn.rollbacks == 0
+
+        pool.release(outer)
+        assert pool.checked_out() == 0
+        assert conn.rollbacks == 1
+    finally:
+        pool.close()

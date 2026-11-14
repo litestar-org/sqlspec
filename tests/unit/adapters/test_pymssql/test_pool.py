@@ -369,3 +369,30 @@ def test_pymssql_pool_failed_checkin_rollback_retires_connection(monkeypatch: py
             assert cast("object", replacement) is second
     finally:
         pool.close()
+
+
+@pytest.mark.parametrize("autocommit", [False, True], ids=["autocommit-off", "autocommit-on"])
+def test_pymssql_pool_nested_acquire_rolls_back_only_on_outermost_release(
+    monkeypatch: pytest.MonkeyPatch, autocommit: bool
+) -> None:
+    """Nested acquire/release pairs on the same thread roll back only when the outermost handle releases."""
+    connection = FakeConnection()
+    connection.autocommit(autocommit)
+    monkeypatch.setattr(pool_module, "pymssql", FakePymssqlModule(connection))
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, recycle_seconds=0, health_check_interval=0)
+
+    try:
+        outer = pool.acquire()
+        inner = pool.acquire()
+        assert inner is outer
+        assert pool.checked_out() == 2
+
+        pool.release(inner)
+        assert pool.checked_out() == 1
+        assert connection.rollbacks == 0
+
+        pool.release(outer)
+        assert pool.checked_out() == 0
+        assert connection.rollbacks == (0 if autocommit else 1)
+    finally:
+        pool.close()

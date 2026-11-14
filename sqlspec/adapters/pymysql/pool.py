@@ -137,6 +137,7 @@ class PyMysqlConnectionPool:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
             self._connection_threads.clear()
+            self._checked_out = 0
             self._generation += 1
         for connection in orphaned:
             with contextlib.suppress(Exception):

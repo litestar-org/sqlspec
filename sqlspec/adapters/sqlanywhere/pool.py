@@ -88,9 +88,7 @@ class SqlanywhereConnectionPool:
     @contextmanager
     def get_connection(self) -> "Generator[SqlanywhereConnection, None, None]":
         """Yield a thread-local SQL Anywhere connection."""
-        depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
-        self._thread_local.depth = depth + 1
         body_failed = False
         try:
             yield connection
@@ -101,7 +99,6 @@ class SqlanywhereConnectionPool:
                     self._close_thread_connection()
             raise
         finally:
-            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             if body_failed:
                 with contextlib.suppress(Exception):
                     self.release(connection)
@@ -124,12 +121,15 @@ class SqlanywhereConnectionPool:
     def acquire(self) -> SqlanywhereConnection:
         """Acquire a healthy thread-local connection."""
         connection = self._get_thread_connection()
+        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: SqlanywhereConnection) -> None:
         """Release a checked-out connection back to the thread-local slot."""
+        if getattr(self._thread_local, "connection", None) is connection:
+            self._thread_local.depth = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
         try:
             self._rollback_on_checkin(connection)
         finally:
@@ -267,3 +267,4 @@ class SqlanywhereConnectionPool:
             self._thread_local.created_at = 0.0
             self._thread_local.last_used = 0.0
             self._thread_local.generation = -1
+        self._thread_local.depth = 0

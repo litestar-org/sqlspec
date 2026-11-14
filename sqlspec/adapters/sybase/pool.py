@@ -120,9 +120,7 @@ class SybaseConnectionPool:
         Yields:
             A thread-local database connection.
         """
-        depth = getattr(self._thread_local, "depth", 0)
         connection = self.acquire()
-        self._thread_local.depth = depth + 1
         body_failed = False
         try:
             yield connection
@@ -133,7 +131,6 @@ class SybaseConnectionPool:
                     self._close_thread_connection()
             raise
         finally:
-            self._thread_local.depth = max(0, getattr(self._thread_local, "depth", 1) - 1)
             if body_failed:
                 with contextlib.suppress(Exception):
                     self.release(connection)
@@ -155,11 +152,14 @@ class SybaseConnectionPool:
 
     def acquire(self) -> SybaseConnection:
         connection = self._get_thread_connection()
+        self._thread_local.depth = int(getattr(self._thread_local, "depth", 0)) + 1
         with self._registry_lock:
             self._checked_out += 1
         return connection
 
     def release(self, connection: SybaseConnection) -> None:
+        if getattr(self._thread_local, "connection", None) is connection:
+            self._thread_local.depth = max(0, int(getattr(self._thread_local, "depth", 1)) - 1)
         try:
             self._rollback_on_checkin(connection)
         finally:
@@ -279,6 +279,8 @@ class SybaseConnectionPool:
             return
         if getattr(self._thread_local, "connection", None) is not connection:
             return
+        if connection is None:
+            return
         if bool(getattr(connection, "autocommit_state", True)):
             return
         try:
@@ -296,3 +298,4 @@ class SybaseConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
+        self._thread_local.depth = 0
