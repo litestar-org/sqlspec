@@ -7,6 +7,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from sqlspec.adapters.adbc._typing import AdbcNativeError
+from sqlspec.adapters.adbc.core import create_mapped_exception
 from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 if TYPE_CHECKING:
@@ -61,6 +63,13 @@ class AdbcConnectionPool:
         self._reservations = 0
         self._state = "OPEN"
 
+    @property
+    def is_closed(self) -> bool:
+        """Return whether every owned native resource has been closed."""
+        self.check_pid()
+        with self._condition:
+            return self._state == "CLOSED"
+
     def acquire(self) -> "AdbcConnection":
         """Acquire an exclusive clone or wait up to the configured timeout."""
         self.check_pid()
@@ -86,7 +95,10 @@ class AdbcConnectionPool:
             with self._seed_lock:
                 if self._seed is None:
                     self._seed = self._create_connection()
-                connection = self._seed.adbc_clone()
+                try:
+                    connection = self._seed.adbc_clone()
+                except AdbcNativeError as exc:
+                    raise create_mapped_exception(exc) from exc
         except BaseException:
             with self._condition:
                 self._reservations -= 1
@@ -168,13 +180,6 @@ class AdbcConnectionPool:
                 first_error = exc
         if first_error is not None:
             raise first_error
-        with self._condition:
-            return self._state == "CLOSED"
-
-    @property
-    def is_closed(self) -> bool:
-        """Return whether every owned native resource has been closed."""
-        self.check_pid()
         with self._condition:
             return self._state == "CLOSED"
 

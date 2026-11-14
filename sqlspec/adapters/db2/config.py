@@ -9,6 +9,7 @@ from sqlspec.adapters.db2._typing import (
     Db2AsyncCursor,
     Db2AsyncRawCursor,
     Db2AsyncSessionContext,
+    Db2Error,
     Db2RawCursor,
     Db2SyncConnection,
     Db2SyncCursor,
@@ -18,6 +19,7 @@ from sqlspec.adapters.db2.core import (
     apply_driver_features,
     build_connection_config,
     build_dsn_string,
+    create_mapped_exception,
     default_statement_config,
     resolve_connection_overrides,
 )
@@ -142,9 +144,21 @@ class Db2SyncConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "Db2SyncConnection":
+        try:
+            return cast("Db2SyncConnection", super().__enter__())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class _Db2SyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "Db2SyncConnection":
+        try:
+            return cast("Db2SyncConnection", super().acquire_connection())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -217,14 +231,6 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             **kwargs,
         )
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
-    ) -> dict[str, Any]:
-        return resolve_connection_overrides(config, overrides)
-
-    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
-        return _build_db2_replica_overrides(spec_input, self.connection_config)
-
     def create_connection(self) -> "Db2SyncConnection":
         """Open a standalone connection owned by the caller.
 
@@ -260,6 +266,14 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return runtime hints for Db2 event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return resolve_connection_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        return _build_db2_replica_overrides(spec_input, self.connection_config)
 
     def _create_pool(self) -> "Db2SyncConnectionPool":
         """Create a new thread-local connection pool."""
@@ -313,9 +327,21 @@ class Db2AsyncConnectionContext(AsyncPoolConnectionContext):
 
     __slots__ = ()
 
+    async def __aenter__(self) -> "Db2AsyncConnection":
+        try:
+            return cast("Db2AsyncConnection", await super().__aenter__())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class _Db2AsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
+
+    async def acquire_connection(self) -> "Db2AsyncConnection":
+        try:
+            return cast("Db2AsyncConnection", await super().acquire_connection())
+        except Db2Error as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -399,14 +425,6 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
             **kwargs,
         )
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
-    ) -> dict[str, Any]:
-        return resolve_connection_overrides(config, overrides)
-
-    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
-        return _build_db2_replica_overrides(spec_input, self.connection_config)
-
     async def create_connection(self) -> "Db2AsyncConnection":
         """Open a standalone connection owned by the caller.
 
@@ -443,6 +461,14 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return runtime hints for Db2 event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: "Mapping[str, Any]"
+    ) -> dict[str, Any]:
+        return resolve_connection_overrides(config, overrides)
+
+    def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
+        return _build_db2_replica_overrides(spec_input, self.connection_config)
 
     async def _create_pool(self) -> "Db2AsyncConnectionPool":
         """Create a new bounded asyncio connection pool."""

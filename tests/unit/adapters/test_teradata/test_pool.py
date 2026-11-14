@@ -331,3 +331,33 @@ def test_pool_release_resets_session_query_band_and_discards_on_failure(
     reused.close.assert_called_once_with()
     assert pool.size() == 0
     pool.close()
+
+
+def test_teradata_new_connection_maps_driver_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native teradatasql connection failures map to DatabaseConnectionError while preserving cause."""
+
+    class FakeTeradataError(Exception):
+        pass
+
+    class FakeOperationalError(FakeTeradataError):
+        pass
+
+    native = FakeOperationalError("[Error 1000] Unable to connect to host")
+
+    def failing_connect(**_: Any) -> Any:
+        raise native
+
+    monkeypatch.setitem(
+        sys.modules,
+        "teradatasql",
+        SimpleNamespace(connect=failing_connect, Error=FakeTeradataError, OperationalError=FakeOperationalError),
+    )
+    reset_dependency_cache("teradatasql")
+    pool = TeradataConnectionPool({"host": "primary.invalid"}, max_size=1)
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            pool.acquire()
+        assert exc_info.value.__cause__ is native
+    finally:
+        pool.close()
+        reset_dependency_cache("teradatasql")

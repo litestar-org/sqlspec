@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from sqlspec.adapters.adbc._typing import AdbcSessionContext
+import sqlspec.adapters.adbc.config as adbc_config_module
+from sqlspec.adapters.adbc._typing import AdbcOperationalError, AdbcSessionContext, AdbcStatusCode
 from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.pool import AdbcConnectionPool
 from sqlspec.core import StatementConfig
@@ -573,3 +574,38 @@ def test_adbc_session_context_enter_failure_detaches_constructed_driver() -> Non
 
     assert released_while_attached == [True]
     assert captured[0].connection is _DETACHED_CONNECTION
+
+
+def test_adbc_pool_clone_maps_native_error() -> None:
+    """AdbcConnectionPool.acquire maps AdbcNativeError from adbc_clone for replica failover."""
+    native = AdbcOperationalError("libpq: connection refused", status_code=AdbcStatusCode.IO)
+    seed = MagicMock()
+    seed.adbc_clone.side_effect = native
+    pool = AdbcConnectionPool(lambda: seed, max_size=1, timeout=0)
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            pool.acquire()
+        assert exc_info.value.__cause__ is native
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
+def test_adbc_config_provide_maps_native_connect_error(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    """provide_connection and provide_session unwrap native ADBC connect failures while create_connection keeps its contract."""
+    native = AdbcOperationalError("State: 08001, connection refused", status_code=AdbcStatusCode.IO)
+
+    def failing_connect(**_: Any) -> Any:
+        raise native
+
+    monkeypatch.setattr(adbc_config_module, "resolve_driver_connect_func", lambda *_a: failing_connect)
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
+
+    with pytest.raises(ImproperConfigurationError) as cfg_exc:
+        config.create_connection()
+    assert cfg_exc.value.__cause__ is native
+
+    with pytest.raises(DatabaseConnectionError) as mapped_exc:
+        with getattr(config, method)():
+            pass
+    assert mapped_exc.value.__cause__ is native

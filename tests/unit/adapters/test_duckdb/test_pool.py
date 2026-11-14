@@ -17,6 +17,7 @@ from sqlspec.adapters.duckdb.pool import (
     _secret_sql,
     _validate_sql_identifier,
 )
+from sqlspec.exceptions import DatabaseConnectionError, OperationalError
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
@@ -673,3 +674,30 @@ def test_format_secret_literal_rejects_non_finite_floats(bad_float: float) -> No
     assert _format_secret_literal(42) == "42"
     assert _format_secret_literal(True) == "true"
     assert _format_secret_literal(False) == "false"
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_cls"),
+    [
+        (lambda: duckdb.ConnectionException("unable to connect"), DatabaseConnectionError),
+        (lambda: duckdb.IOException("cannot open database file"), OperationalError),
+    ],
+    ids=["connection_exception", "io_exception"],
+)
+def test_duckdb_open_connection_maps_native_error(
+    monkeypatch: pytest.MonkeyPatch, exc_factory: Any, expected_cls: type[Exception]
+) -> None:
+    """DuckDB connection failures map to SQLSpec connection/operational errors for replica failover."""
+    native = exc_factory()
+
+    def failing_connect(**_: Any) -> Any:
+        raise native
+
+    monkeypatch.setattr(duckdb, "connect", failing_connect)
+    pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
+    try:
+        with pytest.raises(expected_cls) as exc_info:
+            pool.acquire()
+        assert exc_info.value.__cause__ is native
+    finally:
+        pool.close()

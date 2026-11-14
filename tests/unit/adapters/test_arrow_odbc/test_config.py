@@ -538,3 +538,29 @@ def test_arrow_odbc_session_failed_rollback_preserves_mapped_error_on_connection
 
     assert caller.rollbacks == 1
     assert session.connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
+def test_arrow_odbc_config_provide_maps_native_connect_error(monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    """provide_connection and provide_session unwrap native arrow-odbc connect failures for failover."""
+
+    class _FakeArrowOdbcError(ArrowOdbcError):
+        def __init__(self, message: str) -> None:
+            Exception.__init__(self, message)
+
+    native = _FakeArrowOdbcError("State: 08001, Native error: 0, Message: Unable to connect")
+
+    def failing_connect(*_args: Any, **_kwargs: Any) -> Any:
+        raise native
+
+    monkeypatch.setattr(arrow_odbc_config, "arrow_odbc_connect", failing_connect)
+    config = ArrowOdbcConfig(connection_config={"dsn": "analytics"})
+
+    with pytest.raises(ImproperConfigurationError) as cfg_exc:
+        config.create_connection()
+    assert cfg_exc.value.__cause__ is native
+
+    with pytest.raises(DatabaseConnectionError) as mapped_exc:
+        with getattr(config, method)():
+            pass
+    assert mapped_exc.value.__cause__ is native

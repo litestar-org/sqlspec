@@ -11,7 +11,12 @@ from typing import Any
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.teradata.core import build_connection_config, format_query_band, render_query_band_sql
+from sqlspec.adapters.teradata.core import (
+    build_connection_config,
+    create_mapped_exception,
+    format_query_band,
+    render_query_band_sql,
+)
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
     DatabaseConnectionError,
@@ -119,7 +124,17 @@ class TeradataConnectionPool:
         module = import_optional("teradatasql")
         if module is None:
             raise MissingDependencyError(package="teradatasql", install_package="teradata")
-        connection = module.connect(**self._connection_config)
+        try:
+            connection = module.connect(**self._connection_config)
+        except Exception as exc:
+            error_base = getattr(module, "Error", None)
+            if (isinstance(error_base, type) and isinstance(exc, error_base)) or type(exc).__name__ in {
+                "OperationalError",
+                "DatabaseError",
+                "InterfaceError",
+            }:
+                raise create_mapped_exception(exc) from exc
+            raise
         try:
             connection.autocommit = self._autocommit_baseline
             if self._session_query_band is not None:

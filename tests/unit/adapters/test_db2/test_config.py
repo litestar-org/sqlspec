@@ -22,14 +22,16 @@ from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
     FakeDb2AsyncConnection,
     FakeDb2Connection,
     FakeDb2Cursor,
+    FakeDb2OperationalError,
     FakeIbmDbDbiModule,
     FakeIbmDbModule,
+    db2_error,
 )
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
@@ -681,3 +683,30 @@ def test_hadr_clone_replacement_dsn_controls_native_mode(config_type: Any) -> No
     assert replica.connection_config["read_only"] is True
     assert parent.connection_config["autocommit"] is True
     assert parent.connection_config["read_only"] is False
+
+
+@pytest.mark.parametrize("config_type", [Db2SyncConfig, Db2AsyncConfig])
+@pytest.mark.parametrize("method", ["provide_connection", "provide_session"])
+@pytest.mark.anyio
+async def test_db2_config_provide_maps_acquire_driver_error(
+    config_type: Any, method: str, fake_ibm_db: FakeModules
+) -> None:
+    """Db2 provide_connection and provide_session map native acquire failures to DatabaseConnectionError."""
+    _, module = fake_ibm_db
+    native = db2_error(-30081, "08001", "A communication error", FakeDb2OperationalError)
+    module.connect_errors.append(native)
+    config = config_type(connection_config={"database": "TESTDB"})
+    try:
+        with pytest.raises(DatabaseConnectionError) as exc_info:
+            if config.is_async:
+                async with getattr(config, method)():
+                    pass
+            else:
+                with getattr(config, method)():
+                    pass
+        assert exc_info.value.__cause__ is native
+    finally:
+        if config.is_async:
+            await config.close_pool()
+        else:
+            config.close_pool()

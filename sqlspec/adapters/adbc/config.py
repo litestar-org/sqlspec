@@ -8,13 +8,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict, cast
 
-from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
+from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
     cleanup_duckdb_profile_path,
     configure_adbc_duckdb_profiling,
     create_duckdb_profile_path,
+    create_mapped_exception,
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
@@ -248,8 +249,9 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
         self._connection: AdbcConnection | None = None
 
     def __enter__(self) -> "AdbcConnection":
-        self._connection = self._config.create_connection()
-        return cast("AdbcConnection", self._connection)
+        connection = _acquire_adbc_connection(self._config)
+        self._connection = connection
+        return connection
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -280,9 +282,7 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
 
     def acquire_connection(self) -> "AdbcConnection":
         self._origin_pool = self._config.provide_pool()
-        connection: AdbcConnection = (
-            self._origin_pool.acquire() if self._origin_pool is not None else self._config.create_connection()
-        )
+        connection: AdbcConnection = _acquire_adbc_connection(self._config, self._origin_pool)
         self._connection = connection
         try:
             if self._config._resolved_dialect == "duckdb" and bool(
@@ -496,37 +496,6 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
         """Drain an owned generation, retaining native cleanup failures for retry."""
         self._shutdown_pool(retire=True)
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        aliases = ("uri", "dsn", "url", "connection_string", "path")
-        inherited = dict(self.connection_config.get("db_kwargs") or {})
-        explicit_nested = dict(overrides.get("db_kwargs") or {})
-        seed: dict[str, Any] = {
-            key: config[key] for key in ("driver_name", "driver", "driver_path", "entrypoint") if key in config
-        }
-        if any(key in overrides for key in aliases):
-            inherited.pop("uri", None)
-            if "uri" not in overrides:
-                config.pop("uri", None)
-        else:
-            uri = config.get("uri") or inherited.get("uri")
-            if uri is not None:
-                seed["uri"] = uri
-        seed.update({key: value for key, value in overrides.items() if key != "db_kwargs"})
-        lifted = build_connection_config(seed).get("db_kwargs")
-        if isinstance(lifted, Mapping):
-            inherited.update(lifted)
-        inherited.update(explicit_nested)
-        if inherited:
-            config["db_kwargs"] = inherited
-        return config
-
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if isinstance(spec_input, str):
-            return {"connection_config_overrides": {"uri": spec_input}}
-        return super()._build_replica_spec_overrides(spec_input)
-
     def derive_pool(
         self,
         *,
@@ -683,6 +652,37 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
 
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("uri", "dsn", "url", "connection_string", "path")
+        inherited = dict(self.connection_config.get("db_kwargs") or {})
+        explicit_nested = dict(overrides.get("db_kwargs") or {})
+        seed: dict[str, Any] = {
+            key: config[key] for key in ("driver_name", "driver", "driver_path", "entrypoint") if key in config
+        }
+        if any(key in overrides for key in aliases):
+            inherited.pop("uri", None)
+            if "uri" not in overrides:
+                config.pop("uri", None)
+        else:
+            uri = config.get("uri") or inherited.get("uri")
+            if uri is not None:
+                seed["uri"] = uri
+        seed.update({key: value for key, value in overrides.items() if key != "db_kwargs"})
+        lifted = build_connection_config(seed).get("db_kwargs")
+        if isinstance(lifted, Mapping):
+            inherited.update(lifted)
+        inherited.update(explicit_nested)
+        if inherited:
+            config["db_kwargs"] = inherited
+        return config
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(spec_input, str):
+            return {"connection_config_overrides": {"uri": spec_input}}
+        return super()._build_replica_spec_overrides(spec_input)
+
     def _detect_extensions_if_needed(self) -> None:
         """Detect postgres extensions on first call, caching results.
 
@@ -706,7 +706,7 @@ class AdbcConfig(SyncDatabaseConfig[AdbcConnection, AdbcConnectionPool | AdbcCon
             self._pg_textsearch_available = False
             return
 
-        connection = self.create_connection()
+        connection = _acquire_adbc_connection(self)
         try:
             pgvector_available, paradedb_available, pg_textsearch_available = detect_postgres_extensions(
                 connection,
@@ -823,3 +823,12 @@ def _rollback_connection_instance(
     except BaseException:
         if exc_type is None:
             raise
+
+
+def _acquire_adbc_connection(config: "AdbcConfig", pool: "AdbcConnectionPool | None" = None) -> "AdbcConnection":
+    try:
+        return pool.acquire() if pool is not None else config.create_connection()
+    except ImproperConfigurationError as exc:
+        if isinstance(exc.__cause__, AdbcNativeError):
+            raise create_mapped_exception(exc.__cause__) from exc.__cause__
+        raise

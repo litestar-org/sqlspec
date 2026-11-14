@@ -8,7 +8,9 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from sqlspec.adapters.snowflake._typing import SnowflakeConnection, SnowflakeCursor, SnowflakeSessionContext
 from sqlspec.adapters.snowflake.core import (
     apply_driver_features,
+    create_mapped_exception,
     default_statement_config,
+    is_snowflake_error,
     merge_snowflake_derive_overrides,
     normalize_connection_params,
 )
@@ -237,6 +239,51 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
             **kwargs,
         )
 
+    def create_connection(self) -> "SnowflakeConnection":
+        """Open a standalone connection whose lifecycle belongs to the caller."""
+        self._require_leased_tenant_connection()
+        connector = import_optional("snowflake.connector")
+        if connector is None:
+            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
+        try:
+            connection = cast(
+                "SnowflakeConnection", connector.connect(**normalize_connection_params(self.connection_config))
+            )
+        except Exception as exc:
+            if is_snowflake_error(exc):
+                raise create_mapped_exception(exc) from exc
+            raise
+        try:
+            self.get_observability_runtime().emit_connection_create_sync(connection)
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+    def get_event_runtime_hints(self) -> EventRuntimeHints:
+        """Return polling and lease defaults suitable for Snowflake warehouses."""
+        return EventRuntimeHints(
+            poll_interval=2.0, lease_seconds=60, retention_seconds=172_800, select_for_update=False, skip_locked=False
+        )
+
+    def get_signature_namespace(self) -> dict[str, Any]:
+        """Return Snowflake public types used by framework dependency injection."""
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "SnowflakeConfig": SnowflakeConfig,
+            "SnowflakeConnection": SnowflakeConnection,
+            "SnowflakeConnectionParams": SnowflakeConnectionParams,
+            "SnowflakeConnectionPool": SnowflakeConnectionPool,
+            "SnowflakeCursor": SnowflakeCursor,
+            "SnowflakeDriver": SnowflakeDriver,
+            "SnowflakeDriverFeatures": SnowflakeDriverFeatures,
+            "SnowflakePoolParams": SnowflakePoolParams,
+            "SnowflakeSessionContext": SnowflakeSessionContext,
+            "SnowflakePoolConnectionContext": SnowflakePoolConnectionContext,
+            "SnowflakePoolSessionFactory": SnowflakePoolSessionFactory,
+        })
+        return namespace
+
     def _prepare_derived_connection_config(
         self, config: dict[str, Any], overrides: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -270,22 +317,6 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
             options = {"warehouse": spec_input}
         return {"connection_config_overrides": options}
 
-    def create_connection(self) -> "SnowflakeConnection":
-        """Open a standalone connection whose lifecycle belongs to the caller."""
-        self._require_leased_tenant_connection()
-        connector = import_optional("snowflake.connector")
-        if connector is None:
-            raise MissingDependencyError(package="snowflake-connector-python", install_package="snowflake")
-        connection = cast(
-            "SnowflakeConnection", connector.connect(**normalize_connection_params(self.connection_config))
-        )
-        try:
-            self.get_observability_runtime().emit_connection_create_sync(connection)
-        except BaseException:
-            connection.close()
-            raise
-        return connection
-
     def _create_pool(self) -> SnowflakeConnectionPool:
         return SnowflakeConnectionPool(
             self.connection_config,
@@ -300,27 +331,3 @@ class SnowflakeConfig(SyncDatabaseConfig[SnowflakeConnection, SnowflakeConnectio
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
-
-    def get_event_runtime_hints(self) -> EventRuntimeHints:
-        """Return polling and lease defaults suitable for Snowflake warehouses."""
-        return EventRuntimeHints(
-            poll_interval=2.0, lease_seconds=60, retention_seconds=172_800, select_for_update=False, skip_locked=False
-        )
-
-    def get_signature_namespace(self) -> dict[str, Any]:
-        """Return Snowflake public types used by framework dependency injection."""
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "SnowflakeConfig": SnowflakeConfig,
-            "SnowflakeConnection": SnowflakeConnection,
-            "SnowflakeConnectionParams": SnowflakeConnectionParams,
-            "SnowflakeConnectionPool": SnowflakeConnectionPool,
-            "SnowflakeCursor": SnowflakeCursor,
-            "SnowflakeDriver": SnowflakeDriver,
-            "SnowflakeDriverFeatures": SnowflakeDriverFeatures,
-            "SnowflakePoolParams": SnowflakePoolParams,
-            "SnowflakeSessionContext": SnowflakeSessionContext,
-            "SnowflakePoolConnectionContext": SnowflakePoolConnectionContext,
-            "SnowflakePoolSessionFactory": SnowflakePoolSessionFactory,
-        })
-        return namespace

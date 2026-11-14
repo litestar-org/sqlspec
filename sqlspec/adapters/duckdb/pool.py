@@ -16,6 +16,7 @@ from sqlspec.adapters.duckdb.core import (
     cleanup_duckdb_profile_path,
     configure_duckdb_statement_profiling,
     create_duckdb_profile_path,
+    create_mapped_exception,
 )
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -556,7 +557,12 @@ def _open_duckdb_connection(
                 connect_parameters["config"] = config_dict
             else:
                 connect_parameters.pop("config", None)
-            connection = duckdb.connect(**connect_parameters)
+            try:
+                connection = duckdb.connect(**connect_parameters)
+            except duckdb.Error as retry_exc:
+                raise create_mapped_exception(retry_exc) from retry_exc
+        elif isinstance(exc, duckdb.Error):
+            raise create_mapped_exception(exc) from exc
         else:
             raise
     return connection, deferred_parquet_metadata_cache
