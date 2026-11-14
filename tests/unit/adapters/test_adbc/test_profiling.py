@@ -176,8 +176,16 @@ def test_adbc_duckdb_profiles_remain_scoped_after_execution_error() -> None:
             session.execute("SELECT missing_column FROM missing_table")
         session.rollback()
         assert session.select_value("SELECT 2 AS value") == 2
-    assert [event.sql for event in events] == ["SELECT 1 AS value", "SELECT 2 AS value"]
-    assert all(isinstance(event.profile, dict) for event in events)
+    assert [event.sql for event in events] == [
+        "SELECT 1 AS value",
+        "SELECT missing_column FROM missing_table",
+        "SELECT 2 AS value",
+    ]
+    assert events[1].rows_affected is None
+    assert events[1].profile is None
+    assert isinstance(events[0].profile, dict)
+    assert isinstance(events[2].profile, dict)
+    assert events[0].profile is not events[2].profile
 
 
 def test_adbc_duckdb_statement_profiling_without_duckdb_package() -> None:
