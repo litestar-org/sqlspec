@@ -12,9 +12,10 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import build_connection_config
+from sqlspec.adapters.aiosqlite.pool import AiosqliteConnectTimeoutError
 from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, ImproperConfigurationError
 
 
 class CustomConnection(sqlite3.Connection):
@@ -422,3 +423,30 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
 
     assert release_events == [(True, True, RuntimeError)]
     assert captured[0].connection is _DETACHED_CONNECTION
+
+
+async def test_aiosqlite_read_replica_failover_on_timeout_and_cantopen(tmp_path: Path) -> None:
+    """AiosqliteConnectTimeoutError and SQLITE_CANTOPEN trigger ReadReplicaGroup failover."""
+    assert issubclass(AiosqliteConnectTimeoutError, ConnectionTimeoutError)
+    assert issubclass(AiosqliteConnectTimeoutError, DatabaseConnectionError)
+
+    db_path = tmp_path / "healthy_async.sqlite"
+    config = AiosqliteConfig(
+        connection_config={"database": str(db_path)},
+        replicas=[
+            {"database": str(tmp_path / "missing_dir" / "bad.sqlite"), "query_only": True},
+            {"database": str(db_path), "query_only": True},
+        ],
+    )
+    try:
+        async with config.provide_session() as writer:
+            await writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            await writer.commit()
+        async with config.provide_read_connection() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM probe")
+            assert await cursor.fetchone() == (0,)
+            await cursor.close()
+        async with config.provide_read_session() as reader:
+            assert await reader.select_value("SELECT COUNT(*) FROM probe") == 0
+    finally:
+        await config.close_pool()

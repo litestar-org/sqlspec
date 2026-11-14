@@ -14,11 +14,17 @@ from sqlspec.adapters.psqlpy._typing import (
     LoadBalanceHosts,
     PsqlpyConnection,
     PsqlpyCursor,
+    PsqlpyError,
     PsqlpySessionContext,
     TargetSessionAttrs,
 )
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
-from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.psqlpy.core import (
+    apply_driver_features,
+    build_connection_config,
+    create_mapped_exception,
+    default_statement_config,
+)
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
 from sqlspec.adapters.psqlpy.tenant import PsqlpyRLSStrategy, PsqlpyTenantLease
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -193,19 +199,26 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
     async def acquire_connection(self) -> "PsqlpyConnection":
         if self._tenant_lease is not None:
             return cast("PsqlpyConnection", await self._tenant_lease.acquire())
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        ctx = pool.acquire()
-        self._ctx = ctx
-        connection = cast("PsqlpyConnection", await ctx.__aenter__())
         try:
-            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
-        except BaseException:
-            await ctx.__aexit__(*sys.exc_info())
-            self._ctx = None
-            raise
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+            ctx = pool.acquire()
+            self._ctx = ctx
+            try:
+                connection = cast("PsqlpyConnection", await ctx.__aenter__())
+            except BaseException:
+                self._ctx = None
+                raise
+            try:
+                await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+            except BaseException:
+                await ctx.__aexit__(*sys.exc_info())
+                self._ctx = None
+                raise
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
@@ -240,20 +253,27 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> PsqlpyConnection:
         if self._tenant_lease is not None:
             return cast("PsqlpyConnection", await self._tenant_lease.acquire())
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-
-        ctx = pool.acquire()
-        self._ctx = ctx
-        connection = await ctx.__aenter__()
         try:
-            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
-        except BaseException:
-            await ctx.__aexit__(*sys.exc_info())
-            self._ctx = None
-            raise
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+
+            ctx = pool.acquire()
+            self._ctx = ctx
+            try:
+                connection = await ctx.__aenter__()
+            except BaseException:
+                self._ctx = None
+                raise
+            try:
+                await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+            except BaseException:
+                await ctx.__aexit__(*sys.exc_info())
+                self._ctx = None
+                raise
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
         typed_connection = cast("PsqlpyConnection", connection)
         self._connection = typed_connection
         return typed_connection
@@ -376,111 +396,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             self.driver_features["pooler_mode"] = require_session_pooler(
                 self.driver_features.get("pooler_mode"), "PsqlpyConfig"
             )
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        aliases = ("dsn", "conninfo", "url", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["dsn"] = explicit_dsn
-        for canonical, aliases_for_field in (("db_name", ("database", "dbname", "db")), ("username", ("user",))):
-            if canonical not in overrides:
-                for key in aliases_for_field:
-                    if key in overrides:
-                        config[canonical] = overrides[key]
-                        break
-        identity_fields = {
-            "host",
-            "hosts",
-            "port",
-            "ports",
-            "username",
-            "user",
-            "password",
-            "database",
-            "dbname",
-            "db",
-            "db_name",
-            "target_session_attrs",
-        }
-        if isinstance(config.get("dsn"), str) and identity_fields.intersection(overrides):
-            normalized_overrides = build_connection_config(overrides)
-            config["dsn"] = self._merge_derived_dsn(config["dsn"], normalized_overrides)
-        if "options" not in overrides:
-            if self._explicit_options is None:
-                config.pop("options", None)
-            else:
-                config["options"] = self._explicit_options
-        return config
-
-    @staticmethod
-    def _merge_derived_dsn(dsn: str, overrides: Mapping[str, Any]) -> str:
-        """Merge explicit connection identity overrides without losing DSN security settings."""
-        fields: dict[str, str] = {}
-        if dsn.startswith(("postgres://", "postgresql://")):
-            parsed = urlsplit(dsn)
-            authority = parsed.netloc.rsplit("@", 1)[-1]
-            hosts = []
-            ports = []
-            for endpoint in authority.split(","):
-                match = re.fullmatch(r"(?:\[([^]]+)\]|([^:]*))(?::([0-9]+))?", endpoint)
-                if match is None:
-                    message = "Invalid PostgreSQL DSN endpoint"
-                    raise ImproperConfigurationError(message)
-                hosts.append(unquote(match.group(1) or match.group(2) or ""))
-                ports.append(match.group(3) or "5432")
-            fields["host"] = ",".join(hosts)
-            fields["port"] = ",".join(ports)
-            if parsed.username is not None:
-                fields["user"] = unquote(parsed.username)
-            if parsed.password is not None:
-                fields["password"] = unquote(parsed.password)
-            if parsed.path[1:]:
-                fields["dbname"] = unquote(parsed.path[1:])
-            fields.update(parse_qsl(parsed.query.replace("+", "%2B"), keep_blank_values=True))
-        else:
-            pattern = r"([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*('(?:[^'\\]|\\.)*'|(?:[^\s\\]|\\.)*)"
-            position = 0
-            for match in re.finditer(pattern, dsn):
-                if dsn[position : match.start()].strip():
-                    message = "Invalid PostgreSQL connection string"
-                    raise ImproperConfigurationError(message)
-                raw = match.group(2)
-                fields[match.group(1)] = re.sub(r"\\(.)", r"\1", raw[1:-1] if raw.startswith("'") else raw)
-                position = match.end()
-            if dsn[position:].strip():
-                message = "Invalid PostgreSQL connection string"
-                raise ImproperConfigurationError(message)
-        for source, target in (
-            ("host", "host"),
-            ("hosts", "host"),
-            ("port", "port"),
-            ("ports", "port"),
-            ("username", "user"),
-            ("password", "password"),
-            ("db_name", "dbname"),
-        ):
-            if source in overrides:
-                value = overrides[source]
-                fields[target] = (
-                    ",".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
-                )
-        if "target_session_attrs" in overrides:
-            attrs = overrides["target_session_attrs"]
-            fields["target_session_attrs"] = (
-                "any"
-                if attrs == TargetSessionAttrs.Any
-                else ("read-write" if attrs == TargetSessionAttrs.ReadWrite else "read-only")
-            )
-        parts = []
-        for key, value in fields.items():
-            escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-            parts.append(f"{key}='{escaped}'")
-        return " ".join(parts)
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -627,6 +542,111 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             observability_config=self.observability_config,
         )
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("dsn", "conninfo", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        for canonical, aliases_for_field in (("db_name", ("database", "dbname", "db")), ("username", ("user",))):
+            if canonical not in overrides:
+                for key in aliases_for_field:
+                    if key in overrides:
+                        config[canonical] = overrides[key]
+                        break
+        identity_fields = {
+            "host",
+            "hosts",
+            "port",
+            "ports",
+            "username",
+            "user",
+            "password",
+            "database",
+            "dbname",
+            "db",
+            "db_name",
+            "target_session_attrs",
+        }
+        if isinstance(config.get("dsn"), str) and identity_fields.intersection(overrides):
+            normalized_overrides = build_connection_config(overrides)
+            config["dsn"] = self._merge_derived_dsn(config["dsn"], normalized_overrides)
+        if "options" not in overrides:
+            if self._explicit_options is None:
+                config.pop("options", None)
+            else:
+                config["options"] = self._explicit_options
+        return config
+
+    @staticmethod
+    def _merge_derived_dsn(dsn: str, overrides: Mapping[str, Any]) -> str:
+        """Merge explicit connection identity overrides without losing DSN security settings."""
+        fields: dict[str, str] = {}
+        if dsn.startswith(("postgres://", "postgresql://")):
+            parsed = urlsplit(dsn)
+            authority = parsed.netloc.rsplit("@", 1)[-1]
+            hosts = []
+            ports = []
+            for endpoint in authority.split(","):
+                match = re.fullmatch(r"(?:\[([^]]+)\]|([^:]*))(?::([0-9]+))?", endpoint)
+                if match is None:
+                    message = "Invalid PostgreSQL DSN endpoint"
+                    raise ImproperConfigurationError(message)
+                hosts.append(unquote(match.group(1) or match.group(2) or ""))
+                ports.append(match.group(3) or "5432")
+            fields["host"] = ",".join(hosts)
+            fields["port"] = ",".join(ports)
+            if parsed.username is not None:
+                fields["user"] = unquote(parsed.username)
+            if parsed.password is not None:
+                fields["password"] = unquote(parsed.password)
+            if parsed.path[1:]:
+                fields["dbname"] = unquote(parsed.path[1:])
+            fields.update(parse_qsl(parsed.query.replace("+", "%2B"), keep_blank_values=True))
+        else:
+            pattern = r"([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*('(?:[^'\\]|\\.)*'|(?:[^\s\\]|\\.)*)"
+            position = 0
+            for match in re.finditer(pattern, dsn):
+                if dsn[position : match.start()].strip():
+                    message = "Invalid PostgreSQL connection string"
+                    raise ImproperConfigurationError(message)
+                raw = match.group(2)
+                fields[match.group(1)] = re.sub(r"\\(.)", r"\1", raw[1:-1] if raw.startswith("'") else raw)
+                position = match.end()
+            if dsn[position:].strip():
+                message = "Invalid PostgreSQL connection string"
+                raise ImproperConfigurationError(message)
+        for source, target in (
+            ("host", "host"),
+            ("hosts", "host"),
+            ("port", "port"),
+            ("ports", "port"),
+            ("username", "user"),
+            ("password", "password"),
+            ("db_name", "dbname"),
+        ):
+            if source in overrides:
+                value = overrides[source]
+                fields[target] = (
+                    ",".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
+                )
+        if "target_session_attrs" in overrides:
+            attrs = overrides["target_session_attrs"]
+            fields["target_session_attrs"] = (
+                "any"
+                if attrs == TargetSessionAttrs.Any
+                else ("read-write" if attrs == TargetSessionAttrs.ReadWrite else "read-only")
+            )
+        parts = []
+        for key, value in fields.items():
+            escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+            parts.append(f"{key}='{escaped}'")
+        return " ".join(parts)
+
     async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called once for this connection.
 
@@ -679,7 +699,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             if inspect.isawaitable(token_result):
                 token_result = await token_result
             pool_cfg["password"] = str(token_result)
-        return ConnectionPool(**pool_cfg)
+        try:
+            return ConnectionPool(**pool_cfg)
+        except PsqlpyError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""

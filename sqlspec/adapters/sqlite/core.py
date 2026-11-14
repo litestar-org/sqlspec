@@ -86,6 +86,7 @@ SQLITE_CONSTRAINT_CHECK_CODE = 275
 SQLITE_CONSTRAINT_DATATYPE_CODE = 3091
 SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
+SQLITE_NOTADB_CODE = 26
 SQLITE_IOERR_CODE = 10
 SQLITE_CORRUPT_CODE = 11
 SQLITE_MISMATCH_CODE = 20
@@ -428,17 +429,6 @@ _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
 })
 
 
-def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter connection parameters for SQLite."""
-    return {
-        key: value
-        for key, value in mapping.items()
-        if key not in _EXCLUDED_CONNECTION_KEYS
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
-
-
 def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
     """Return whether a configuration requests SQLite read-only enforcement."""
     if connection_config.get("query_only"):
@@ -569,8 +559,8 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_sqlite_error(error, 0, PermissionDeniedError, "permission denied")
 
-    if primary_code == SQLITE_CANTOPEN_CODE or (
-        isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
+    if primary_code in (SQLITE_CANTOPEN_CODE, SQLITE_NOTADB_CODE) or (
+        isinstance(error_name, str) and error_name.startswith(("SQLITE_CANTOPEN", "SQLITE_NOTADB"))
     ):
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if primary_code in (SQLITE_IOERR_CODE, SQLITE_CORRUPT_CODE) or (
@@ -658,6 +648,17 @@ def apply_driver_features(
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters for SQLite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
 
 
 def _normalize_metadata_row(row: Any) -> Any:

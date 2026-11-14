@@ -1,9 +1,11 @@
 """Psqlpy configuration tests covering statement config builders."""
 
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from psqlpy import exceptions as psqlpy_exceptions
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyConnectionPool, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.config import (
@@ -851,3 +853,37 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
 
     assert release_events == [(True, True, RuntimeError)]
     assert captured[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_psqlpy_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Psqlpy pool build and acquire errors map to DatabaseConnectionError so ReadReplicaGroup fails over."""
+    good_conn = SimpleNamespace(in_transaction=AsyncMock(return_value=False))
+    good_ctx = AsyncMock()
+    good_ctx.__aenter__.return_value = good_conn
+    good_ctx.__aexit__.return_value = None
+    good_pool = SimpleNamespace(acquire=lambda: good_ctx)
+
+    bad_ctx = AsyncMock()
+    bad_ctx.__aenter__.side_effect = psqlpy_exceptions.ConnectionPoolExecuteError("exhausted")
+    bad_pool = SimpleNamespace(acquire=lambda: bad_ctx)
+
+    def fake_pool_cls(**kwargs: Any) -> Any:
+        if "bad" in str(kwargs.get("dsn", "")):
+            if failure_stage == "pool":
+                raise psqlpy_exceptions.ConnectionPoolBuildError("cannot build pool")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.psqlpy.config.ConnectionPool", fake_pool_cls)
+    config = PsqlpyConfig(
+        connection_config={"dsn": "postgresql://primary"},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
+        replicas=["postgresql://bad", "postgresql://good"],
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn

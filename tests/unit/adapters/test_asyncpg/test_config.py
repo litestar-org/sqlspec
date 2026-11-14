@@ -3,6 +3,7 @@
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock
 
+import asyncpg
 import pytest
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
 
@@ -751,3 +752,32 @@ async def test_session_context_aenter_failure_releases_and_detaches_driver() -> 
 
     assert release_events == [(True, True, RuntimeError)]
     assert captured[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_asyncpg_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asyncpg pool creation and acquire errors map to DatabaseConnectionError so replicas fail over."""
+    good_conn = object()
+    good_pool = AsyncMock()
+    good_pool.acquire = AsyncMock(return_value=good_conn)
+    good_pool.release = AsyncMock()
+    bad_pool = AsyncMock()
+    bad_pool.acquire = AsyncMock(side_effect=asyncpg.InterfaceError("closed"))
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if "bad" in str(kwargs.get("dsn", "")):
+            if failure_stage == "pool":
+                raise asyncpg.CannotConnectNowError("replica starting")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", fake_create_pool)
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn

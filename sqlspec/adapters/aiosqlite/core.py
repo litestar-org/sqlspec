@@ -431,17 +431,6 @@ _EXCLUDED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
 })
 
 
-def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
-    return {
-        key: value
-        for key, value in mapping.items()
-        if key not in _EXCLUDED_CONNECTION_KEYS
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
-
-
 def is_read_only_sqlite_config(connection_config: Mapping[str, Any]) -> bool:
     """Return whether a configuration requests SQLite read-only enforcement."""
     if connection_config.get("query_only"):
@@ -700,6 +689,17 @@ def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
             raise ImproperConfigurationError(msg)
         rendered.append((pragma_name, rendered_value))
     return rendered
+
+
+def _filter_connection_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Filter connection parameters to only those accepted by SQLite/aiosqlite."""
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in _EXCLUDED_CONNECTION_KEYS
+        and (value is not None or key == "isolation_level")
+        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+    }
 
 
 driver_profile = build_profile()

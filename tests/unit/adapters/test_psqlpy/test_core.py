@@ -26,6 +26,7 @@ from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
+    DatabaseConnectionError,
     DataError,
     IntegrityError,
     OperationalError,
@@ -477,3 +478,20 @@ def test_psqlpy_json_parameter_preserves_none_and_structured_containers() -> Non
     assert len(prepared_jsonb) == 2
     assert type(prepared_jsonb[0]).__name__ == "JSONB"
     assert type(prepared_jsonb[1]).__name__ == "JSONB"
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_cls"),
+    [
+        (lambda: psqlpy_exceptions.ConnectionPoolBuildError("build failed"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionPoolExecuteError("pool exhausted"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionClosedError("socket closed"), DatabaseConnectionError),
+        (lambda: psqlpy_exceptions.ConnectionPoolBuildError("connection timeout"), ConnectionTimeoutError),
+    ],
+)
+def test_create_mapped_exception_maps_psqlpy_connection_and_pool_base_errors(
+    exc_factory: Any, expected_cls: type[Exception]
+) -> None:
+    """Connection and pool base errors map cleanly even when the message omits generic keywords."""
+    mapped = psqlpy_core.create_mapped_exception(exc_factory())
+    assert type(mapped) is expected_cls

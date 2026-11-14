@@ -132,8 +132,8 @@ class SqliteConnectionPool:
         """
         try:
             connection = sqlite3.connect(**self._connection_parameters)
-        except sqlite3.OperationalError as exc:
-            if getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_CANTOPEN:
+        except sqlite3.Error as exc:
+            if getattr(exc, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_CANTOPEN, 26):
                 raise create_mapped_exception(exc) from exc
             raise
 
@@ -180,55 +180,6 @@ class SqliteConnectionPool:
             self._get_connection_unlocked() as connection,
         ):
             yield connection
-
-    @contextmanager
-    def _get_connection_unlocked(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a thread-local connection.
-
-        Yields:
-            SqliteConnection: A thread-local connection.
-        """
-        connection = self._get_thread_connection()
-        with self._registry_lock:
-            depth = self._connection_depths.get(connection, 0)
-            self._connection_depths[connection] = depth + 1
-            if depth == 0:
-                self._checked_out_count += 1
-        outermost = depth == 0
-        try:
-            yield connection
-        except BaseException:
-            if outermost:
-                try:
-                    end_transaction(connection, commit=False)
-                except Exception:
-                    if getattr(self._thread_local, "connection", None) is connection:
-                        self._close_thread_connection()
-                    else:
-                        self._retire_connection(connection)
-            raise
-        else:
-            if outermost:
-                try:
-                    end_transaction(connection, commit=True)
-                except BaseException:
-                    try:
-                        end_transaction(connection, commit=False)
-                    except Exception:
-                        if getattr(self._thread_local, "connection", None) is connection:
-                            self._close_thread_connection()
-                        else:
-                            self._retire_connection(connection)
-                    raise
-        finally:
-            with self._registry_lock:
-                remaining = self._connection_depths.get(connection, 1) - 1
-                if remaining > 0:
-                    self._connection_depths[connection] = remaining
-                else:
-                    self._connection_depths.pop(connection, None)
-                if outermost and self._checked_out_count > 0:
-                    self._checked_out_count -= 1
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -292,6 +243,55 @@ class SqliteConnectionPool:
         """Get number of checked out connections."""
         with self._registry_lock:
             return self._checked_out_count
+
+    @contextmanager
+    def _get_connection_unlocked(self) -> "Generator[SqliteConnection, None, None]":
+        """Get a thread-local connection.
+
+        Yields:
+            SqliteConnection: A thread-local connection.
+        """
+        connection = self._get_thread_connection()
+        with self._registry_lock:
+            depth = self._connection_depths.get(connection, 0)
+            self._connection_depths[connection] = depth + 1
+            if depth == 0:
+                self._checked_out_count += 1
+        outermost = depth == 0
+        try:
+            yield connection
+        except BaseException:
+            if outermost:
+                try:
+                    end_transaction(connection, commit=False)
+                except Exception:
+                    if getattr(self._thread_local, "connection", None) is connection:
+                        self._close_thread_connection()
+                    else:
+                        self._retire_connection(connection)
+            raise
+        else:
+            if outermost:
+                try:
+                    end_transaction(connection, commit=True)
+                except BaseException:
+                    try:
+                        end_transaction(connection, commit=False)
+                    except Exception:
+                        if getattr(self._thread_local, "connection", None) is connection:
+                            self._close_thread_connection()
+                        else:
+                            self._retire_connection(connection)
+                    raise
+        finally:
+            with self._registry_lock:
+                remaining = self._connection_depths.get(connection, 1) - 1
+                if remaining > 0:
+                    self._connection_depths[connection] = remaining
+                else:
+                    self._connection_depths.pop(connection, None)
+                if outermost and self._checked_out_count > 0:
+                    self._checked_out_count -= 1
 
     def _prune_dead_threads(self) -> None:
         """Prune connections owned by dead threads."""

@@ -18,6 +18,8 @@ from sqlglot.errors import ParseError
 from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
 from sqlspec.adapters.psqlpy._typing import (
     LoadBalanceHosts,
+    PsqlpyBaseConnectionError,
+    PsqlpyBaseConnectionPoolError,
     PsqlpyConnectionExecuteError,
     PsqlpyDataError,
     PsqlpyIntegrityError,
@@ -618,8 +620,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
         return _create_postgres_error(error, IntegrityError, "integrity constraint violation")
-    if isinstance(error, (PsqlpyConnectionExecuteError,)):
-        return _create_postgres_error(error, DatabaseConnectionError, "connection execute error")
+    if isinstance(error, (PsqlpyBaseConnectionError, PsqlpyBaseConnectionPoolError, PsqlpyConnectionExecuteError)):
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
 
     if "connection" in error_msg:
         if "timeout" in error_msg or "timed out" in error_msg:

@@ -11,7 +11,9 @@ import sqlspec.adapters.asyncpg._typing as _asyncpg_typing
 from sqlspec.adapters.asyncpg._typing import (
     AsyncpgConnection,
     AsyncpgCursor,
+    AsyncpgInterfaceError,
     AsyncpgPool,
+    AsyncpgPostgresError,
     AsyncpgPreparedStatement,
     AsyncpgSessionContext,
     asyncpg_connect,
@@ -26,6 +28,7 @@ from sqlspec.adapters.asyncpg._typing import AsyncpgRecord as Record
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
@@ -285,11 +288,23 @@ class _AsyncpgAlloydbConnector:
 class _AsyncpgSessionFactory(AsyncPoolSessionFactory):
     __slots__ = ()
 
+    async def acquire_connection(self) -> AsyncpgConnection:
+        try:
+            return cast("AsyncpgConnection", await super().acquire_connection())
+        except (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class AsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for AsyncPG connections."""
 
     __slots__ = ()
+
+    async def __aenter__(self) -> AsyncpgConnection:
+        try:
+            return cast("AsyncpgConnection", await super().__aenter__())
+        except (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 @mypyc_attr(native_class=False)
@@ -400,25 +415,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         self._validate_connector_config()
 
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        if not self._explicit_statement_cache_size and "statement_cache_size" not in overrides:
-            config.pop("statement_cache_size", None)
-        if "server_settings" not in overrides:
-            if self._explicit_server_settings is None:
-                config.pop("server_settings", None)
-            else:
-                config["server_settings"] = dict(self._explicit_server_settings)
-        aliases = ("dsn", "url", "conninfo", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["dsn"] = explicit_dsn
-        return config
-
     @property
     def pg_textsearch_available(self) -> bool:
         """Return True if the pg_textsearch extension is available."""
@@ -522,9 +518,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             prepare_driver=self._prepare_driver,
         )
 
-    def _default_runtime_statement_config(self) -> "StatementConfig":
-        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
-
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AsyncPG types.
 
@@ -592,6 +585,28 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             extension_config=cast("ExtensionConfigs", dict(self.extension_config)),
             observability_config=self.observability_config,
         )
+
+    def _default_runtime_statement_config(self) -> "StatementConfig":
+        return resolve_runtime_statement_config(None, self.statement_config, default_statement_config)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_statement_cache_size and "statement_cache_size" not in overrides:
+            config.pop("statement_cache_size", None)
+        if "server_settings" not in overrides:
+            if self._explicit_server_settings is None:
+                config.pop("server_settings", None)
+            else:
+                config["server_settings"] = dict(self._explicit_server_settings)
+        aliases = ("dsn", "url", "conninfo", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        return config
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
@@ -727,7 +742,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         try:
             return await asyncpg_create_pool(**config)
-        except BaseException:
+        except BaseException as exc:
             if self._cloud_sql_connector is not None:
                 with suppress(Exception):
                     await self._cloud_sql_connector.close_async()
@@ -736,6 +751,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 with suppress(Exception):
                     await self._alloydb_connector.close()
                 self._alloydb_connector = None
+            if isinstance(exc, (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError)):
+                raise create_mapped_exception(exc) from exc
             raise
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:

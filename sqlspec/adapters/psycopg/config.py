@@ -25,7 +25,7 @@ from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectionPool as Async
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncNullConnectionPool as AsyncNullConnectionPool
 from sqlspec.adapters.psycopg._typing import PsycopgConnectionPool as ConnectionPool
 from sqlspec.adapters.psycopg._typing import PsycopgNullConnectionPool as NullConnectionPool
-from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.psycopg.core import apply_driver_features, create_mapped_exception, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
@@ -280,8 +280,12 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> "PsycopgSyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -303,8 +307,12 @@ class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
     def acquire_connection(self) -> "PsycopgSyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("PsycopgSyncConnection", self._ctx.__enter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -420,24 +428,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self.driver_features["pooler_mode"] = validate_psycopg_tenant_config(
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgSyncConfig"
             )
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
-            config.pop("prepare_threshold", None)
-        aliases = ("conninfo", "dsn", "url", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["conninfo"] = explicit_dsn
-        if "database" in overrides or "db" in overrides:
-            config["dbname"] = overrides.get("database", overrides.get("db"))
-        if "username" in overrides:
-            config["user"] = overrides["username"]
-        return config
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -591,6 +581,24 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+        return config
+
     def _validate_alloydb_config(self) -> None:
         """Validate sync-only AlloyDB connector configuration."""
         if not self.driver_features.get("enable_alloydb", False):
@@ -701,10 +709,13 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
-        if conninfo:
-            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
-        else:
-            pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        try:
+            if conninfo:
+                pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
+            else:
+                pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        except _psycopg_typing.psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
         return pool
 
@@ -818,9 +829,13 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> "PsycopgAsyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -846,9 +861,13 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     async def acquire_connection(self) -> "PsycopgAsyncConnection":
         if self._tenant_lease is not None:
             return cast("PsycopgAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
+        except _psycopg_typing.psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -961,24 +980,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             self.driver_features["pooler_mode"] = validate_psycopg_tenant_config(
                 self.driver_features, self.connection_config, self.connection_instance, "PsycopgAsyncConfig"
             )
-
-    def _prepare_derived_connection_config(
-        self, config: dict[str, Any], overrides: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
-            config.pop("prepare_threshold", None)
-        aliases = ("conninfo", "dsn", "url", "connection_string")
-        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
-        if any(key in overrides for key in aliases):
-            for key in aliases:
-                config.pop(key, None)
-            if explicit_dsn is not None:
-                config["conninfo"] = explicit_dsn
-        if "database" in overrides or "db" in overrides:
-            config["dbname"] = overrides.get("database", overrides.get("db"))
-        if "username" in overrides:
-            config["user"] = overrides["username"]
-        return config
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -1135,6 +1136,24 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if not self._explicit_prepare_threshold and "prepare_threshold" not in overrides:
+            config.pop("prepare_threshold", None)
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+        return config
+
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""
 
@@ -1190,13 +1209,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if pooling_disabled:
             pool_parameters.pop("min_size", None)
 
-        if conninfo:
-            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
-        else:
-            pool = pool_cls("", kwargs=all_config, **pool_parameters)
+        try:
+            if conninfo:
+                pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
+            else:
+                pool = pool_cls("", kwargs=all_config, **pool_parameters)
 
-        if open_pool is True:
-            await pool.open()
+            if open_pool is True:
+                await pool.open()
+        except _psycopg_typing.psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
         return pool
 

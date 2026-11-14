@@ -1,12 +1,15 @@
 """CockroachDB AsyncPG configuration."""
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
 from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs, register_pgvector_support
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
+    CockroachAsyncpgInterfaceError,
     CockroachAsyncpgPool,
+    CockroachAsyncpgPostgresError,
     CockroachAsyncpgSessionContext,
 )
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgRecord as Record
@@ -17,6 +20,7 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     CockroachAsyncpgRetryConfig,
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
     resolve_follower_read_options,
     validate_follower_read_staleness,
 )
@@ -39,7 +43,7 @@ from sqlspec.utils.tenant import TenantContextPayload
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
-    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable
     from contextlib import AbstractAsyncContextManager
     from uuid import UUID
 
@@ -217,11 +221,23 @@ class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
 
     __slots__ = ()
 
+    async def acquire_connection(self) -> "CockroachAsyncpgConnection":
+        try:
+            return cast("CockroachAsyncpgConnection", await super().acquire_connection())
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
+
 
 class CockroachAsyncpgConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for CockroachDB AsyncPG connections."""
 
     __slots__ = ()
+
+    async def __aenter__(self) -> "CockroachAsyncpgConnection":
+        try:
+            return cast("CockroachAsyncpgConnection", await super().__aenter__())
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 class CockroachAsyncpgConfig(
@@ -455,17 +471,6 @@ class CockroachAsyncpgConfig(
         context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
         return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
 
-    @asynccontextmanager
-    async def _read_connection(
-        self, context: "AbstractAsyncContextManager[CockroachAsyncpgDriver]"
-    ) -> "AsyncIterator[Any]":
-        async with context as session:
-            await session.begin()
-            try:
-                yield session.connection
-            finally:
-                await session.rollback()
-
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "CockroachAsyncpgPool":
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
@@ -491,10 +496,51 @@ class CockroachAsyncpgConfig(
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("dsn", "url", "conninfo", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["dsn"] = explicit_dsn
+        if "dbname" in overrides or "db" in overrides:
+            config["database"] = overrides.get("dbname", overrides.get("db"))
+            config.pop("dbname", None)
+            config.pop("db", None)
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+            config.pop("username", None)
+        return config
+
+    @asynccontextmanager
+    async def _read_connection(
+        self, context: "AbstractAsyncContextManager[CockroachAsyncpgDriver]"
+    ) -> "AsyncIterator[Any]":
+        async with context as session:
+            await session.begin()
+            failed = False
+            try:
+                yield session.connection
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                if failed:
+                    with suppress(Exception):
+                        await session.rollback()
+                else:
+                    await session.rollback()
+
     async def _create_pool(self) -> "CockroachAsyncpgPool":
         config = build_connection_config(self.connection_config)
         config.setdefault("init", self._init_connection)
-        return await asyncpg_create_pool(**config)
+        try:
+            return await asyncpg_create_pool(**config)
+        except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
         """Initialize connection with JSON codecs and user callback."""

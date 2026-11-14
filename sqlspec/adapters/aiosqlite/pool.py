@@ -18,7 +18,7 @@ from sqlspec.adapters.aiosqlite.core import (
     is_read_only_sqlite_config,
     run_on_worker_thread,
 )
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -51,7 +51,7 @@ class AiosqlitePoolClosedError(SQLSpecError):
     """Pool has been closed and cannot accept new operations."""
 
 
-class AiosqliteConnectTimeoutError(SQLSpecError):
+class AiosqliteConnectTimeoutError(ConnectionTimeoutError):
     """Connection could not be established within the specified timeout period."""
 
 
@@ -333,9 +333,9 @@ class AiosqliteConnectionPool:
             connection = await connect_proxy
         except BaseException as exc:
             self._detach_worker(connect_proxy)
-            if (
-                isinstance(exc, sqlite3.OperationalError)
-                and getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_CANTOPEN
+            if isinstance(exc, sqlite3.Error) and getattr(exc, "sqlite_errorcode", 0) & 0xFF in (
+                sqlite3.SQLITE_CANTOPEN,
+                26,
             ):
                 raise create_mapped_exception(exc) from exc
             raise

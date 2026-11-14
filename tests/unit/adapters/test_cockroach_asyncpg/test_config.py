@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 
 from sqlspec.adapters.cockroach_asyncpg import (
@@ -910,3 +911,98 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     async with config.provide_session() as session:
         assert session.connection is connection
     assert session.connection is _DETACHED_CONNECTION
+
+
+def test_cockroach_asyncpg_derive_pool_overrides_dsn_and_aliases() -> None:
+    """Derived replica configs replace primary DSN, database, and user aliases cleanly."""
+    primary = CockroachAsyncpgConfig(
+        connection_config={"dsn": "postgresql://primary:26257/rw", "database": "rw_db", "user": "rw_user"}
+    )
+    derived = primary.derive_pool(url="postgresql://replica:26257/ro", dbname="ro_db", username="ro_user")
+    assert derived.connection_config["dsn"] == "postgresql://replica:26257/ro"
+    assert "url" not in derived.connection_config
+    assert derived.connection_config["database"] == "ro_db"
+    assert derived.connection_config["user"] == "ro_user"
+
+
+@pytest.mark.parametrize("body_raises", [False, True], ids=["clean-exit", "body-exception"])
+async def test_cockroach_asyncpg_read_connection_rollback_error_handling(body_raises: bool) -> None:
+    """Caller exceptions are preserved if cleanup rollback fails; clean exits propagate rollback failure."""
+    connection = object()
+    session = AsyncMock()
+    session.connection = connection
+    session.begin = AsyncMock()
+    session.rollback = AsyncMock(side_effect=RuntimeError("rollback boom"))
+
+    class _FakeSessionCtx:
+        async def __aenter__(self) -> Any:
+            return session
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(connection_config={"dsn": "postgresql://localhost:26257/db"})
+    expected_exc = ValueError if body_raises else RuntimeError
+    with pytest.raises(expected_exc, match="body boom" if body_raises else "rollback boom"):
+        async with config._read_connection(_FakeSessionCtx()) as conn:  # pyright: ignore[reportPrivateUsage]
+            assert conn is connection
+            if body_raises:
+                raise ValueError("body boom")
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_cockroach_asyncpg_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CockroachAsyncpg pool creation and acquire errors map to DatabaseConnectionError for replica failover."""
+
+    class _FakeTx:
+        def __init__(self, conn: "_GoodConn") -> None:
+            self._conn = conn
+
+        async def start(self) -> None:
+            self._conn._in_tx = True
+
+        async def commit(self) -> None:
+            self._conn._in_tx = False
+
+        async def rollback(self) -> None:
+            self._conn._in_tx = False
+
+    class _GoodConn:
+        def __init__(self) -> None:
+            self._in_tx = False
+
+        def is_in_transaction(self) -> bool:
+            return self._in_tx
+
+        def transaction(self) -> _FakeTx:
+            return _FakeTx(self)
+
+        async def execute(self, query: str, *args: Any) -> str:
+            _ = query, args
+            return "OK"
+
+    good_conn = _GoodConn()
+    good_pool = AsyncMock()
+    good_pool.acquire = AsyncMock(return_value=good_conn)
+    good_pool.release = AsyncMock()
+    bad_pool = AsyncMock()
+    bad_pool.acquire = AsyncMock(side_effect=asyncpg.InterfaceError("closed"))
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if "bad" in str(kwargs.get("dsn", "")):
+            if failure_stage == "pool":
+                raise asyncpg.CannotConnectNowError("replica unavailable")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_asyncpg.config.asyncpg_create_pool", fake_create_pool)
+    config = CockroachAsyncpgConfig(
+        connection_config={"dsn": "postgresql://primary:26257/db"},
+        replicas=["postgresql://bad:26257/db", "postgresql://good:26257/db"],
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn

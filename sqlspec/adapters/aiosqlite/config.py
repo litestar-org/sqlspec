@@ -12,10 +12,12 @@ from sqlspec.adapters.aiosqlite._typing import (
     AiosqliteCursor,
     AiosqliteSessionContext,
 )
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
     apply_driver_features,
     build_connection_config,
     build_readonly_sqlite_uri,
+    create_mapped_exception,
     default_statement_config,
     is_read_only_sqlite_config,
     render_pragmas,
@@ -218,13 +220,17 @@ class _AiosqliteSessionFactory(AsyncPoolSessionFactory):
         self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def acquire_connection(self) -> "AiosqliteConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
-        self._ctx = ctx
-        return await ctx.__aenter__()
+        try:
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+            ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+            self._ctx = ctx
+            return await ctx.__aenter__()
+        except sqlite3.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def release_connection(self, _conn: "AiosqliteConnection", **kwargs: Any) -> None:
         context = self._ctx
@@ -244,13 +250,17 @@ class AiosqliteConnectionContext(AsyncPoolConnectionContext):
         self._ctx: AiosqlitePoolConnectionContext | None = None
 
     async def __aenter__(self) -> AiosqliteConnection:
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
-        ctx: AiosqlitePoolConnectionContext = pool.get_connection()
-        self._ctx = ctx
-        return await ctx.__aenter__()
+        try:
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+            ctx: AiosqlitePoolConnectionContext = pool.get_connection()
+            self._ctx = ctx
+            return await ctx.__aenter__()
+        except sqlite3.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -399,15 +409,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             **overrides,
         )
 
-    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
-        if spec_input is True:
-            database = build_readonly_sqlite_uri(str(self.connection_config.get("database", "")))
-            return {
-                "connection_config_overrides": {"database": database, "uri": True, "query_only": True, "pool_size": 5},
-                "driver_features_overrides": {"default_transaction_mode": "DEFERRED"},
-            }
-        return super()._build_replica_spec_overrides(spec_input)
-
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for AiosqliteConfig types.
 
@@ -457,6 +458,15 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
         return self.connection_instance
+
+    def _build_replica_spec_overrides(self, spec_input: str | bool | Mapping[str, Any]) -> dict[str, Any]:
+        if spec_input is True:
+            database = build_readonly_sqlite_uri(str(self.connection_config.get("database", "")))
+            return {
+                "connection_config_overrides": {"database": database, "uri": True, "query_only": True, "pool_size": 5},
+                "driver_features_overrides": {"default_transaction_mode": "DEFERRED"},
+            }
+        return super()._build_replica_spec_overrides(spec_input)
 
     async def _create_pool(self) -> AiosqliteConnectionPool:
         """Create the connection pool instance.

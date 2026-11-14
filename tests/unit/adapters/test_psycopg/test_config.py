@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import psycopg
+import psycopg_pool
 import pytest
 from psycopg import AsyncCursor, Connection, Cursor, pq
 from psycopg import Error as PsycopgError
@@ -1281,3 +1283,75 @@ async def test_psycopg_session_context_enter_failure_releases_and_detaches_drive
 
     assert release_events == [(True, True, RuntimeError)]
     assert captured[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+def test_psycopg_sync_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PsycopgSyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    good_ctx = MagicMock()
+    good_ctx.__enter__.return_value = good_conn
+    good_ctx.__exit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = MagicMock()
+    bad_ctx.__enter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            if failure_stage == "pool":
+                raise psycopg.OperationalError("replica down")
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", fake_pool_cls)
+    config = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
+    )
+    with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    with config.provide_read_session() as reader:
+        assert reader.connection is good_conn
+
+
+@pytest.mark.parametrize("failure_stage", ["pool", "acquire"])
+async def test_psycopg_async_read_replica_failover_maps_driver_errors(
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PsycopgAsyncConfig pool and acquire errors map via create_mapped_exception for ReadReplicaGroup failover."""
+    good_conn = SimpleNamespace(autocommit=True, info=SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE))
+    good_ctx = AsyncMock()
+    good_ctx.__aenter__.return_value = good_conn
+    good_ctx.__aexit__.return_value = None
+    good_pool = MagicMock()
+    good_pool.open = AsyncMock()
+    good_pool.connection.return_value = good_ctx
+
+    bad_ctx = AsyncMock()
+    bad_ctx.__aenter__.side_effect = psycopg_pool.PoolTimeout("pool timed out")
+    bad_pool = MagicMock()
+    bad_pool.open = (
+        AsyncMock(side_effect=psycopg.OperationalError("replica down")) if failure_stage == "pool" else AsyncMock()
+    )
+    bad_pool.connection.return_value = bad_ctx
+
+    def fake_async_pool_cls(conninfo: str, **kwargs: Any) -> Any:
+        _ = kwargs
+        if "bad" in conninfo:
+            return bad_pool
+        return good_pool
+
+    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", fake_async_pool_cls)
+    config = PsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://primary"}, replicas=["postgresql://bad", "postgresql://good"]
+    )
+    async with config.provide_read_connection() as conn:
+        assert conn is good_conn
+    async with config.provide_read_session() as reader:
+        assert reader.connection is good_conn

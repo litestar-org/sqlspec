@@ -1,5 +1,6 @@
 """SQLite configuration normalization tests."""
 
+import sqlite3
 import threading
 from os import PathLike
 from pathlib import Path
@@ -10,10 +11,10 @@ import pytest
 import sqlspec.adapters.sqlite.core as sqlite_core
 from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory, SqliteSessionContext
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams, SqliteDriverFeatures
-from sqlspec.adapters.sqlite.core import build_connection_config
+from sqlspec.adapters.sqlite.core import build_connection_config, create_mapped_exception
 from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
 
 
 def _annotation_contains(annotation: object, expected: object) -> bool:
@@ -377,5 +378,62 @@ def test_session_context_enter_failure_releases_pool_and_detaches_driver(tmp_pat
             assert getattr(captured[0], "connection", None) is _DETACHED_CONNECTION
 
         assert pool.checked_out() == 0
+    finally:
+        config.close_pool()
+
+
+def test_sqlite_read_replica_enforces_deferred_transaction_mode(tmp_path: Path) -> None:
+    """SQLite read-only replicas default to DEFERRED transactions even when primary uses IMMEDIATE."""
+    db_path = tmp_path / "replica_deferred.sqlite"
+    primary = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        driver_features={"default_transaction_mode": "IMMEDIATE"},
+        replicas=True,
+    )
+    try:
+        with primary.provide_session() as writer:
+            writer.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            writer.execute("INSERT INTO items (id) VALUES (1)")
+            writer.commit()
+
+        with primary.provide_read_session() as reader, reader.transaction():
+            assert reader.driver_features["default_transaction_mode"] == "DEFERRED"
+            row = reader.select_one("SELECT id FROM items")
+            assert row["id"] == 1
+    finally:
+        primary.close_pool()
+
+    with pytest.raises(ImproperConfigurationError, match="DEFERRED"):
+        SqliteConfig(
+            connection_config={"database": str(db_path), "query_only": True},
+            driver_features={"default_transaction_mode": "IMMEDIATE"},
+        )
+
+
+def test_sqlite_create_mapped_exception_maps_notadb_and_replica_failover(tmp_path: Path) -> None:
+    """SQLITE_NOTADB maps to DatabaseConnectionError and bad replicas fail over to healthy replicas."""
+
+    class _NotADbError(sqlite3.DatabaseError):
+        sqlite_errorcode = 26
+        sqlite_errorname = "SQLITE_NOTADB"
+
+    assert isinstance(create_mapped_exception(_NotADbError("file is not a database")), DatabaseConnectionError)
+
+    db_path = tmp_path / "healthy.sqlite"
+    config = SqliteConfig(
+        connection_config={"database": str(db_path)},
+        replicas=[
+            {"database": str(tmp_path / "missing_dir" / "bad.sqlite"), "query_only": True},
+            {"database": str(db_path), "query_only": True},
+        ],
+    )
+    try:
+        with config.provide_session() as writer:
+            writer.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY)")
+            writer.commit()
+        with config.provide_read_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM probe").fetchone() == (0,)
+        with config.provide_read_session() as reader:
+            assert reader.select_value("SELECT COUNT(*) FROM probe") == 0
     finally:
         config.close_pool()

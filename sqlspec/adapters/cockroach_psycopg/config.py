@@ -2,6 +2,7 @@
 
 import inspect
 import re
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast, overload
 
@@ -10,6 +11,7 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
+    cockroach_psycopg_module,
 )
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAdaptersMap as AdaptersMap
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAsyncConnectionPool as AsyncConnectionPool
@@ -23,6 +25,7 @@ from sqlspec.adapters.cockroach_psycopg.core import (
     apply_driver_features,
     build_connection_config,
     build_statement_config,
+    create_mapped_exception,
     resolve_follower_read_options,
     validate_follower_read_staleness,
 )
@@ -229,8 +232,12 @@ class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> "CockroachSyncConnection":
         if self._tenant_lease is not None:
             return cast("CockroachSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("CockroachSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("CockroachSyncConnection", self._ctx.__enter__())
+        except cockroach_psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -252,8 +259,12 @@ class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
     def acquire_connection(self) -> "CockroachSyncConnection":
         if self._tenant_lease is not None:
             return cast("CockroachSyncConnection", self._tenant_lease.acquire())
-        self._ctx = self._config.provide_pool().connection()
-        return cast("CockroachSyncConnection", self._ctx.__enter__())
+        try:
+            self._ctx = self._config.provide_pool().connection()
+            return cast("CockroachSyncConnection", self._ctx.__enter__())
+        except cockroach_psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -499,15 +510,6 @@ class CockroachPsycopgSyncConfig(
         context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
         return _ReadSyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
 
-    @contextmanager
-    def _read_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
-        with context as session:
-            session.begin()
-            try:
-                yield session.connection
-            finally:
-                session.rollback()
-
     def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
         if not self.connection_instance:
             self.connection_instance = self.create_pool()
@@ -532,6 +534,42 @@ class CockroachPsycopgSyncConfig(
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+            config.pop("database", None)
+            config.pop("db", None)
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+            config.pop("username", None)
+        return config
+
+    @contextmanager
+    def _read_connection(self, context: "AbstractContextManager[CockroachPsycopgSyncDriver]") -> "Iterator[Any]":
+        with context as session:
+            session.begin()
+            failed = False
+            try:
+                yield session.connection
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                if failed:
+                    with suppress(Exception):
+                        session.rollback()
+                else:
+                    session.rollback()
 
     def _create_pool(self) -> "ConnectionPool":
         all_config = dict(self.connection_config)
@@ -563,12 +601,17 @@ class CockroachPsycopgSyncConfig(
         all_config.update(kwargs)
         all_config.update(extra)
         _apply_cluster_option(all_config)
-        if conninfo:
-            return ConnectionPool(
-                conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
-            )
+        try:
+            if conninfo:
+                return ConnectionPool(
+                    conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
+                )
 
-        return ConnectionPool("", kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
+            return ConnectionPool(
+                "", kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
+            )
+        except cockroach_psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
         autocommit_setting = self.connection_config.get("autocommit")
@@ -613,9 +656,13 @@ class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> "CockroachAsyncConnection":
         if self._tenant_lease is not None:
             return cast("CockroachAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
+        except cockroach_psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -641,9 +688,13 @@ class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     async def acquire_connection(self) -> "CockroachAsyncConnection":
         if self._tenant_lease is not None:
             return cast("CockroachAsyncConnection", await self._tenant_lease.acquire())
-        pool = await self._config.provide_pool()
-        self._ctx = pool.connection()
-        return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            self._ctx = pool.connection()
+            return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
+        except cockroach_psycopg_module.Error as exc:
+            self._ctx = None
+            raise create_mapped_exception(exc) from exc
 
     async def release_connection(self, _conn: "CockroachAsyncConnection", **kwargs: Any) -> None:
         if self._tenant_lease is not None:
@@ -889,17 +940,6 @@ class CockroachPsycopgAsyncConfig(
         context = self.provide_read_session(*args, bind_group=bind_group, **kwargs)
         return _ReadAsyncContext(self._read_connection(context), cast("Any", context)._selection_receipt)
 
-    @asynccontextmanager
-    async def _read_connection(
-        self, context: "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]"
-    ) -> "AsyncIterator[Any]":
-        async with context as session:
-            await session.begin()
-            try:
-                yield session.connection
-            finally:
-                await session.rollback()
-
     async def provide_pool(self, *args: Any, **kwargs: Any) -> "AsyncConnectionPool":
         if not self.connection_instance:
             self.connection_instance = await self.create_pool()
@@ -924,6 +964,44 @@ class CockroachPsycopgAsyncConfig(
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    def _prepare_derived_connection_config(
+        self, config: dict[str, Any], overrides: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        aliases = ("conninfo", "dsn", "url", "connection_string")
+        explicit_dsn = next((overrides[key] for key in aliases if key in overrides), None)
+        if any(key in overrides for key in aliases):
+            for key in aliases:
+                config.pop(key, None)
+            if explicit_dsn is not None:
+                config["conninfo"] = explicit_dsn
+        if "database" in overrides or "db" in overrides:
+            config["dbname"] = overrides.get("database", overrides.get("db"))
+            config.pop("database", None)
+            config.pop("db", None)
+        if "username" in overrides:
+            config["user"] = overrides["username"]
+            config.pop("username", None)
+        return config
+
+    @asynccontextmanager
+    async def _read_connection(
+        self, context: "AbstractAsyncContextManager[CockroachPsycopgAsyncDriver]"
+    ) -> "AsyncIterator[Any]":
+        async with context as session:
+            await session.begin()
+            failed = False
+            try:
+                yield session.connection
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                if failed:
+                    with suppress(Exception):
+                        await session.rollback()
+                else:
+                    await session.rollback()
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         all_config = dict(self.connection_config)
@@ -956,17 +1034,20 @@ class CockroachPsycopgAsyncConfig(
         all_config.update(kwargs)
         all_config.update(extra)
         _apply_cluster_option(all_config)
-        if conninfo:
-            pool = AsyncConnectionPool(
-                conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
-            )
-        else:
-            pool = AsyncConnectionPool(
-                "", kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
-            )
+        try:
+            if conninfo:
+                pool = AsyncConnectionPool(
+                    conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+                )
+            else:
+                pool = AsyncConnectionPool(
+                    "", kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+                )
 
-        if open_pool is True:
-            await pool.open()
+            if open_pool is True:
+                await pool.open()
+        except cockroach_psycopg_module.Error as exc:
+            raise create_mapped_exception(exc) from exc
         return cast("AsyncConnectionPool", pool)
 
     async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
