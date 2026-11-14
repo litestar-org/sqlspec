@@ -1065,8 +1065,15 @@ async def test_cockroach_psycopg_adk_memory_search_with_embedding() -> None:
             ("inserted_at",),
         ]
 
-        async def execute(self, sql: bytes, params: Any) -> None:
-            executed_queries.append((sql.decode(), params))
+        async def execute(self, sql: Any, params: Any) -> None:
+            rendered = (
+                sql.decode()
+                if isinstance(sql, bytes)
+                else sql.as_string(None)
+                if hasattr(sql, "as_string")
+                else str(sql)
+            )
+            executed_queries.append((rendered, params))
 
         async def fetchall(self) -> list[Any]:
             return []
@@ -1446,6 +1453,7 @@ def test_replicas_true_selects_single_pool_follower_reads(config_type: Any) -> N
 
 @pytest.mark.parametrize("config_type", [CockroachPsycopgSyncConfig, CockroachPsycopgAsyncConfig])
 def test_derive_replaces_managed_options_without_duplicating_user_options(config_type: Any) -> None:
+    assert "statement_timeout_ms" not in CockroachPsycopgDriverFeatures.__optional_keys__
     primary = config_type(
         connection_config={
             "options": "-c search_path=app -c statement_timeout=1000 -c statement_timeout=2000",
@@ -1453,7 +1461,8 @@ def test_derive_replaces_managed_options_without_duplicating_user_options(config
         }
     )
     derived = primary.derive_pool(
-        driver_features_overrides={"enable_follower_reads": False, "statement_timeout_ms": 5000}
+        connection_config_overrides={"statement_timeout": 5000},
+        driver_features_overrides={"enable_follower_reads": False},
     )
     options = derived.connection_config["options"]
     assert options.count("search_path=app") == 1

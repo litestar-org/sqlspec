@@ -227,8 +227,6 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     """Emit structured debug/warning logs when serialization retries occur."""
     enable_follower_reads: NotRequired[bool]
     """Allow ``AS OF SYSTEM TIME`` follower-read clauses on read queries."""
-    statement_timeout_ms: NotRequired[int]
-    """Statement execution timeout forwarded to the managed libpq session option."""
     default_staleness: NotRequired[str]
     """Default ``AS OF SYSTEM TIME`` staleness expression (such as ``'-5s'`` or ``follower_read_timestamp()``)."""
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -347,11 +345,8 @@ class CockroachPsycopgSyncConfig(
         if raw_strategy is not None and raw_strategy is not False:
             require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
         connection_config = dict(connection_config or {})
-        if driver_features is not None:
-            if driver_features.get("enable_follower_reads") is False:
-                connection_config["default_transaction_use_follower_reads"] = False
-            if "statement_timeout_ms" in driver_features:
-                connection_config["statement_timeout"] = driver_features["statement_timeout_ms"]
+        if driver_features is not None and driver_features.get("enable_follower_reads") is False:
+            connection_config["default_transaction_use_follower_reads"] = False
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
@@ -768,11 +763,8 @@ class CockroachPsycopgAsyncConfig(
         if raw_strategy is not None and raw_strategy is not False:
             require_session_pooler((driver_features or {}).get("pooler_mode"), type(self).__name__)
         connection_config = dict(connection_config or {})
-        if driver_features is not None:
-            if driver_features.get("enable_follower_reads") is False:
-                connection_config["default_transaction_use_follower_reads"] = False
-            if "statement_timeout_ms" in driver_features:
-                connection_config["statement_timeout"] = driver_features["statement_timeout_ms"]
+        if driver_features is not None and driver_features.get("enable_follower_reads") is False:
+            connection_config["default_transaction_use_follower_reads"] = False
         connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
