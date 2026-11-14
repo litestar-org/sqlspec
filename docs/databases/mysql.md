@@ -295,7 +295,6 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `ssl_verify_cert` | `bool` | - | Verify the server TLS certificate against `ssl_ca`. |
     | `ssl_verify_identity` | `bool` | - | Verify that the server TLS certificate matches the target hostname. |
     | `extra` | `dict[str, Any]` | - | Additional keyword arguments forwarded to `pymysql.connect`. |
-    | `read_only` | `bool` | - | Initialize each connection in session read-only mode after native initialization. |
     | `pool_recycle_seconds` | `int` | - | Maximum connection age in seconds before recycling pooled PyMySQL connections. |
     | `health_check_interval` | `float` | - | Minimum interval in seconds between `conn.ping()` liveness checks. |
     <!-- GENERATED:END config-table:sqlspec.adapters.pymysql.config.PyMysqlConnectionParams,sqlspec.adapters.pymysql.config.PyMysqlPoolParams -->
@@ -425,7 +424,7 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
 
 All four MySQL/MariaDB adapters accept reader endpoints through `replicas=`. Point them at MySQL Router, ProxySQL, an Aurora/RDS reader endpoint, or a server you already replicate. `True` is rejected because it cannot identify that endpoint.
 
-Derived reader configs append `SET SESSION TRANSACTION READ ONLY` to `init_command` once. Pass `read_only=False` explicitly to opt out. Alias overrides replace inherited values, and connection hooks remain attached. Sync mysql-connector readers get a distinct pool name and default `pool_reset_session=False`, so reset does not erase their read-only state.
+Derived reader configs run `SET SESSION TRANSACTION READ ONLY` after establishing each physical connection without modifying `init_command`. Pass `read_only=False` explicitly to opt out. Alias overrides replace inherited values, and connection hooks remain attached. `mysql-connector` readers get a distinct pool name and default `pool_reset_session=False` (re-applying session setup on checkout if `pool_reset_session=True`), so reset does not erase their read-only state.
 
 `wait_for_gtid_set(gtid_set, timeout=2.0, mariadb=False)` returns whether the requested position is applied. It binds the GTID and timeout to `WAIT_FOR_EXECUTED_GTID_SET`; `mariadb=True` selects `MASTER_GTID_WAIT`. Await it on async drivers. Empty GTIDs, negative or nonfinite timeouts, and boolean timeout values fail before a query. Keep a positive timeout for a bounded MySQL wait: MySQL treats `0` as unlimited, while MariaDB treats `0` as a nonblocking check.
 

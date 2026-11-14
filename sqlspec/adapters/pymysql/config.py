@@ -182,8 +182,6 @@ class PyMysqlConnectionParams(TypedDict):
 class PyMysqlPoolParams(PyMysqlConnectionParams):
     """PyMySQL pool parameters."""
 
-    read_only: NotRequired[bool]
-    """Initialize each connection in session read-only mode after native initialization."""
     pool_recycle_seconds: NotRequired[int]
     """Maximum connection age in seconds before recycling pooled PyMySQL connections."""
     health_check_interval: NotRequired[float]

@@ -101,24 +101,36 @@ def test_resolve_column_types_newdecimal_parity(
 
 
 @pytest.mark.parametrize(
-    ("config_path", "config_name", "params_name"),
+    ("config_path", "config_name", "params_name", "pool_params_name"),
     [
-        ("sqlspec.adapters.aiomysql.config", "AiomysqlConfig", "AiomysqlConnectionParams"),
-        ("sqlspec.adapters.asyncmy.config", "AsyncmyConfig", "AsyncmyConnectionParams"),
-        ("sqlspec.adapters.mysqlconnector.config", "MysqlConnectorSyncConfig", "MysqlConnectorSyncConnectionParams"),
-        ("sqlspec.adapters.mysqlconnector.config", "MysqlConnectorAsyncConfig", "MysqlConnectorAsyncConnectionParams"),
-        ("sqlspec.adapters.pymysql.config", "PyMysqlConfig", "PyMysqlConnectionParams"),
+        ("sqlspec.adapters.aiomysql.config", "AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlPoolParams"),
+        ("sqlspec.adapters.asyncmy.config", "AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyPoolParams"),
+        (
+            "sqlspec.adapters.mysqlconnector.config",
+            "MysqlConnectorSyncConfig",
+            "MysqlConnectorSyncConnectionParams",
+            "MysqlConnectorPoolParams",
+        ),
+        (
+            "sqlspec.adapters.mysqlconnector.config",
+            "MysqlConnectorAsyncConfig",
+            "MysqlConnectorAsyncConnectionParams",
+            "MysqlConnectorAsyncConnectionParams",
+        ),
+        ("sqlspec.adapters.pymysql.config", "PyMysqlConfig", "PyMysqlConnectionParams", "PyMysqlPoolParams"),
     ],
 )
 def test_mysql_replica_readonly_is_internal_and_preserves_init_command(
-    config_path: str, config_name: str, params_name: str
+    config_path: str, config_name: str, params_name: str, pool_params_name: str
 ) -> None:
     config_mod = importlib.import_module(config_path)
     core_mod = importlib.import_module(config_path.rsplit(".", 1)[0] + ".core")
     config_cls = getattr(config_mod, config_name)
     params_cls = getattr(config_mod, params_name)
+    pool_params_cls = getattr(config_mod, pool_params_name)
 
     assert "read_only" not in params_cls.__annotations__
+    assert "read_only" not in pool_params_cls.__annotations__
     assert not hasattr(core_mod, "append_read_only_init_command")
 
     primary = config_cls(
