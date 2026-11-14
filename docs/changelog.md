@@ -110,7 +110,7 @@ important operational fixes.
 
 **Fixed:**
 
-* `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter. `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
+* `.where_eq(col, None)` / `.where_neq(col, None)` (including `or_` variants, `("col", None)` tuples, and `SQL.where_eq` / `SQL.where_neq`) render `col IS NULL` / `NOT col IS NULL` instead of binding a NULL parameter.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
 * `sql.exists_()`, `sql.any_()`, and `sql.all_()` fragments built from parameterized subqueries merge their parameters into the outer query when used in `.where()`, `.having()`, or `Column` comparisons. Passing `sql.in_()` directly to `.where()` raises `SQLBuilderError` pointing to `.where_in()`.
   ([#887](https://github.com/litestar-org/sqlspec/pull/887))
