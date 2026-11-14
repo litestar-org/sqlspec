@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.adapters.asyncpg.core import driver_profile
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
-from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgPostgresError, CockroachAsyncpgSessionContext
+from sqlspec.adapters.cockroach_asyncpg._typing import (
+    CockroachAsyncpgInterfaceError,
+    CockroachAsyncpgPostgresError,
+    CockroachAsyncpgSessionContext,
+)
 from sqlspec.adapters.cockroach_asyncpg.core import (
     DEFAULT_FOLLOWER_READ_STALENESS,
     CockroachAsyncpgRetryConfig,
@@ -92,7 +96,9 @@ class CockroachAsyncpgExceptionHandler(AsyncpgExceptionHandler):
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
-        if isinstance(exc_val, CockroachAsyncpgPostgresError) or has_sqlstate(exc_val):
+        if isinstance(
+            exc_val, (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError)
+        ) or has_sqlstate(exc_val):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -220,14 +226,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         self._wants_follower_read(statement)
         return await super().dispatch_special_handling(cursor, statement)
 
-    def _wants_follower_read(self, statement: "SQL") -> bool:
-        """Return True when a statement may run under a follower-read transaction."""
-        safe = statement.is_read_only()
-        if self.driver_features.get("read_only_session") and not safe:
-            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
-            raise ReadOnlyTransactionError(msg)
-        return safe
-
     async def begin(self) -> None:
         """Begin a transaction and apply follower-read staleness to it.
 
@@ -292,6 +290,25 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             await self.commit()
         return result
 
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+        """Return a native asyncpg row stream wrapped for follower reads."""
+        stream = super().dispatch_select_stream(statement, chunk_size)
+        if stream is None:
+            return None
+        source = CockroachAsyncpgStreamSource(self, statement, cast("AsyncpgStreamSource", stream._source))
+        return AsyncRowStream(source)
+
+    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
+        return CockroachAsyncpgExceptionHandler()
+
+    def _wants_follower_read(self, statement: "SQL") -> bool:
+        """Return True when a statement may run under a follower-read transaction."""
+        safe = statement.is_read_only()
+        if self.driver_features.get("read_only_session") and not safe:
+            msg = "A read-only CockroachDB session cannot execute a modifying or unsafe statement"
+            raise ReadOnlyTransactionError(msg)
+        return safe
+
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
@@ -311,17 +328,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         if auto_started and self._connection_in_transaction():
             await self.commit()
         return result
-
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
-        """Return a native asyncpg row stream wrapped for follower reads."""
-        stream = super().dispatch_select_stream(statement, chunk_size)
-        if stream is None:
-            return None
-        source = CockroachAsyncpgStreamSource(self, statement, cast("AsyncpgStreamSource", stream._source))
-        return AsyncRowStream(source)
-
-    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
-        return CockroachAsyncpgExceptionHandler()
 
     def _native_storage_ready(self) -> bool:
         return bool(self.driver_features.get("enable_native_storage")) and not self._connection_in_transaction()

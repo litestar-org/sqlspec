@@ -346,7 +346,7 @@ def resolve_follower_read_options(
     return enabled, validate_follower_read_staleness(value) if value is not None else None, read_only_session
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map native read-only violations before generic transaction errors."""
     if (has_sqlstate(error) and error.sqlstate == "25006") or type(error).__name__ in {
         "ReadOnlySqlTransaction",
@@ -355,4 +355,4 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         mapped = ReadOnlyTransactionError(str(error))
         mapped.__cause__ = error if isinstance(error, BaseException) else None
         return mapped
-    return _map_parent_exception(error)
+    return _map_parent_exception(error, logger=logger)

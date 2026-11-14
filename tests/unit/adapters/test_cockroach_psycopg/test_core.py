@@ -1,16 +1,21 @@
 # pyright: reportArgumentType=false
 """Unit tests for CockroachDB psycopg retry helpers."""
 
+import inspect
+from unittest.mock import MagicMock
+
 import pytest
+from psycopg import errors as pg_errors
 
 from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgRetryConfig
 from sqlspec.adapters.cockroach_psycopg.core import (
+    build_connection_config,
     calculate_backoff_seconds,
     create_mapped_exception,
     is_retryable_error,
     resolve_follower_read_options,
 )
-from sqlspec.exceptions import ReadOnlyTransactionError
+from sqlspec.exceptions import ConnectionTimeoutError, ReadOnlyTransactionError
 from sqlspec.utils.routing import RoutingContext
 
 
@@ -182,3 +187,29 @@ def test_native_read_only_exception_keeps_cause() -> None:
     mapped = create_mapped_exception(native)
     assert isinstance(mapped, ReadOnlyTransactionError)
     assert mapped.__cause__ is native
+
+
+def test_create_mapped_exception_signature_parity() -> None:
+    """CockroachDB psycopg create_mapped_exception exposes the standard logger keyword argument."""
+    sig = inspect.signature(create_mapped_exception)
+    assert list(sig.parameters.keys()) == ["error", "logger"]
+    assert sig.parameters["logger"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["logger"].default is None
+
+    mock_logger = MagicMock()
+    mapped = create_mapped_exception(pg_errors.CannotConnectNow("cannot connect now"), logger=mock_logger)
+    assert isinstance(mapped, ConnectionTimeoutError)
+
+
+def test_build_connection_config_merges_managed_options() -> None:
+    """Managed options replace existing copies while preserving unrelated options."""
+    built = build_connection_config({
+        "dsn": "postgresql://localhost:26257/defaultdb",
+        "options": "--application_name=app -c statement_timeout=1000",
+        "statement_timeout": 2500,
+        "default_transaction_use_follower_reads": True,
+    })
+    assert built["conninfo"] == "postgresql://localhost:26257/defaultdb"
+    assert built["options"] == (
+        "--application_name=app -c statement_timeout=2500 -c default_transaction_use_follower_reads=on"
+    )

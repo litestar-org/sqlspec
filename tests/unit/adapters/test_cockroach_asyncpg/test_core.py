@@ -1,8 +1,10 @@
 # pyright: reportArgumentType=false
 """Unit tests for CockroachDB AsyncPG retry helpers."""
 
-from unittest.mock import AsyncMock
+import inspect
+from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import pytest
 
 from sqlspec.adapters.asyncpg.core import register_json_codecs
@@ -13,7 +15,8 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     is_retryable_error,
     resolve_follower_read_options,
 )
-from sqlspec.exceptions import ReadOnlyTransactionError
+from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgExceptionHandler
+from sqlspec.exceptions import DatabaseConnectionError, QueryTimeoutError, ReadOnlyTransactionError
 from sqlspec.utils.routing import RoutingContext
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -198,3 +201,35 @@ async def test_cockroach_asyncpg_json_codecs_encode_string_scalars_as_json_strin
     jsonb_encoder = connection.set_type_codec.call_args_list[1].kwargs["encoder"]
     assert json_encoder(scalar) == to_json(scalar).encode("utf-8")
     assert jsonb_encoder(scalar) == b"\x01" + to_json(scalar).encode("utf-8")
+
+
+def test_create_mapped_exception_signature_parity() -> None:
+    """CockroachDB AsyncPG create_mapped_exception exposes the standard logger keyword argument."""
+    sig = inspect.signature(create_mapped_exception)
+    assert list(sig.parameters.keys()) == ["error", "logger"]
+    assert sig.parameters["logger"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["logger"].default is None
+
+    mock_logger = MagicMock()
+    err = TimeoutError("timed out")
+    mapped = create_mapped_exception(err, logger=mock_logger)
+    assert isinstance(mapped, QueryTimeoutError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("exc", "expected_cls"),
+    [
+        (TimeoutError("connect timed out"), QueryTimeoutError),
+        (OSError("connection reset by peer"), DatabaseConnectionError),
+        (asyncpg.InterfaceError("connection is closed"), DatabaseConnectionError),
+    ],
+)
+async def test_cockroach_exception_handler_maps_transport_and_interface_errors(
+    exc: BaseException, expected_cls: type[Exception]
+) -> None:
+    """CockroachAsyncpgExceptionHandler mirrors AsyncpgExceptionHandler transport and interface error checks."""
+    handler = CockroachAsyncpgExceptionHandler()
+    async with handler:
+        raise exc
+    assert isinstance(handler.pending_exception, expected_cls)

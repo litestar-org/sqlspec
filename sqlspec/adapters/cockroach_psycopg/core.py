@@ -153,9 +153,12 @@ def build_connection_config(
             raise ImproperConfigurationError(msg)
         managed[key] = str(value)
     if existing or managed:
-        config["options"] = " ".join(
-            part for part in (remaining, *(f"-c {key}={value}" for key, value in managed.items())) if part
-        )
+        option_parts: list[str] = []
+        if remaining:
+            option_parts.append(remaining)
+        for key, value in managed.items():
+            option_parts.append(f"-c {key}={value}")
+        config["options"] = " ".join(option_parts)
 
     return config
 
@@ -356,7 +359,7 @@ def resolve_follower_read_options(
     return enabled, validate_follower_read_staleness(value) if value is not None else None, read_only_session
 
 
-def create_mapped_exception(error: Any) -> SQLSpecError:
+def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
     """Map native read-only violations before generic transaction errors."""
     if (has_sqlstate(error) and error.sqlstate == "25006") or type(error).__name__ in {
         "ReadOnlySqlTransaction",
@@ -365,4 +368,4 @@ def create_mapped_exception(error: Any) -> SQLSpecError:
         mapped = ReadOnlyTransactionError(str(error))
         mapped.__cause__ = error if isinstance(error, BaseException) else None
         return mapped
-    return _map_parent_exception(error)
+    return _map_parent_exception(error, logger=logger)
