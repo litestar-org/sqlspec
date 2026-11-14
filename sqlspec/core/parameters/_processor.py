@@ -696,7 +696,7 @@ class ParameterProcessor:
             return parameters
 
         if index_order:
-            cached_names = tuple(dict.fromkeys(param.name or f"param_{param.ordinal}" for param in cached_param_info))
+            cached_names = tuple(dict.fromkeys([param.name or f"param_{param.ordinal}" for param in cached_param_info]))
             if len(cached_names) == len(index_order):
                 if is_many and isinstance(parameters, (list, tuple)):
                     return [
@@ -1330,7 +1330,7 @@ def _generated_name_order(name: str) -> int:
 def _align_cached_mapping(
     parameters: "Mapping[str, Any]", cached_param_info: "Sequence[ParameterInfo]"
 ) -> "Mapping[str, Any]":
-    names = tuple(dict.fromkeys(param.name for param in cached_param_info if param.name is not None))
+    names = tuple(dict.fromkeys([param.name for param in cached_param_info if param.name is not None]))
     generated = [name for name in names if name not in parameters and _is_generated_name(name)]
     if not generated:
         return parameters
