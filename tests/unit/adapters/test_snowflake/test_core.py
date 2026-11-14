@@ -297,10 +297,14 @@ def test_read_only_mapping_keeps_snowflake_query_id_and_native_cause() -> None:
     assert mapped.__cause__ is native
 
 
-def test_snowflake_identifiers_reject_trailing_newlines() -> None:
-    """Snowflake qualified identifier parsing and column folding reject trailing newlines."""
+def test_snowflake_column_folding_rejects_trailing_newlines() -> None:
+    """Snowflake column folding rejects column names containing trailing newlines."""
     assert IMPLICIT_UPPER_COLUMN_PATTERN.match("COL\n") is None
     assert resolve_column_names([("COL\n", 0)], {}, enable_lowercase_column_names=True) == ["COL\n"]
-    for bad_identifier in ("orders\n", "sales.orders\n", "sales\n.orders"):
-        with pytest.raises(SQLSpecError, match="Invalid Snowflake identifier"):
-            format_snowflake_identifier(bad_identifier)
+
+
+@pytest.mark.parametrize("bad_identifier", ("orders\n", "sales.orders\n", "sales\n.orders"))
+def test_snowflake_identifiers_reject_trailing_newlines(bad_identifier: str) -> None:
+    """Snowflake qualified identifier formatting rejects embedded and trailing newlines."""
+    with pytest.raises(SQLSpecError, match="Invalid Snowflake identifier"):
+        format_snowflake_identifier(bad_identifier)
