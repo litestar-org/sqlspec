@@ -23,8 +23,16 @@ from sqlspec.adapters.oracledb import config, parse_sqlnet_ora, parse_tnsnames_o
 from sqlspec.adapters.oracledb._typing import OracleAsyncCursor
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleDriverFeatures, OracleSyncConfig
 from sqlspec.adapters.oracledb.core import (
+    _ORACLE_NLS_KEY_PATTERN,
+    _ORACLE_TIME_ZONE_PATTERN,
+    _ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN,
+    _UNQUOTED_ORACLE_IDENTIFIER_PATTERN,
+    IMPLICIT_UPPER_COLUMN_PATTERN,
     OracleEndpoint,
     OracleTopologyConfig,
+    _normalize_oracle_dbms_cloud_part,
+    _validate_oracle_nls_parameters,
+    _validate_oracle_time_zone,
     apply_driver_features,
     apply_oracle_transaction_priority,
     apply_wallet_ssl_context,
@@ -891,3 +899,17 @@ def test_build_tns_description_validates_endpoints_and_address_lists(
     )
     with pytest.raises(ImproperConfigurationError, match="host"):
         build_tns_description(invalid)
+
+
+def test_oracle_identifier_patterns_reject_trailing_newlines() -> None:
+    """Oracle identifier and session parameter patterns reject trailing newlines."""
+    assert IMPLICIT_UPPER_COLUMN_PATTERN.match("COL\n") is None
+    assert _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.match("TBL\n") is None
+    assert _ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN.match("TBL\n") is None
+    assert _ORACLE_TIME_ZONE_PATTERN.match("UTC\n") is None
+    assert _ORACLE_NLS_KEY_PATTERN.match("NLS_LANGUAGE\n") is None
+    assert _normalize_oracle_dbms_cloud_part('"TBL\n"', full_identifier='"TBL\n"') == '"TBL\n"'
+    with pytest.raises(ImproperConfigurationError):
+        _validate_oracle_time_zone("UTC\n")
+    with pytest.raises(ImproperConfigurationError):
+        _validate_oracle_nls_parameters({"NLS_LANGUAGE\n": "AMERICAN"})

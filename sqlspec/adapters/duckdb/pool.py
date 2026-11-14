@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 __all__ = ("DuckDBConnectionPool",)
 
 
-_SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_SQL_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _EXPLICIT_INSTALL_KEYS: Final[tuple[str, ...]] = ("version", "repository", "repository_url")
 
 

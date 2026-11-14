@@ -103,7 +103,7 @@ logger = get_logger("sqlspec.adapters.duckdb.core")
 ARROW_MIN_ROWS: Final[int] = 64
 _VERSION_COMPONENTS: Final[int] = 3
 _CGROUP_UNBOUNDED_THRESHOLD: Final[int] = 1 << 60
-_MEMORY_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")
+_MEMORY_LIMIT_RE: Final[re.Pattern[str]] = re.compile(r"\A[ \t]*(\d+(?:\.\d+)?)[ \t]*([A-Za-z]*)[ \t]*\Z")
 _MEMORY_UNIT_MULTIPLIERS: Final[dict[str, int]] = {
     "": 1,
     "B": 1,
@@ -674,7 +674,7 @@ def duckdb_copy_filename_follows_query() -> bool:
 
 
 def _parse_memory_size_bytes(memory_limit: str) -> "int | None":
-    match = _MEMORY_LIMIT_RE.match(memory_limit)
+    match = _MEMORY_LIMIT_RE.fullmatch(memory_limit)
     if match is None:
         return None
     amount = float(match.group(1))

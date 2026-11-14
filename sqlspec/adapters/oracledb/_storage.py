@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 
 __all__ = ("oracle_table_feature_report", "validate_oracle_identifier")
 
-_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]*$")
+_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"\A[A-Za-z][A-Za-z0-9_$#]*\Z")
 
 ORACLE_DEFAULT_HASH_PARTITIONS = 16
 ORACLE_MIN_HASH_PARTITIONS = 2

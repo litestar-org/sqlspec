@@ -61,7 +61,7 @@ __all__ = (
 )
 
 DEFAULT_STAGE_PARQUET_THRESHOLD_ROWS: Final[int] = 1000
-IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)[A-Z0-9_]+$")
+IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)[A-Z0-9_]+\Z")
 VALID_WORKLOAD_IDENTITY_PROVIDERS: Final[frozenset[str]] = frozenset({"AWS", "GCP", "AZURE", "OIDC"})
 TOKEN_AUTHENTICATORS: Final[frozenset[str]] = frozenset({"PROGRAMMATIC_ACCESS_TOKEN", "oauth", "WORKLOAD_IDENTITY"})
 POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
@@ -71,7 +71,9 @@ POOL_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "pool_recycle_seconds",
     "health_check_interval",
 })
-_QUALIFIED_IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(r'\s*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)\s*(\.|$)')
+_QUALIFIED_IDENTIFIER_PART: Final[re.Pattern[str]] = re.compile(
+    r'[ \t]*("(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)[ \t]*(\.|\Z)'
+)
 _AUTH_ALIASES: Final[dict[str, str]] = {
     "snowflake": "snowflake",
     "jwt": "SNOWFLAKE_JWT",

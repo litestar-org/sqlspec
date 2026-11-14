@@ -266,8 +266,8 @@ def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
     return partial(_chained_output_handler, inner, fallback)
 
 
-IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
-_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]*$")
+IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
+_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"\A[A-Za-z][A-Za-z0-9_$#]*\Z")
 _ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
     "ACCESS",
     "ADD",
@@ -534,7 +534,7 @@ _DBMS_CLOUD_FORMAT_MAP: Final[dict[str, str]] = {
     "ndjson": "json",
 }
 
-_ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Z][A-Z0-9_$#]*$")
+_ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"\A[A-Z][A-Z0-9_$#]*\Z")
 _WALLET_DIR_MODE: Final[int] = 0o700
 _WALLET_FILE_MODE: Final[int] = 0o600
 _MIN_QUOTED_IDENTIFIER_LEN: Final[int] = 2
@@ -544,8 +544,8 @@ _WALLET_DIR_REFCOUNTS: Final[dict[Path, int]] = {}
 _ATEXIT_WALLET_DIRS: Final[set[Path]] = set()
 _ATEXIT_WALLET_HOOK_REGISTERED: list[bool] = [False]
 
-_ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9_+\-/:]{1,64}$")
-_ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"^NLS_[A-Z0-9_]{1,60}$")
+_ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"\A[A-Za-z0-9_+\-/:]{1,64}\Z")
+_ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"\ANLS_[A-Z0-9_]{1,60}\Z")
 _ORACLE_TEXT_TOKEN_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9_]+")
 _ORACLE_TEXT_OPERATORS: Final[frozenset[str]] = frozenset({"ACCUM", "AND", "OR", "NEAR"})
 _ORACLE_TEXT_RESERVED_OPERATORS: "frozenset[str]" = frozenset({
@@ -4204,10 +4204,10 @@ def _normalize_oracle_dbms_cloud_part(raw_part: str, *, full_identifier: str) ->
         if not inner:
             msg = f"Invalid Oracle table identifier: {full_identifier!r}"
             raise SQLSpecError(msg)
-        if _ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN.match(inner):
+        if _ORACLE_UPPER_SIMPLE_IDENTIFIER_PATTERN.fullmatch(inner):
             return inner
         return quote_identifier(inner)
-    if not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.match(cleaned):
+    if not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(cleaned):
         msg = f"Invalid Oracle table identifier: {full_identifier!r}"
         raise SQLSpecError(msg)
     return cleaned

@@ -117,7 +117,7 @@ __all__ = (
 
 _MAX_TCP_PORT: Final = 65535
 _MIN_BRACED_VALUE_LEN: Final = 2
-_FLIGHTSQL_HEADER_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]+$")
+_FLIGHTSQL_HEADER_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 _URI_HOST_FORBIDDEN_CHARS: Final[frozenset[str]] = frozenset({"/", "?", "#", "@", " ", "\t", "\r", "\n", "\x00"})
 COLUMN_CACHE_MAX_SIZE: int = 256
 RECONCILE_ADBC_DIALECTS: Final = frozenset({
@@ -131,7 +131,7 @@ RECONCILE_ADBC_DIALECTS: Final = frozenset({
     "teradata",
     "sqlite",
 })
-_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 NoneType: Final = type(None)
 _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
@@ -2402,7 +2402,7 @@ _SNOWFLAKE_DURATION_OPTIONS: Final[tuple[str, ...]] = (
     "client_timeout",
     "jwt_expire_timeout",
 )
-_GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+$")
+_GO_DURATION_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?:\d+(?:\.\d+)?(?:ns|us|\u00b5s|ms|s|m|h))+\Z")
 _SNOWFLAKE_ERROR_MARKER: Final = "[snowflake]"
 _SNOWFLAKE_ERROR_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b(\d{6})(?:\s*\([0-9A-Z]{5}\))?\s*:")
 _SNOWFLAKE_ERROR_CODES: Final[dict[str, tuple[type[SQLSpecError], str]]] = {

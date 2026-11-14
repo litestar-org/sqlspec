@@ -19,8 +19,14 @@ from sqlspec.adapters.arrow_odbc import (
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
+from sqlspec.adapters.arrow_odbc.core import _ODBC_KEY_PATTERN, _format_odbc_connection_value
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcStreamSource, _reader_to_table
+from sqlspec.adapters.arrow_odbc.driver import (
+    _DB2_PLAIN_IDENTIFIER,
+    ArrowOdbcStreamSource,
+    _db2_table_reference,
+    _reader_to_table,
+)
 from sqlspec.core import SQL, ArrowResult, LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import (
@@ -1315,3 +1321,12 @@ def test_transaction_lifecycle_maps_generic_exception() -> None:
 
     with pytest.raises(SQLSpecError, match="Failed to rollback transaction"):
         driver.rollback()
+
+
+def test_arrow_odbc_identifier_patterns_reject_trailing_newlines() -> None:
+    """Arrow-ODBC identifier and keyword patterns reject trailing newlines."""
+    assert _ODBC_KEY_PATTERN.match("DSN\n") is None
+    assert _DB2_PLAIN_IDENTIFIER.match("orders\n") is None
+    assert _db2_table_reference('"orders\n"') == '"orders\n"'
+    with pytest.raises(ImproperConfigurationError, match="Invalid ODBC connection parameter key"):
+        _format_odbc_connection_value("DSN\n", "sample")

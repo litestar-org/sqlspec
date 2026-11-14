@@ -986,7 +986,7 @@ def test_snowflake_qualified_table_and_database_scope_reflection() -> None:
     unsupported_views = dictionary.get_views(sqlite_driver)
     assert unsupported_views.capability.support == MetadataSupport.UNSUPPORTED
 
-    for bad_identifier in ("", "sales.", "sales..orders", '""'):
+    for bad_identifier in ("", "sales.", "sales..orders", '""', "orders\n", "sales.orders\n", "sales\n.orders"):
         with pytest.raises(SQLSpecError):
             dictionary.get_columns(driver, table=bad_identifier)
 

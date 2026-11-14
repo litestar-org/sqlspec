@@ -3,7 +3,10 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from sqlspec.adapters.arrow_odbc.core import quote_bracket_identifier, strip_bracket_quotes
+from sqlspec.adapters.arrow_odbc.litestar.store import _validate_arrow_odbc_table_name
 
 
 def test_arrow_odbc_extensions_do_not_import_other_adapters() -> None:
@@ -41,3 +44,10 @@ def test_bracket_quoting_and_stripping() -> None:
     assert strip_bracket_quotes('"users"') == "users"
     assert strip_bracket_quotes('""users""') == '"users"'
     assert strip_bracket_quotes("plain") == "plain"
+
+
+@pytest.mark.parametrize("bad_table", ["sessions\n", "[sessions\n]", '"sessions\n"', 'dbo."sessions\n"'])
+def test_arrow_odbc_store_rejects_trailing_newline_table_names(bad_table: str) -> None:
+    """Store table validation must reject segments containing trailing newlines."""
+    with pytest.raises(ValueError, match="Invalid table name"):
+        _validate_arrow_odbc_table_name(bad_table)

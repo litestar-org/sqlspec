@@ -16,6 +16,7 @@ from sqlspec.adapters.duckdb.config import (
     DuckDBSecretConfig,
 )
 from sqlspec.adapters.duckdb.core import (
+    _parse_memory_size_bytes,
     apply_driver_features,
     build_connection_config,
     build_statement_config,
@@ -23,6 +24,7 @@ from sqlspec.adapters.duckdb.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
+from sqlspec.adapters.duckdb.pool import _SQL_IDENTIFIER_RE, _validate_sql_identifier
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -335,3 +337,22 @@ def test_provide_session_failed_rollback_forwards_exception_to_pool_and_avoids_c
             assert check_session.select_value("SELECT COUNT(*) FROM items") == 0
     finally:
         config.close_pool()
+
+
+def test_duckdb_patterns_reject_trailing_newline() -> None:
+    """DuckDB secret identifier and memory limit patterns reject trailing newlines."""
+    assert _SQL_IDENTIFIER_RE.match("secret_name\n") is None
+    assert _parse_memory_size_bytes("10MB\n") is None
+    with pytest.raises(ValueError, match="Invalid SQL identifier"):
+        _validate_sql_identifier("bad_secret\n", "secret_name")
+    cfg = DuckDBConfig(
+        connection_config={"database": ":memory:bad_secret_nl"},
+        driver_features={
+            "secrets": [{"name": "bad_secret\n", "secret_type": "s3", "value": {"key_id": "a"}, "required": True}]
+        },
+    )
+    try:
+        with pytest.raises(ValueError, match="Invalid SQL identifier"), cfg.provide_session():
+            pass
+    finally:
+        cfg.close_pool()

@@ -67,7 +67,7 @@ DB2_INDEX_EXISTS_SQL: Final[str] = (
 _CONNECT_KWARG_KEYS: Final[set[str]] = {"user", "password", "login_timeout_sec", "packet_size", "autocommit"}
 _USER_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("user", "uid", "username")
 _PASSWORD_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("password", "pwd")
-_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
 _MIN_DELIMITER_LEN: Final[int] = 2
 _CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
@@ -155,7 +155,7 @@ _SPECIFIC_SQLSTATE_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
 _LOCK_TIMEOUT_SQLSTATES: Final[frozenset[str]] = frozenset({"40001", "57033"})
 _DB2_REASON_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r'Reason code\s*"?(\d+)"?', re.IGNORECASE)
 _DB2_LOCK_TIMEOUT_REASON_CODE: Final[str] = "68"
-_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
 _SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),

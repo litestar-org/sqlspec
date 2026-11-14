@@ -5,7 +5,13 @@ from uuid import UUID
 
 import pytest
 
-from sqlspec.adapters.teradata.core import build_connection_config, build_set_query_band_sql, create_mapped_exception
+from sqlspec.adapters.teradata.core import (
+    IMPLICIT_UPPER_COLUMN_PATTERN,
+    build_connection_config,
+    build_set_query_band_sql,
+    create_mapped_exception,
+    resolve_column_names,
+)
 from sqlspec.adapters.teradata.type_converter import prepare_teradata_parameters
 from sqlspec.exceptions import ImproperConfigurationError, UniqueViolationError
 
@@ -351,3 +357,9 @@ def test_replica_error_mapping_preserves_native_cause(message: str) -> None:
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, ReadOnlyTransactionError)
     assert mapped.__cause__ is error
+
+
+def test_teradata_column_pattern_rejects_trailing_newline() -> None:
+    """Implicit uppercase column folding must preserve identifiers ending with a newline."""
+    assert IMPLICIT_UPPER_COLUMN_PATTERN.match("COL\n") is None
+    assert resolve_column_names([("COL\n",)], {}, enable_lowercase_column_names=True) == ["COL\n"]

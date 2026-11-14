@@ -98,7 +98,7 @@ _INTEGER_KEYS: Final[tuple[str, ...]] = ("port", "connect_timeout")
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 _CLI_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
-_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ODBC_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z][A-Za-z0-9_]*\Z")
 _ODBC_SPECIAL_CHARS: Final[frozenset[str]] = frozenset({";", "{", "}", "="})
 _BRACED_MIN_LENGTH: Final[int] = 2
 _DEFAULT_PORT: Final[int] = 50000
@@ -106,7 +106,7 @@ _MIN_PORT: Final[int] = 1
 _MAX_PORT: Final[int] = 65535
 _DEFAULT_PROTOCOL: Final[str] = "TCPIP"
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
-IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A(?!\d)(?:[A-Z0-9_]+)\Z")
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
 )

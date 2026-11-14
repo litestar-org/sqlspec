@@ -17,7 +17,13 @@ from sqlspec.adapters.db2.config import (
     Db2SyncConfig,
     Db2SyncConnectionContext,
 )
-from sqlspec.adapters.db2.core import _parse_db2_dsn, build_connection_config, build_dsn_string
+from sqlspec.adapters.db2.core import (
+    _ODBC_KEY_PATTERN,
+    IMPLICIT_UPPER_COLUMN_PATTERN,
+    _parse_db2_dsn,
+    build_connection_config,
+    build_dsn_string,
+)
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
@@ -717,3 +723,11 @@ async def test_db2_config_provide_maps_acquire_driver_error(
             await config.close_pool()
         else:
             config.close_pool()
+
+
+def test_db2_identifier_patterns_reject_trailing_newline() -> None:
+    """Db2 identifier patterns reject trailing newlines."""
+    assert IMPLICIT_UPPER_COLUMN_PATTERN.match("COL\n") is None
+    assert _ODBC_KEY_PATTERN.match("HOSTNAME\n") is None
+    with pytest.raises(ImproperConfigurationError, match="keyword"):
+        build_dsn_string({"extra": {"KEY\n": "val"}})

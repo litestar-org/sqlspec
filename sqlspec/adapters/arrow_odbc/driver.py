@@ -719,7 +719,9 @@ def _db2_table_reference(table: str) -> str:
     rendered: list[str] = []
     for part in exp.to_table(table, dialect="db2").parts:
         plain = isinstance(part, exp.Identifier) and not part.quoted
-        rendered.append(part.name if plain and _DB2_PLAIN_IDENTIFIER.match(part.name) else quote_identifier(part.name))
+        rendered.append(
+            part.name if plain and _DB2_PLAIN_IDENTIFIER.fullmatch(part.name) else quote_identifier(part.name)
+        )
     return ".".join(rendered)
 
 
@@ -729,7 +731,7 @@ def _statement_dialect_for(dialect: str) -> str:
     return dialect
 
 
-_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 _MSSQL_SQL_GAP: Final = r"(?:\s|/\*.*?\*/|--[^\r\n]*(?:\r?\n|$))*"
 _MSSQL_PAGINATION_PATTERN: Final = re.compile(
     rf"\bTOP{_MSSQL_SQL_GAP}\({_MSSQL_SQL_GAP}(?P<top>\?){_MSSQL_SQL_GAP}\)"
