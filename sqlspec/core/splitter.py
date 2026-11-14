@@ -21,7 +21,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from enum import Enum
 from re import Pattern
-from typing import Any, Final, TypeAlias, cast, final
+from typing import Any, ClassVar, Final, TypeAlias, cast, final
 
 from mypy_extensions import mypyc_attr
 
@@ -269,13 +269,13 @@ class _EagerDialectConfig(DialectConfig):
 
     __slots__ = ()
 
-    _DIALECT_NAME = ""
-    _BLOCK_STARTERS: tuple[str, ...] = ()
-    _BLOCK_ENDERS: tuple[str, ...] = ("END",)
-    _STATEMENT_TERMINATORS: tuple[str, ...] = (";",)
-    _BATCH_SEPARATORS: tuple[str, ...] = ()
-    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = ()
-    _MAX_NESTING_DEPTH = 256
+    _DIALECT_NAME: ClassVar[str] = ""
+    _BLOCK_STARTERS: ClassVar[tuple[str, ...]] = ()
+    _BLOCK_ENDERS: ClassVar[tuple[str, ...]] = ("END",)
+    _STATEMENT_TERMINATORS: ClassVar[tuple[str, ...]] = (";",)
+    _BATCH_SEPARATORS: ClassVar[tuple[str, ...]] = ()
+    _SPECIAL_TERMINATORS: ClassVar[tuple[tuple[str, SpecialTerminatorHandler], ...]] = ()
+    _MAX_NESTING_DEPTH: ClassVar[int] = 256
 
     def __init__(self) -> None:
         """Initialize eager dialect configuration."""
@@ -533,7 +533,7 @@ class MySQLDialectConfig(_EagerDialectConfig):
 
     _DIALECT_NAME = "mysql"
     _BLOCK_STARTERS = ("BEGIN", "DECLARE", "CASE")
-    _SPECIAL_TERMINATORS: tuple[tuple[str, SpecialTerminatorHandler], ...] = (
+    _SPECIAL_TERMINATORS: ClassVar[tuple[tuple[str, SpecialTerminatorHandler], ...]] = (
         ("\\g", _special_terminator_true),
         ("\\G", _special_terminator_true),
     )
