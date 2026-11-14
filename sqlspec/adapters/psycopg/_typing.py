@@ -216,8 +216,14 @@ class PsycopgSyncSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver, self._driver = self._driver, None
             connection, self._connection = self._connection, None
-            self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            try:
+                if connection is not None:
+                    self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            finally:
+                if driver is not None:
+                    driver._detach_connection()
             raise
 
     def __exit__(
@@ -303,8 +309,16 @@ class PsycopgAsyncSessionContext:
             )
             return self._prepare_driver(self._driver)
         except BaseException as exc:
+            driver, self._driver = self._driver, None
             connection, self._connection = self._connection, None
-            await self._release_connection(connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+            try:
+                if connection is not None:
+                    await self._release_connection(
+                        connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
+                    )
+            finally:
+                if driver is not None:
+                    driver._detach_connection()
             raise
 
     async def __aexit__(

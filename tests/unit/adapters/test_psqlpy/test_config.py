@@ -821,3 +821,33 @@ async def test_provide_session_detaches_driver_on_exit() -> None:
     async with config.provide_session() as session:
         assert session.connection is connection
     assert session.connection is _DETACHED_CONNECTION
+
+
+async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
+    connection = object()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    async def acquire_connection() -> Any:
+        return connection
+
+    async def release_connection(conn: Any, **kwargs: Any) -> None:
+        release_events.append((conn is connection, captured[0].connection is connection, kwargs.get("exc_type")))
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    ctx = PsqlpySessionContext(
+        acquire_connection=acquire_connection,
+        release_connection=release_connection,
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=fail_prepare,
+    )
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with ctx:
+            pytest.fail("prepare failure must abort __aenter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION

@@ -1,10 +1,10 @@
 import sqlite3
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import Any, get_args, get_type_hints
 
 import pytest
 
-from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory
+from sqlspec.adapters.aiosqlite._typing import AiosqliteConnectionFactory, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite.config import (
     AiosqliteConfig,
     AiosqliteConnectionParams,
@@ -12,6 +12,7 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqlitePoolParams,
 )
 from sqlspec.adapters.aiosqlite.core import build_connection_config
+from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -391,3 +392,33 @@ async def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
             await session.execute("SELECT 1")
     finally:
         await config.close_pool()
+
+
+async def test_session_context_aenter_failure_releases_and_detaches_driver() -> None:
+    stub_conn = object()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    async def acquire_connection() -> Any:
+        return stub_conn
+
+    async def release_connection(conn: Any, **kwargs: Any) -> None:
+        release_events.append((conn is stub_conn, captured[0].connection is stub_conn, kwargs.get("exc_type")))
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    ctx = AiosqliteSessionContext(
+        acquire_connection=acquire_connection,
+        release_connection=release_connection,
+        statement_config=StatementConfig(dialect="sqlite"),
+        driver_features={},
+        prepare_driver=fail_prepare,
+    )
+    with pytest.raises(RuntimeError, match="prepare boom"):
+        async with ctx:
+            pytest.fail("prepare failure must abort __aenter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION

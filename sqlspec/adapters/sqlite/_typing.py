@@ -125,10 +125,16 @@ class SqliteSessionContext:
             driver_cls = SqliteDriver
 
         self._connection = self._acquire_connection()
-        self._driver = driver_cls(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        return self._prepare_driver(self._driver)
+        try:
+            self._driver = driver_cls(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

@@ -1234,3 +1234,50 @@ async def test_psycopg_session_context_propagates_or_preserves_rollback_error_an
     assert release.call_args.args == (conn,)
     assert release.call_args.kwargs["exc_type"] is type(caught.value)
     assert release.call_args.kwargs["exc_val"] is caught.value
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_psycopg_session_context_enter_failure_releases_and_detaches_driver(asynchronous: bool) -> None:
+    conn = AsyncMock() if asynchronous else MagicMock()
+    captured: list[Any] = []
+    release_events: list[tuple[bool, bool, Any]] = []
+
+    def fail_prepare(driver: Any) -> Any:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    if asynchronous:
+
+        async def acquire_async() -> Any:
+            return conn
+
+        async def release_async(released: Any, **kwargs: Any) -> None:
+            release_events.append((released is conn, captured[0].connection is conn, kwargs.get("exc_type")))
+
+        ctx = PsycopgAsyncSessionContext(
+            acquire_connection=acquire_async,
+            release_connection=release_async,
+            statement_config=StatementConfig(dialect="postgres"),
+            driver_features={},
+            prepare_driver=fail_prepare,
+        )
+        with pytest.raises(RuntimeError, match="prepare boom"):
+            async with ctx:
+                pytest.fail("prepare failure must abort __aenter__")
+    else:
+
+        def release_sync(released: Any, **kwargs: Any) -> None:
+            release_events.append((released is conn, captured[0].connection is conn, kwargs.get("exc_type")))
+
+        ctx_sync = PsycopgSyncSessionContext(
+            acquire_connection=lambda: conn,
+            release_connection=release_sync,
+            statement_config=StatementConfig(dialect="postgres"),
+            driver_features={},
+            prepare_driver=fail_prepare,
+        )
+        with pytest.raises(RuntimeError, match="prepare boom"), ctx_sync:
+            pytest.fail("prepare failure must abort __enter__")
+
+    assert release_events == [(True, True, RuntimeError)]
+    assert captured[0].connection is _DETACHED_CONNECTION

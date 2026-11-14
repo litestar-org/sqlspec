@@ -8,9 +8,10 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import pytest
 
 import sqlspec.adapters.sqlite.core as sqlite_core
-from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory
+from sqlspec.adapters.sqlite._typing import SqliteConnectionFactory, SqliteSessionContext
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.core import build_connection_config
+from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -343,5 +344,38 @@ def test_provide_session_detaches_driver_on_exit(tmp_path: Path) -> None:
         assert session.connection is _DETACHED_CONNECTION
         with pytest.raises(ImproperConfigurationError, match="already closed"):
             session.execute("SELECT 1")
+    finally:
+        config.close_pool()
+
+
+def test_session_context_enter_failure_releases_pool_and_detaches_driver(tmp_path: Path) -> None:
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "enter_fail.sqlite")}, replicas=True)
+    pool = config.provide_pool()
+    captured: list[object] = []
+
+    def fail_prepare(driver: object) -> object:
+        captured.append(driver)
+        raise RuntimeError("prepare boom")
+
+    try:
+        with pool.get_connection() as conn:
+            release_events: list[tuple[bool, object]] = []
+
+            def release_connection(released: object, **kwargs: object) -> None:
+                release_events.append((released is conn, kwargs.get("exc_type")))
+
+            ctx = SqliteSessionContext(
+                acquire_connection=lambda: conn,
+                release_connection=release_connection,
+                statement_config=StatementConfig(dialect="sqlite"),
+                driver_features={},
+                prepare_driver=fail_prepare,  # type: ignore[arg-type]
+            )
+            with pytest.raises(RuntimeError, match="prepare boom"), ctx:
+                pytest.fail("prepare failure must abort __enter__")
+            assert release_events == [(True, RuntimeError)]
+            assert getattr(captured[0], "connection", None) is _DETACHED_CONNECTION
+
+        assert pool.checked_out() == 0
     finally:
         config.close_pool()
