@@ -638,7 +638,7 @@ def _merge_mssql_connection_string(raw_conn_str: str, config: dict[str, Any]) ->
         canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
         options[canonical_key.lower()] = (canonical_key, raw_value)
 
-    server = _pop_alias(config, ("server", "address", "addr"), "server")
+    server = _pop_alias(config, _SERVER_ALIASES, "server")
     port = config.pop("port", None)
     if server is not None:
         options["server"] = ("Server", _format_odbc_connection_value("Server", _append_port(str(server), port)))

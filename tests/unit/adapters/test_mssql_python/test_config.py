@@ -1001,6 +1001,30 @@ def test_ag_shorthand_uses_connection_string_database_and_explicit_intent(shorth
         assert "MultiSubnetFailover=yes" in text
 
 
+def test_connection_string_primary_merges_host_and_port_overrides() -> None:
+    """Host and port overrides replace the primary Server entry inside connection_string."""
+    primary = MssqlPythonConfig(
+        connection_config={"connection_string": "Server=pri,1433;Database=app;"},
+        replicas=[{"host": "reader", "port": 1434}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(host="reader", port=1434)
+
+    replica_conn_str, replica_kwargs = build_connection_config(replica.connection_config)
+    derived_conn_str, derived_kwargs = build_connection_config(derived.connection_config)
+
+    assert replica_conn_str == "Server=reader,1434;Database=app;MultiSubnetFailover=yes;ApplicationIntent=ReadOnly;"
+    assert replica_kwargs == {}
+    assert derived_conn_str == "Server=reader,1434;Database=app;"
+    assert derived_kwargs == {}
+
+
+def test_replica_spec_rejects_false_boolean() -> None:
+    """Boolean False replica entries should raise ImproperConfigurationError."""
+    with pytest.raises(ImproperConfigurationError):
+        MssqlPythonConfig(connection_config={"server": "pri", "database": "app"}, replicas=[False])
+
+
 @pytest.mark.parametrize(
     "replicas",
     [

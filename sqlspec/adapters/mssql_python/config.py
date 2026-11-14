@@ -352,6 +352,9 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
 
     def _build_replica_spec_overrides(self, spec_input: "str | bool | Mapping[str, Any]") -> dict[str, Any]:
         if isinstance(spec_input, bool):
+            if not spec_input:
+                msg = f"{type(self).__name__} does not support False replica entries; pass True or explicit overrides"
+                raise ImproperConfigurationError(msg)
             if not resolve_configured_database(self._raw_connection_config):
                 msg = "SQL Server read-only intent requires a target database"
                 raise ImproperConfigurationError(msg)
