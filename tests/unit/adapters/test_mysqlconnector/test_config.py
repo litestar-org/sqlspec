@@ -719,6 +719,35 @@ def test_mysqlconnectorasyncconfig_replica_readonly_is_idempotent_and_validates_
         MysqlConnectorAsyncConfig(replicas=[""])
 
 
+@pytest.mark.parametrize("config_cls", [MysqlConnectorSyncConfig, MysqlConnectorAsyncConfig])
+@pytest.mark.parametrize("override_key", ["dsn", "url", "connection_string"])
+def test_mysqlconnector_dsn_override_replaces_inherited_primary_endpoint(
+    config_cls: type[MysqlConnectorSyncConfig] | type[MysqlConnectorAsyncConfig], override_key: str
+) -> None:
+    """Supplying a DSN override clears inherited primary endpoint parameters."""
+    primary = config_cls(
+        connection_config={"dsn": "mysql://u1:p1@pri:3306/d1", "unix_socket": "/tmp/pri.sock"},
+        replicas=[{override_key: "mysql://u2:p2@rep2:3308/d2"}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(**{override_key: "mysql://u3:p3@rep3:3309/d3"})
+
+    assert replica.connection_config["user"] == "u2"
+    assert replica.connection_config["password"] == "p2"
+    assert replica.connection_config["host"] == "rep2"
+    assert replica.connection_config["port"] == 3308
+    assert replica.connection_config["database"] == "d2"
+    assert "unix_socket" not in replica.connection_config
+    assert derived.connection_config["user"] == "u3"
+    assert derived.connection_config["password"] == "p3"
+    assert derived.connection_config["host"] == "rep3"
+    assert derived.connection_config["port"] == 3309
+    assert derived.connection_config["database"] == "d3"
+    assert "unix_socket" not in derived.connection_config
+    assert primary.connection_config["host"] == "pri"
+    assert primary.connection_config["database"] == "d1"
+
+
 def test_sync_provide_session_detaches_driver_on_exit() -> None:
     pooled_conn = MagicMock(autocommit=True, in_transaction=False)
     fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))

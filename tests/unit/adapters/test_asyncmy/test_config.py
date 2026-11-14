@@ -463,6 +463,32 @@ def test_asyncmyconfig_replica_readonly_is_idempotent_and_validates_endpoints() 
         AsyncmyConfig(replicas=[""])
 
 
+@pytest.mark.parametrize("override_key", ["dsn", "url", "connection_string"])
+def test_asyncmyconfig_dsn_override_replaces_inherited_primary_endpoint(override_key: str) -> None:
+    """Supplying a DSN override clears inherited primary endpoint parameters."""
+    primary = AsyncmyConfig(
+        connection_config={"dsn": "mysql://u1:p1@pri:3306/d1", "unix_socket": "/tmp/pri.sock"},
+        replicas=[{override_key: "mysql://u2:p2@rep2:3308/d2"}],
+    )
+    replica = primary.replica_groups["default"].configs[0]
+    derived = primary.derive_pool(**{override_key: "mysql://u3:p3@rep3:3309/d3"})
+
+    assert replica.connection_config["user"] == "u2"
+    assert replica.connection_config["password"] == "p2"
+    assert replica.connection_config["host"] == "rep2"
+    assert replica.connection_config["port"] == 3308
+    assert replica.connection_config["database"] == "d2"
+    assert "unix_socket" not in replica.connection_config
+    assert derived.connection_config["user"] == "u3"
+    assert derived.connection_config["password"] == "p3"
+    assert derived.connection_config["host"] == "rep3"
+    assert derived.connection_config["port"] == 3309
+    assert derived.connection_config["database"] == "d3"
+    assert "unix_socket" not in derived.connection_config
+    assert primary.connection_config["host"] == "pri"
+    assert primary.connection_config["database"] == "d1"
+
+
 async def test_provide_session_detaches_driver_on_exit() -> None:
     mock_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
     acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock(return_value=None))

@@ -592,6 +592,25 @@ def merge_derive_overrides(
         Independent normalized connection options.
     """
     result = dict(base_config)
+    dsn_keys = ("dsn", "url", "connection_string")
+    if any(overrides.get(key) is not None for key in dsn_keys):
+        for key in dsn_keys:
+            if key not in overrides:
+                result.pop(key, None)
+        for endpoint_key in (
+            "host",
+            "port",
+            "user",
+            "username",
+            "password",
+            "passwd",
+            "db",
+            "database",
+            "unix_socket",
+            "charset",
+        ):
+            if endpoint_key not in overrides:
+                result.pop(endpoint_key, None)
     aliases = {
         "database": ("db",),
         "user": ("username",),
