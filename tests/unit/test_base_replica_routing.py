@@ -259,7 +259,7 @@ async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous:
     end_boom_runtime: Any = _BoomRuntime(fail_start=False, fail_end=True)
     try:
         with pytest.raises(RuntimeError, match="session_end boom"):
-            if asynchronous:
+            if isinstance(config, AiosqliteConfig):
                 async with _RuntimeAsyncContext(config.provide_session(), end_boom_runtime, config) as session:
                     captured.append(session)
             else:
