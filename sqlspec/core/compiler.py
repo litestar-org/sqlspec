@@ -78,6 +78,51 @@ VOLATILE_FUNCTIONS: Final[frozenset[str]] = frozenset({
     "PG_LOGICAL_EMIT_MESSAGE",
     "PG_EXPORT_SNAPSHOT",
     "PG_STAT_RESET",
+    "PG_PROMOTE",
+    "GIN_CLEAN_PENDING_LIST",
+    "PG_REPLICATION_SLOT_ADVANCE",
+    "PG_COPY_LOGICAL_REPLICATION_SLOT",
+    "PG_COPY_PHYSICAL_REPLICATION_SLOT",
+    "PG_SYNC_REPLICATION_SLOTS",
+    "PG_LOG_BACKEND_MEMORY_CONTEXTS",
+    "PG_SIGNAL_BACKEND",
+    "PG_STAT_CLEAR_SNAPSHOT",
+    "PG_BACKUP_START",
+    "PG_BACKUP_STOP",
+    "PG_START_BACKUP",
+    "PG_STOP_BACKUP",
+    "PG_LOGICAL_SLOT_GET_CHANGES",
+    "PG_LOGICAL_SLOT_GET_BINARY_CHANGES",
+    "DBLINK_CONNECT",
+    "DBLINK_DISCONNECT",
+    "DBLINK_SEND_QUERY",
+})
+_VOLATILE_FUNCTION_PREFIXES: Final[tuple[str, ...]] = (
+    "PG_ADVISORY_",
+    "PG_TRY_ADVISORY_",
+    "PG_STAT_RESET",
+    "PG_REPLICATION_ORIGIN_",
+    "PG_CREATE_",
+    "PG_DROP_",
+    "LO_",
+    "BRIN_",
+)
+_READ_ONLY_DBMS_SESSION_FUNCTIONS: Final[frozenset[str]] = frozenset({
+    "UNIQUE_SESSION_ID",
+    "IS_ROLE_ENABLED",
+    "IS_SESSION_ALIVE",
+    "LIST_CONTEXT",
+})
+_SAFE_COPY_STDOUT_PARAMS: Final[frozenset[str]] = frozenset({
+    "FORMAT",
+    "DELIMITER",
+    "NULL",
+    "DEFAULT",
+    "HEADER",
+    "QUOTE",
+    "ESCAPE",
+    "FORCE_QUOTE",
+    "ENCODING",
 })
 
 _MODIFIES_ROWS_AST_TYPES: Final[tuple[type[exp.Expr], ...]] = (
@@ -1216,7 +1261,7 @@ class SQLProcessor:
             return _command_explain_is_read_only(expression, dialect)
         if not isinstance(expression, _READ_ONLY_ROOT_TYPES):
             return False
-        if isinstance(expression, exp.Copy) and expression.args.get("kind") is not False:
+        if isinstance(expression, exp.Copy) and not _copy_is_read_only(expression):
             return False
         if isinstance(expression, exp.Describe) and _describe_is_analyze(expression):
             return False
@@ -1289,21 +1334,55 @@ def _describe_is_analyze(expression: "exp.Describe") -> bool:
     return False
 
 
+def _dot_package_name(node: "exp.Func") -> str | None:
+    parent = node.parent
+    if not isinstance(parent, exp.Dot):
+        return None
+    qualifier = parent.this
+    if isinstance(qualifier, exp.Identifier):
+        return str(qualifier.name).upper()
+    if isinstance(qualifier, exp.Dot):
+        inner = qualifier.expression
+        if isinstance(inner, (exp.Identifier, exp.Column)):
+            return str(inner.name).upper()
+    return None
+
+
+def _copy_is_read_only(expression: "exp.Copy") -> bool:
+    """Return True only for COPY ... TO STDOUT streaming without file, stage, or program targets."""
+    if expression.args.get("kind") is not False:
+        return False
+    credentials = expression.args.get("credentials")
+    if isinstance(credentials, exp.Expr) and bool(credentials.args):
+        return False
+    if credentials is not None and not isinstance(credentials, exp.Expr):
+        return False
+    files = expression.args.get("files")
+    if not isinstance(files, list) or len(files) != 1:
+        return False
+    target = files[0]
+    if not isinstance(target, exp.Identifier) or target.args.get("quoted") or target.name.upper() != "STDOUT":
+        return False
+    params = expression.args.get("params")
+    if params:
+        for param in params:
+            if not isinstance(param, exp.CopyParameter):
+                return False
+            param_this = param.this
+            param_name = param_this.name.upper() if isinstance(param_this, exp.Expr) else str(param_this).upper()
+            if param_name not in _SAFE_COPY_STDOUT_PARAMS:
+                return False
+    return True
+
+
 def _func_is_volatile(node: "exp.Func") -> bool:
     name = node.name.upper() if isinstance(node, exp.Anonymous) else node.sql_name().upper()
-    if name in VOLATILE_FUNCTIONS or name.startswith(("PG_ADVISORY_", "PG_TRY_ADVISORY_")):
+    if name in VOLATILE_FUNCTIONS or name.startswith(_VOLATILE_FUNCTION_PREFIXES):
         return True
-    if name == "SET_IDENTIFIER":
-        parent = node.parent
-        if isinstance(parent, exp.Dot):
-            qualifier = parent.this
-            if isinstance(qualifier, exp.Identifier) and qualifier.name.upper() == "DBMS_SESSION":
-                return True
-            if isinstance(qualifier, exp.Dot):
-                inner = qualifier.expression
-                if isinstance(inner, (exp.Identifier, exp.Column)) and inner.name.upper() == "DBMS_SESSION":
-                    return True
-    return False
+    package = _dot_package_name(node)
+    if package == "DBMS_SESSION":
+        return name not in _READ_ONLY_DBMS_SESSION_FUNCTIONS
+    return package == "DBMS_LOCK"
 
 
 def _node_disqualifies_read_only_extra(node: "exp.Expr") -> bool:
@@ -1397,7 +1476,7 @@ def _classify_root_operation(
         if isinstance(expr, exp.Command):
             is_read_only = _command_explain_is_read_only(expr, dialect)
         elif isinstance(expr, _READ_ONLY_ROOT_TYPES):
-            if (isinstance(expr, exp.Copy) and expr.args.get("kind") is not False) or (
+            if (isinstance(expr, exp.Copy) and not _copy_is_read_only(expr)) or (
                 isinstance(expr, exp.Describe) and _describe_is_analyze(expr)
             ):
                 is_read_only = False
