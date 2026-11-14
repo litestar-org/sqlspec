@@ -595,3 +595,11 @@ async def test_aiosqlite_adk_delete_entries_by_session_scopes_and_syncs_fts(
         assert app_b_u1 == (["m-3"] if "m-3" in expected_remaining else [])
     finally:
         await config.close_pool()
+
+
+def test_aiosqlite_adk_fts_tokenize_rejects_trailing_newline() -> None:
+    """FTS5 tokenizer validation uses fullmatch so trailing newlines fail."""
+    with pytest.raises(ImproperConfigurationError, match="fts_tokenize"):
+        AiosqliteADKMemoryStore(
+            AiosqliteConfig(extension_config={"adk": {"memory_use_fts": True, "fts_tokenize": "porter\n"}})
+        )

@@ -66,7 +66,7 @@ __all__ = (
     "resolve_runtime_statement_config",
 )
 
-ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+ASYNC_PG_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 EXPECTED_REGEX_GROUPS = 3
 
 logger = get_logger("sqlspec.adapters.asyncpg.core")
@@ -308,7 +308,7 @@ def parse_status(status: Any) -> int:
     if not status or not isinstance(status, str):
         return 0
 
-    match = ASYNC_PG_STATUS_REGEX.match(status.strip())
+    match = ASYNC_PG_STATUS_REGEX.fullmatch(status.strip())
     if match:
         groups = match.groups()
         if len(groups) >= EXPECTED_REGEX_GROUPS:

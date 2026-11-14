@@ -28,7 +28,7 @@ __all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore", "decode_
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
-PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+PSQLPY_STATUS_REGEX: Final[re.Pattern[str]] = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 
 
 class PsqlpyADKConfig(ADKConfig):
@@ -1195,7 +1195,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if not tag:
             return -1
 
-        match = PSQLPY_STATUS_REGEX.match(tag.strip())
+        match = PSQLPY_STATUS_REGEX.fullmatch(tag.strip())
         if match:
             command = match.group(1).upper()
             if command == "INSERT" and match.group(3):

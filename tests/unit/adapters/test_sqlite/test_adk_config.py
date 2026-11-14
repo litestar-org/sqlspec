@@ -628,3 +628,11 @@ async def test_sqlite_stores_reapply_pragmas_after_close_pool(tmp_path: Path) ->
         assert len(adk_store._configured_connections) == 1
     finally:
         config.close_pool()
+
+
+def test_sqlite_adk_fts_tokenize_rejects_trailing_newline() -> None:
+    """FTS5 tokenizer validation uses fullmatch so trailing newlines fail."""
+    with pytest.raises(ImproperConfigurationError, match="fts_tokenize"):
+        SqliteADKMemoryStore(
+            SqliteConfig(extension_config={"adk": {"memory_use_fts": True, "fts_tokenize": "porter\n"}})
+        )

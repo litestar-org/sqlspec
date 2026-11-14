@@ -38,7 +38,7 @@ __all__ = ("JULIAN_EPOCH", "SECONDS_PER_DAY", "SqliteADKConfig", "SqliteADKMemor
 
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 _FTS_DETAIL_VALUES: Final = frozenset({"full", "column", "none"})
-_FTS_TOKENIZE_PATTERN: Final = re.compile(r"^[A-Za-z0-9_ -]+$")
+_FTS_TOKENIZE_PATTERN: Final = re.compile(r"\A[A-Za-z0-9_ -]+\Z")
 
 
 logger: "logging.Logger" = get_logger("sqlspec.adapters.sqlite.adk.store")
@@ -1421,7 +1421,7 @@ def _fts_options(config: "SqliteConfig") -> "tuple[str, ...]":
 
     fts_tokenize = adk_config.get("fts_tokenize")
     if fts_tokenize is not None:
-        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.match(fts_tokenize) is None:
+        if not isinstance(fts_tokenize, str) or _FTS_TOKENIZE_PATTERN.fullmatch(fts_tokenize) is None:
             msg = "extension_config['adk']['fts_tokenize'] must contain only safe FTS5 tokenizer characters"
             raise ImproperConfigurationError(msg)
         options.append(f"tokenize = '{fts_tokenize}'")

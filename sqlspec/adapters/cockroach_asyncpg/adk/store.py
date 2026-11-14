@@ -23,7 +23,7 @@ __all__ = ("CockroachAsyncpgADKConfig", "CockroachAsyncpgADKMemoryStore", "Cockr
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg.adk.store")
 _LOCALITY_CLAUSE_PATTERN = re.compile(
-    r"^LOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)$",
+    r"\ALOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)\Z",
     re.IGNORECASE,
 )
 

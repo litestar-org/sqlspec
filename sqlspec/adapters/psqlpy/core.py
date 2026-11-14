@@ -109,7 +109,7 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
-PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
+PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"\A([A-Z]+)(?:\s+(\d+))?\s+(\d+)\Z", re.IGNORECASE)
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
@@ -779,7 +779,7 @@ def _parse_psqlpy_command_tag(tag: str) -> int:
     if not tag:
         return 0
 
-    match = PSQLPY_STATUS_REGEX.match(tag.strip())
+    match = PSQLPY_STATUS_REGEX.fullmatch(tag.strip())
     if match:
         command = match.group(1).upper()
         if command == "INSERT" and match.group(3):
