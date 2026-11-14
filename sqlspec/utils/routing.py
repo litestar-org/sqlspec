@@ -555,6 +555,41 @@ def _is_valid_routing_token(value: str) -> bool:
     )
 
 
+def _split_cookie_segments(cookie_header: str) -> list[str]:
+    segments: list[str] = []
+    start = 0
+    in_value = False
+    value_leading = False
+    in_quotes = False
+    escaped = False
+    for index, ch in enumerate(cookie_header):
+        if in_quotes:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quotes = False
+            continue
+        if in_value and value_leading:
+            if ch in {" ", "\t"}:
+                continue
+            value_leading = False
+            if ch == '"':
+                in_quotes = True
+                continue
+        if not in_value and ch == "=":
+            in_value = True
+            value_leading = True
+        elif ch == ";":
+            segments.append(cookie_header[start:index])
+            start = index + 1
+            in_value = False
+            value_leading = False
+    segments.append(cookie_header[start:])
+    return segments
+
+
 def _extract_cookie_value(cookie_header: str, cookie_name: str) -> str | None:
     cookie = SimpleCookie()
     try:
@@ -564,7 +599,7 @@ def _extract_cookie_value(cookie_header: str, cookie_name: str) -> str | None:
     morsel = cookie.get(cookie_name)
     if morsel is not None:
         return morsel.value
-    for part in cookie_header.split(";"):
+    for part in _split_cookie_segments(cookie_header):
         name, separator, raw_value = part.partition("=")
         if not separator or name.strip() != cookie_name:
             continue

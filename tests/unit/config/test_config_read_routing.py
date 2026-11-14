@@ -160,14 +160,19 @@ async def test_async_request_tenant_resolution_is_lazy_and_shared_with_replicas(
 
 
 @pytest.mark.parametrize(
-    "headers",
+    ("headers", "routing_secret", "expect_pinned"),
     [
-        [(b"cookie", b"bad[cookie]=1; wp={token}")],
-        [(b"cookie", b"other=1; bad cookie=2; wp={token}")],
-        [(b"cookie", b"wp={token}"), (b"cookie", b"theme=dark")],
+        ([(b"cookie", b"bad[cookie]=1; wp={token}")], "cookie-secret", True),
+        ([(b"cookie", b"other=1; bad cookie=2; wp={token}")], "cookie-secret", True),
+        ([(b"cookie", b"wp={token}"), (b"cookie", b"theme=dark")], "cookie-secret", True),
+        ([(b"cookie", b'other="a; wp=hijack"; real=1')], None, False),
+        ([(b"cookie", b'bad[cookie]=1; other="a; wp=hijack"; wp={token}')], "cookie-secret", True),
+        ([(b"cookie", b'bad[cookie]=1; other="a\\"; wp=hijack"; wp={token}')], "cookie-secret", True),
     ],
 )
-def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(headers: list[tuple[bytes, bytes]]) -> None:
+def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(
+    headers: list[tuple[bytes, bytes]], routing_secret: str | None, expect_pinned: bool
+) -> None:
     token = sign_write_pin("cookie-secret", bind_key="orders", causal_token="lsn-99")
     rendered_headers = [(key, value.replace(b"{token}", token.encode("ascii"))) for key, value in headers]
     cookie_header, routing_header_value = extract_asgi_routing_headers(
@@ -179,9 +184,12 @@ def test_request_routing_hints_extracts_pin_with_sibling_or_split_cookies(header
         routing_header_value=routing_header_value,
         cookie_header=cookie_header,
         write_pin_cookie="wp",
-        routing_secret="cookie-secret",
+        routing_secret=routing_secret,
     )
-    entry = payload.entries["orders"]
-    assert entry.mode == "primary"
-    assert entry.pinned_by_write is True
-    assert entry.causal_token == "lsn-99"
+    if expect_pinned:
+        entry = payload.entries["orders"]
+        assert entry.mode == "primary"
+        assert entry.pinned_by_write is True
+        assert entry.causal_token == "lsn-99"
+    else:
+        assert "orders" not in payload.entries
