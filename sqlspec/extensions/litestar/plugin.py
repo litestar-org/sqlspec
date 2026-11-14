@@ -1,8 +1,10 @@
 """Litestar plugin for SQLSpec database configuration, lifecycle, and dependency injection."""
 
 import asyncio
+import datetime as dt
 import logging
-from collections.abc import Iterable, MutableMapping
+import os
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, cast, overload
@@ -83,7 +85,7 @@ from sqlspec.utils.serializers import DEFAULT_TYPE_ENCODERS, numpy_array_dec_hoo
 from sqlspec.utils.tenant import TenantContext, TenantRequestBinding
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from litestar import Litestar, Request, Response
@@ -136,7 +138,7 @@ __all__ = (
 logger = get_logger("sqlspec.extensions.litestar")
 
 CommitMode = Literal["manual", "autocommit", "autocommit_include_redirect"]
-DEFAULT_COMMIT_MODE: CommitMode = "manual"
+DEFAULT_COMMIT_MODE: CommitMode = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
@@ -439,22 +441,21 @@ class ConnectionCleanupMiddleware:
                 )
                 exc_override: BaseException | None = None
                 try:
-                    if (
-                        connection is not None
-                        and target.commit_mode != "manual"
-                        and getattr(transaction_target or connection, "pinned_to_primary", True)
-                    ):
-                        commit_range = range(200, 400 if target.commit_mode == "autocommit_include_redirect" else 300)
-                        should_commit = (
-                            effective_exc is None
-                            and response_status is not None
-                            and (response_status in commit_range or response_status in target.extra_commit_statuses)
-                            and response_status not in target.extra_rollback_statuses
-                        )
+                    if connection is not None and getattr(transaction_target or connection, "pinned_to_primary", True):
                         if effective_exc is not None:
                             with suppress(Exception):
                                 await _finalize_request_session(transaction_target, connection, commit=False)
+                        elif target.commit_mode == "manual":
+                            await _finalize_request_session(transaction_target, connection, commit=False)
                         else:
+                            commit_range = range(
+                                200, 400 if target.commit_mode == "autocommit_include_redirect" else 300
+                            )
+                            should_commit = (
+                                response_status is not None
+                                and (response_status in commit_range or response_status in target.extra_commit_statuses)
+                                and response_status not in target.extra_rollback_statuses
+                            )
                             await _finalize_request_session(transaction_target, connection, commit=should_commit)
                 except BaseException as finalization_exc:
                     exc_override = finalization_exc
@@ -523,13 +524,24 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         to the include_extensions list in your migration configuration.
     """
 
-    __slots__ = ("_correlation_headers", "_enable_sqlcommenter_middleware", "_plugin_configs", "_sqlspec")
+    __slots__ = (
+        "_correlation_headers",
+        "_cursor_encrypt",
+        "_cursor_secret",
+        "_cursor_ttl",
+        "_enable_sqlcommenter_middleware",
+        "_plugin_configs",
+        "_sqlspec",
+    )
 
     def __init__(
         self,
         sqlspec: "SQLSpec | AnyDatabaseConfig | Sequence[DatabaseConfigProtocol[Any, Any, Any]]",
         *,
         loader: "SQLFileLoader | None" = None,
+        cursor_secret: str | bytes | None = None,
+        cursor_ttl: float | dt.timedelta | None = None,
+        cursor_encrypt: bool | None = None,
     ) -> None:
         """Initialize SQLSpec plugin.
 
@@ -537,15 +549,24 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             sqlspec: Pre-configured SQLSpec registry, a single database
                 configuration, or a sequence of database configurations.
             loader: Optional SQL file loader instance attached to the registry.
+            cursor_secret: Optional application-wide cursor signing secret.
+            cursor_ttl: Optional default cursor expiration window.
+            cursor_encrypt: Optional default cursor encryption flag.
         """
         self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
 
         self._plugin_configs: list[PluginConfigState] = []
+        extracted_settings: list[dict[str, Any]] = []
         for cfg in self._sqlspec.configs.values():
             config_union = cast("AnyDatabaseConfig", cfg)
             settings = self._extract_extension_settings(config_union)
+            extracted_settings.append(settings)
             state = self._config_state(config_union, settings)
             self._plugin_configs.append(state)
+
+        self._cursor_secret, self._cursor_ttl, self._cursor_encrypt = _resolve_plugin_cursor_settings(
+            extracted_settings, cursor_secret=cursor_secret, cursor_ttl=cursor_ttl, cursor_encrypt=cursor_encrypt
+        )
 
         correlation_headers: list[str] = []
         enable_sqlcommenter = False
@@ -568,6 +589,21 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             config_count=len(self._plugin_configs),
             correlation_headers=len(self._correlation_headers),
         )
+
+    @property
+    def cursor_secret(self) -> str | bytes | None:
+        """Return resolved application-wide cursor secret."""
+        return self._cursor_secret
+
+    @property
+    def cursor_ttl(self) -> int | float | dt.timedelta | None:
+        """Return resolved application-wide cursor TTL."""
+        return self._cursor_ttl
+
+    @property
+    def cursor_encrypt(self) -> bool | None:
+        """Return resolved application-wide cursor encryption setting."""
+        return self._cursor_encrypt
 
     @property
     def sqlspec(self) -> SQLSpec:
@@ -1362,6 +1398,9 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             "disable_di": disable_di,
             "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
             "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
+            "cursor_secret": litestar_config.get("cursor_secret"),
+            "cursor_ttl": litestar_config.get("cursor_ttl"),
+            "cursor_encrypt": litestar_config.get("cursor_encrypt"),
         }
 
     def _config_state(self, config: "AnyDatabaseConfig", settings: "dict[str, Any]") -> PluginConfigState:
@@ -1805,6 +1844,64 @@ def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None,
         (state.read_session_key, "manual"),
         (state.routing_session_key, state.commit_mode),
     )
+
+
+def _normalize_ttl_seconds(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
+        msg = "cursor_ttl must be an int, float, or datetime.timedelta"
+        raise ImproperConfigurationError(msg)
+    return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
+
+
+def _resolve_plugin_cursor_settings(
+    settings_list: "Sequence[Mapping[str, Any]]",
+    *,
+    cursor_secret: str | bytes | None,
+    cursor_ttl: float | dt.timedelta | None,
+    cursor_encrypt: bool | None,
+) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
+    resolved_secret: str | bytes | None = cursor_secret
+    for settings in settings_list:
+        candidate = settings.get("cursor_secret")
+        if candidate is None:
+            continue
+        if resolved_secret is None:
+            resolved_secret = candidate
+        elif resolved_secret != candidate:
+            msg = "Conflicting 'cursor_secret' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+    if resolved_secret is None:
+        resolved_secret = os.environ.get("SQLSPEC_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+
+    resolved_ttl: int | float | dt.timedelta | None = None
+    resolved_ttl_seconds: float | None = None
+    if cursor_ttl is not None:
+        resolved_ttl = cursor_ttl
+        resolved_ttl_seconds = _normalize_ttl_seconds(cursor_ttl)
+    for settings in settings_list:
+        candidate_ttl = settings.get("cursor_ttl")
+        if candidate_ttl is None:
+            continue
+        candidate_seconds = _normalize_ttl_seconds(candidate_ttl)
+        if resolved_ttl_seconds is None:
+            resolved_ttl = candidate_ttl
+            resolved_ttl_seconds = candidate_seconds
+        elif resolved_ttl_seconds != candidate_seconds:
+            msg = "Conflicting 'cursor_ttl' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    resolved_encrypt: bool | None = cursor_encrypt
+    for settings in settings_list:
+        candidate_encrypt = settings.get("cursor_encrypt")
+        if candidate_encrypt is None:
+            continue
+        if resolved_encrypt is None:
+            resolved_encrypt = bool(candidate_encrypt)
+        elif resolved_encrypt != bool(candidate_encrypt):
+            msg = "Conflicting 'cursor_encrypt' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    return resolved_secret, resolved_ttl, resolved_encrypt
 
 
 def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:

@@ -30,8 +30,11 @@ _LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
     "arrow_odbc",
     "asyncpg",
     "cockroach_asyncpg",
+    "db2",
     "duckdb",
     "psqlpy",
+    "snowflake",
+    "sybase",
     "teradata",
 })
 
@@ -210,7 +213,7 @@ def _resolve_or_build_session(request: Any, config_state: "SanicConfigState") ->
         )
     )
     if (
-        config_state.commit_mode in {"autocommit", "autocommit_include_redirect"}
+        config_state.commit_mode in {"manual", "autocommit", "autocommit_include_redirect"}
         and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
     ):
         session._auto_begin_on_write = True

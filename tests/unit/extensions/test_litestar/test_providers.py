@@ -600,15 +600,15 @@ def test_cursor_sort_field_order_changes_cached_default() -> None:
 
 @pytest.mark.parametrize("secrets", [(b"secret", "b'secret'"), ("b'secret'", b"secret")])
 def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | bytes]) -> None:
-    from sqlspec.core import CursorFilter, CursorKey
+    from sqlspec.core import CursorKey
 
     keys = [CursorKey("id")]
     providers = []
     for secret in secrets:
         config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
         providers.append(create_filter_dependencies(config)["cursor_filter"].dependency)
-    for index, secret in enumerate(secrets):
-        token = CursorFilter(keys, 20, secret=secret).encode({"id": 1}, backward=False)
+    for index, _secret in enumerate(secrets):
+        token = providers[index]().encode({"id": 1}, backward=False)
         assert providers[index](cursor=token).limit == 20
         with pytest.raises(ValidationException, match="Invalid pagination cursor"):
             providers[1 - index](cursor=token)
@@ -682,3 +682,198 @@ def test_provide_request_session_async_awaits_async_lifecycle_hooks(
 
     assert events == ["start", "end"]
     assert "Async lifecycle hook invoked on sync path" not in caplog.text
+
+
+def test_litestar_plugin_cursor_config_conflicts_and_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Litestar SQLSpecPlugin cursor config resolution, env capture, and conflict detection."""
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    unconfigured = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert unconfigured.cursor_secret is None
+    assert unconfigured.cursor_ttl is None
+    assert unconfigured.cursor_encrypt is None
+
+    monkeypatch.setenv("SECRET_KEY", "app-secret-key")
+    fallback_plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert fallback_plugin.cursor_secret == "app-secret-key"
+
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "sqlspec-cursor-env")
+    primary_env_plugin = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert primary_env_plugin.cursor_secret == "sqlspec-cursor-env"
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "mutated-after-init")
+    assert primary_env_plugin.cursor_secret == "sqlspec-cursor-env"
+
+    consistent = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"litestar": {"cursor_ttl": 120, "cursor_encrypt": True}},
+        ),
+        cursor_secret="plugin-secret",
+        cursor_ttl=dt.timedelta(minutes=2),
+        cursor_encrypt=True,
+    )
+    assert consistent.cursor_secret == "plugin-secret"
+    assert consistent.cursor_ttl == dt.timedelta(minutes=2)
+    assert consistent.cursor_encrypt is True
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_secret"):
+        SQLSpecPlugin([
+            AiosqliteConfig(
+                bind_key="a",
+                connection_config={"database": ":memory:"},
+                extension_config={"litestar": {"cursor_secret": "one"}},
+            ),
+            AiosqliteConfig(
+                bind_key="b",
+                connection_config={"database": ":memory:"},
+                extension_config={"litestar": {"cursor_secret": "two"}},
+            ),
+        ])
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_ttl"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"}, extension_config={"litestar": {"cursor_ttl": 10}}
+            ),
+            cursor_ttl=20,
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_encrypt"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"}, extension_config={"litestar": {"cursor_encrypt": True}}
+            ),
+            cursor_encrypt=False,
+        )
+
+
+def test_litestar_cursor_dependencies_inherit_plugin_config_derive_endpoint_keys_and_keep_openapi_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify Litestar cursor DI inherits app state settings, derives per-endpoint keys, and keeps OpenAPI clean."""
+    import hashlib
+    import hmac
+
+    from litestar import Litestar
+    from litestar.di import NamedDependency
+    from litestar.testing import TestClient
+
+    from sqlspec.extensions.litestar import providers as litestar_providers
+
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    captured_calls: list[dict[str, Any]] = []
+
+    def _recording_cursor_filter(
+        keys: Any,
+        limit: int,
+        cursor: str | None = None,
+        secret: str | bytes | None = None,
+        *,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        captured_calls.append(payload)
+        return payload
+
+    monkeypatch.setattr(litestar_providers, "CursorFilter", _recording_cursor_filter)
+
+    deps_shared = create_filter_dependencies(FilterConfig(pagination_type="cursor", cursor_keys=["id"]))
+    deps_override = create_filter_dependencies(
+        FilterConfig(
+            pagination_type="cursor",
+            cursor_keys=["id"],
+            cursor_secret="override-secret",
+            cursor_ttl=15,
+            cursor_encrypt=False,
+        )
+    )
+
+    @get("/users", dependencies=deps_shared)
+    async def list_users(cursor_filter: NamedDependency[Any]) -> dict[str, Any]:
+        _ = cursor_filter
+        return {"ok": True}
+
+    @get("/orders", dependencies=deps_shared)
+    async def list_orders(cursor_filter: NamedDependency[Any]) -> dict[str, Any]:
+        _ = cursor_filter
+        return {"ok": True}
+
+    @get("/custom", dependencies=deps_override)
+    async def list_custom(cursor_filter: NamedDependency[Any]) -> dict[str, Any]:
+        _ = cursor_filter
+        return {"ok": True}
+
+    plugin = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"litestar": {"cursor_secret": "app-secret", "cursor_ttl": 90, "cursor_encrypt": True}},
+        )
+    )
+    app = Litestar([list_users, list_orders, list_custom], plugins=[plugin])
+
+    schema = app.openapi_schema.to_schema()
+    users_params = {p["name"] for p in schema["paths"]["/users"]["get"]["parameters"]}
+    orders_params = {p["name"] for p in schema["paths"]["/orders"]["get"]["parameters"]}
+    assert users_params == {"cursor", "pageSize"}
+    assert orders_params == {"cursor", "pageSize"}
+
+    with TestClient(app) as client:
+        assert client.get("/users").status_code == 200
+        assert client.get("/orders").status_code == 200
+        assert client.get("/custom").status_code == 200
+
+    assert len(captured_calls) == 3
+    users_call, orders_call, custom_call = captured_calls
+    assert users_call["secret"] == hmac.new(b"app-secret", b"/users", hashlib.sha256).digest()
+    assert orders_call["secret"] == hmac.new(b"app-secret", b"/orders", hashlib.sha256).digest()
+    assert users_call["secret"] != orders_call["secret"]
+    assert users_call["ttl"] == 90
+    assert users_call["encrypt"] is True
+
+    assert custom_call["secret"] == hmac.new(b"override-secret", b"/custom", hashlib.sha256).digest()
+    assert custom_call["ttl"] == 15
+    assert custom_call["encrypt"] is False
+
+
+def test_litestar_explicit_none_cursor_secret_respects_env_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify explicit cursor_secret=None does not alias dep_cache across env secret changes."""
+    import hashlib
+    import hmac
+
+    from sqlspec.extensions.litestar import providers as litestar_providers
+
+    captured: list[dict[str, Any]] = []
+
+    def _recording_cursor_filter(
+        keys: Any,
+        limit: int,
+        cursor: str | None = None,
+        secret: str | bytes | None = None,
+        *,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        captured.append(payload)
+        return payload
+
+    monkeypatch.setattr(litestar_providers, "CursorFilter", _recording_cursor_filter)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-secret-one")
+    dep_one = create_filter_dependencies(
+        cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+    )["cursor_filter"]
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-secret-two")
+    dep_two = create_filter_dependencies(
+        cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+    )["cursor_filter"]
+
+    dep_one.dependency()
+    dep_two.dependency()
+    assert captured[0]["secret"] == hmac.new(b"env-secret-one", b"litestar:standalone", hashlib.sha256).digest()
+    assert captured[1]["secret"] == hmac.new(b"env-secret-two", b"litestar:standalone", hashlib.sha256).digest()

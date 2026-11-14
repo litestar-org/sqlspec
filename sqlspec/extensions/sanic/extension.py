@@ -59,7 +59,7 @@ _TENANT_SCOPE_KEY: Final = "sqlspec_tenant_token"
 _REQUEST_EXCEPTION_KEY: Final = "sqlspec_request_exception"
 _ACTIVE_REQUEST_KEY: Final = "_sqlspec_active_request"
 _CURRENT_REQUEST: ContextVar[Any | None] = ContextVar("_sqlspec_sanic_active_request", default=None)
-DEFAULT_COMMIT_MODE = "manual"
+DEFAULT_COMMIT_MODE = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
@@ -432,7 +432,7 @@ class SQLSpecPlugin:
             if error is None and cancelled:
                 error = asyncio.CancelledError()
             try:
-                if key == state.routing_session_key and state.commit_mode != "manual" and resource.pinned_to_primary:
+                if key == state.routing_session_key and resource.pinned_to_primary:
                     if error is None and state.should_commit(self._response_status_code(response)):
                         try:
                             await ensure_async_(resource.commit)()
@@ -746,7 +746,7 @@ class SQLSpecPlugin:
                         exc_override: BaseException | None = None
                         try:
                             connection = get_context_value(target_request.ctx, config_state.connection_key, None)
-                            if connection is not None and config_state.commit_mode != "manual":
+                            if connection is not None:
                                 with contextlib.suppress(Exception):
                                     await self._rollback_target(target_request, connection, config_state)
                         except BaseException as rollback_exc:
@@ -1099,7 +1099,9 @@ class SQLSpecPlugin:
 
         exc_override: BaseException | None = None
         try:
-            if config_state.commit_mode != "manual":
+            if config_state.commit_mode == "manual":
+                await self._rollback_target(request, connection, config_state)
+            else:
                 has_exception = get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None) is not None
                 status_code = self._response_status_code(response)
                 if not has_exception and self._should_commit(config_state, status_code):

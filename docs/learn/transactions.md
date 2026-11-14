@@ -167,9 +167,9 @@ if should_retry_fallback:
 
 Web integrations (`Litestar`, `FastAPI`, `Starlette`, `Flask`, `Sanic`) support these request-scoped commit modes:
 
-- `manual` (default): Handlers or services call `commit()` explicitly; ideal for strict boundary control and read-heavy routes.
-- `autocommit`: Commits automatically on `2xx` HTTP responses and rolls back on `4xx`/`5xx` responses or unhandled exceptions.
-- `autocommit_include_redirect`: Commits on both `2xx` and `3xx` redirect responses (`301`–`308`), useful for HTML form and HTMX workflows.
+- `autocommit` (default): Commits automatically on clean `2xx` HTTP responses and rolls back on `>= 300` responses, unhandled exceptions, or request cancellations.
+- `autocommit_include_redirect`: Commits on both `2xx` and `3xx` redirect responses (`301`–`308`), useful for HTML form, HTMX, and Inertia.js workflows (`302` / `303`).
+- `manual`: Handlers or services call `commit()` explicitly; any uncommitted handler work rolls back automatically before releasing the connection.
 
 ## Read-Only Sessions and Primary Pinning
 

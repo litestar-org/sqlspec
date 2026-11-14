@@ -2,7 +2,7 @@
 
 import datetime as dt
 import inspect
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, cast, get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -745,15 +745,185 @@ def test_cursor_sort_field_order_changes_cached_default() -> None:
 
 @pytest.mark.parametrize("secrets", [(b"secret", "b'secret'"), ("b'secret'", b"secret")])
 def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | bytes]) -> None:
-    from sqlspec.core import CursorFilter, CursorKey
+    from sqlspec.core import CursorKey
 
     keys = [CursorKey("id")]
     providers = []
     for secret in secrets:
         config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
         providers.append(_get_dependency(provide_filters(config), "cursor_filter"))
-    for index, secret in enumerate(secrets):
-        token = CursorFilter(keys, 20, secret=secret).encode({"id": 1}, backward=False)
+    for index, _secret in enumerate(secrets):
+        token = providers[index]().encode({"id": 1}, backward=False)
         assert providers[index](cursor=token).limit == 20
         with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
             providers[1 - index](cursor=token)
+
+
+def test_fastapi_plugin_cursor_config_starlette_fallback_and_endpoint_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify FastAPI plugin/standalone cursor inheritance, env fallback, OpenAPI schema, and endpoint key isolation."""
+    import hashlib
+    import hmac
+
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.extensions.fastapi import SQLSpecPlugin
+    from sqlspec.extensions.fastapi import providers as fastapi_providers
+
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    captured_calls: list[dict[str, Any]] = []
+
+    def _recording_cursor_filter(
+        keys: Any,
+        limit: int,
+        cursor: str | None = None,
+        secret: str | bytes | None = None,
+        *,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        captured_calls.append(payload)
+        return payload
+
+    monkeypatch.setattr(fastapi_providers, "CursorFilter", _recording_cursor_filter)
+
+    app = FastAPI()
+    plugin = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={
+                "starlette": {"cursor_secret": "starlette-inherited-secret", "cursor_ttl": 45, "cursor_encrypt": True}
+            },
+        ),
+        app,
+    )
+    standalone_dep = provide_filters(FilterConfig(pagination_type="cursor", cursor_keys=["id"]))
+    plugin_dep = plugin.provide_filters(FilterConfig(pagination_type="cursor", cursor_keys=["id"]))
+    override_dep = plugin.provide_filters(
+        FilterConfig(
+            pagination_type="cursor",
+            cursor_keys=["id"],
+            cursor_secret="route-override",
+            cursor_ttl=10,
+            cursor_encrypt=False,
+        )
+    )
+
+    @app.get("/users")
+    def list_users(filters: Annotated[Any, Depends(standalone_dep)]) -> dict[str, Any]:
+        _ = filters
+        return {"ok": True}
+
+    @app.get("/orders")
+    def list_orders(filters: Annotated[Any, Depends(plugin_dep)]) -> dict[str, Any]:
+        _ = filters
+        return {"ok": True}
+
+    @app.get("/custom")
+    def list_custom(filters: Annotated[Any, Depends(override_dep)]) -> dict[str, Any]:
+        _ = filters
+        return {"ok": True}
+
+    openapi = app.openapi()
+    assert {p["name"] for p in openapi["paths"]["/users"]["get"]["parameters"]} == {"cursor", "pageSize"}
+    assert {p["name"] for p in openapi["paths"]["/orders"]["get"]["parameters"]} == {"cursor", "pageSize"}
+
+    with TestClient(app) as client:
+        assert client.get("/users").status_code == 200
+        assert client.get("/orders").status_code == 200
+        assert client.get("/custom").status_code == 200
+
+    assert len(captured_calls) == 3
+    users_call, orders_call, custom_call = captured_calls
+    assert users_call["secret"] == hmac.new(b"starlette-inherited-secret", b"/users", hashlib.sha256).digest()
+    assert users_call["ttl"] == 45
+    assert users_call["encrypt"] is True
+
+    assert orders_call["secret"] == hmac.new(b"starlette-inherited-secret", b"/orders", hashlib.sha256).digest()
+    assert orders_call["secret"] != users_call["secret"]
+    assert orders_call["ttl"] == 45
+    assert orders_call["encrypt"] is True
+
+    assert custom_call["secret"] == hmac.new(b"route-override", b"/custom", hashlib.sha256).digest()
+    assert custom_call["ttl"] == 10
+    assert custom_call["encrypt"] is False
+
+
+def test_fastapi_standalone_cursor_env_fallback_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify FastAPI standalone provide_filters resolves env secrets once at construction."""
+    import hashlib
+    import hmac
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    from sqlspec.extensions.fastapi import SQLSpecPlugin
+    from sqlspec.extensions.fastapi import providers as fastapi_providers
+
+    captured: list[dict[str, Any]] = []
+
+    def _recording_cursor_filter(
+        keys: Any,
+        limit: int,
+        cursor: str | None = None,
+        secret: str | bytes | None = None,
+        *,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool = False,
+    ) -> dict[str, Any]:
+        payload = {"keys": keys, "limit": limit, "cursor": cursor, "secret": secret, "ttl": ttl, "encrypt": encrypt}
+        captured.append(payload)
+        return payload
+
+    monkeypatch.setattr(fastapi_providers, "CursorFilter", _recording_cursor_filter)
+    monkeypatch.setenv("SECRET_KEY", "secret-key-fallback")
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    dep_fallback = _get_dependency(
+        provide_filters({"pagination_type": "cursor", "cursor_keys": ["id"]}), "cursor_filter"
+    )
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "primary-env-key")
+    dep_primary = _get_dependency(
+        provide_filters({"pagination_type": "cursor", "cursor_keys": ["id"]}), "cursor_filter"
+    )
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "changed-too-late")
+
+    dep_fallback()
+    dep_primary()
+    assert captured[0]["secret"] == hmac.new(b"secret-key-fallback", b"fastapi:standalone", hashlib.sha256).digest()
+    assert captured[1]["secret"] == hmac.new(b"primary-env-key", b"fastapi:standalone", hashlib.sha256).digest()
+
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-none-one")
+    dep_none_one = _get_dependency(
+        provide_filters(
+            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+        ),
+        "cursor_filter",
+    )
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "env-none-two")
+    dep_none_two = _get_dependency(
+        provide_filters(
+            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+        ),
+        "cursor_filter",
+    )
+    dep_none_one()
+    dep_none_two()
+    assert captured[2]["secret"] == hmac.new(b"env-none-one", b"fastapi:standalone", hashlib.sha256).digest()
+    assert captured[3]["secret"] == hmac.new(b"env-none-two", b"fastapi:standalone", hashlib.sha256).digest()
+
+    explicit_none_plugin = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"fastapi": {"cursor_secret": "plugin-none-secret"}},
+        )
+    )
+    dep_plugin_inherited = _get_dependency(
+        explicit_none_plugin.provide_filters(
+            cast("FilterConfig", {"pagination_type": "cursor", "cursor_keys": ["id"], "cursor_secret": None})
+        ),
+        "cursor_filter",
+    )
+    dep_plugin_inherited()
+    assert captured[4]["secret"] == hmac.new(b"plugin-none-secret", b"fastapi:standalone", hashlib.sha256).digest()

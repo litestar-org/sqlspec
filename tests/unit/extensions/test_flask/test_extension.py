@@ -508,7 +508,7 @@ def test_flask_request_connection_is_checked_out_on_first_access_only() -> None:
     [
         ("duckdb", "autocommit", True),
         ("duckdb", "autocommit_include_redirect", True),
-        ("duckdb", "manual", False),
+        ("duckdb", "manual", True),
         ("sqlite", "autocommit", False),
     ],
 )
@@ -732,3 +732,67 @@ def test_flask_async_lifecycle_hooks_via_portal(caplog: pytest.LogCaptureFixture
         assert "Async lifecycle hook invoked on sync path" not in caplog.text
     finally:
         plugin.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_flask_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Flask default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    database = str(tmp_path / "flask_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    flask_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        flask_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        flask_cfg["extra_commit_statuses"] = extra_commit
+
+    config = SqliteConfig(
+        connection_config={"database": database}, extension_config={"flask": flask_cfg} if flask_cfg else {}
+    )
+    app = Flask(__name__)
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.post("/write")
+    def write_route() -> tuple[dict[str, Any], int]:
+        session = plugin.get_session()
+        session.execute("INSERT INTO items VALUES (?)", ("written",))
+        if explicit_commit:
+            session.commit()
+        return {"status": status_code}, status_code
+
+    try:
+        resp = app.test_client().post("/write")
+        assert resp.status_code == status_code
+    finally:
+        plugin.shutdown()
+        config.close_pool()
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])

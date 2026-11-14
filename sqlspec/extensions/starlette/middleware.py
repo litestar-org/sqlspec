@@ -181,13 +181,12 @@ class SQLSpecRequestLeaseMiddleware:
                                 _clear_deferred_session(request, f"{resource_key}_deferred")
 
     async def _finalize(self, request: "Request", state: "SQLSpecConfigState", commit: bool) -> None:
-        if state.commit_mode == "manual":
-            return
+        should_commit = commit and state.commit_mode != "manual"
         primary_error: BaseException | None = None
         connection = get_state_value(request.state, state.connection_key, None)
         try:
             if connection is not None:
-                if commit:
+                if should_commit:
                     try:
                         await _finalize_request_transaction(request, state, connection, commit=True)
                     except BaseException:
@@ -203,7 +202,7 @@ class SQLSpecRequestLeaseMiddleware:
             if state.routing_session_key is not None:
                 facade = get_state_value(request.state, state.routing_session_key, None)
                 if facade is not None and facade.pinned_to_primary:
-                    if commit and primary_error is None:
+                    if should_commit and primary_error is None:
                         try:
                             await ensure_async_(facade.commit)()
                         except BaseException:
@@ -221,8 +220,8 @@ class SQLSpecRequestLeaseMiddleware:
 class SQLSpecManualMiddleware(SQLSpecRequestLeaseMiddleware):
     """Middleware for manual transaction mode.
 
-    Acquires connection from pool, stores in request.state, releases after request.
-    No automatic commit or rollback - user code must handle transactions.
+    Acquires connection from pool, stores in request.state, rolls back uncommitted
+    work when the handler finishes, and releases the connection after the request.
     """
 
     __slots__ = ("config_state",)
@@ -254,7 +253,13 @@ class SQLSpecManualMiddleware(SQLSpecRequestLeaseMiddleware):
         if get_state_value(request.state, _response_owner_key(self.config_state.connection_key), False):
             return await call_next(request)
         async with self._connection_cm(request):
-            return await call_next(request)
+            try:
+                response = await call_next(request)
+            except BaseException:
+                await self._finalize(request, self.config_state, False)
+                raise
+            await self._finalize(request, self.config_state, False)
+            return response
 
     @asynccontextmanager
     async def _connection_cm(self, request: "Request") -> "AsyncGenerator[Any]":

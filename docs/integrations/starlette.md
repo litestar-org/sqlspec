@@ -52,6 +52,8 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starle
 
 ## Configuration Options
 
+Configure `commit_mode` inside `extension_config["starlette"]` (`"autocommit"` by default, `"autocommit_include_redirect"` for HTML/HTMX/Inertia.js `302`/`303` redirects, or `"manual"` for explicit `commit()` with automatic rollback of uncommitted work):
+
 <!-- GENERATED:START config-table:sqlspec.config.StarletteConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -59,7 +61,7 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starle
 | `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.state once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.state. Default: 'db_session' |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit'. manual: No automatic commit; uncommitted work rolls back on release; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger commit. Default: set() |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger rollback. Default: set() |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Starlette/FastAPI extension will not add middleware for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |
@@ -78,6 +80,9 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Starle
 | `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
 | `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
+| `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `cursor_encrypt` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.StarletteConfig -->
 
 Set `enable_correlation_middleware=False` to stop this plugin from reading request IDs or adding them to response headers.

@@ -66,7 +66,7 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `connection_key` | `str` | `'db_connection'` | Key for storing connection in ASGI scope. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in application state. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in ASGI scope. Default: 'db_session' |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual' |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit' |
 | `enable_correlation_middleware` | `bool` | `True` | Enable request correlation ID middleware. Default: True |
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
@@ -88,6 +88,9 @@ Configure `extension_config["litestar"]` (`LitestarConfig`) per database configu
 | `write_pin_cookie` | `str or None` | `None` | Optional application write-pin cookie name. Default: None. |
 | `routing_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed write-pin cookies. Default: None. |
 | `read_pool_key` | `str` | - | Request key for the selected read pool. |
+| `cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
+| `cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
+| `cursor_encrypt` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
 <!-- GENERATED:END config-table:sqlspec.config.LitestarConfig -->
 
 ## Multi-Database Dependency Keys
@@ -131,17 +134,17 @@ Configure `commit_mode` inside `extension_config["litestar"]` to control how req
 
 | Commit Mode | Commits On | Rolls Back On | Best For |
 | --- | --- | --- | --- |
-| `"manual"` (default) | Explicit `session.commit()` calls only | Unhandled or mapped exceptions and request cancellations | Explicit service-layer transaction boundaries |
-| `"autocommit"` | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
-| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML / HTMX form handlers that commit and return `302` / `303` redirects |
+| `"autocommit"` (default) | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
+| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML, HTMX, and Inertia.js form handlers that commit and return `302` / `303` redirects |
+| `"manual"` | Explicit `session.commit()` calls only | Uncommitted handler work on clean return, unhandled or mapped exceptions, and request cancellations | Explicit service-layer transaction boundaries |
 
 ```python
 --8<-- "docs/examples/frameworks/litestar/commit_modes.py:example"
 ```
 
-Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when specific status codes require custom commit or rollback treatment.
+Add `extra_commit_statuses` or `extra_rollback_statuses` in `LitestarConfig` when `"autocommit"` or `"autocommit_include_redirect"` requires custom commit or rollback status overrides.
 
-On `asyncpg`, `cockroach_asyncpg`, `psqlpy`, `duckdb`, `teradata`, `adbc`, and `arrow_odbc`, requests running under `"autocommit"` or `"autocommit_include_redirect"` open their transaction lazily on the first write statement rather than issuing an eager `BEGIN` at request start, eliminating extra transaction round trips on read-only handlers.
+On `adbc`, `arrow_odbc`, `asyncpg`, `cockroach_asyncpg`, `db2`, `duckdb`, `psqlpy`, `snowflake`, `sybase`, and `teradata`, requests running under `"manual"`, `"autocommit"`, or `"autocommit_include_redirect"` open their transaction lazily on the first write statement rather than issuing an eager `BEGIN` at request start, eliminating extra transaction round trips on read-only handlers.
 
 ## Request Failure Handling
 
@@ -152,15 +155,7 @@ Litestar manages request connections across two distinct paths, and both forward
 
 Both unhandled exceptions and exceptions mapped to HTTP responses by Litestar `exception_handlers` (such as `HTTPException`, `NotFoundError`, `IntegrityError`, or custom handlers returning `4xx` or `2xx` fallback responses) record the exception via `after_exception` and roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies.
 
-When a route handler in `"manual"` mode returns cleanly without calling `commit()` or `rollback()`, the outcome for open uncommitted work depends on the adapter:
-
-| Clean return with uncommitted work (`manual` mode) | Adapters |
-| --- | --- |
-| Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
-| Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
-| Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
-| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`; `teradata` and `snowflake` roll back uncommitted `autocommit=False` work on pool release) | `psqlpy`, `db2`, `teradata`, `snowflake`, `arrow_odbc`, `bigquery` |
-| Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
+In `"manual"` mode, uncommitted handler writes roll back consistently before releasing the connection back to the pool (only adapters without session-level multi-statement transactions—such as `bigquery` outside explicit session transactions and non-transactional `spanner` snapshots—are outside DB-API session rollback).
 
 ## Declarative Query Filter Providers
 
@@ -208,7 +203,7 @@ async def list_users(
     )
 ```
 
-For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md).
+For bidirectional keyset pagination (`CursorPagination`), set `pagination_type="cursor"` and `cursor_keys="id"` (or pass `CursorKey` specs) on `FilterConfig`; see [Filtering and Pagination](../learn/filtering-and-pagination.md). Configure application-wide cursor signing (`cursor_secret`), expiration (`cursor_ttl`), and payload encryption (`cursor_encrypt`) once via `LitestarConfig` or `SQLSpecPlugin(..., cursor_secret=..., cursor_ttl=..., cursor_encrypt=...)` (falling back to `SQLSPEC_CURSOR_SECRET` / `SECRET_KEY` environment variables when omitted); `create_filter_dependencies(...)` inherits those settings from application state automatically and derives per-endpoint signing keys without duplicating configuration per controller.
 
 ## Server-Side Session Stores
 

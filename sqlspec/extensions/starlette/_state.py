@@ -86,6 +86,8 @@ class SQLSpecConfigState:
 
     def should_commit(self, status_code: int) -> bool:
         """Return whether a response status should trigger a commit."""
+        if self.commit_mode == "manual":
+            return False
         if self.extra_commit_statuses and status_code in self.extra_commit_statuses:
             return True
         if self.extra_rollback_statuses and status_code in self.extra_rollback_statuses:
@@ -98,4 +100,4 @@ class SQLSpecConfigState:
 
     def should_rollback(self, status_code: int) -> bool:
         """Return whether a response status should trigger a rollback."""
-        return self.commit_mode != "manual" and not self.should_commit(status_code)
+        return not self.should_commit(status_code)

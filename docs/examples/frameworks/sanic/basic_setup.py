@@ -12,10 +12,7 @@ def create_app() -> Sanic:
     """Create a Sanic application wired with SQLSpecPlugin."""
     app = Sanic("SQLSpecSanicBasicExample")
     db_plugin = SQLSpecPlugin(
-        AiosqliteConfig(
-            connection_config={"database": ":memory:"},
-            extension_config={"sanic": {"commit_mode": "manual", "session_key": "db"}},
-        ),
+        AiosqliteConfig(connection_config={"database": ":memory:"}, extension_config={"sanic": {"session_key": "db"}}),
         app,
     )
 

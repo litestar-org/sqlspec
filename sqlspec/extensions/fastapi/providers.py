@@ -6,7 +6,10 @@ automatic parsing of query parameters into SQLSpec filter objects.
 
 import copy
 import datetime as dt
+import hashlib
+import hmac
 import inspect
+import os
 import typing
 from collections.abc import Callable, Mapping
 from enum import Enum
@@ -16,7 +19,7 @@ from types import GenericAlias
 from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypeVar, cast
 from uuid import UUID
 
-from fastapi import Depends, Query
+from fastapi import Depends, Query, Request
 from fastapi.exceptions import RequestValidationError
 from typing_extensions import TypedDict
 
@@ -61,6 +64,7 @@ __all__ = (
     "provide_filters",
 )
 
+_UNSET_REQUEST: Request = cast("Request", None)
 DTorNone = dt.datetime | None
 StringOrNone = str | None
 UuidOrNone = UUID | None
@@ -157,6 +161,10 @@ class FilterConfig(TypedDict):
     """Field names, (field, direction) pairs, or CursorKey values. The last key must be unique per row."""
     cursor_secret: NotRequired[str | bytes]
     """Secret enabling HMAC-SHA256 signed cursors."""
+    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    """Cursor expiration window in seconds or timedelta."""
+    cursor_encrypt: NotRequired[bool]
+    """Encrypt cursor payloads at rest when a cursor secret is configured."""
     pagination_size: NotRequired[int]
     """Default page size for limit/offset or cursor pagination."""
     pagination_max_size: NotRequired[int]
@@ -231,13 +239,21 @@ def provide_filters(
     if not _has_filter_config(config):
         return _empty_filter_list
 
-    cache_key = hash(_make_hashable(config))
+    env_secret = (
+        _resolve_env_cursor_secret()
+        if config.get("pagination_type") == "cursor" and config.get("cursor_secret") is None
+        else None
+    )
+    if config.get("pagination_type") == "cursor" and config.get("cursor_secret") is None:
+        cache_key = hash((_make_hashable(config), env_secret))
+    else:
+        cache_key = hash(_make_hashable(config))
 
     cached_dep = dep_cache.get_dependencies(cache_key)
     if cached_dep is not None:
         return cached_dep
 
-    dep = _configured_filter_aggregator(config, dep_defaults)
+    dep = _configured_filter_aggregator(config, dep_defaults, env_secret=env_secret)
     dep_cache.add_dependencies(cache_key, dep)
     return dep
 
@@ -257,13 +273,14 @@ class _SortFieldResolution(NamedTuple):
 
 
 def _configured_filter_aggregator(
-    config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS
+    config: FilterConfig, dep_defaults: DependencyDefaults = DEPENDENCY_DEFAULTS, *, env_secret: str | None = None
 ) -> "Callable[..., list[FilterTypes]]":
     """Create a FastAPI dependency function that aggregates multiple filter dependencies.
 
     Args:
         config: Filter configuration.
-        dep_defaults: Dependency defaults.
+        dep_defaults: Dependency defaults for filter configuration.
+        env_secret: Environment cursor secret resolved at dependency creation time.
 
     Returns:
         A FastAPI dependency function that aggregates multiple filter dependencies.
@@ -380,6 +397,9 @@ def _configured_filter_aggregator(
                 config.get("cursor_secret"),
                 config.get("sort_field"),
                 config,
+                ttl=config.get("cursor_ttl"),
+                encrypt=config.get("cursor_encrypt"),
+                env_secret=env_secret,
             ),
         )
 
@@ -411,9 +431,34 @@ def _make_hashable(value: Any) -> HashableType:
         hashable_items = [_make_hashable(item) for item in value]
         filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
+    if isinstance(value, dt.timedelta):
+        return ("__timedelta__", value.days, value.seconds, value.microseconds)
     if isinstance(value, (str, bytes, int, float, bool, type(None))):
         return value
     return str(value)
+
+
+def _resolve_env_cursor_secret() -> str | None:
+    return os.environ.get("SQLSPEC_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+
+
+def _resolve_context_identity(request: Any) -> str:
+    if request is None:
+        return "fastapi:standalone"
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, Mapping):
+        root_path = str(scope.get("root_path") or "")
+        route = scope.get("route")
+        route_path = getattr(route, "path", None) or scope.get("path") or ""
+        return f"{root_path}{route_path}" or "fastapi:standalone"
+    url = getattr(request, "url", None)
+    path = getattr(url, "path", None)
+    return str(path or "fastapi:standalone")
+
+
+def _derive_cursor_secret(secret: str | bytes, context_identity: str) -> bytes:
+    secret_bytes = secret if isinstance(secret, bytes) else secret.encode("utf-8")
+    return hmac.new(secret_bytes, context_identity.encode("utf-8"), hashlib.sha256).digest()
 
 
 def _has_filter_config(config: FilterConfig) -> bool:
@@ -614,11 +659,17 @@ class _CursorFilterProvider:
         secret: str | bytes | None,
         sort_field: SortField | None,
         config: FilterConfig,
+        ttl: float | dt.timedelta | None = None,
+        encrypt: bool | None = None,
+        env_secret: str | None = None,
     ) -> None:
         self.cursor_keys = normalize_cursor_keys(cursor_keys)
         self.default_page_size = default_page_size
         self.max_page_size = max_page_size
         self.secret = secret
+        self.ttl = config.get("cursor_ttl") if ttl is None else ttl
+        self.encrypt = config.get("cursor_encrypt") if encrypt is None else encrypt
+        self.env_secret = env_secret
         self.sort_field = sort_field
         self.config = copy.deepcopy(config)
         self.sort_resolution = (
@@ -645,6 +696,11 @@ class _CursorFilterProvider:
         ]
         if sort_field:
             parameters.extend(_OrderByProvider(sort_field, config).__signature__.parameters.values())
+        parameters.append(
+            inspect.Parameter(
+                "request", kind=inspect.Parameter.KEYWORD_ONLY, default=_UNSET_REQUEST, annotation=Request
+            )
+        )
         self.__signature__ = inspect.Signature(parameters=parameters, return_annotation=CursorFilter)
 
     def __call__(
@@ -653,11 +709,38 @@ class _CursorFilterProvider:
         page_size: int | None = None,
         field_name: str | None = None,
         sort_order: SortOrder | None = None,
+        request: Request = _UNSET_REQUEST,
     ) -> CursorFilter:
         resolved_page_size = page_size if page_size is not None else self.default_page_size
         keys = _effective_cursor_keys(self, field_name, sort_order)
+        app = getattr(request, "app", None) if request is not None else None
+        app_state = getattr(app, "state", None) if app is not None else None
+        plugin = getattr(app_state, "sqlspec_plugin", None) if app_state is not None else None
+
+        if self.secret is not None:
+            resolved_secret: str | bytes | None = self.secret
+        elif plugin is not None and getattr(plugin, "cursor_secret", None) is not None:
+            resolved_secret = getattr(plugin, "cursor_secret", None)
+        else:
+            resolved_secret = self.env_secret
+
+        resolved_ttl = (
+            self.ttl if self.ttl is not None else (getattr(plugin, "cursor_ttl", None) if plugin is not None else None)
+        )
+        plugin_encrypt = getattr(plugin, "cursor_encrypt", None) if plugin is not None else None
+        resolved_encrypt = bool(
+            self.encrypt if self.encrypt is not None else (plugin_encrypt if plugin_encrypt is not None else False)
+        )
+
+        derived_secret = (
+            _derive_cursor_secret(resolved_secret, _resolve_context_identity(request))
+            if resolved_secret is not None
+            else None
+        )
         try:
-            return CursorFilter(keys, resolved_page_size, cursor, self.secret)
+            return CursorFilter(
+                keys, resolved_page_size, cursor, derived_secret, ttl=resolved_ttl, encrypt=resolved_encrypt
+            )
         except InvalidCursorError as exc:
             raise RequestValidationError(
                 errors=[{"loc": ("query", "cursor"), "msg": "Invalid pagination cursor", "type": "value_error"}]
@@ -673,6 +756,9 @@ class _CursorFilterProvider:
                 self.secret,
                 copy.deepcopy(self.sort_field, memo),
                 copy.deepcopy(self.config, memo),
+                ttl=copy.deepcopy(self.ttl, memo),
+                encrypt=self.encrypt,
+                env_secret=self.env_secret,
             ),
             memo,
         )

@@ -9,6 +9,7 @@ modules only after proving the boundary with installed-wheel smoke coverage.
 """
 
 import asyncio
+import datetime as dt
 import sys
 import threading
 import time
@@ -360,8 +361,8 @@ class FlaskConfig(TypedDict):
     """Key for accessing session via plugin.get_session(). Default: 'db_session'."""
 
     commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
-    """Transaction commit mode. Default: 'manual'.
-    - manual: No automatic commits, user handles explicitly
+    """Transaction commit mode. Default: 'autocommit'.
+    - manual: No automatic commit; uncommitted work rolls back on release
     - autocommit: Commits on 2xx status, rollback otherwise
     - autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise
     """
@@ -474,7 +475,7 @@ class LitestarConfig(TypedDict):
     """Key for storing session in ASGI scope. Default: 'db_session'"""
 
     commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
-    """Transaction commit mode. Default: 'manual'"""
+    """Transaction commit mode. Default: 'autocommit'"""
 
     enable_correlation_middleware: NotRequired[bool]
     """Enable request correlation ID middleware. Default: True"""
@@ -547,6 +548,12 @@ class LitestarConfig(TypedDict):
     """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
+    cursor_secret: NotRequired[str | bytes]
+    """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
+    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    """Default cursor expiration window in seconds or timedelta."""
+    cursor_encrypt: NotRequired[bool]
+    """Encrypt cursor payloads at rest when a cursor secret is configured."""
 
 
 class StarletteConfig(TypedDict):
@@ -568,9 +575,9 @@ class StarletteConfig(TypedDict):
     """Key for storing session in request.state. Default: 'db_session'"""
 
     commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
-    """Transaction commit mode. Default: 'manual'
+    """Transaction commit mode. Default: 'autocommit'
 
-    - manual: No automatic commit/rollback
+    - manual: No automatic commit; uncommitted work rolls back on release
     - autocommit: Commit on 2xx, rollback otherwise
     - autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise
     """
@@ -630,6 +637,12 @@ class StarletteConfig(TypedDict):
     """Optional HMAC secret verifying signed write-pin cookies. Default: None."""
     read_pool_key: NotRequired[str]
     """Request key for the selected read pool."""
+    cursor_secret: NotRequired[str | bytes]
+    """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
+    cursor_ttl: NotRequired[int | float | dt.timedelta]
+    """Default cursor expiration window in seconds or timedelta."""
+    cursor_encrypt: NotRequired[bool]
+    """Encrypt cursor payloads at rest when a cursor secret is configured."""
 
 
 class FastAPIConfig(StarletteConfig):
@@ -659,9 +672,9 @@ class SanicConfig(TypedDict):
     """Key for storing session in request.ctx. Default: 'db_session'"""
 
     commit_mode: NotRequired[Literal["manual", "autocommit", "autocommit_include_redirect"]]
-    """Transaction commit mode. Default: 'manual'
+    """Transaction commit mode. Default: 'autocommit'
 
-    - manual: No automatic commit/rollback
+    - manual: No automatic commit; uncommitted work rolls back on release
     - autocommit: Commit on 2xx, rollback otherwise
     - autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise
     """

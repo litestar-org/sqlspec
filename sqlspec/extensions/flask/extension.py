@@ -47,7 +47,7 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.flask")
 
-DEFAULT_COMMIT_MODE: Literal["manual"] = "manual"
+DEFAULT_COMMIT_MODE: Literal["autocommit"] = "autocommit"
 DEFAULT_SESSION_KEY = "db_session"
 _ROUTING_SCOPE_KEY: Final = "sqlspec_routing_token"
 _RESOURCE_CONTEXTS_KEY: Final = "sqlspec_read_routing_contexts"
@@ -605,9 +605,6 @@ class SQLSpecPlugin:
             if config_state.disable_di:
                 continue
 
-            if config_state.commit_mode == "manual":
-                continue
-
             cache_key = f"sqlspec_session_cache_{config_state.session_key}"
             session = get_context_value(g, cache_key, None)
             connection = get_context_value(g, config_state.connection_key, None)
@@ -621,7 +618,7 @@ class SQLSpecPlugin:
                 self._execute_rollback(session, config_state, connection=connection)
 
         for config_state in self._config_states:
-            if config_state.routing_session_key is None or config_state.commit_mode == "manual":
+            if config_state.routing_session_key is None:
                 continue
             facade = get_context_value(g, config_state.routing_session_key, None)
             if facade is not None and facade.pinned_to_primary:
@@ -673,12 +670,7 @@ class SQLSpecPlugin:
         resource_errors: list[BaseException] = []
         for config_state, resource_key, context, resource, captured_payload in reversed(contexts):
             try:
-                if (
-                    resource_key == config_state.routing_session_key
-                    and _exc is not None
-                    and config_state.commit_mode != "manual"
-                    and resource.pinned_to_primary
-                ):
+                if resource_key == config_state.routing_session_key and _exc is not None and resource.pinned_to_primary:
                     self._execute_rollback(resource, config_state)
                 if config_state.is_async:
                     assert self._portal is not None
@@ -707,11 +699,7 @@ class SQLSpecPlugin:
             captured_payload = pop_context_value(g, payload_key)
 
             try:
-                if (
-                    _exc is not None
-                    and config_state.commit_mode != "manual"
-                    and (session is not None or connection is not None)
-                ):
+                if _exc is not None and (session is not None or connection is not None):
                     self._execute_rollback(session, config_state, connection=connection)
             finally:
                 try:
@@ -1090,11 +1078,7 @@ class _StreamedResponseRelease:
         for config_state, resource_key, context, resource, captured_payload in resource_contexts:
             try:
                 try:
-                    if (
-                        resource_key == config_state.routing_session_key
-                        and config_state.commit_mode != "manual"
-                        and resource.pinned_to_primary
-                    ):
+                    if resource_key == config_state.routing_session_key and resource.pinned_to_primary:
                         if self._completed and config_state.should_commit(self._status_code):
                             self._plugin._execute_commit(resource, config_state)
                         else:
@@ -1113,7 +1097,7 @@ class _StreamedResponseRelease:
         for config_state, session, connection, conn_ctx, captured_payload, has_captured_payload in entries:
             try:
                 try:
-                    if config_state.commit_mode != "manual" and (session is not None or connection is not None):
+                    if session is not None or connection is not None:
                         if self._completed and config_state.should_commit(self._status_code):
                             self._plugin._execute_commit(session, config_state, connection=connection)
                         else:

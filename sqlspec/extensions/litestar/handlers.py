@@ -63,8 +63,11 @@ _LAZY_BEGIN_ADAPTERS: Final[frozenset[str]] = frozenset({
     "arrow_odbc",
     "asyncpg",
     "cockroach_asyncpg",
+    "db2",
     "duckdb",
     "psqlpy",
+    "snowflake",
+    "sybase",
     "teradata",
 })
 
@@ -103,7 +106,7 @@ def build_request_session(
         )
     )
     if (
-        commit_mode in {"autocommit", "autocommit_include_redirect"}
+        commit_mode in {"manual", "autocommit", "autocommit_include_redirect"}
         and resolve_adapter_name(config) in _LAZY_BEGIN_ADAPTERS
     ):
         driver._auto_begin_on_write = True
@@ -113,7 +116,7 @@ def build_request_session(
 def manual_handler_maker(
     connection_scope_key: str, *, session_scope_key: str | None = None
 ) -> "Callable[[Message, Scope], Coroutine[Any, Any, None]]":
-    """Create handler for manual connection management.
+    """Create handler for manual connection management with automatic uncommitted rollback.
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
@@ -126,7 +129,7 @@ def manual_handler_maker(
     stream_deferred_key = f"{connection_scope_key}_stream_deferred"
 
     async def handler(message: "Message", scope: "Scope") -> None:
-        """Handle closing and cleaning up connections on response completion or disconnect.
+        """Roll back uncommitted work on response start and clean up on completion.
 
         Args:
             message: ASGI Message.
@@ -136,6 +139,24 @@ def manual_handler_maker(
         if connection is None or get_sqlspec_scope_state(scope, provider_owned_key):
             return
         message_type = message["type"]
+        if message_type == HTTP_RESPONSE_START:
+            session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
+            if session is None:
+                session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+            transaction_target = session or connection
+            if getattr(transaction_target, "pinned_to_primary", True):
+                finalization_error: BaseException | None = None
+                try:
+                    await _finalize_request_session(session, connection, commit=False)
+                except BaseException as exc:
+                    finalization_error = exc
+                    raise
+                finally:
+                    if finalization_error is not None:
+                        await _release_request_session(
+                            scope, connection_scope_key, session_scope_key, connection, exc_override=finalization_error
+                        )
+            return
         if message_type == "http.response.body":
             if get_sqlspec_scope_state(scope, stream_deferred_key):
                 return
@@ -144,7 +165,21 @@ def manual_handler_maker(
                 return
             await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
         elif message_type in {WEBSOCKET_CLOSE, WEBSOCKET_DISCONNECT}:
-            await _release_request_session(scope, connection_scope_key, session_scope_key, connection)
+            session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
+            if session is None:
+                session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+            transaction_target = session or connection
+            finalization_error = None
+            try:
+                if getattr(transaction_target, "pinned_to_primary", True):
+                    await _finalize_request_session(session, connection, commit=False)
+            except BaseException as exc:
+                finalization_error = exc
+                raise
+            finally:
+                await _release_request_session(
+                    scope, connection_scope_key, session_scope_key, connection, exc_override=finalization_error
+                )
 
     return handler
 
@@ -391,7 +426,7 @@ def session_provider_maker(
     connection_dependency_key: str,
     *,
     session_scope_key: str | None = None,
-    commit_mode: "CommitMode" = "manual",
+    commit_mode: "CommitMode" = "autocommit",
 ) -> "Callable[..., AsyncGenerator[DriverT, None]]":
     """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
 
@@ -524,16 +559,20 @@ async def _finalize_request_session(session: Any, connection: Any, *, commit: bo
         return
     if commit:
         commit_target = session if session is not None and hasattr(session, "commit") else connection
+        if not hasattr(commit_target, "commit"):
+            return
         try:
             await ensure_async_(commit_target.commit)()
         except BaseException:
             rollback_target = session if session is not None and hasattr(session, "rollback") else connection
-            with contextlib.suppress(Exception):
-                await ensure_async_(rollback_target.rollback)()
+            if hasattr(rollback_target, "rollback"):
+                with contextlib.suppress(Exception):
+                    await ensure_async_(rollback_target.rollback)()
             raise
         return
     rollback_target = session if session is not None and hasattr(session, "rollback") else connection
-    await ensure_async_(rollback_target.rollback)()
+    if hasattr(rollback_target, "rollback"):
+        await ensure_async_(rollback_target.rollback)()
 
 
 async def _release_request_session(

@@ -910,11 +910,14 @@ def test_precomputed_sql_hash_hashes_sanitized_sql_when_mask_literals_enabled() 
     assert observed[0]["sql_hash"] == expected_redacted_hash
 
 
-def test_deterministic_sampling_uses_crc32_across_processes() -> None:
-    """Verify deterministic sampling uses zlib.crc32 rather than process-seeded hash()."""
+def test_deterministic_sampling_uses_salted_crc32() -> None:
+    """Verify deterministic sampling mixes a per-process salt with zlib.crc32."""
+    from sqlspec.observability._sampling import _PROCESS_SALT
+
     cid = "cross-process-cid-99"
-    expected_bucket = zlib.crc32(cid.encode("utf-8")) % SamplingConfig.HASH_MODULUS
-    rate_above = (expected_bucket + 1) / SamplingConfig.HASH_MODULUS
+    assert len(_PROCESS_SALT) == 16
+    expected_bucket = zlib.crc32(_PROCESS_SALT + cid.encode("utf-8")) % SamplingConfig.HASH_MODULUS
+    rate_above = (expected_bucket + 1.5) / SamplingConfig.HASH_MODULUS
     rate_below = expected_bucket / SamplingConfig.HASH_MODULUS
     assert SamplingConfig(sample_rate=rate_above, deterministic=True).should_sample(correlation_id=cid) is True
     assert SamplingConfig(sample_rate=rate_below, deterministic=True).should_sample(correlation_id=cid) is False
@@ -1488,7 +1491,7 @@ def test_span_manager_end_span_redacts_recorded_exception() -> None:
 def test_create_statement_event_redacts_profile_strings_without_mutating_input(redaction: RedactionConfig) -> None:
     """create_statement_event masks string values inside nested profile dicts without mutating caller data."""
     runtime = ObservabilityRuntime(ObservabilityConfig(redaction=redaction), config_name="DuckDBConfig")
-    original_profile = {
+    original_profile: dict[str, Any] = {
         "query_name": "SELECT * FROM t WHERE token = 'secret-val'",
         "operator_name": "SEQ_SCAN",
         "extra_info": ["filter: x = 999 AND y = 'nested-secret'", ("k", "SELECT q'[alt]'")],

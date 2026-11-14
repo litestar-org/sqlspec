@@ -725,7 +725,8 @@ async def test_on_response_keeps_session_open_until_on_lifecycle_response_finali
         ("asyncpg", "autocommit", True, "commit", True, True),
         ("asyncpg", "autocommit", True, "rollback", True, True),
         ("asyncpg", "autocommit_include_redirect", False, "commit", True, False),
-        ("asyncpg", "manual", False, "commit", False, True),
+        ("asyncpg", "manual", False, "rollback", True, False),
+        ("asyncpg", "manual", True, "rollback", True, True),
         ("aiosqlite", "autocommit", False, "commit", False, True),
     ],
 )

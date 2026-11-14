@@ -1377,7 +1377,7 @@ async def test_autocommit_handler_finalizes_through_session_and_detaches_on_rele
     [
         ("asyncpg", "autocommit", True),
         ("asyncpg", "autocommit_include_redirect", True),
-        ("asyncpg", "manual", False),
+        ("asyncpg", "manual", True),
         ("duckdb", "autocommit", True),
         ("aiosqlite", "autocommit", False),
     ],
@@ -1471,3 +1471,72 @@ async def test_connection_provider_direct_exit_emits_session_end_and_detaches_se
             _ = session.connection.cursor
     finally:
         await config.close_pool()
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_litestar_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Path,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Litestar default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    from litestar import Litestar, Response, post
+    from litestar.di import NamedDependency
+    from litestar.testing import TestClient
+
+    from sqlspec import SQLSpec
+    from sqlspec.extensions.litestar import SQLSpecPlugin
+
+    database = str(tmp_path / "litestar_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    litestar_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        litestar_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        litestar_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"litestar": litestar_cfg} if litestar_cfg else {}
+    )
+    spec = SQLSpec()
+    spec.add_config(config)
+    plugin = SQLSpecPlugin(sqlspec=spec)
+
+    @post("/write")
+    async def write_route(db_session: NamedDependency[Any]) -> Response[dict[str, Any]]:
+        await db_session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await db_session.commit()
+        return Response({"status": status_code}, status_code=status_code)
+
+    app = Litestar(route_handlers=[write_route], plugins=[plugin])
+    with TestClient(app) as client:
+        resp = client.post("/write")
+        assert resp.status_code == status_code
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])

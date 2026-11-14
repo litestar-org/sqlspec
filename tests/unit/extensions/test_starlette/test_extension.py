@@ -150,7 +150,9 @@ class _Config:
         return self.manager
 
 
-def _make_state(config: _Config | SimpleNamespace, commit_mode: "CommitMode" = "manual") -> SQLSpecConfigState:
+def _make_state(
+    config: "DatabaseConfigProtocol[Any, Any, Any] | _Config | SimpleNamespace", commit_mode: "CommitMode" = "manual"
+) -> SQLSpecConfigState:
     return SQLSpecConfigState(
         config=cast("DatabaseConfigProtocol[Any, Any, Any]", config),
         connection_key="db_connection",
@@ -418,10 +420,11 @@ async def test_tenant_stream_keeps_connection_through_body_and_background(
     if failure is None:
         assert events.index("body_query") < events.index("final_sent")
         assert events.index("background_query") < events.index("release")
-        if mode == "autocommit":
-            assert events.index("background_query") < events.index("commit") < events.index("release")
+        op = "commit" if mode == "autocommit" else "rollback"
+        assert events.index("background_query") < events.index(op) < events.index("release")
     if mode == "manual":
-        assert "commit" not in events and "rollback" not in events
+        assert "commit" not in events
+        assert events.count("rollback") == 1
     elif failure is not None:
         assert "commit" not in events
         assert events.count("rollback") == 1
@@ -779,7 +782,8 @@ def test_starlette_session_lifecycle_events_detachment_and_response_completion()
         ("asyncpg", "autocommit", False, True, False),
         ("asyncpg", "autocommit", True, True, True),
         ("asyncpg", "autocommit_include_redirect", False, True, False),
-        ("asyncpg", "manual", False, False, False),
+        ("asyncpg", "manual", False, True, False),
+        ("asyncpg", "manual", True, True, False),
         ("aiosqlite", "autocommit", False, False, True),
     ],
 )
@@ -806,7 +810,11 @@ async def test_starlette_armed_and_unarmed_session_finalization(
     if adapter_kind == "asyncpg":
         session._transaction = tx
 
-    if commit_mode != "manual":
+    if commit_mode == "manual":
+        await _finalize_request_transaction(request, state, conn, commit=False)
+        rolled_back = (tx.rollback.await_count > 0) if adapter_kind == "asyncpg" else (conn.rollback.await_count > 0)
+        assert rolled_back is in_tx
+    else:
         await _finalize_request_transaction(request, state, conn, commit=True)
 
     committed = (tx.commit.await_count > 0) if adapter_kind == "asyncpg" else (conn.commit.await_count > 0)
@@ -883,3 +891,133 @@ def test_starlette_async_lifecycle_hooks_execute_on_async_and_deferred_sessions(
 
     assert events == ["start", "end"]
     assert "Async lifecycle hook invoked on sync path" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit", 200, False, None, True),
+        ("autocommit", 302, False, None, False),
+        ("autocommit", 303, False, None, False),
+        ("autocommit", 400, False, None, False),
+        ("autocommit_include_redirect", 200, False, None, True),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_starlette_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Starlette default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    database = str(tmp_path / "starlette_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    starlette_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        starlette_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        starlette_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"starlette": starlette_cfg} if starlette_cfg else {}
+    )
+
+    async def write_route(request: Request) -> Response:
+        session = await plugin.get_session_async(request)
+        await session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await session.commit()
+        return JSONResponse({"status": status_code}, status_code=status_code)
+
+    app = Starlette(routes=[Route("/write", write_route, methods=["POST"])])
+    plugin = SQLSpecPlugin(config, app)
+
+    with TestClient(app) as client:
+        resp = client.post("/write")
+        assert resp.status_code == status_code
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])
+
+
+def test_starlette_plugin_cursor_config_and_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Starlette SQLSpecPlugin cursor configuration, env fallback, and conflict detection."""
+    import datetime as dt
+
+    monkeypatch.delenv("SQLSPEC_CURSOR_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    base = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert base.cursor_secret is None
+    assert base.cursor_ttl is None
+    assert base.cursor_encrypt is None
+
+    monkeypatch.setenv("SECRET_KEY", "flask-style-secret")
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "primary-env-secret")
+    from_env = SQLSpecPlugin(AiosqliteConfig(connection_config={"database": ":memory:"}))
+    assert from_env.cursor_secret == "primary-env-secret"
+    monkeypatch.setenv("SQLSPEC_CURSOR_SECRET", "mutated-later")
+    assert from_env.cursor_secret == "primary-env-secret"
+
+    explicit = SQLSpecPlugin(
+        AiosqliteConfig(
+            connection_config={"database": ":memory:"},
+            extension_config={"starlette": {"cursor_ttl": 60, "cursor_encrypt": True}},
+        ),
+        cursor_secret="kwarg-secret",
+        cursor_ttl=dt.timedelta(seconds=60),
+        cursor_encrypt=True,
+    )
+    assert explicit.cursor_secret == "kwarg-secret"
+    assert explicit.cursor_ttl == dt.timedelta(seconds=60)
+    assert explicit.cursor_encrypt is True
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_secret"):
+        SQLSpecPlugin([
+            AiosqliteConfig(
+                bind_key="one",
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"cursor_secret": b"abc"}},
+            ),
+            AiosqliteConfig(
+                bind_key="two",
+                connection_config={"database": ":memory:"},
+                extension_config={"starlette": {"cursor_secret": "abc"}},
+            ),
+        ])
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_ttl"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"}, extension_config={"starlette": {"cursor_ttl": 30}}
+            ),
+            cursor_ttl=60,
+        )
+
+    with pytest.raises(ImproperConfigurationError, match="cursor_encrypt"):
+        SQLSpecPlugin(
+            AiosqliteConfig(
+                connection_config={"database": ":memory:"}, extension_config={"starlette": {"cursor_encrypt": False}}
+            ),
+            cursor_encrypt=True,
+        )

@@ -131,8 +131,8 @@ def test_respects_fastapi_extension_config_key() -> None:
     assert plugin._config_states[0].session_key == custom_key  # pyright: ignore[reportPrivateUsage]
 
 
-def test_ignores_starlette_extension_config_key() -> None:
-    """FastAPI plugin should not read Starlette extension config."""
+def test_falls_back_to_starlette_extension_config_key() -> None:
+    """FastAPI plugin reads extension_config['starlette'] when 'fastapi' is omitted."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
         connection_config={"database": ":memory:"}, extension_config={"starlette": {"session_key": "starlette_db"}}
@@ -142,22 +142,34 @@ def test_ignores_starlette_extension_config_key() -> None:
     plugin = SQLSpecPlugin(sqlspec)
 
     assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
-    assert plugin._config_states[0].session_key == DEFAULT_SESSION_KEY  # pyright: ignore[reportPrivateUsage]
+    assert plugin._config_states[0].session_key == "starlette_db"  # pyright: ignore[reportPrivateUsage]
 
 
-def test_fastapi_extension_config_takes_fastapi_config() -> None:
-    """FastAPI-specific config should own FastAPI settings."""
+@pytest.mark.parametrize(
+    ("starlette_cfg", "fastapi_cfg", "should_raise"),
+    [
+        ({"session_key": "shared_db"}, {"session_key": "shared_db"}, False),
+        ({"session_key": "starlette_db"}, {"session_key": "fastapi_db"}, True),
+        ({"commit_mode": "manual"}, {}, True),
+    ],
+)
+def test_fastapi_and_starlette_extension_config_conflict_detection(
+    starlette_cfg: dict[str, Any], fastapi_cfg: dict[str, Any], should_raise: bool
+) -> None:
+    """Conflicting 'starlette' and 'fastapi' extension_config dicts raise ImproperConfigurationError."""
     sqlspec = SQLSpec()
     config = AiosqliteConfig(
         connection_config={"database": ":memory:"},
-        extension_config={"starlette": {"session_key": "starlette_db"}, "fastapi": {"session_key": "fastapi_db"}},
+        extension_config={"starlette": starlette_cfg, "fastapi": fastapi_cfg},
     )
     sqlspec.add_config(config)
 
-    plugin = SQLSpecPlugin(sqlspec)
-
-    assert len(plugin._config_states) == 1  # pyright: ignore[reportPrivateUsage]
-    assert plugin._config_states[0].session_key == "fastapi_db"  # pyright: ignore[reportPrivateUsage]
+    if should_raise:
+        with pytest.raises(ImproperConfigurationError, match="Conflicting 'fastapi' and 'starlette'"):
+            SQLSpecPlugin(sqlspec)
+    else:
+        plugin = SQLSpecPlugin(sqlspec)
+        assert plugin._config_states[0].session_key == fastapi_cfg["session_key"]  # pyright: ignore[reportPrivateUsage]
 
 
 def test_fastapi_sqlcommenter_framework_defaults_to_fastapi() -> None:
@@ -464,3 +476,63 @@ def test_fastapi_async_lifecycle_hooks_via_provide_session(caplog: pytest.LogCap
 
     assert events == ["start", "end"]
     assert "Async lifecycle hook invoked on sync path" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+def test_fastapi_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify FastAPI default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    from fastapi.responses import JSONResponse
+
+    database = str(tmp_path / "fastapi_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    fastapi_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        fastapi_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        fastapi_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"fastapi": fastapi_cfg} if fastapi_cfg else {}
+    )
+    app = FastAPI()
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.post("/write")
+    async def write_route(db: Annotated[Any, Depends(plugin.provide_session())]) -> JSONResponse:
+        await db.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await db.commit()
+        return JSONResponse({"status": status_code}, status_code=status_code)
+
+    with TestClient(app) as client:
+        resp = client.post("/write")
+        assert resp.status_code == status_code
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])

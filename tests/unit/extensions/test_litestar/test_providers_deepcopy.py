@@ -16,7 +16,9 @@ if not LITESTAR_INSTALLED:
 
 
 _FACTORIES: "dict[str, Any]" = {
-    "_CursorFilterProvider": lambda cls: cls([CursorKey("id")], 20, 1000, "secret", "id", {"sort_field": "id"}),
+    "_CursorFilterProvider": lambda cls: cls(
+        [CursorKey("id")], 20, 1000, "secret", "id", {"sort_field": "id"}, ttl=60, encrypt=True, env_secret="env-sec"
+    ),
     "_LimitOffsetFilterProvider": lambda cls: cls(20, 1000),
     "_IdFilterProvider": lambda cls: cls("id", int),
     "_BeforeAfterFilterProvider": lambda cls: cls("created_at", "createdBefore", "createdAfter"),

@@ -46,9 +46,9 @@ async def test_request_middleware_acquires_pooled_connection() -> None:
 
 
 async def test_manual_response_middleware_cleans_connection_without_transaction() -> None:
-    """Manual mode should release connection state on lifecycle response without commit or rollback."""
+    """Manual mode should roll back uncommitted work and release connection state on lifecycle response."""
     connection = _make_connection()
-    config = _make_config(connection=connection)
+    config = _make_config(connection=connection, commit_mode="manual")
     plugin = SQLSpecPlugin(MagicMock(spec=SQLSpec, configs={"default": config}))
     request = _make_request(pool=object())
     response = SimpleNamespace(status=200)
@@ -60,7 +60,7 @@ async def test_manual_response_middleware_cleans_connection_without_transaction(
     await plugin._on_lifecycle_response(request=request, response=response)  # pyright: ignore[reportPrivateUsage]
 
     connection.commit.assert_not_awaited()
-    connection.rollback.assert_not_awaited()
+    connection.rollback.assert_awaited_once_with()
     assert not has_context_value(request.ctx, "db_connection")
     assert not has_context_value(request.ctx, "db_session_instance")
 
@@ -499,3 +499,71 @@ def test_sanic_request_connection_is_checked_out_on_first_access_only(tmp_path: 
         assert reader.execute("SELECT status FROM items").fetchall() == [(201,)]
     finally:
         reader.close()
+
+
+@pytest.mark.parametrize(
+    ("commit_mode", "status_code", "explicit_commit", "extra_commit", "expect_persisted"),
+    [
+        (None, 200, False, None, True),
+        (None, 303, False, None, False),
+        ("autocommit_include_redirect", 302, False, None, True),
+        ("autocommit_include_redirect", 303, False, None, True),
+        ("autocommit_include_redirect", 400, False, None, False),
+        ("manual", 200, False, {200}, False),
+        ("manual", 200, True, None, True),
+    ],
+)
+async def test_sanic_commit_mode_redirect_and_manual_rollback_behavior(
+    tmp_path: Any,
+    commit_mode: str | None,
+    status_code: int,
+    explicit_commit: bool,
+    extra_commit: "set[int] | None",
+    expect_persisted: bool,
+) -> None:
+    """Verify Sanic default autocommit, Inertia 302/303 redirect commit, and manual rollback."""
+    import sqlite3
+
+    from sanic import response
+
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    database = str(tmp_path / "sanic_modes.db")
+    conn = sqlite3.connect(database)
+    conn.execute("CREATE TABLE items (value TEXT)")
+    conn.commit()
+    conn.close()
+
+    sanic_cfg: dict[str, Any] = {}
+    if commit_mode is not None:
+        sanic_cfg["commit_mode"] = commit_mode
+    if extra_commit is not None:
+        sanic_cfg["extra_commit_statuses"] = extra_commit
+
+    config = AiosqliteConfig(
+        connection_config={"database": database}, extension_config={"sanic": sanic_cfg} if sanic_cfg else {}
+    )
+    app = Sanic(f"SQLSpecModes_{uuid4().hex}")
+    app.config.USE_UVLOOP = False
+    plugin = SQLSpecPlugin(config, app)
+
+    @app.post("/write")
+    async def write_route(request: Any) -> Any:
+        session = await plugin.get_session_async(request)
+        await session.execute("INSERT INTO items VALUES (:val)", {"val": "written"})
+        if explicit_commit:
+            await session.commit()
+        return response.json({"status": status_code}, status=status_code)
+
+    try:
+        _, resp = await app.asgi_client.post("/write")
+        assert resp.status == status_code
+    finally:
+        Sanic.unregister_app(app)
+
+    reader = sqlite3.connect(database)
+    try:
+        rows = reader.execute("SELECT value FROM items").fetchall()
+    finally:
+        reader.close()
+    assert rows == ([("written",)] if expect_persisted else [])

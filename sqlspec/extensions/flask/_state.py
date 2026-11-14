@@ -108,6 +108,8 @@ class FlaskConfigState:
         Returns:
             True if status should trigger commit, False otherwise.
         """
+        if self.commit_mode == "manual":
+            return False
         if self.extra_commit_statuses and status_code in self.extra_commit_statuses:
             return True
         if self.extra_rollback_statuses and status_code in self.extra_rollback_statuses:
@@ -121,7 +123,8 @@ class FlaskConfigState:
     def should_rollback(self, status_code: int) -> bool:
         """Determine if HTTP status code should trigger rollback.
 
-        In autocommit modes, anything that doesn't commit should rollback.
+        Manual mode always rolls back uncommitted handler work, and autocommit
+        modes roll back any status code that does not trigger a commit.
 
         Args:
             status_code: HTTP response status code.
@@ -129,4 +132,4 @@ class FlaskConfigState:
         Returns:
             True if status should trigger rollback, False otherwise.
         """
-        return self.commit_mode != "manual" and not self.should_commit(status_code)
+        return not self.should_commit(status_code)

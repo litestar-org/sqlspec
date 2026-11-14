@@ -7,10 +7,13 @@ visibility into errors and slow queries.
 """
 
 import random
+import secrets
 import zlib
-from typing import ClassVar
+from typing import ClassVar, Final
 
 __all__ = ("SamplingConfig",)
+
+_PROCESS_SALT: Final[bytes] = secrets.token_bytes(16)
 
 
 class SamplingConfig:
@@ -141,7 +144,7 @@ class SamplingConfig:
             return False
 
         if self.deterministic and correlation_id:
-            hash_value = zlib.crc32(correlation_id.encode("utf-8")) % self.HASH_MODULUS
+            hash_value = zlib.crc32(_PROCESS_SALT + correlation_id.encode("utf-8")) % self.HASH_MODULUS
             threshold = int(self.sample_rate * self.HASH_MODULUS)
             return hash_value < threshold
 

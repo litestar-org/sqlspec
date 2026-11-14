@@ -272,3 +272,34 @@ def test_runtime_sampling_emit_statement_event_without_sampling_preserves_previo
     assert len(observed) == 1
     assert observed[0]["correlation_id"] == "sample-correlation"
     assert observed[0]["sampled"] is True
+
+
+def test_deterministic_sampling_mixes_per_process_salt() -> None:
+    """Fresh processes initialize distinct sampling salts while remaining consistent within one process."""
+    import subprocess
+    import sys
+    import zlib
+
+    from sqlspec.observability import _sampling
+
+    cid = "shared-correlation-id"
+    in_process_bucket = zlib.crc32(_sampling._PROCESS_SALT + cid.encode("utf-8")) % SamplingConfig.HASH_MODULUS
+    cfg = SamplingConfig(sample_rate=0.5, deterministic=True)
+    assert len({cfg.should_sample(correlation_id=cid) for _ in range(5)}) == 1
+
+    script = (
+        "import json, zlib; "
+        "from sqlspec.observability import _sampling; "
+        "from sqlspec.observability._sampling import SamplingConfig; "
+        "cids = [f'shared-correlation-id-{i}' for i in range(10)]; "
+        "buckets = [zlib.crc32(_sampling._PROCESS_SALT + c.encode('utf-8')) % SamplingConfig.HASH_MODULUS for c in cids]; "
+        "print(json.dumps({'salt': _sampling._PROCESS_SALT.hex(), 'buckets': buckets}))"
+    )
+    proc_one = subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+    proc_two = subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+    payload_one = __import__("json").loads(proc_one.stdout.strip())
+    payload_two = __import__("json").loads(proc_two.stdout.strip())
+    assert payload_one["salt"] != _sampling._PROCESS_SALT.hex()
+    assert payload_one["salt"] != payload_two["salt"]
+    assert payload_one["buckets"] != payload_two["buckets"]
+    assert in_process_bucket >= 0

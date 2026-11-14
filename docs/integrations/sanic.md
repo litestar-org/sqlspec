@@ -40,7 +40,15 @@ Request connections are checked out on first access, so routes that never touch 
 
 ## Commit Modes and Custom Rollback Statuses
 
-Set `commit_mode` (`"manual"`, `"autocommit"`, or `"autocommit_include_redirect"`) and optional `extra_commit_statuses` / `extra_rollback_statuses` sets in `extension_config["sanic"]`:
+Set `commit_mode` (`"autocommit"`, `"autocommit_include_redirect"`, or `"manual"`) in `extension_config["sanic"]`:
+
+| Commit Mode | Commits On | Rolls Back On | Best For |
+| --- | --- | --- | --- |
+| `"autocommit"` (default) | Clean HTTP `200`–`299` responses | HTTP `>= 300` responses (`3xx`, `4xx`, `5xx`), any raised exception (including mapped `2xx` responses), or cancellation | JSON REST APIs where every `2xx` handler mutates state |
+| `"autocommit_include_redirect"` | Clean HTTP `200`–`399` responses | HTTP `>= 400` responses, any raised exception (including mapped `2xx`/`3xx` responses), or cancellation | HTML, HTMX, and Inertia.js form handlers that commit and return `302` / `303` redirects |
+| `"manual"` | Explicit `session.commit()` calls only | Uncommitted handler work on clean return, unhandled or mapped exceptions, and request cancellations | Explicit service-layer transaction boundaries |
+
+Add `extra_commit_statuses` / `extra_rollback_statuses` sets in `extension_config["sanic"]` when `"autocommit"` or `"autocommit_include_redirect"` requires custom status overrides:
 
 ```{ .python title="docs/examples/frameworks/sanic/commit_modes.py" }
 --8<-- "docs/examples/frameworks/sanic/commit_modes.py:example"
@@ -52,17 +60,7 @@ During request setup, `_on_request` acquires configured connections under `BaseE
 
 When a route handler or middleware raises an exception, Sanic dispatches `http.lifecycle.exception`, which records the exception on `request.ctx` before response middleware runs. During response teardown, the plugin checks this recorded exception before evaluating `commit_mode` status codes (rolling back even when an `@app.exception(...)` handler maps a failure to a `2xx` fallback response) and forwards `(exc_type, exc_val, exc_tb)` to the connection context exit (`__aexit__`). If `asyncio.CancelledError` or an abrupt client disconnect bypasses `http.lifecycle.exception` and response middleware, the `http.lifecycle.complete` signal listener rolls back and exits any residual connection contexts with a cancellation exception and restores observability contexts idempotently.
 
-Both unhandled exceptions and exceptions mapped to HTTP responses by Sanic `@app.exception(...)` handlers roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies.
-
-When a route handler in `"manual"` mode returns cleanly without calling `commit()` or `rollback()`, the outcome for open uncommitted work depends on the adapter:
-
-| Clean return with uncommitted work (`manual` mode) | Adapters |
-| --- | --- |
-| Commits open transaction on context exit | `sqlite`, `aiosqlite`, `duckdb`, `psycopg`, `cockroach_psycopg`, `spanner` |
-| Rolls back uncommitted transaction on pool release or close | `pymysql`, `aiomysql`, `asyncmy`, `mysqlconnector`, `oracledb`, `mssql_python`, `adbc` |
-| Autocommits single statements; rolls back open `BEGIN` blocks on pool release | `asyncpg`, `cockroach_asyncpg` |
-| Autocommits single statements by default (explicit `BEGIN` or `autocommit=False` requires explicit commit or `commit_mode`) | `psqlpy`, `db2`, `arrow_odbc`, `bigquery` |
-| Retains open transaction on thread-local connection until explicit `commit()` / `rollback()` (discards connection on exception) | `pymssql`, `sybase`, `sqlanywhere` |
+Both unhandled exceptions and exceptions mapped to HTTP responses by Sanic `@app.exception(...)` handlers roll back uncommitted work. By contrast, Starlette, FastAPI, and Flask treat exceptions already converted into responses by inner framework exception handlers as normal responses at the middleware boundary unless status-based rollback applies. In `"manual"` mode, uncommitted handler writes roll back before returning connections to the pool, and lazy-begin adapters (`adbc`, `arrow_odbc`, `asyncpg`, `cockroach_asyncpg`, `db2`, `duckdb`, `psqlpy`, `snowflake`, `sybase`, `teradata`) defer `BEGIN` until the first write statement across all three commit modes.
 
 ## Multi-Database Routing
 
@@ -103,7 +101,7 @@ Configure `extension_config["sanic"]` (`SanicConfig`) per database configuration
 | `connection_key` | `str` | `'db_connection'` | Key for storing the connection in request.ctx once it is checked out on first access. Default: 'db_connection' |
 | `pool_key` | `str` | `'db_pool'` | Key for storing connection pool in app.ctx. Default: 'db_pool' |
 | `session_key` | `str` | `'db_session'` | Key for storing session in request.ctx. Default: 'db_session' |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commit/rollback; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit'. manual: No automatic commit; uncommitted work rolls back on release; autocommit: Commit on 2xx, rollback otherwise; autocommit_include_redirect: Commit on 2xx-3xx, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger commit. Default: set() |
 | `extra_rollback_statuses` | `set[int]` | `set()` | Additional HTTP status codes that trigger rollback. Default: set() |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Sanic extension will not register request middleware for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |

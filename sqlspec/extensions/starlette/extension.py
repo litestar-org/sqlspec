@@ -1,6 +1,8 @@
 """Starlette extension for SQLSpec database session and middleware management."""
 
+import datetime as dt
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast, overload
 
@@ -30,7 +32,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence
 
     from starlette.applications import Starlette
     from starlette.requests import Request
@@ -50,7 +52,7 @@ __all__ = ("SQLSpecPlugin",)
 
 logger = get_logger("sqlspec.extensions.starlette")
 
-DEFAULT_COMMIT_MODE = "manual"
+DEFAULT_COMMIT_MODE = "autocommit"
 DEFAULT_CONNECTION_KEY = "db_connection"
 DEFAULT_POOL_KEY = "db_pool"
 DEFAULT_SESSION_KEY = "db_session"
@@ -63,7 +65,15 @@ class SQLSpecPlugin:
     and connection pooling lifecycle management.
     """
 
-    __slots__ = ("_config_states", "_correlation_middleware_added", "_sqlcommenter_middleware_added", "_sqlspec")
+    __slots__ = (
+        "_config_states",
+        "_correlation_middleware_added",
+        "_cursor_encrypt",
+        "_cursor_secret",
+        "_cursor_ttl",
+        "_sqlcommenter_middleware_added",
+        "_sqlspec",
+    )
 
     def __init__(
         self,
@@ -71,6 +81,9 @@ class SQLSpecPlugin:
         app: "Starlette | None" = None,
         *,
         loader: "SQLFileLoader | None" = None,
+        cursor_secret: str | bytes | None = None,
+        cursor_ttl: float | dt.timedelta | None = None,
+        cursor_encrypt: bool | None = None,
     ) -> None:
         """Initialize SQLSpec Starlette extension.
 
@@ -79,16 +92,25 @@ class SQLSpecPlugin:
                 configuration, or a sequence of database configurations.
             app: Optional Starlette application to initialize immediately.
             loader: Optional SQL file loader attached to the registry.
+            cursor_secret: Optional application-wide cursor signing secret.
+            cursor_ttl: Optional default cursor expiration window.
+            cursor_encrypt: Optional default cursor encryption flag.
         """
         self._sqlspec = coerce_sqlspec(sqlspec, loader=loader)
         self._config_states: list[SQLSpecConfigState] = []
         self._correlation_middleware_added = False
         self._sqlcommenter_middleware_added = False
 
+        extracted_settings: list[dict[str, Any]] = []
         for cfg in self._sqlspec.configs.values():
             settings = self._extract_extension_settings(cfg)
+            extracted_settings.append(settings)
             state = self._config_state(cfg, settings)
             self._config_states.append(state)
+
+        self._cursor_secret, self._cursor_ttl, self._cursor_encrypt = _resolve_plugin_cursor_settings(
+            extracted_settings, cursor_secret=cursor_secret, cursor_ttl=cursor_ttl, cursor_encrypt=cursor_encrypt
+        )
 
         if app is not None:
             self.init_app(app)
@@ -100,6 +122,21 @@ class SQLSpecPlugin:
             stage="init",
             config_count=len(self._config_states),
         )
+
+    @property
+    def cursor_secret(self) -> str | bytes | None:
+        """Return resolved application-wide cursor secret."""
+        return self._cursor_secret
+
+    @property
+    def cursor_ttl(self) -> int | float | dt.timedelta | None:
+        """Return resolved application-wide cursor TTL."""
+        return self._cursor_ttl
+
+    @property
+    def cursor_encrypt(self) -> bool | None:
+        """Return resolved application-wide cursor encryption setting."""
+        return self._cursor_encrypt
 
     @property
     def sqlspec(self) -> SQLSpec:
@@ -451,6 +488,9 @@ class SQLSpecPlugin:
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
             "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "starlette"),
+            "cursor_secret": framework_config.get("cursor_secret"),
+            "cursor_ttl": framework_config.get("cursor_ttl"),
+            "cursor_encrypt": framework_config.get("cursor_encrypt"),
         }
 
     def _config_state(self, config: Any, settings: "dict[str, Any]") -> SQLSpecConfigState:
@@ -629,3 +669,65 @@ class SQLSpecPlugin:
                 return state
         msg = f"No configuration found for: {key!r}"
         raise ValueError(msg)
+
+
+def _normalize_ttl_seconds(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
+        msg = "cursor_ttl must be an int, float, or datetime.timedelta"
+        raise ImproperConfigurationError(msg)
+    return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
+
+
+def _resolve_env_cursor_secret() -> str | None:
+    return os.environ.get("SQLSPEC_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+
+
+def _resolve_plugin_cursor_settings(
+    settings_list: "Sequence[Mapping[str, Any]]",
+    *,
+    cursor_secret: str | bytes | None,
+    cursor_ttl: float | dt.timedelta | None,
+    cursor_encrypt: bool | None,
+) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
+    resolved_secret: str | bytes | None = cursor_secret
+    for settings in settings_list:
+        candidate = settings.get("cursor_secret")
+        if candidate is None:
+            continue
+        if resolved_secret is None:
+            resolved_secret = candidate
+        elif resolved_secret != candidate:
+            msg = "Conflicting 'cursor_secret' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+    if resolved_secret is None:
+        resolved_secret = _resolve_env_cursor_secret()
+
+    resolved_ttl: int | float | dt.timedelta | None = None
+    resolved_ttl_seconds: float | None = None
+    if cursor_ttl is not None:
+        resolved_ttl = cursor_ttl
+        resolved_ttl_seconds = _normalize_ttl_seconds(cursor_ttl)
+    for settings in settings_list:
+        candidate_ttl = settings.get("cursor_ttl")
+        if candidate_ttl is None:
+            continue
+        candidate_seconds = _normalize_ttl_seconds(candidate_ttl)
+        if resolved_ttl_seconds is None:
+            resolved_ttl = candidate_ttl
+            resolved_ttl_seconds = candidate_seconds
+        elif resolved_ttl_seconds != candidate_seconds:
+            msg = "Conflicting 'cursor_ttl' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    resolved_encrypt: bool | None = cursor_encrypt
+    for settings in settings_list:
+        candidate_encrypt = settings.get("cursor_encrypt")
+        if candidate_encrypt is None:
+            continue
+        if resolved_encrypt is None:
+            resolved_encrypt = bool(candidate_encrypt)
+        elif resolved_encrypt != bool(candidate_encrypt):
+            msg = "Conflicting 'cursor_encrypt' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    return resolved_secret, resolved_ttl, resolved_encrypt

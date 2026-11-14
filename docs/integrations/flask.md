@@ -52,13 +52,15 @@ With `driver_features={"tenant_strategy": "rls"}` on a supported adapter, Flask 
 
 ## Configuration Options
 
+Configure `commit_mode` inside `extension_config["flask"]` (`"autocommit"` by default, `"autocommit_include_redirect"` for HTML/HTMX/Inertia.js `302`/`303` redirects, or `"manual"` for explicit `commit()` with automatic rollback of uncommitted work):
+
 <!-- GENERATED:START config-table:sqlspec.config.FlaskConfig -->
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `tenant_extractor` | `Callable[..., TenantExtractorValue]` | - | Return the authorized tenant payload, string, UUID, or None (no tenant from this source) for the request. Requires tenant_strategy on the same configuration; called on first tenant use, never at request start. Accepts zero arguments or the Flask request. |
 | `connection_key` | `str` | - | Key for storing the connection in Flask g once it is checked out on first access. Default: auto-generated from session_key. |
 | `session_key` | `str` | `'db_session'` | Key for accessing session via plugin.get_session(). Default: 'db_session'. |
-| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'manual'` | Transaction commit mode. Default: 'manual'. manual: No automatic commits, user handles explicitly; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
+| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` | Transaction commit mode. Default: 'autocommit'. manual: No automatic commit; uncommitted work rolls back on release; autocommit: Commits on 2xx status, rollback otherwise; autocommit_include_redirect: Commits on 2xx-3xx status, rollback otherwise |
 | `extra_commit_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger commit. Default: None. |
 | `extra_rollback_statuses` | `set[int]` | `None` | Additional HTTP status codes that trigger rollback. Default: None. |
 | `disable_di` | `bool` | `False` | Disable built-in dependency injection. Default: False. When True, the Flask extension will not register request hooks for managing database connections and sessions. Users are responsible for managing the database lifecycle manually via their own DI solution. |

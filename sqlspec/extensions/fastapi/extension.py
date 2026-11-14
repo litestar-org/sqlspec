@@ -1,12 +1,13 @@
 """FastAPI extension for SQLSpec database session and dependency management."""
 
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from fastapi import Request
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.fastapi.providers import DEPENDENCY_DEFAULTS
 from sqlspec.extensions.fastapi.providers import provide_filters as _provide_filters
+from sqlspec.extensions.starlette.extension import DEFAULT_COMMIT_MODE
 from sqlspec.extensions.starlette.extension import SQLSpecPlugin as _StarlettePlugin
 
 if TYPE_CHECKING:
@@ -226,11 +227,10 @@ class SQLSpecPlugin(_StarlettePlugin):
         """Build a lazy routing facade dependency without driver response schemas."""
         return self._read_routing_dependency(key, "routing")
 
-    @staticmethod
     def provide_filters(
-        config: "FilterConfig", dep_defaults: "DependencyDefaults | None" = None
+        self, config: "FilterConfig", dep_defaults: "DependencyDefaults | None" = None
     ) -> "Callable[..., list[FilterTypes]]":
-        """Create filter dependency for FastAPI routes.
+        """Create filter dependency for FastAPI routes inheriting plugin cursor settings.
 
         Dynamically generates a FastAPI dependency function that parses query
         parameters into SQLSpec filter objects. The returned callable can be used
@@ -243,11 +243,17 @@ class SQLSpecPlugin(_StarlettePlugin):
         Returns:
             Callable for use with Depends() that returns list of filters.
         """
-
         if dep_defaults is None:
             dep_defaults = DEPENDENCY_DEFAULTS
 
-        return _provide_filters(config, dep_defaults=dep_defaults)
+        merged = dict(config)
+        if merged.get("cursor_secret") is None and self._cursor_secret is not None:
+            merged["cursor_secret"] = self._cursor_secret
+        if merged.get("cursor_ttl") is None and self._cursor_ttl is not None:
+            merged["cursor_ttl"] = self._cursor_ttl
+        if merged.get("cursor_encrypt") is None and self._cursor_encrypt is not None:
+            merged["cursor_encrypt"] = self._cursor_encrypt
+        return _provide_filters(cast("FilterConfig", merged), dep_defaults=dep_defaults)
 
     def _read_routing_dependency(
         self, key: Any, kind: str, *, require_async: bool | None = None
@@ -289,7 +295,24 @@ class SQLSpecPlugin(_StarlettePlugin):
         Returns:
             Dictionary of FastAPI-specific settings.
         """
-        framework_config = config.extension_config.get("fastapi", {})
+        has_fastapi = "fastapi" in config.extension_config
+        has_starlette = "starlette" in config.extension_config
+        if has_fastapi and has_starlette:
+            fastapi_cfg = config.extension_config["fastapi"]
+            starlette_cfg = config.extension_config["starlette"]
+            if fastapi_cfg != starlette_cfg:
+                msg = (
+                    "Conflicting 'fastapi' and 'starlette' extension_config settings; "
+                    "configure only one or ensure they match."
+                )
+                raise ImproperConfigurationError(msg)
+            framework_config = fastapi_cfg
+        elif has_fastapi:
+            framework_config = config.extension_config["fastapi"]
+        elif has_starlette:
+            framework_config = config.extension_config["starlette"]
+        else:
+            framework_config = {}
         pool_key = framework_config.get("pool_key", "db_pool")
         if not config.supports_connection_pooling and pool_key == "db_pool":
             pool_key = f"_db_pool_{id(config)}"
@@ -319,7 +342,7 @@ class SQLSpecPlugin(_StarlettePlugin):
             "routing_header": framework_config.get("routing_header"),
             "write_pin_cookie": framework_config.get("write_pin_cookie"),
             "routing_secret": framework_config.get("routing_secret"),
-            "commit_mode": framework_config.get("commit_mode", "manual"),
+            "commit_mode": framework_config.get("commit_mode", DEFAULT_COMMIT_MODE),
             "extra_commit_statuses": framework_config.get("extra_commit_statuses"),
             "extra_rollback_statuses": framework_config.get("extra_rollback_statuses"),
             "disable_di": framework_config.get("disable_di", False),
@@ -330,4 +353,7 @@ class SQLSpecPlugin(_StarlettePlugin):
             "enable_sqlcommenter_middleware": framework_config.get("enable_sqlcommenter_middleware", True),
             "tenant_extractor": framework_config.get("tenant_extractor"),
             "sqlcommenter_framework": framework_config.get("sqlcommenter_framework", "fastapi"),
+            "cursor_secret": framework_config.get("cursor_secret"),
+            "cursor_ttl": framework_config.get("cursor_ttl"),
+            "cursor_encrypt": framework_config.get("cursor_encrypt"),
         }

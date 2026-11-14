@@ -85,8 +85,8 @@ def test_sqlite_autocommit_commit_and_rollback_by_status(tmp_path: Path) -> None
     assert _read_sqlite_rows(db_path) == ["good"]
 
 
-def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -> None:
-    """Manual mode commits on clean 200 and 400, and rolls back on unhandled exception."""
+def test_sqlite_manual_discards_uncommitted_and_persists_explicit_commit(tmp_path: Path) -> None:
+    """Manual mode discards uncommitted 200/400/exception writes and persists explicit commit()."""
     db_path = tmp_path / "manual.db"
     _setup_sqlite_db(db_path)
 
@@ -99,8 +99,14 @@ def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -
 
     @get("/ok")
     def ok_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, str]:
-        db_session.execute("INSERT INTO items (name) VALUES (?)", ("good",))
+        db_session.execute("INSERT INTO items (name) VALUES (?)", ("uncommitted_ok",))
         return {"status": "ok"}
+
+    @get("/committed")
+    def committed_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> dict[str, str]:
+        db_session.execute("INSERT INTO items (name) VALUES (?)", ("committed",))
+        db_session.commit()
+        return {"status": "committed"}
 
     @get("/bad")
     def bad_route(db_session: NamedDependency[SyncDriverAdapterBase]) -> Response[dict[str, str]]:
@@ -112,17 +118,19 @@ def test_sqlite_manual_commits_clean_and_rolls_back_exceptions(tmp_path: Path) -
         db_session.execute("INSERT INTO items (name) VALUES (?)", ("ugly",))
         raise RuntimeError("failed in handler")
 
-    app = Litestar(route_handlers=[ok_route, bad_route, raise_route], plugins=[plugin], debug=True)
+    app = Litestar(route_handlers=[ok_route, committed_route, bad_route, raise_route], plugins=[plugin], debug=True)
 
     with TestClient(app=app, raise_server_exceptions=False) as client:
         res_ok = client.get("/ok")
+        res_committed = client.get("/committed")
         res_bad = client.get("/bad")
         res_raise = client.get("/raise")
 
     assert res_ok.status_code == 200
+    assert res_committed.status_code == 200
     assert res_bad.status_code == 400
     assert res_raise.status_code == 500
-    assert _read_sqlite_rows(db_path) == ["good", "bad"]
+    assert _read_sqlite_rows(db_path) == ["committed"]
 
 
 def test_sqlite_extra_commit_statuses_persists_row(tmp_path: Path) -> None:
@@ -358,6 +366,7 @@ def test_litestar_pre_response_cancelled_error_after_handover_releases_pool(tmp_
     @get("/healthy")
     async def healthy_route(db_session: NamedDependency[AsyncDriverAdapterBase]) -> dict[str, str]:
         await db_session.execute("INSERT INTO items (name) VALUES (:name)", name="healthy_write")
+        await db_session.commit()
         return {"status": "ok"}
 
     app = Litestar(route_handlers=[abort_route, healthy_route], plugins=[plugin])
