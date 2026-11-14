@@ -903,24 +903,6 @@ _UNSET_SESSION_FIELD: Final = object()
 _MISSING_TRANSACTION_PRIORITY: Final = object()
 
 
-def _drop_oracle_session_state_by_id(conn_id: int) -> None:
-    _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
-    _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
-    _INITIAL_ALTER_SESSION_BY_CONN_ID.pop(conn_id, None)
-    _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
-    _TAGGED_ALTER_CONN_IDS.discard(conn_id)
-    _REGISTERED_SESSION_CLEANUP_IDS.discard(conn_id)
-
-
-def _ensure_session_state_cleanup(connection: Any) -> None:
-    conn_id = id(connection)
-    if conn_id in _REGISTERED_SESSION_CLEANUP_IDS:
-        return
-    _REGISTERED_SESSION_CLEANUP_IDS.add(conn_id)
-    with contextlib.suppress(TypeError):
-        weakref.finalize(connection, _drop_oracle_session_state_by_id, conn_id)
-
-
 def forget_oracle_session_state(connection: Any) -> None:
     """Remove checkout baselines when a physical connection is discarded."""
     _drop_oracle_session_state_by_id(id(connection))
@@ -936,34 +918,6 @@ def mark_oracle_tagged_release(connection: Any, enabled: bool) -> None:
         _TAGGED_ALTER_CONN_IDS.discard(conn_id)
 
 
-def _build_alter_session_baseline_probe(
-    *, need_edition: bool, need_time_zone: bool, missing_nls_keys: "tuple[str, ...]"
-) -> "tuple[str | None, dict[str, Any]]":
-    branches: list[str] = []
-    binds: dict[str, Any] = {}
-    if need_edition:
-        branches.append(
-            "SELECT 'EDITION' AS kind, 'EDITION' AS param_key, "
-            "SYS_CONTEXT('USERENV', 'CURRENT_EDITION_NAME') AS param_val FROM DUAL"
-        )
-    if need_time_zone:
-        branches.append("SELECT 'TIME_ZONE' AS kind, 'TIME_ZONE' AS param_key, SESSIONTIMEZONE AS param_val FROM DUAL")
-    if missing_nls_keys:
-        placeholders: list[str] = []
-        for idx, key in enumerate(missing_nls_keys):
-            param_name = f"p_nls_base_{idx}"
-            placeholders.append(f":{param_name}")
-            binds[param_name] = key
-        in_clause = ", ".join(placeholders)
-        branches.append(
-            "SELECT 'NLS' AS kind, PARAMETER AS param_key, VALUE AS param_val "
-            f"FROM NLS_SESSION_PARAMETERS WHERE PARAMETER IN ({in_clause})"
-        )
-    if not branches:
-        return None, {}
-    return " UNION ALL ".join(branches), binds
-
-
 def record_oracle_alter_session_baseline(connection: Any, rows: "Sequence[Any] | None") -> None:
     """Cache initial session edition, time zone, and NLS values for release restoration."""
     if not rows:
@@ -972,7 +926,7 @@ def record_oracle_alter_session_baseline(connection: Any, rows: "Sequence[Any] |
     baseline = _INITIAL_ALTER_SESSION_BY_CONN_ID.get(conn_id)
     if baseline is None:
         _ensure_session_state_cleanup(connection)
-        baseline = {"nls_parameters": {}}
+        baseline = {"nls_parameters": cast("Any", {})}
         _INITIAL_ALTER_SESSION_BY_CONN_ID[conn_id] = baseline
     nls_baseline = cast("dict[str, str]", baseline.setdefault("nls_parameters", {}))
     for row in rows:
@@ -3720,6 +3674,52 @@ def _validate_end_user_roles(value: Any) -> None:
     ):
         msg = "data_roles must be a sequence of nonempty strings"
         raise ImproperConfigurationError(msg)
+
+
+def _drop_oracle_session_state_by_id(conn_id: int) -> None:
+    _INITIAL_SCHEMA_BY_CONN_ID.pop(conn_id, None)
+    _INITIAL_PRIORITY_BY_CONN_ID.pop(conn_id, None)
+    _INITIAL_ALTER_SESSION_BY_CONN_ID.pop(conn_id, None)
+    _ACTIVE_ALTER_FIELDS_BY_CONN_ID.pop(conn_id, None)
+    _TAGGED_ALTER_CONN_IDS.discard(conn_id)
+    _REGISTERED_SESSION_CLEANUP_IDS.discard(conn_id)
+
+
+def _ensure_session_state_cleanup(connection: Any) -> None:
+    conn_id = id(connection)
+    if conn_id in _REGISTERED_SESSION_CLEANUP_IDS:
+        return
+    _REGISTERED_SESSION_CLEANUP_IDS.add(conn_id)
+    with contextlib.suppress(TypeError):
+        weakref.finalize(connection, _drop_oracle_session_state_by_id, conn_id)
+
+
+def _build_alter_session_baseline_probe(
+    *, need_edition: bool, need_time_zone: bool, missing_nls_keys: "tuple[str, ...]"
+) -> "tuple[str | None, dict[str, Any]]":
+    branches: list[str] = []
+    binds: dict[str, Any] = {}
+    if need_edition:
+        branches.append(
+            "SELECT 'EDITION' AS kind, 'EDITION' AS param_key, "
+            "SYS_CONTEXT('USERENV', 'CURRENT_EDITION_NAME') AS param_val FROM DUAL"
+        )
+    if need_time_zone:
+        branches.append("SELECT 'TIME_ZONE' AS kind, 'TIME_ZONE' AS param_key, SESSIONTIMEZONE AS param_val FROM DUAL")
+    if missing_nls_keys:
+        placeholders: list[str] = []
+        for idx, key in enumerate(missing_nls_keys):
+            param_name = f"p_nls_base_{idx}"
+            placeholders.append(f":{param_name}")
+            binds[param_name] = key
+        in_clause = ", ".join(placeholders)
+        branches.append(
+            "SELECT 'NLS' AS kind, PARAMETER AS param_key, VALUE AS param_val "
+            f"FROM NLS_SESSION_PARAMETERS WHERE PARAMETER IN ({in_clause})"
+        )
+    if not branches:
+        return None, {}
+    return " UNION ALL ".join(branches), binds
 
 
 def _validate_end_user_attributes(value: Any) -> None:

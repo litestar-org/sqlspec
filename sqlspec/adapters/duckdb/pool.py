@@ -69,27 +69,6 @@ _SECRET_BOOLEAN_TEXT: Final[dict[str, str]] = {
 }
 
 
-def _current_async_task() -> "asyncio.Task[Any] | None":
-    try:
-        return asyncio.current_task()
-    except RuntimeError:
-        return None
-
-
-def _sanitize_database_name(database: object) -> str:
-    """Strip userinfo and query parameters from DuckDB database URIs for logging."""
-    raw = str(database) if database else ""
-    if not raw or raw.startswith(":memory:"):
-        return ":memory:"
-    parsed = urlsplit(raw)
-    if parsed.scheme and len(parsed.scheme) > 1:
-        netloc = parsed.netloc
-        if "@" in netloc:
-            netloc = netloc.rsplit("@", 1)[1]
-        return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
-    return raw
-
-
 @final
 @mypyc_attr(allow_interpreted_subclasses=False)
 class DuckDBConnectionPool:
@@ -161,52 +140,6 @@ class DuckDBConnectionPool:
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
         return _sanitize_database_name(self._connection_config.get("database", ""))
-
-    def _checkout_state(self) -> "dict[str, Any]":
-        """Return the checkout state mapping for the current sync thread or active asyncio task."""
-        thread_dict = self._thread_local.__dict__
-        task = _current_async_task()
-        if task is None:
-            return thread_dict
-        task_states = cast(
-            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
-        )
-        if task_states is None:
-            task_states = WeakKeyDictionary()
-            thread_dict["_task_states"] = task_states
-        state = task_states.get(task)
-        if state is None:
-            state = {}
-            task_states[task] = state
-            task.add_done_callback(partial(self._retire_finished_task_state, task_states))
-        return state
-
-    def _existing_checkout_state(self) -> "dict[str, Any] | None":
-        """Return an existing checkout state mapping without allocating a new task slot."""
-        thread_dict = self._thread_local.__dict__
-        task = _current_async_task()
-        if task is None:
-            return thread_dict
-        task_states = cast(
-            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
-        )
-        if task_states is None:
-            return None
-        return task_states.get(task)
-
-    def _retire_finished_task_state(
-        self, task_states: "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]]", completed_task: "asyncio.Task[Any]"
-    ) -> None:
-        state = task_states.pop(completed_task, None)
-        if state is None or state.get("manual_acquire"):
-            return
-        connection = cast("DuckDBConnection | None", state.get("connection"))
-        if connection is None:
-            return
-        with self._lock:
-            if self._is_memory_db and len(self._connection_registry) <= 1:
-                return
-        self._retire_connection(connection)
 
     def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
         """Open a standalone connection with extensions and secrets applied.
@@ -587,6 +520,52 @@ class DuckDBConnectionPool:
             thread_state["storage_secrets"] = tuple(current_secrets)
             thread_state.pop("_cached_storage_settings", None)
 
+    def _checkout_state(self) -> "dict[str, Any]":
+        """Return the checkout state mapping for the current sync thread or active asyncio task."""
+        thread_dict = self._thread_local.__dict__
+        task = _current_async_task()
+        if task is None:
+            return thread_dict
+        task_states = cast(
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+        )
+        if task_states is None:
+            task_states = WeakKeyDictionary()
+            thread_dict["_task_states"] = task_states
+        state = task_states.get(task)
+        if state is None:
+            state = {}
+            task_states[task] = state
+            task.add_done_callback(partial(self._retire_finished_task_state, task_states))
+        return state
+
+    def _existing_checkout_state(self) -> "dict[str, Any] | None":
+        """Return an existing checkout state mapping without allocating a new task slot."""
+        thread_dict = self._thread_local.__dict__
+        task = _current_async_task()
+        if task is None:
+            return thread_dict
+        task_states = cast(
+            "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]] | None", thread_dict.get("_task_states")
+        )
+        if task_states is None:
+            return None
+        return task_states.get(task)
+
+    def _retire_finished_task_state(
+        self, task_states: "WeakKeyDictionary[asyncio.Task[Any], dict[str, Any]]", completed_task: "asyncio.Task[Any]"
+    ) -> None:
+        state = task_states.pop(completed_task, None)
+        if state is None or state.get("manual_acquire"):
+            return
+        connection = cast("DuckDBConnection | None", state.get("connection"))
+        if connection is None:
+            return
+        with self._lock:
+            if self._is_memory_db and len(self._connection_registry) <= 1:
+                return
+        self._retire_connection(connection)
+
     def _retire_connection(self, connection: DuckDBConnection) -> None:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._lock:
@@ -628,6 +607,27 @@ class DuckDBConnectionPool:
         except Exception:
             return False
         return True
+
+
+def _current_async_task() -> "asyncio.Task[Any] | None":
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+def _sanitize_database_name(database: object) -> str:
+    """Strip userinfo and query parameters from DuckDB database URIs for logging."""
+    raw = str(database) if database else ""
+    if not raw or raw.startswith(":memory:"):
+        return ":memory:"
+    parsed = urlsplit(raw)
+    if parsed.scheme and len(parsed.scheme) > 1:
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[1]
+        return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    return raw
 
 
 def _open_duckdb_connection(
