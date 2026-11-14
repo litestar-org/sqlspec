@@ -1645,7 +1645,9 @@ def _pushdown_predicates_without_simplify(expression: exp.Expr, dialect: Dialect
     unnest_requires_cross_join = isinstance(resolved_dialect, (Athena, Presto))
     scope_ref_count = root.ref_count()
 
-    for scope in reversed(list(root.traverse())):
+    scopes = list(root.traverse())
+    scopes.reverse()
+    for scope in scopes:
         select = scope.expression
         where_node = select.args.get("where")
         joins: list[exp.Join] = select.args.get("joins") or []
