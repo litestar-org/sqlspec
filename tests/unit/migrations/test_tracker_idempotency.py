@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
 from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
 from sqlspec.adapters.mssql_python.core import create_mapped_exception as mssql_python_map_exception
@@ -1722,3 +1724,177 @@ async def test_sqlite_unrecovered_savepoint_failure_rolls_back_outer_transaction
             cfg_sync.close_pool()
 
     assert "partial_leak" not in tables
+
+
+@pytest.mark.parametrize(
+    ("driver_kind", "dialect", "expected_backend", "expected_lock_sql"),
+    [
+        ("adbc", "postgres", "postgres", "pg_advisory_lock"),
+        ("adbc", "mysql", "mysql", "GET_LOCK"),
+        ("adbc", "tsql", "mssql", "sp_getapplock"),
+        ("adbc", "sqlite", "", None),
+        ("adbc", "cockroachdb", "", None),
+        ("arrow_odbc", "postgres", "postgres", "pg_advisory_lock"),
+        ("arrow_odbc", "mysql", "mysql", "GET_LOCK"),
+        ("arrow_odbc", "tsql", "mssql", "sp_getapplock"),
+        ("arrow_odbc", "sqlite", "", None),
+    ],
+)
+def test_bridge_driver_migration_advisory_lock_classification_and_sqlite_exclusion(
+    driver_kind: str,
+    dialect: str,
+    expected_backend: str,
+    expected_lock_sql: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bridge drivers acquire advisory locks for postgres/mysql/mssql while excluding sqlite and cockroachdb."""
+    executed: list[str] = []
+    tracker = SyncMigrationTracker()
+
+    if driver_kind == "adbc":
+        conn = MagicMock()
+        driver: Any = AdbcDriver(conn, dialect=dialect)
+    else:
+        conn = MagicMock()
+        dbms_names = {"postgres": "PostgreSQL", "mysql": "MySQL", "tsql": "Microsoft SQL Server", "sqlite": "SQLite"}
+        driver = ArrowOdbcDriver(
+            conn, statement_config=StatementConfig(dialect=dialect), driver_features={"dbms_name": dbms_names[dialect]}
+        )
+
+    assert tracker._lock_backend_kind(driver) == expected_backend  # pyright: ignore[reportPrivateUsage]
+
+    def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
+        sql_text = str(stmt)
+        executed.append(sql_text)
+        if "GET_LOCK" in sql_text:
+            return SQLResult(data=[{"acquired": 1}])
+        if "sp_getapplock" in sql_text:
+            return SQLResult(data=[{"res": 0}])
+        return SQLResult()
+
+    def _capture_select_value(_self: Any, stmt: Any, _params: Any = None) -> int:
+        executed.append(str(stmt))
+        return 1
+
+    monkeypatch.setattr(type(driver), "execute", _capture_execute)
+    monkeypatch.setattr(type(driver), "select_value", _capture_select_value)
+
+    with tracker.acquire_lock(driver):
+        pass
+
+    if expected_lock_sql is None:
+        assert executed == []
+        assert not tracker.holds_transaction_lock(driver)
+    else:
+        assert any(expected_lock_sql in sql for sql in executed)
+
+
+def test_adbc_postgres_lock_error_unwind_rolls_back_implicit_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PostgreSQL advisory lock exit on AdbcDriver rolls back active implicit transactions before unlock."""
+    events: list[str] = []
+    conn = MagicMock(_commit_supported=True, _autocommit=False, adbc_connection=None)
+    driver = AdbcDriver(conn, dialect="postgres")
+    driver._transaction_active = False
+    assert driver._has_implicit_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+    def _capture_execute(_self: Any, stmt: Any, _params: Any = None) -> SQLResult:
+        events.append(f"execute:{stmt}")
+        return SQLResult()
+
+    monkeypatch.setattr(AdbcDriver, "execute", _capture_execute)
+    monkeypatch.setattr(AdbcDriver, "rollback", lambda _self: events.append("rollback"))
+
+    tracker = SyncMigrationTracker()
+    with pytest.raises(RuntimeError, match="step failed"):
+        with tracker.acquire_lock(driver):
+            raise RuntimeError("step failed")
+
+    assert any(item == "rollback" for item in events)
+    assert events.index("rollback") < next(i for i, item in enumerate(events) if "pg_advisory_unlock" in item)
+
+
+@pytest.mark.parametrize(
+    ("version_table_name", "version_table_schema", "should_raise", "expected_table"),
+    [
+        ("audit.ddl_migrations", "public", True, ""),
+        ('"Audit".ddl_migrations', "public", True, ""),
+        ("audit.ddl_migrations", "audit", False, "audit.ddl_migrations"),
+        ('"Audit"."DdlMigrations"', "Audit", False, '"Audit"."DdlMigrations"'),
+        ("audit.ddl_migrations", None, False, "audit.ddl_migrations"),
+        ("audit.ddl_migrations", "   ", False, "audit.ddl_migrations"),
+    ],
+)
+def test_tracker_rejects_conflicting_embedded_and_explicit_version_table_schemas(
+    version_table_name: str, version_table_schema: str | None, should_raise: bool, expected_table: str
+) -> None:
+    """Conflicting schema prefixes between version_table_name and version_table_schema raise MigrationError."""
+    if should_raise:
+        with pytest.raises(MigrationError, match="Conflicting migration version table schemas"):
+            SyncMigrationTracker(version_table_name=version_table_name, version_table_schema=version_table_schema)
+        return
+    tracker = SyncMigrationTracker(version_table_name=version_table_name, version_table_schema=version_table_schema)
+    assert tracker.version_table == expected_table
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("probe_rows", "expected_error_match"),
+    [
+        ([], None),
+        ([{"relkind": "r", "has_user_triggers": False}], None),
+        ([{"relkind": "p", "has_user_triggers": False}], None),
+        ([{"relkind": "v", "has_user_triggers": False}], "ordinary or partitioned table"),
+        ([{"relkind": "f", "has_user_triggers": False}], "ordinary or partitioned table"),
+        ([{"relkind": "r", "has_user_triggers": True}], "non-internal triggers"),
+    ],
+    ids=["absent", "ordinary-table", "partitioned-table", "view", "foreign-table", "user-trigger"],
+)
+async def test_postgres_ensure_tracking_table_validates_relation_kind_and_triggers(
+    is_async: bool, probe_rows: list[dict[str, Any]], expected_error_match: str | None
+) -> None:
+    """PostgreSQL ensure_tracking_table validates pre-existing relation kind and trigger state."""
+
+    if is_async:
+        tracker_async = AsyncMigrationTracker()
+        driver_async = MagicMock()
+        driver_async.dialect = "postgres"
+        driver_async.driver_features = {"autocommit": True}
+        driver_async.data_dictionary.get_columns = AsyncMock(
+            return_value=[{"column_name": col.name} for col in tracker_async._tracking_table_ddl().columns]  # pyright: ignore[reportPrivateUsage]
+        )
+
+        async def _exec_async(stmt: Any, _params: Any = None) -> SQLResult:
+            if "pg_catalog.pg_class" in str(stmt):
+                return SQLResult(data=probe_rows)
+            return SQLResult()
+
+        driver_async.execute = AsyncMock(side_effect=_exec_async)
+        driver_async.commit = AsyncMock()
+        if expected_error_match is not None:
+            with pytest.raises(MigrationError, match=expected_error_match):
+                await tracker_async.ensure_tracking_table(driver_async)
+            return
+        await tracker_async.ensure_tracking_table(driver_async)
+        return
+
+    tracker_sync = SyncMigrationTracker()
+    driver_sync = MagicMock()
+    driver_sync.dialect = "postgres"
+    driver_sync.driver_features = {"autocommit": True}
+    driver_sync.data_dictionary.get_columns.return_value = [
+        {"column_name": col.name}
+        for col in tracker_sync._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    def _exec_sync(stmt: Any, _params: Any = None) -> SQLResult:
+        if "pg_catalog.pg_class" in str(stmt):
+            return SQLResult(data=probe_rows)
+        return SQLResult()
+
+    driver_sync.execute = MagicMock(side_effect=_exec_sync)
+    if expected_error_match is not None:
+        with pytest.raises(MigrationError, match=expected_error_match):
+            tracker_sync.ensure_tracking_table(driver_sync)
+        return
+    tracker_sync.ensure_tracking_table(driver_sync)

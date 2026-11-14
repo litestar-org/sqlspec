@@ -5,7 +5,7 @@ import importlib
 import inspect
 import os
 from abc import abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NotRequired, TypeVar, cast
 
@@ -19,7 +19,7 @@ from sqlspec.builder._delete import Delete
 from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
-from sqlspec.exceptions import MigrationError, SQLSpecError
+from sqlspec.exceptions import MigrationError, SQLSpecError, SquashValidationError
 from sqlspec.migrations.schema import SchemaTarget
 from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
 from sqlspec.migrations.utils import (
@@ -31,9 +31,10 @@ from sqlspec.migrations.utils import (
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import Awaitable
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.observability import ObservabilityRuntime
@@ -53,6 +54,27 @@ logger = get_logger("sqlspec.migrations.base")
 _MAX_LOCK_NAME_LENGTH: Final[int] = 64
 _LOCK_NAME_HASH_BYTES: Final[int] = 6
 _LOCK_NAME_PREFIX_LENGTH: Final[int] = _MAX_LOCK_NAME_LENGTH - 1 - (_LOCK_NAME_HASH_BYTES * 2)
+_BRIDGE_DRIVER_CLASS_NAMES: Final[frozenset[str]] = frozenset({"AdbcDriver", "ArrowOdbcDriver"})
+_PG_RELATION_GUARD_SQL: Final[str] = (
+    "SELECT "
+    "c.relkind::text AS relkind, "
+    "EXISTS ("
+    "SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal"
+    ") AS has_user_triggers "
+    "FROM pg_catalog.pg_class c "
+    "WHERE c.oid = pg_catalog.to_regclass(:version_table)"
+)
+_PG_RLS_SCHEMA_CHECK_SQL: Final[str] = (
+    "SELECT n.nspname::text AS schema_name, c.relname::text AS table_name "
+    "FROM pg_catalog.pg_class c "
+    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = COALESCE(CAST(:schema_name AS text), current_schema()) "
+    "AND c.relkind IN ('r', 'p') "
+    "AND ("
+    "c.relrowsecurity "
+    "OR EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid)"
+    ")"
+)
 
 
 class LoadedMigrationMetadata(TypedDict):
@@ -162,8 +184,19 @@ class BaseMigrationTracker(Generic[DriverT]):
         embedded_db = parsed_table.args.get("db")
         embedded_schema_identifier = embedded_db if isinstance(embedded_db, exp.Identifier) else None
 
-        explicit_schema_identifier = _parse_ddl_identifier(version_table_schema) if version_table_schema else None
+        clean_schema = version_table_schema.strip() if isinstance(version_table_schema, str) else ""
+        explicit_schema_identifier = _parse_ddl_identifier(clean_schema) if clean_schema else None
         if explicit_schema_identifier is not None:
+            if (
+                embedded_schema_identifier is not None
+                and explicit_schema_identifier.name != embedded_schema_identifier.name
+            ):
+                msg = (
+                    f"Conflicting migration version table schemas: '{embedded_schema_identifier.name}' in "
+                    f"version_table_name '{version_table_name}' vs explicit version_table_schema "
+                    f"'{explicit_schema_identifier.name}'"
+                )
+                raise MigrationError(msg)
             if (
                 embedded_schema_identifier is not None
                 and explicit_schema_identifier.name == embedded_schema_identifier.name
@@ -541,9 +574,11 @@ class BaseMigrationTracker(Generic[DriverT]):
     @classmethod
     def _lock_backend_kind(cls, driver: Any) -> str:
         """Classify ``driver`` into its migration lock backend family or empty string."""
-        raw_dialect = getattr(type(driver), "dialect", None)
+        driver_type = type(driver)
+        is_bridge_driver = any(base.__name__ in _BRIDGE_DRIVER_CLASS_NAMES for base in driver_type.__mro__)
+        raw_dialect = getattr(driver, "dialect", None) if is_bridge_driver else getattr(driver_type, "dialect", None)
         dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
-        if not dialect or type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+        if not dialect or _is_cockroach_driver(driver):
             return ""
         if dialect in cls._POSTGRES_LOCK_DIALECTS:
             return "postgres"
@@ -552,6 +587,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         if dialect in cls._MSSQL_LOCK_DIALECTS:
             return "mssql"
         if dialect == "sqlite":
+            if is_bridge_driver:
+                return ""
             return "sqlite"
         return ""
 
@@ -771,6 +808,12 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         """
         migration_config = self._get_migration_config()
         if self._config_supports_schemas():
+            explicit_schema = migration_config.get("version_table_schema")
+            if (
+                not (isinstance(explicit_schema, str) and explicit_schema.strip())
+                and BaseMigrationTracker._split_version_table(self.version_table)[1] is not None
+            ):
+                return None
             return resolve_tracker_schema(migration_config)
         self._reject_schema_options(migration_config)
         return None
@@ -1153,15 +1196,127 @@ out-of-order migrations gracefully.
         return resolved_use_logger, resolved_echo, resolved_summary_only
 
 
-async def _driver_in_transaction_async(driver: Any) -> bool:
-    """Return True when ``driver`` reports an active transaction via async or sync hooks."""
-    transaction_open = getattr(driver, "_transaction_open", None)
-    if callable(transaction_open):
-        return bool(await cast("Awaitable[Any]", transaction_open()))
-    conn_checker = getattr(driver, "_connection_in_transaction", None)
-    if callable(conn_checker):
-        result = conn_checker()
-        if inspect.isawaitable(result):
-            return bool(await result)
-        return bool(result)
+def _driver_has_explicit_hook(driver: Any, name: str) -> bool:
+    """Return True when ``driver`` defines ``name`` on its class, dict, or configured mock child."""
+    driver_dict = getattr(driver, "__dict__", None)
+    if isinstance(driver_dict, Mapping):
+        if name in driver_dict:
+            return True
+        mock_children = driver_dict.get("_mock_children")
+        if isinstance(mock_children, Mapping) and name in mock_children:
+            return True
+    return hasattr(type(driver), name)
+
+
+def _driver_in_transaction_sync(driver: Any) -> bool:
+    """Return True when ``driver`` reports an explicit or implicit active transaction."""
+    if _driver_has_explicit_hook(driver, "_connection_in_transaction"):
+        conn_checker = getattr(driver, "_connection_in_transaction", None)
+        if callable(conn_checker):
+            result = conn_checker()
+            if inspect.isawaitable(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                return False
+            if result:
+                return True
+    if _driver_has_explicit_hook(driver, "_has_implicit_transaction"):
+        implicit_checker = getattr(driver, "_has_implicit_transaction", None)
+        if callable(implicit_checker):
+            implicit_res = implicit_checker()
+            if inspect.isawaitable(implicit_res):
+                if inspect.iscoroutine(implicit_res):
+                    implicit_res.close()
+                return False
+            return bool(implicit_res)
     return False
+
+
+async def _driver_in_transaction_async(driver: Any) -> bool:
+    """Return True when ``driver`` reports an active transaction via async, sync, or implicit hooks."""
+    if _driver_has_explicit_hook(driver, "_transaction_open"):
+        transaction_open = getattr(driver, "_transaction_open", None)
+        if callable(transaction_open):
+            return bool(await cast("Awaitable[Any]", transaction_open()))
+    if _driver_has_explicit_hook(driver, "_connection_in_transaction"):
+        conn_checker = getattr(driver, "_connection_in_transaction", None)
+        if callable(conn_checker):
+            result = conn_checker()
+            if inspect.isawaitable(result):
+                if await result:
+                    return True
+            elif result:
+                return True
+    if _driver_has_explicit_hook(driver, "_has_implicit_transaction"):
+        implicit_checker = getattr(driver, "_has_implicit_transaction", None)
+        if callable(implicit_checker):
+            implicit_res = implicit_checker()
+            if inspect.isawaitable(implicit_res):
+                return bool(await implicit_res)
+            return bool(implicit_res)
+    return False
+
+
+def _is_cockroach_driver(driver: Any) -> bool:
+    """Return True when ``driver`` targets a CockroachDB adapter or resolved dialect."""
+    if type(driver).__module__.startswith("sqlspec.adapters.cockroach_"):
+        return True
+    if _driver_has_explicit_hook(driver, "_dialect_name"):
+        resolved_hint = getattr(driver, "_dialect_name", None)
+        if isinstance(resolved_hint, str) and "cockroach" in resolved_hint.lower():
+            return True
+    return False
+
+
+def _is_postgres_non_cockroach_driver(driver: Any) -> bool:
+    """Return True when ``driver`` targets PostgreSQL-family backends excluding CockroachDB."""
+    raw_dialect = getattr(driver, "dialect", None)
+    dialect = raw_dialect.lower() if isinstance(raw_dialect, str) else ""
+    if not dialect or _is_cockroach_driver(driver):
+        return False
+    return dialect in BaseMigrationTracker._POSTGRES_LOCK_DIALECTS
+
+
+def _extract_catalog_rows(result: Any) -> "list[Mapping[str, Any]]":
+    """Extract mapping rows from a driver result while ignoring unset mock return values."""
+    if result is None:
+        return []
+    data = getattr(result, "data", result)
+    if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
+        return []
+    return [row for row in data if isinstance(row, Mapping)]
+
+
+def _validate_postgres_rls_rows(
+    rows: "Sequence[Mapping[str, Any]]",
+    *,
+    exclude_tables: "Sequence[str] | None" = None,
+    use_squash_error: bool = False,
+) -> None:
+    """Raise when PostgreSQL catalog rows indicate RLS or attached policies on included tables."""
+    if not rows:
+        return
+    excluded: set[str] = set()
+    if exclude_tables:
+        for table_name in exclude_tables:
+            parts = split_qualified_identifier(table_name, quote_chars='"`', allow_bracket_quotes=True)
+            bare = parts[-1] if parts else table_name.strip('"`[]')
+            if bare:
+                excluded.add(bare.lower())
+    protected: list[str] = []
+    for row in rows:
+        table_name = str(row.get("table_name") or row.get("relname") or "").strip()
+        if table_name and table_name.lower() in excluded:
+            continue
+        schema_name = str(row.get("schema_name") or row.get("nspname") or "").strip()
+        label = f"{schema_name}.{table_name}" if schema_name and table_name else (table_name or "<table_with_rls>")
+        protected.append(label)
+    if not protected:
+        return
+    msg = (
+        f"Schema extraction cannot include PostgreSQL tables with RLS or row-level policies "
+        f"({', '.join(protected)}): schema extraction does not emit RLS policies (use --strategy ddl instead)"
+    )
+    if use_squash_error:
+        raise SquashValidationError(msg)
+    raise MigrationError(msg)

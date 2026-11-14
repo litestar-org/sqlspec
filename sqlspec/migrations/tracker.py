@@ -11,13 +11,20 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import MigrationError, SQLSpecError
-from sqlspec.migrations.base import BaseMigrationTracker, _driver_in_transaction_async
+from sqlspec.migrations.base import (
+    _PG_RELATION_GUARD_SQL,
+    BaseMigrationTracker,
+    _driver_in_transaction_async,
+    _driver_in_transaction_sync,
+    _extract_catalog_rows,
+    _is_postgres_non_cockroach_driver,
+)
 from sqlspec.migrations.schema import ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from types import TracebackType
 
     from rich.console import Console
@@ -44,6 +51,10 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        if _is_postgres_non_cockroach_driver(driver):
+            relation_result = driver.execute(_PG_RELATION_GUARD_SQL, {"version_table": self.version_table})
+            _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
+
         driver.execute(self._tracking_table_ddl())
         self._safe_commit(driver)
 
@@ -362,6 +373,10 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        if _is_postgres_non_cockroach_driver(driver):
+            relation_result = await driver.execute(_PG_RELATION_GUARD_SQL, {"version_table": self.version_table})
+            _validate_pg_relation_rows(_extract_catalog_rows(relation_result), self.version_table)
+
         await driver.execute(self._tracking_table_ddl())
         await self._safe_commit(driver)
 
@@ -901,6 +916,22 @@ def _log_commit_skipped(driver: Any, exc: Exception) -> None:
     )
 
 
+def _validate_pg_relation_rows(rows: "Sequence[Mapping[str, Any]]", version_table: str) -> None:
+    """Validate pre-existing PostgreSQL tracking relation kind and trigger state."""
+    for row in rows:
+        relkind = row.get("relkind")
+        if isinstance(relkind, str) and relkind.strip() not in {"r", "p"}:
+            msg = (
+                f"Migration tracking table '{version_table}' must be an ordinary or partitioned table "
+                f"(found relkind={relkind.strip()!r})"
+            )
+            raise MigrationError(msg)
+        has_triggers = row.get("has_user_triggers")
+        if has_triggers is True or (isinstance(has_triggers, int) and has_triggers > 0):
+            msg = f"Migration tracking table '{version_table}' cannot have non-internal triggers attached"
+            raise MigrationError(msg)
+
+
 def _log_unlock_failed(driver: Any, lock_name: str, exc: Exception) -> None:
     """Log a migration lock release or cleanup error while preserving the caller failure."""
     log_with_context(
@@ -994,7 +1025,7 @@ class _SyncMigrationLockContext:
     def _exit_postgres(self, has_error: bool) -> None:
         if has_error:
             with suppress(Exception):
-                if self._driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+                if _driver_in_transaction_sync(self._driver):
                     self._driver.rollback()
             try:
                 self._driver.execute("SELECT pg_advisory_unlock(:lock_id)", {"lock_id": self._lock_id})
