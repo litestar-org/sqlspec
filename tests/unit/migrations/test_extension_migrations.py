@@ -836,7 +836,7 @@ async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontrans
     assert events == ["tx_open", "commit"]
 
     events.clear()
-    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path="demo.reconcile")
+    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path=tmp_path / "demo_reconcile.py")
     monkeypatch.setattr(runner, "_resolve_migration_schema", lambda _meta: None)
     monkeypatch.setattr(runner, "_resolve_use_transaction", lambda _meta, _default: False)
 
@@ -856,7 +856,7 @@ async def test_reconciler_savepoint_start_discards_stale_recovery_marker(
     tmp_path: Path, is_async: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Starting a reconciler savepoint inside an outer lock clears stale savepoint recovery flags."""
-    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path="demo.reconcile")
+    descriptor = ExtensionReconcilerDescriptor(name="demo", module_path=tmp_path / "demo_reconcile.py")
 
     if is_async:
         runner_async = AsyncMigrationRunner(tmp_path)
