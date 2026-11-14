@@ -583,39 +583,6 @@ class SQLSpec:
         return diagnostics.snapshot()
 
     @staticmethod
-    def _collect_replica_telemetry(
-        config: "DatabaseConfigProtocol[Any, Any, Any]", diagnostics: TelemetryDiagnostics, seen: set[int]
-    ) -> None:
-        runtime = config.get_observability_runtime()
-        base_key = runtime.diagnostics_key
-        if id(config) not in seen:
-            seen.add(id(config))
-            diagnostics.add_lifecycle_snapshot(base_key, runtime.lifecycle_snapshot())
-            diagnostics.add_metric_snapshot(runtime.metrics_snapshot())
-        for group_name, group in config.replica_groups.items():
-            for index, replica in enumerate(group.configs):
-                if id(replica) in seen:
-                    continue
-                seen.add(id(replica))
-                replica_runtime = replica.get_observability_runtime()
-                prefix = (
-                    f"{base_key}:replica:{index}"
-                    if group_name == "default"
-                    else f"{base_key}:replica:{group_name}:{index}"
-                )
-                original_prefix = f"{replica_runtime.diagnostics_key}."
-                lifecycle = {
-                    f"{prefix}.{key.removeprefix(original_prefix)}": value
-                    for key, value in replica_runtime.lifecycle_snapshot().items()
-                }
-                metrics = {
-                    f"{prefix}.{key.removeprefix(original_prefix)}": value
-                    for key, value in replica_runtime.metrics_snapshot().items()
-                }
-                diagnostics.add_lifecycle_snapshot(prefix, lifecycle)
-                diagnostics.add_metric_snapshot(metrics)
-
-    @staticmethod
     def get_cache_config() -> CacheConfig:
         """Get the current global cache configuration.
 
@@ -808,6 +775,39 @@ class SQLSpec:
             return []
         return self._loader.list_files()
 
+    @staticmethod
+    def _collect_replica_telemetry(
+        config: "DatabaseConfigProtocol[Any, Any, Any]", diagnostics: TelemetryDiagnostics, seen: set[int]
+    ) -> None:
+        runtime = config.get_observability_runtime()
+        base_key = runtime.diagnostics_key
+        if id(config) not in seen:
+            seen.add(id(config))
+            diagnostics.add_lifecycle_snapshot(base_key, runtime.lifecycle_snapshot())
+            diagnostics.add_metric_snapshot(runtime.metrics_snapshot())
+        for group_name, group in config.replica_groups.items():
+            for index, replica in enumerate(group.configs):
+                if id(replica) in seen:
+                    continue
+                seen.add(id(replica))
+                replica_runtime = replica.get_observability_runtime()
+                prefix = (
+                    f"{base_key}:replica:{index}"
+                    if group_name == "default"
+                    else f"{base_key}:replica:{group_name}:{index}"
+                )
+                original_prefix = f"{replica_runtime.diagnostics_key}."
+                lifecycle = {
+                    f"{prefix}.{key.removeprefix(original_prefix)}": value
+                    for key, value in replica_runtime.lifecycle_snapshot().items()
+                }
+                metrics = {
+                    f"{prefix}.{key.removeprefix(original_prefix)}": value
+                    for key, value in replica_runtime.metrics_snapshot().items()
+                }
+                diagnostics.add_lifecycle_snapshot(prefix, lifecycle)
+                diagnostics.add_metric_snapshot(metrics)
+
     def _ensure_registered(
         self,
         config: "NoPoolSyncConfig[Any, Any] | SyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any]",
@@ -945,16 +945,43 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
         value = self._context.__enter__()
         config = self._config
         if config is not None:
-            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
-            self._value = driver
-            connection = driver.connection
-            if connection is not None:
-                self._runtime.emit_connection_create_sync(connection)
-            self._runtime.emit_session_start_sync(driver)
-            return cast("ContextValueT", driver)
+            driver: Any = None
+            raw_connection: Any | None = None
+            connection_created = False
+            try:
+                prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+                driver = prepared
+                raw_connection = prepared.connection
+                if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                    self._runtime.emit_connection_create_sync(raw_connection)
+                    connection_created = True
+                self._runtime.emit_session_start_sync(prepared)
+            except BaseException as exc:
+                self._value = None
+                try:
+                    try:
+                        self._context.__exit__(type(exc), exc, exc.__traceback__)
+                    finally:
+                        if (
+                            connection_created
+                            and raw_connection is not None
+                            and raw_connection is not _DETACHED_CONNECTION
+                        ):
+                            self._runtime.emit_connection_destroy_sync(raw_connection)
+                finally:
+                    if driver is not None:
+                        _detach_session(driver)
+                raise
+            self._value = prepared
+            return cast("ContextValueT", prepared)
 
+        try:
+            self._runtime.emit_connection_create_sync(value)
+        except BaseException as exc:
+            self._value = None
+            self._context.__exit__(type(exc), exc, exc.__traceback__)
+            raise
         self._value = value
-        self._runtime.emit_connection_create_sync(value)
         return cast("ContextValueT", value)
 
     def __exit__(
@@ -965,17 +992,20 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
         try:
             return self._context.__exit__(exc_type, exc_val, exc_tb)
         finally:
+            self._value = None
             if value is not None:
                 if self._config is None:
-                    self._runtime.emit_connection_destroy_sync(value)
+                    if value is not _DETACHED_CONNECTION:
+                        self._runtime.emit_connection_destroy_sync(value)
                 else:
-                    self._runtime.emit_session_end_sync(value)
-                    if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
-                        self._runtime.emit_connection_destroy_sync(raw_connection)
-                    detach = getattr(value, "_detach_connection", None)
-                    if detach is not None:
-                        detach()
-                self._value = None
+                    try:
+                        try:
+                            self._runtime.emit_session_end_sync(value)
+                        finally:
+                            if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                                self._runtime.emit_connection_destroy_sync(raw_connection)
+                    finally:
+                        _detach_session(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -997,16 +1027,43 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
         value = await self._context.__aenter__()
         config = self._config
         if config is not None:
-            driver = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
-            self._value = driver
-            connection = driver.connection
-            if connection is not None:
-                await self._runtime.emit_connection_create_async(connection)
-            await self._runtime.emit_session_start_async(driver)
-            return cast("ContextValueT", driver)
+            driver: Any = None
+            raw_connection: Any | None = None
+            connection_created = False
+            try:
+                prepared: Any = config._prepare_driver(value)  # pyright: ignore[reportPrivateUsage]
+                driver = prepared
+                raw_connection = prepared.connection
+                if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                    await self._runtime.emit_connection_create_async(raw_connection)
+                    connection_created = True
+                await self._runtime.emit_session_start_async(prepared)
+            except BaseException as exc:
+                self._value = None
+                try:
+                    try:
+                        await self._context.__aexit__(type(exc), exc, exc.__traceback__)
+                    finally:
+                        if (
+                            connection_created
+                            and raw_connection is not None
+                            and raw_connection is not _DETACHED_CONNECTION
+                        ):
+                            await self._runtime.emit_connection_destroy_async(raw_connection)
+                finally:
+                    if driver is not None:
+                        _detach_session(driver)
+                raise
+            self._value = prepared
+            return cast("ContextValueT", prepared)
 
+        try:
+            await self._runtime.emit_connection_create_async(value)
+        except BaseException as exc:
+            self._value = None
+            await self._context.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
         self._value = value
-        await self._runtime.emit_connection_create_async(value)
         return cast("ContextValueT", value)
 
     async def __aexit__(
@@ -1017,17 +1074,20 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
         try:
             return await self._context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
+            self._value = None
             if value is not None:
                 if self._config is None:
-                    await self._runtime.emit_connection_destroy_async(value)
+                    if value is not _DETACHED_CONNECTION:
+                        await self._runtime.emit_connection_destroy_async(value)
                 else:
-                    await self._runtime.emit_session_end_async(value)
-                    if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
-                        await self._runtime.emit_connection_destroy_async(raw_connection)
-                    detach = getattr(value, "_detach_connection", None)
-                    if detach is not None:
-                        detach()
-                self._value = None
+                    try:
+                        try:
+                            await self._runtime.emit_session_end_async(value)
+                        finally:
+                            if raw_connection is not None and raw_connection is not _DETACHED_CONNECTION:
+                                await self._runtime.emit_connection_destroy_async(raw_connection)
+                    finally:
+                        _detach_session(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1049,13 +1109,29 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
             self._context.__exit__(type(error), error, error.__traceback__)
             raise error
         runtime = selected.get_observability_runtime()
+        connection = value.connection if self._session else value
+        connection_created = False
+        try:
+            if connection is not None and connection is not _DETACHED_CONNECTION:
+                runtime.emit_connection_create_sync(connection)
+                connection_created = True
+            if self._session:
+                runtime.emit_session_start_sync(value)
+        except BaseException as exc:
+            self._value = None
+            self._runtime = None
+            try:
+                try:
+                    self._context.__exit__(type(exc), exc, exc.__traceback__)
+                finally:
+                    if connection_created and connection is not None and connection is not _DETACHED_CONNECTION:
+                        runtime.emit_connection_destroy_sync(connection)
+            finally:
+                if self._session:
+                    _detach_session(value)
+            raise
         self._runtime = runtime
         self._value = value
-        connection = value.connection if self._session else value
-        if connection is not None:
-            runtime.emit_connection_create_sync(connection)
-        if self._session:
-            runtime.emit_session_start_sync(value)
         return cast("ContextValueT", value)
 
     def __exit__(
@@ -1069,13 +1145,17 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
         finally:
             self._value = None
             self._runtime = None
-            if runtime is not None:
-                try:
-                    if self._session:
-                        runtime.emit_session_end_sync(value)
-                finally:
-                    if connection is not None:
-                        runtime.emit_connection_destroy_sync(connection)
+            try:
+                if runtime is not None:
+                    try:
+                        if self._session and value is not None:
+                            runtime.emit_session_end_sync(value)
+                    finally:
+                        if connection is not None and connection is not _DETACHED_CONNECTION:
+                            runtime.emit_connection_destroy_sync(connection)
+            finally:
+                if self._session and value is not None:
+                    _detach_session(value)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1097,13 +1177,29 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
             await self._context.__aexit__(type(error), error, error.__traceback__)
             raise error
         runtime = selected.get_observability_runtime()
+        connection = value.connection if self._session else value
+        connection_created = False
+        try:
+            if connection is not None and connection is not _DETACHED_CONNECTION:
+                await runtime.emit_connection_create_async(connection)
+                connection_created = True
+            if self._session:
+                await runtime.emit_session_start_async(value)
+        except BaseException as exc:
+            self._value = None
+            self._runtime = None
+            try:
+                try:
+                    await self._context.__aexit__(type(exc), exc, exc.__traceback__)
+                finally:
+                    if connection_created and connection is not None and connection is not _DETACHED_CONNECTION:
+                        await runtime.emit_connection_destroy_async(connection)
+            finally:
+                if self._session:
+                    _detach_session(value)
+            raise
         self._runtime = runtime
         self._value = value
-        connection = value.connection if self._session else value
-        if connection is not None:
-            await runtime.emit_connection_create_async(connection)
-        if self._session:
-            await runtime.emit_session_start_async(value)
         return cast("ContextValueT", value)
 
     async def __aexit__(
@@ -1117,10 +1213,20 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
         finally:
             self._value = None
             self._runtime = None
-            if runtime is not None:
-                try:
-                    if self._session:
-                        await runtime.emit_session_end_async(value)
-                finally:
-                    if connection is not None:
-                        await runtime.emit_connection_destroy_async(connection)
+            try:
+                if runtime is not None:
+                    try:
+                        if self._session and value is not None:
+                            await runtime.emit_session_end_async(value)
+                    finally:
+                        if connection is not None and connection is not _DETACHED_CONNECTION:
+                            await runtime.emit_connection_destroy_async(connection)
+            finally:
+                if self._session and value is not None:
+                    _detach_session(value)
+
+
+def _detach_session(value: Any) -> None:
+    detach = getattr(value, "_detach_connection", None)
+    if detach is not None:
+        detach()

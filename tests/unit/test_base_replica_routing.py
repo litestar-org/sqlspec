@@ -1,12 +1,20 @@
 """Registry read providers retain selected configuration ownership."""
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
-from sqlspec.base import SQLSpec
+from sqlspec.base import (
+    SQLSpec,
+    _RuntimeAsyncContext,
+    _RuntimeReadAsyncContext,
+    _RuntimeReadSyncContext,
+    _RuntimeSyncContext,
+)
+from sqlspec.driver._common import _DETACHED_CONNECTION
 from sqlspec.observability import LifecycleContext, ObservabilityConfig, TelemetryConfig
 from sqlspec.utils.routing import RoutingContext
 
@@ -175,3 +183,161 @@ async def test_failed_primary_pool_close_retains_retry_and_closes_replicas(async
     else:
         primary.close_pool()
     assert primary.connection_instance is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_runtime_contexts_cleanup_on_lifecycle_hook_failures(asynchronous: bool) -> None:
+    config = AiosqliteConfig() if asynchronous else SqliteConfig()
+    destroyed: list[Any] = []
+    exited: list[bool] = []
+
+    class _BoomRuntime:
+        def __init__(self, *, fail_start: bool, fail_end: bool) -> None:
+            self.fail_start = fail_start
+            self.fail_end = fail_end
+
+        def emit_connection_create_sync(self, connection: Any) -> None:
+            return None
+
+        async def emit_connection_create_async(self, connection: Any) -> None:
+            return None
+
+        def emit_session_start_sync(self, session: Any) -> None:
+            if self.fail_start:
+                raise RuntimeError("session_start boom")
+
+        async def emit_session_start_async(self, session: Any) -> None:
+            if self.fail_start:
+                raise RuntimeError("session_start boom")
+
+        def emit_session_end_sync(self, session: Any) -> None:
+            if self.fail_end:
+                raise RuntimeError("session_end boom")
+
+        async def emit_session_end_async(self, session: Any) -> None:
+            if self.fail_end:
+                raise RuntimeError("session_end boom")
+
+        def emit_connection_destroy_sync(self, connection: Any) -> None:
+            destroyed.append(connection)
+
+        async def emit_connection_destroy_async(self, connection: Any) -> None:
+            destroyed.append(connection)
+
+    class _FakeReadSession:
+        def __init__(self) -> None:
+            self.connection: Any = object()
+
+        def _detach_connection(self) -> None:
+            self.connection = _DETACHED_CONNECTION
+
+    class _FakeConfig:
+        def __init__(self, runtime: _BoomRuntime) -> None:
+            self._runtime = runtime
+
+        def get_observability_runtime(self) -> _BoomRuntime:
+            return self._runtime
+
+    class _FakeReadProvider:
+        def __init__(self, runtime: _BoomRuntime) -> None:
+            self._selection_receipt = type("Receipt", (), {"config": _FakeConfig(runtime)})()
+            self.session = _FakeReadSession()
+
+        def __enter__(self) -> Any:
+            return self.session
+
+        def __exit__(self, *args: Any) -> None:
+            exited.append(True)
+
+        async def __aenter__(self) -> Any:
+            return self.session
+
+        async def __aexit__(self, *args: Any) -> None:
+            exited.append(True)
+
+    captured: list[Any] = []
+    end_boom_runtime: Any = _BoomRuntime(fail_start=False, fail_end=True)
+    try:
+        with pytest.raises(RuntimeError, match="session_end boom"):
+            if asynchronous:
+                async with _RuntimeAsyncContext(config.provide_session(), end_boom_runtime, config) as session:
+                    captured.append(session)
+            else:
+                with _RuntimeSyncContext(config.provide_session(), end_boom_runtime, config) as session:
+                    captured.append(session)
+        assert len(destroyed) == 1
+        assert captured[0].connection is _DETACHED_CONNECTION
+
+        destroyed.clear()
+        start_boom_runtime = _BoomRuntime(fail_start=True, fail_end=False)
+        failing_read_provider = _FakeReadProvider(start_boom_runtime)
+        with pytest.raises(RuntimeError, match="session_start boom"):
+            if asynchronous:
+                async with _RuntimeReadAsyncContext(failing_read_provider, session=True):
+                    pass
+            else:
+                with _RuntimeReadSyncContext(failing_read_provider, session=True):
+                    pass
+        assert exited == [True]
+        assert failing_read_provider.session.connection is _DETACHED_CONNECTION
+    finally:
+        if isinstance(config, AiosqliteConfig):
+            await config.close_pool()
+        else:
+            config.close_pool()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_runtime_read_context_detaches_session_and_skips_detached_destroy(asynchronous: bool) -> None:
+    config = AiosqliteConfig() if asynchronous else SqliteConfig()
+    destroyed: list[Any] = []
+    config.get_observability_runtime().register_lifecycle_hook(
+        "on_connection_destroy", lambda ctx: destroyed.append(ctx.get("connection"))
+    )
+
+    class _FakeReadSession:
+        def __init__(self, pre_detached: bool) -> None:
+            self.connection: Any = _DETACHED_CONNECTION if pre_detached else object()
+
+        def _detach_connection(self) -> None:
+            self.connection = _DETACHED_CONNECTION
+
+    class _FakeReadProvider:
+        def __init__(self, pre_detached: bool) -> None:
+            self._selection_receipt = type("Receipt", (), {"config": config})()
+            self.session = _FakeReadSession(pre_detached)
+
+        def __enter__(self) -> Any:
+            return self.session
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        async def __aenter__(self) -> Any:
+            return self.session
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    try:
+        provider_detached = _FakeReadProvider(pre_detached=True)
+        provider_live = _FakeReadProvider(pre_detached=False)
+        if asynchronous:
+            async with _RuntimeReadAsyncContext(provider_detached, session=True):
+                pass
+            async with _RuntimeReadAsyncContext(provider_live, session=True):
+                pass
+        else:
+            with _RuntimeReadSyncContext(provider_detached, session=True):
+                pass
+            with _RuntimeReadSyncContext(provider_live, session=True):
+                pass
+
+        assert provider_live.session.connection is _DETACHED_CONNECTION
+        assert len(destroyed) == 1
+        assert destroyed[0] is not _DETACHED_CONNECTION
+    finally:
+        if isinstance(config, AiosqliteConfig):
+            await config.close_pool()
+        else:
+            config.close_pool()
