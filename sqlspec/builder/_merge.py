@@ -253,11 +253,22 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
                     msg = f"Invalid column key {key!r} in MERGE USING row {index}."
                     raise SQLBuilderError(msg)
 
-        columns = list(dict.fromkeys(key for record in raw_rows for key in record))
+        columns: list[str] = []
+        seen_columns: set[str] = set()
+        for record in raw_rows:
+            for key in record:
+                if key not in seen_columns:
+                    seen_columns.add(key)
+                    columns.append(key)
         column_tuple = tuple(columns)
+        differs = False
+        for record in raw_rows:
+            if tuple(record.keys()) != column_tuple:
+                differs = True
+                break
         data: list[dict[str, Any]] = (
             [{col: record.get(col) for col in columns} for record in raw_rows]
-            if any(tuple(record.keys()) != column_tuple for record in raw_rows)
+            if differs
             else [dict(record) for record in raw_rows]
         )
         builder = cast("QueryBuilder", self)

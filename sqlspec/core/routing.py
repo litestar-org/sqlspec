@@ -194,7 +194,9 @@ class RoundRobinSelector:
                 if self._current_weights[index] > self._current_weights[winner]:
                     winner = index
             self._current_weights[winner] -= total
-        return [winner, *(index for index in eligible if index != winner)]
+        order = [winner]
+        order.extend([index for index in eligible if index != winner])
+        return order
 
 
 @final
@@ -224,12 +226,15 @@ class RandomSelector:
     ) -> list[int]:
         """Order each healthy, staleness-eligible index exactly once."""
         candidates = _eligible(self._specs, breaker, max_staleness_seconds)
+        candidate_weights = [self._weights[index] for index in candidates]
         result: list[int] = []
         with self._lock:
             while candidates:
-                index = self._rng.choices(candidates, weights=[self._weights[i] for i in candidates], k=1)[0]
+                index = self._rng.choices(candidates, weights=candidate_weights, k=1)[0]
                 result.append(index)
-                candidates.remove(index)
+                pos = candidates.index(index)
+                candidates.pop(pos)
+                candidate_weights.pop(pos)
         return result
 
 
