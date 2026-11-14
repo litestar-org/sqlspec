@@ -214,7 +214,10 @@ def test_render_typeddict_table_renders_inheritance_types_defaults_and_or_unions
     flask_table = render_typeddict_table(["sqlspec.config.FlaskConfig"])
     assert "| `session_key` | `str` | `'db_session'` |" in flask_table
     assert "| `connection_key` | `str` | - |" in flask_table
-    assert "`'manual'`" in flask_table
+    assert (
+        "| `commit_mode` | `Literal['manual', 'autocommit', 'autocommit_include_redirect']` | `'autocommit'` |"
+        in flask_table
+    )
 
     litestar_table = render_typeddict_table(["sqlspec.config.LitestarConfig"])
     assert "| `manage_lifespan` | `bool` | - |" in litestar_table
