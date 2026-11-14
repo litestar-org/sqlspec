@@ -14,7 +14,13 @@ from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from sqlspec.adapters.pymssql.tenant import PymssqlSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    TenantCleanupError,
+    TenantContextError,
+)
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection
 
@@ -353,5 +359,67 @@ def test_replica_native_checkout_errors_are_mapped(monkeypatch: pytest.MonkeyPat
         with pytest.raises(expected) as caught, getattr(config, provider)():
             pass
         assert caught.value.__cause__ is error
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc_factory", "expected_mapped"),
+    [
+        (lambda: _pymssql_pool.pymssql.OperationalError(20009, b"Unable to connect"), DatabaseConnectionError),
+        (lambda: _pymssql_pool.pymssql.InterfaceError("Connection broken"), DatabaseConnectionError),
+        (lambda: _pymssql_pool.pymssql.OperationalError("Server lost"), OperationalError),
+    ],
+)
+def test_pymssql_read_replica_failover_maps_connection_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc_factory: Any, expected_mapped: type[Exception]
+) -> None:
+    """Connection-level pymssql errors map on checkout/create_connection and fail over replicas."""
+    driver_exc = driver_exc_factory()
+    healthy_conn = FakeConnection()
+
+    def connect(**kwargs: Any) -> Any:
+        if kwargs.get("server") == "r1":
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(_pymssql_pool.pymssql, "connect", connect)
+    config = PymssqlConfig(connection_config={"server": "writer", "database": "app"}, replicas=["r1", "r2"])
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = PymssqlConfig(connection_config={"server": "r1", "database": "app"})
+        try:
+            with pytest.raises(expected_mapped) as exc_info:
+                failing_only.create_connection()
+            assert exc_info.value.__cause__ is driver_exc
+            with pytest.raises(expected_mapped), failing_only.provide_connection():
+                pass
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_pymssql_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through provide_read_session without failover."""
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(_pymssql_pool.pymssql, "connect", lambda **_kwargs: hook_conn)
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    config = PymssqlConfig(
+        connection_config={"server": "writer", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+            pass
+        assert hook_conn.closed is True
     finally:
         config.close_pool()

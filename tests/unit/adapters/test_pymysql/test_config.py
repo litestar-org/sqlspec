@@ -6,14 +6,16 @@ from collections.abc import Mapping
 from typing import Any, NotRequired, get_args, get_origin, get_type_hints
 from unittest.mock import MagicMock
 
+import pymysql
 import pytest
 
+import sqlspec.adapters.pymysql.pool as _pymysql_pool
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -442,3 +444,64 @@ def test_pymysql_pool_close_resets_checked_out() -> None:
     assert pool.checked_out() == 1
     pool.close()
     assert pool.checked_out() == 0
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (PyMysqlMySQLError(1040, "Too many connections"), DatabaseConnectionError),
+        (pymysql.err.InterfaceError("Socket lost"), DatabaseConnectionError),
+        (pymysql.err.OperationalError("Server lost"), OperationalError),
+    ],
+)
+def test_pymysql_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Connection errors map at config boundaries and fail over read replicas."""
+    healthy_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+
+    def fake_connect(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(_pymysql_pool, "_pymysql_connect", fake_connect)
+    config = PyMysqlConfig(connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"])
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = PyMysqlConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+        with pytest.raises(expected_mapped) as exc_info:
+            with failing_only.provide_connection():
+                pass
+        assert exc_info.value.__cause__ is driver_exc
+        failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_pymysql_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through provide_read_session without failover."""
+    hook_conn = MagicMock(server_status=0, get_autocommit=MagicMock(return_value=True))
+    monkeypatch.setattr(_pymysql_pool, "_pymysql_connect", lambda **_kwargs: hook_conn)
+    attempted: list[str] = []
+
+    def failing_hook(_conn: Any) -> None:
+        attempted.append("called")
+        raise RuntimeError("hook boom")
+
+    config = PyMysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+            pass
+        assert attempted == ["called"]
+        hook_conn.close.assert_called_once()
+    finally:
+        config.close_pool()

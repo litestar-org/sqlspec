@@ -8,16 +8,25 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection, MssqlPythonPoolingManager
-from sqlspec.adapters.mssql_python.core import create_mapped_exception, extract_error_number
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.adapters.mssql_python._typing import (
+    MSSQL_PYTHON_MODULE,
+    MssqlPythonConnection,
+    MssqlPythonError,
+    MssqlPythonPoolingManager,
+)
+from sqlspec.adapters.mssql_python.core import create_mapped_exception
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = ("MssqlPythonConnectionPool",)
-
-_REPLICA_UNAVAILABLE_CODE = 976
 
 _POOLING_PARAMS: "tuple[int, int, bool] | None" = None
 _POOL_LOCK = threading.Lock()
@@ -110,8 +119,7 @@ class MssqlPythonConnectionPool:
                 "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
             )
         except Exception as error:
-            if extract_error_number(error) == _REPLICA_UNAVAILABLE_CODE:
-                raise create_mapped_exception(error) from error
+            _raise_mapped_connection_error(error)
             raise
         if self.on_connection_create is not None and not getattr(connection, "_sqlspec_initialized", False):
             try:
@@ -142,3 +150,16 @@ class MssqlPythonConnectionPool:
                 _POOLING_PARAMS = None
             elif not _ACTIVE_ENABLED_POOLS and not _ACTIVE_DISABLED_POOLS:
                 _POOLING_PARAMS = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, MssqlPythonError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

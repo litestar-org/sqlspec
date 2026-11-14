@@ -3,7 +3,13 @@
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor, PymssqlRawCursor, PymssqlSessionContext
+from sqlspec.adapters.pymssql._typing import (
+    PymssqlConnection,
+    PymssqlCursor,
+    PymssqlError,
+    PymssqlRawCursor,
+    PymssqlSessionContext,
+)
 from sqlspec.adapters.pymssql.core import (
     apply_driver_features,
     build_connection_config,
@@ -18,7 +24,13 @@ from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError, ReadOnlyTransactionError, ReplicaUnavailableError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -119,9 +131,7 @@ class PymssqlConnectionContext(SyncPoolConnectionContext):
         try:
             return cast("PymssqlConnection", super().__enter__())
         except Exception as exc:
-            mapped = create_mapped_exception(exc)
-            if isinstance(mapped, (ReadOnlyTransactionError, ReplicaUnavailableError)):
-                raise mapped from exc
+            _raise_mapped_connection_error(exc)
             raise
 
 
@@ -132,9 +142,7 @@ class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
         try:
             return cast("PymssqlConnection", super().acquire_connection())
         except Exception as exc:
-            mapped = create_mapped_exception(exc)
-            if isinstance(mapped, (ReadOnlyTransactionError, ReplicaUnavailableError)):
-                raise mapped from exc
+            _raise_mapped_connection_error(exc)
             raise
 
 
@@ -211,7 +219,11 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             PymssqlConnection: A newly opened connection.
         """
         self._require_leased_tenant_connection()
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -257,14 +269,31 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        return PymssqlConnectionPool(
-            config,
-            recycle_seconds=pool_recycle,
-            health_check_interval=health_check,
-            on_connection_create=self._user_connection_hook,
-        )
+        try:
+            return PymssqlConnectionPool(
+                config,
+                recycle_seconds=pool_recycle,
+                health_check_interval=health_check,
+                on_connection_create=self._user_connection_hook,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, PymssqlError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

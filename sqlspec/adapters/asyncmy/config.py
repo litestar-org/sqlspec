@@ -12,12 +12,14 @@ from sqlspec.adapters.asyncmy._typing import (
     AsyncmyCursor,
     AsyncmyDictCursor,
     AsyncmyModule,
+    AsyncmyMySQLError,
     AsyncmyPool,
     AsyncmyRawCursor,
 )
 from sqlspec.adapters.asyncmy.core import (
     append_read_only_init_command,
     apply_driver_features,
+    create_mapped_exception,
     default_statement_config,
     merge_derive_overrides,
     parse_mysql_replica_shorthand,
@@ -26,7 +28,13 @@ from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandl
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -213,9 +221,13 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AsyncmyConnection":
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
-        connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._contexts[id(connection)] = ctx
         try:
             ensure_conn = self._config._ensure_connection
@@ -253,10 +265,14 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         self._ctx: Any = None
 
     async def __aenter__(self) -> AsyncmyConnection:
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AsyncmyConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._ctx = ctx
-        connection = cast("AsyncmyConnection", await ctx.__aenter__())
         self._connection = connection
         try:
             ensure_conn = self._config._ensure_connection
@@ -437,7 +453,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """
         pool_kwargs, connection_kwargs = _split_pool_config(self.connection_config)
         connection_kwargs.update({key: value for key, value in pool_kwargs.items() if key in _ASYNCMY_SHARED_POOL_KEYS})
-        connection = await asyncmy.connect(**connection_kwargs)
+        try:
+            connection = await asyncmy.connect(**connection_kwargs)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -529,7 +549,11 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         Future driver_features can be added here if needed.
         """
-        return await asyncmy.create_pool(**_pool_config(self.connection_config))
+        try:
+            return await asyncmy.create_pool(**_pool_config(self.connection_config))
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
         """Ensure connection callback has been called exactly once for this connection.
@@ -652,3 +676,16 @@ async def _rollback_before_release(connection: Any) -> None:
         with contextlib.suppress(Exception):
             connection.close()
         raise
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, AsyncmyMySQLError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

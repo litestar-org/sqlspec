@@ -4,10 +4,16 @@ import contextlib
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
+from sqlspec.adapters.mssql_python._typing import (
+    MssqlPythonConnection,
+    MssqlPythonError,
+    MssqlPythonSessionContext,
+    TokenProvider,
+)
 from sqlspec.adapters.mssql_python.core import (
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
     default_statement_config,
     merge_connection_overrides,
     resolve_configured_database,
@@ -20,7 +26,13 @@ from sqlspec.config import DRIVER_FEATURE_LIFECYCLE_HOOKS, ExtensionConfigs, Syn
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.tenant import SyncTenantStrategy, TenantStrategyShorthand
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_odbc_connection_string
 
@@ -178,10 +190,14 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
         self._conn: MssqlPythonConnection | None = None
 
     def __enter__(self) -> "MssqlPythonConnection":
-        if self._tenant_lease is not None:
-            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
-        pool = self._config.provide_pool()
-        conn = pool.acquire()
+        try:
+            if self._tenant_lease is not None:
+                return cast("MssqlPythonConnection", self._tenant_lease.acquire())
+            pool = self._config.provide_pool()
+            conn = pool.acquire()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
@@ -208,10 +224,14 @@ class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._conn: MssqlPythonConnection | None = None
 
     def acquire_connection(self) -> "MssqlPythonConnection":
-        if self._tenant_lease is not None:
-            return cast("MssqlPythonConnection", self._tenant_lease.acquire())
-        pool = self._config.provide_pool()
-        conn = pool.acquire()
+        try:
+            if self._tenant_lease is not None:
+                return cast("MssqlPythonConnection", self._tenant_lease.acquire())
+            pool = self._config.provide_pool()
+            conn = pool.acquire()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
@@ -299,8 +319,12 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
 
     def create_connection(self) -> "MssqlPythonConnection":
         self._require_leased_tenant_connection()
-        pool = self.provide_pool()
-        return pool.acquire()
+        try:
+            pool = self.provide_pool()
+            return pool.acquire()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -366,7 +390,13 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         return {**result, "connection_config_overrides": options}
 
     def _create_pool(self) -> "MssqlPythonConnectionPool":
-        return _create_mssql_python_pool(dict(self.connection_config), self.driver_features, self._user_connection_hook)
+        try:
+            return _create_mssql_python_pool(
+                dict(self.connection_config), self.driver_features, self._user_connection_hook
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
@@ -407,3 +437,16 @@ def _normalize_mssql_python_init(
     _, features_dict = apply_driver_features(default_statement_config, driver_features)
     hook = cast("Callable[[MssqlPythonConnection], None] | None", features_dict.pop("on_connection_create", None))
     return normalized, features_dict, hook
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, MssqlPythonError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

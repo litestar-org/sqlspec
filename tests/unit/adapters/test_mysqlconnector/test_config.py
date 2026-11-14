@@ -7,11 +7,13 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
+import mysql.connector.errors as mc_errors
 import pytest
 from mysql.connector.constants import ClientFlag
 from mysql.connector.conversion import MySQLConverter
 from mysql.connector.cursor import MySQLCursor
 
+import sqlspec.adapters.mysqlconnector.config as mysqlconnector_config_module
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncCursor, MysqlConnectorSyncCursor
 from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorAsyncConfig,
@@ -23,7 +25,12 @@ from sqlspec.adapters.mysqlconnector.config import (
     build_connection_config,
 )
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    ConnectionTimeoutError,
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+)
 
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
@@ -790,3 +797,95 @@ def test_mysqlconnector_async_derived_pools_own_distinct_native_names_and_readon
     assert reader.connection_config.get("pool_name") is None
     assert reader.connection_config["pool_reset_session"] is False
     assert primary.connection_config["pool_reset_session"] is True
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (mc_errors.PoolError("pool exhausted"), ConnectionTimeoutError),
+        (mc_errors.InterfaceError("lost"), DatabaseConnectionError),
+        (mc_errors.OperationalError(errno=2003, msg="Can't connect"), DatabaseConnectionError),
+        (mc_errors.OperationalError(errno=1205, msg="Lock wait timeout"), OperationalError),
+    ],
+)
+def test_mysqlconnector_sync_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Sync pool creation and acquire errors map to SQLSpec errors and fail over replicas."""
+    healthy_conn = MagicMock(autocommit=True, in_transaction=False, close=MagicMock(), rollback=MagicMock())
+
+    def fake_pool(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return MagicMock(get_connection=MagicMock(return_value=healthy_conn))
+
+    monkeypatch.setattr(mysqlconnector_config_module, "MysqlConnectorConnectionPool", fake_pool)
+    config = MysqlConnectorSyncConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
+    )
+    with getattr(config, method)() as acquired:
+        conn = acquired if method == "provide_read_connection" else acquired.connection
+        assert conn is healthy_conn
+
+    failing_only = MysqlConnectorSyncConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+    with pytest.raises(expected_mapped) as exc_info, failing_only.provide_connection():
+        pass
+    assert exc_info.value.__cause__ is driver_exc
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (mc_errors.PoolError("pool exhausted"), ConnectionTimeoutError),
+        (mc_errors.InterfaceError("lost"), DatabaseConnectionError),
+        (mc_errors.OperationalError(errno=1040, msg="Too many connections"), DatabaseConnectionError),
+    ],
+)
+async def test_mysqlconnector_async_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Async pool creation and acquire errors map to SQLSpec errors and fail over replicas."""
+    healthy_conn = MagicMock(autocommit=True, in_transaction=False, close=AsyncMock(), rollback=AsyncMock())
+
+    def fake_async_pool(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            return MagicMock(initialize_pool=AsyncMock(side_effect=driver_exc), close_pool=AsyncMock())
+        return MagicMock(initialize_pool=AsyncMock(), get_connection=AsyncMock(return_value=healthy_conn))
+
+    monkeypatch.setattr(mysqlconnector_config_module, "MysqlConnectorAsyncPool", fake_async_pool)
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
+    )
+    async with getattr(config, method)() as acquired:
+        conn = acquired if method == "provide_read_connection" else acquired.connection
+        assert conn is healthy_conn
+
+    failing_only = MysqlConnectorAsyncConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+    with pytest.raises(expected_mapped) as exc_info:
+        async with failing_only.provide_connection():
+            pass
+    assert exc_info.value.__cause__ is driver_exc
+
+
+def test_mysqlconnector_sync_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through sync provide_read_session without failover."""
+    hook_conn = MagicMock(autocommit=True, in_transaction=False, close=MagicMock(), rollback=MagicMock())
+    monkeypatch.setattr(
+        mysqlconnector_config_module,
+        "MysqlConnectorConnectionPool",
+        lambda **_kwargs: MagicMock(get_connection=MagicMock(return_value=hook_conn)),
+    )
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    config = MysqlConnectorSyncConfig(
+        connection_config={"host": "writer"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+        pass
+    hook_conn.close.assert_called_once()

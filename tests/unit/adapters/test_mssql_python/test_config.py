@@ -21,7 +21,15 @@ from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.adapters.mssql_python.tenant import MssqlPythonSessionContextStrategy
 from sqlspec.core.tenant import TenantLeaseState
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError, TenantCleanupError, TenantContextError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    ReplicaUnavailableError,
+    TenantCleanupError,
+    TenantContextError,
+)
 from sqlspec.utils.tenant import TenantContext, TenantContextPayload
 
 
@@ -1049,3 +1057,86 @@ def test_ag_replica_mixed_case_intent_replaces_inherited_parent_options() -> Non
     assert "ApplicationIntent=ReadWrite" in text
     assert text.count("MultiSubnetFailover=") == 1
     assert "MultiSubnetFailover=no" in text
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc_factory", "expected_mapped"),
+    [
+        (
+            lambda: _mssql_pool.MSSQL_PYTHON_MODULE.OperationalError("08001", "Unable to connect"),
+            DatabaseConnectionError,
+        ),
+        (
+            lambda: _mssql_pool.MSSQL_PYTHON_MODULE.InterfaceError("HY000", "Socket disconnected"),
+            DatabaseConnectionError,
+        ),
+        (lambda: _mssql_pool.MSSQL_PYTHON_MODULE.OperationalError("HY000", "Server lost"), OperationalError),
+        (lambda: Exception(976, "Replica unavailable"), ReplicaUnavailableError),
+    ],
+)
+def test_mssql_python_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc_factory: Any, expected_mapped: type[Exception]
+) -> None:
+    """Connection errors map beyond code 976 and trigger read-replica failover."""
+    driver_exc = driver_exc_factory()
+    healthy_conn = DummyConnection()
+
+    def fake_connect(conn_str: str, **_kwargs: Any) -> DummyConnection:
+        if "Server=r1;" in conn_str:
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **_kwargs: None)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", fake_connect)
+    config = MssqlPythonConfig(
+        connection_config={"server": "writer", "database": "app"}, replicas=[{"host": "r1"}, {"host": "r2"}]
+    )
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = MssqlPythonConfig(connection_config={"server": "r1", "database": "app"})
+        try:
+            with pytest.raises(expected_mapped) as exc_info, failing_only.provide_connection():
+                pass
+            assert exc_info.value.__cause__ is driver_exc
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_mssql_python_maps_978_and_preserves_hook_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Error 978 maps to ReadOnlyTransactionError while user hook RuntimeError stays unmapped."""
+    native_978 = Exception(978, "Replica is read-only")
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "pooling", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        _mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *_args, **_kwargs: (_ for _ in ()).throw(native_978)
+    )
+    failing_cfg = MssqlPythonConfig(connection_config={"server": "r1", "database": "app"})
+    try:
+        with pytest.raises(ReadOnlyTransactionError) as exc_info, failing_cfg.provide_session():
+            pass
+        assert exc_info.value.__cause__ is native_978
+    finally:
+        failing_cfg.close_pool()
+
+    hook_conn = DummyConnection()
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "connect", lambda *_args, **_kwargs: hook_conn)
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    hook_cfg = MssqlPythonConfig(
+        connection_config={"server": "writer", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=[{"host": "r1"}, {"host": "r2"}],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), hook_cfg.provide_read_session():
+            pass
+        assert hook_conn.closed is True
+    finally:
+        hook_cfg.close_pool()

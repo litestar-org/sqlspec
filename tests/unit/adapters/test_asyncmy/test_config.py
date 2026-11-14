@@ -3,8 +3,10 @@
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncmy
 import pytest
 
+import sqlspec.adapters.asyncmy.config as asyncmy_config_module
 from sqlspec.adapters.asyncmy._typing import AsyncmyDictCursor
 from sqlspec.adapters.asyncmy.config import (
     AsyncmyConfig,
@@ -15,7 +17,7 @@ from sqlspec.adapters.asyncmy.config import (
 )
 from sqlspec.adapters.asyncmy.core import build_statement_config, default_statement_config
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -494,3 +496,61 @@ async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(m
 
     acquire_ctx.__aexit__.assert_awaited_once()
     assert seen[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (asyncmy.errors.OperationalError(1040, "Too many connections"), DatabaseConnectionError),
+        (asyncmy.errors.InterfaceError("Socket lost"), DatabaseConnectionError),
+        (asyncmy.errors.OperationalError("Server lost"), OperationalError),
+    ],
+)
+async def test_asyncmy_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Replica pool creation and acquire errors map to failover-eligible SQLSpec exceptions."""
+    healthy_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=healthy_conn), __aexit__=AsyncMock(return_value=None))
+    healthy_pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return healthy_pool
+
+    monkeypatch.setattr(asyncmy_config_module.asyncmy, "create_pool", fake_create_pool)
+    config = AsyncmyConfig(connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"])
+    async with getattr(config, method)() as acquired:
+        conn = acquired if method == "provide_read_connection" else acquired.connection
+        assert conn is healthy_conn
+
+    failing_only = AsyncmyConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+    with pytest.raises(expected_mapped) as exc_info:
+        async with failing_only.provide_connection():
+            pass
+    assert exc_info.value.__cause__ is driver_exc
+
+
+async def test_asyncmy_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError during acquisition propagates without triggering replica failover."""
+    hook_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=hook_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+    monkeypatch.setattr(asyncmy_config_module.asyncmy, "create_pool", AsyncMock(return_value=pool))
+    attempted: list[str] = []
+
+    async def failing_hook(_conn: Any) -> None:
+        attempted.append("called")
+        raise RuntimeError("hook boom")
+
+    config = AsyncmyConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    with pytest.raises(RuntimeError, match="hook boom"):
+        async with config.provide_read_session():
+            pass
+    assert attempted == ["called"]

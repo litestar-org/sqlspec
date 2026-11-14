@@ -13,6 +13,7 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncPool,
     MysqlConnectorAsyncSessionContext,
     MysqlConnectorConnectionPool,
+    MysqlConnectorError,
     MysqlConnectorMysqlModule,
     MysqlConnectorSyncConnection,
     MysqlConnectorSyncCursor,
@@ -21,6 +22,7 @@ from sqlspec.adapters.mysqlconnector._typing import (
 from sqlspec.adapters.mysqlconnector.core import (
     append_read_only_init_command,
     apply_driver_features,
+    create_mapped_exception,
     default_statement_config,
     merge_derive_overrides,
     parse_mysql_replica_shorthand,
@@ -39,7 +41,13 @@ from sqlspec.driver import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
@@ -464,7 +472,11 @@ class MysqlConnectorSyncConfig(
             A newly opened mysql-connector connection.
         """
         config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
-        connection = mysql.connector.connect(**config)
+        try:
+            connection = mysql.connector.connect(**config)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             autocommit = config.get("autocommit")
             if autocommit is not None:
@@ -535,8 +547,12 @@ class MysqlConnectorSyncConfig(
 
     def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
-        pool = self.provide_pool()
-        connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
+        try:
+            pool = self.provide_pool()
+            connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             self._ensure_connection(connection)
         except BaseException:
@@ -550,12 +566,16 @@ class MysqlConnectorSyncConfig(
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        return MysqlConnectorConnectionPool(
-            pool_name=pool_name,
-            pool_size=5 if pool_size is None else pool_size,
-            pool_reset_session=pool_reset,
-            **config,
-        )
+        try:
+            return MysqlConnectorConnectionPool(
+                pool_name=pool_name,
+                pool_size=5 if pool_size is None else pool_size,
+                pool_reset_session=pool_reset,
+                **config,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         pool = self.connection_instance
@@ -638,7 +658,11 @@ class MysqlConnectorAsyncConfig(
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
         """Open and initialize a standalone connection owned by the caller."""
         config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
-        connection = await mysqlconnector_aio.connect(**config)
+        try:
+            connection = await mysqlconnector_aio.connect(**config)
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             autocommit = self.connection_config.get("autocommit")
             if autocommit is not None:
@@ -702,17 +726,21 @@ class MysqlConnectorAsyncConfig(
         pool_name = config.pop("pool_name", None)
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
-        pool = MysqlConnectorAsyncPool(
-            pool_name=pool_name,
-            pool_size=5 if pool_size is None else pool_size,
-            pool_reset_session=pool_reset,
-            **config,
-        )
         try:
-            await pool.initialize_pool()
-        except BaseException:
-            with contextlib.suppress(Exception):
-                await pool.close_pool()
+            pool = MysqlConnectorAsyncPool(
+                pool_name=pool_name,
+                pool_size=5 if pool_size is None else pool_size,
+                pool_reset_session=pool_reset,
+                **config,
+            )
+            try:
+                await pool.initialize_pool()
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await pool.close_pool()
+                raise
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
             raise
         return pool
 
@@ -742,8 +770,12 @@ class MysqlConnectorAsyncConfig(
             and not any(key in self.connection_config for key in _POOL_ONLY_CONFIG_KEYS)
         ):
             return await self.create_connection()
-        pool = await self.provide_pool()
-        connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())
+        try:
+            pool = await self.provide_pool()
+            connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -809,3 +841,16 @@ async def _rollback_and_close_async(conn: Any, exc_type: "type[BaseException] | 
         await _disconnect_raw_async(raw_cnx)
     if failure is not None and exc_type is None:
         raise failure
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, MysqlConnectorError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

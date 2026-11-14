@@ -263,6 +263,8 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         return constraint_exception
 
     exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return DatabaseConnectionError(f"Sybase ASE interface error. Original error: {error}")
     if exc_name == "IntegrityError":
         return IntegrityError(f"Sybase ASE integrity error. Original error: {error}")
     if exc_name == "OperationalError":

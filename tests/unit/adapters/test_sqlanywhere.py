@@ -1457,3 +1457,86 @@ def test_sqlanywhere_derive_pool_does_not_double_escape_delimiter_values() -> No
     assert derived_twice.connection_config["pwd"] == "'a;b'"
     assert derived_twice.connection_config["links"] == "tcpip(host=reader;port=2639)"
     assert derived_twice.connection_config["dbn"] == "reporting"
+
+
+class _FakeSqlanyInterfaceError(FakeSqlanydbError):
+    pass
+
+
+class _FakeSqlanyOperationalError(FakeSqlanydbError):
+    pass
+
+
+_FakeSqlanyInterfaceError.__name__ = "InterfaceError"
+_FakeSqlanyOperationalError.__name__ = "OperationalError"
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (FakeSqlanydbError("08001", -100, "Server not found"), DatabaseConnectionError),
+        (FakeSqlanydbError(None, -308, "Connection terminated"), DatabaseConnectionError),
+        (_FakeSqlanyInterfaceError(None, None, "Socket closed"), DatabaseConnectionError),
+        (_FakeSqlanyOperationalError(None, None, "Server unavailable"), OperationalError),
+    ],
+)
+def test_sqlanywhere_read_replica_failover_maps_connection_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """SQL Anywhere config and replica acquisition map driver errors so failover triggers."""
+    healthy_conn = MagicMock()
+
+    def fake_connect(**kwargs: Any) -> Any:
+        if "r1" in str(kwargs.get("host", "")) or "r1" in str(kwargs.get("links", "")):
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=fake_connect))
+    config = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "sql", "database": "app"},
+        replicas=["r1:2638", "r2:2638"],
+    )
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = SqlanywhereConfig(
+            connection_config={"host": "r1", "port": 2638, "user": "dba", "password": "sql", "database": "app"}
+        )
+        try:
+            with pytest.raises(expected_mapped) as exc_info:
+                failing_only.create_connection()
+            assert exc_info.value.__cause__ is driver_exc
+            with pytest.raises(expected_mapped), failing_only.provide_connection():
+                pass
+            with pytest.raises(expected_mapped), failing_only.provide_session():
+                pass
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_sqlanywhere_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through SQL Anywhere provide_read_session without failover."""
+    hook_conn = MagicMock()
+    monkeypatch.setattr(
+        sqlanywhere_pool_module, "SQLANYDB_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn)
+    )
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    config = SqlanywhereConfig(
+        connection_config={"host": "writer", "port": 2638, "user": "dba", "password": "sql", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1:2638", "r2:2638"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+            pass
+        hook_conn.close.assert_called_once()
+    finally:
+        config.close_pool()

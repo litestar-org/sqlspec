@@ -1729,3 +1729,73 @@ def test_sybase_pool_nested_acquire_rolls_back_only_on_outermost_release(
         assert connection.rollbacks == (0 if autocommit else 1)
     finally:
         pool.close()
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (pymssql.OperationalError(20009, b"Adaptive Server is unavailable"), DatabaseConnectionError),
+        (pymssql.InterfaceError("Socket disconnected"), DatabaseConnectionError),
+        (pymssql.OperationalError("Server lost"), OperationalError),
+    ],
+)
+def test_sybase_read_replica_failover_maps_connection_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """SybaseConfig connection, session, and replica paths map driver errors while preserving new_connection."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    healthy_conn = FakeConnection()
+
+    def connect(**kwargs: Any) -> Any:
+        if kwargs.get("server") == "r1":
+            raise driver_exc
+        return healthy_conn
+
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=connect))
+    config = SybaseConfig(
+        connection_config={"server": "writer", "user": "sa", "password": "secret", "database": "app"},
+        replicas=["r1", "r2"],
+    )
+    try:
+        with getattr(config, method)() as acquired:
+            conn = acquired if method == "provide_read_connection" else acquired.connection
+            assert conn is healthy_conn
+
+        failing_only = SybaseConfig(
+            connection_config={"server": "r1", "user": "sa", "password": "secret", "database": "app"}
+        )
+        try:
+            with pytest.raises(expected_mapped) as exc_info:
+                failing_only.create_connection()
+            assert exc_info.value.__cause__ is driver_exc
+            with pytest.raises(expected_mapped), failing_only.provide_connection():
+                pass
+            with pytest.raises(expected_mapped), failing_only.provide_session():
+                pass
+        finally:
+            failing_only.close_pool()
+    finally:
+        config.close_pool()
+
+
+def test_sybase_hook_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError propagates through Sybase provide_read_session without failover."""
+    monkeypatch.setenv("TDSVER", "5.0")
+    hook_conn = FakeConnection()
+    monkeypatch.setattr(sybase_pool, "PYMSSQL_MODULE", SimpleNamespace(connect=lambda **_kwargs: hook_conn))
+
+    def failing_hook(_conn: Any) -> None:
+        raise RuntimeError("hook boom")
+
+    config = SybaseConfig(
+        connection_config={"server": "writer", "user": "sa", "password": "secret", "database": "app"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"), config.provide_read_session():
+            pass
+        assert hook_conn.closed is True
+    finally:
+        config.close_pool()

@@ -388,6 +388,12 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
         if upper_state.startswith("23"):
             return _create_error(error, sqlcode, sqlstate, IntegrityError, "integrity constraint violation")
 
+    exc_name = type(error).__name__
+    if exc_name == "InterfaceError":
+        return _create_error(error, sqlcode, sqlstate, DatabaseConnectionError, "interface error")
+    if exc_name == "OperationalError":
+        return _create_error(error, sqlcode, sqlstate, OperationalError, "operational error")
+
     return _create_error(error, sqlcode, sqlstate, SQLSpecError, "database error")
 
 

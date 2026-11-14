@@ -7,6 +7,7 @@ from urllib.parse import unquote, urlsplit
 from sqlspec.adapters.sqlanywhere._typing import (
     SqlanywhereConnection,
     SqlanywhereCursor,
+    SqlanywhereError,
     SqlanywhereRawCursor,
     SqlanywhereSessionContext,
 )
@@ -14,6 +15,7 @@ from sqlspec.adapters.sqlanywhere.core import (
     _normalize_raw_connection_config,
     apply_driver_features,
     build_connection_config,
+    create_mapped_exception,
     default_statement_config,
     merge_sqlanywhere_derive_overrides,
 )
@@ -23,6 +25,7 @@ from sqlspec.adapters.sqlanywhere.pool import SqlanywhereConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.exceptions import DatabaseConnectionError, OperationalError, ReadOnlyTransactionError, SQLSpecError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -123,9 +126,23 @@ class SqlanywhereConnectionContext(SyncPoolConnectionContext):
 
     __slots__ = ()
 
+    def __enter__(self) -> "SqlanywhereConnection":
+        try:
+            return cast("SqlanywhereConnection", super().__enter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
+
 
 class _SqlanywhereSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
+
+    def acquire_connection(self) -> "SqlanywhereConnection":
+        try:
+            return cast("SqlanywhereConnection", super().acquire_connection())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
 
 class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereConnectionPool, SqlanywhereDriver]):
@@ -208,7 +225,11 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
 
     def create_connection(self) -> "SqlanywhereConnection":
         """Open a standalone SAP SQL Anywhere connection owned by the caller."""
-        return self.provide_pool().new_connection()
+        try:
+            return self.provide_pool().new_connection()
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -269,17 +290,34 @@ class SqlanywhereConfig(SyncDatabaseConfig[SqlanywhereConnection, SqlanywhereCon
         return result
 
     def _create_pool(self) -> "SqlanywhereConnectionPool":
-        return SqlanywhereConnectionPool(
-            self.connection_config,
-            min_size=self._pool_min_size,
-            max_size=self._pool_max_size,
-            timeout=self._pool_timeout,
-            recycle_seconds=self._pool_recycle_seconds,
-            health_check_interval=self._health_check_interval,
-            on_connection_create=self._user_connection_hook,
-        )
+        try:
+            return SqlanywhereConnectionPool(
+                self.connection_config,
+                min_size=self._pool_min_size,
+                max_size=self._pool_max_size,
+                timeout=self._pool_timeout,
+                recycle_seconds=self._pool_recycle_seconds,
+                health_check_interval=self._health_check_interval,
+                on_connection_create=self._user_connection_hook,
+            )
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, SqlanywhereError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

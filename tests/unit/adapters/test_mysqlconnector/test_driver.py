@@ -6,8 +6,9 @@ from typing import Any, cast
 import pytest
 
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
+from sqlspec.adapters.mysqlconnector.core import create_mapped_exception
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
-from sqlspec.exceptions import DeadlockError
+from sqlspec.exceptions import ConnectionTimeoutError, DatabaseConnectionError, DeadlockError, OperationalError
 
 
 class _InvalidBoolean:
@@ -131,3 +132,44 @@ def test_mysqlconnector_dispatch_execute_script_delegates_to_super() -> None:
     result = driver.dispatch_execute_script(cursor, statement)
     assert result.statement_count == 2
     assert result.successful_statements == 2
+
+
+def test_mysqlconnector_pool_and_interface_errors_preserve_cause() -> None:
+    """PoolError and InterfaceError retain their original exception as __cause__."""
+
+    class PoolError(Exception):
+        pass
+
+    class InterfaceError(Exception):
+        errno = -1
+
+    pool_error = PoolError("connection pool exhausted")
+    interface_error = InterfaceError("Connection disconnected")
+
+    mapped_pool = create_mapped_exception(pool_error)
+    mapped_interface = create_mapped_exception(interface_error)
+
+    assert isinstance(mapped_pool, ConnectionTimeoutError)
+    assert mapped_pool.__cause__ is pool_error
+    assert isinstance(mapped_interface, DatabaseConnectionError)
+    assert mapped_interface.__cause__ is interface_error
+
+
+def test_mysqlconnector_maps_1040_and_bare_operational_error() -> None:
+    """Errno 1040 maps to DatabaseConnectionError and bare OperationalError maps to OperationalError."""
+
+    class _FakeOperationalError(Exception):
+        pass
+
+    _FakeOperationalError.__name__ = "OperationalError"
+
+    too_many = MysqlConnectorError(errno=1040, msg="Too many connections")
+    bare_op = _FakeOperationalError("Lost connection to server")
+
+    mapped_too_many = create_mapped_exception(too_many)
+    mapped_op = create_mapped_exception(bare_op)
+
+    assert isinstance(mapped_too_many, DatabaseConnectionError)
+    assert mapped_too_many.__cause__ is too_many
+    assert type(mapped_op) is OperationalError
+    assert mapped_op.__cause__ is bare_op

@@ -11,7 +11,7 @@ from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor
 from sqlspec.adapters.aiomysql.config import AiomysqlConfig, build_connection_config
 from sqlspec.adapters.aiomysql.core import build_statement_config
 from sqlspec.driver._common import _DETACHED_CONNECTION
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DatabaseConnectionError, ImproperConfigurationError, OperationalError
 
 
 def test_build_default_statement_config_custom_serializers() -> None:
@@ -395,7 +395,6 @@ def test_aiomysqlconfig_explicit_read_write_replica_preserves_init_command() -> 
 
 def test_aiomysqlconfig_replica_readonly_is_idempotent_and_validates_endpoints() -> None:
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
-    from sqlspec.exceptions import ImproperConfigurationError
 
     config = AiomysqlConfig(
         connection_config={"init_command": "set session transaction read only"}, replicas=["mariadb://replica:3307"]
@@ -443,3 +442,63 @@ async def test_provide_session_releases_and_detaches_when_prepare_driver_fails(m
 
     acquire_ctx.__aexit__.assert_awaited_once()
     assert seen[0].connection is _DETACHED_CONNECTION
+
+
+@pytest.mark.parametrize("method", ["provide_read_connection", "provide_read_session"])
+@pytest.mark.parametrize(
+    ("driver_exc", "expected_mapped"),
+    [
+        (aiomysql.OperationalError(1040, "Too many connections"), DatabaseConnectionError),
+        (aiomysql.InterfaceError("Socket lost"), DatabaseConnectionError),
+        (aiomysql.OperationalError("Server lost"), OperationalError),
+    ],
+)
+async def test_aiomysql_read_replica_failover_maps_driver_errors(
+    monkeypatch: pytest.MonkeyPatch, method: str, driver_exc: Exception, expected_mapped: type[Exception]
+) -> None:
+    """Replica pool creation and acquire errors map to failover-eligible SQLSpec exceptions."""
+    healthy_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=healthy_conn), __aexit__=AsyncMock(return_value=None))
+    healthy_pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+
+    async def fake_create_pool(**kwargs: Any) -> Any:
+        if kwargs.get("host") == "r1":
+            raise driver_exc
+        return healthy_pool
+
+    monkeypatch.setattr(aiomysql, "create_pool", fake_create_pool)
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"}, replicas=["r1", "r2"]
+    )
+    async with getattr(config, method)() as acquired:
+        conn = acquired if method == "provide_read_connection" else acquired.connection
+        assert conn is healthy_conn
+
+    failing_only = AiomysqlConfig(connection_config={"host": "r1", "user": "app", "database": "db"})
+    with pytest.raises(expected_mapped) as exc_info:
+        async with failing_only.provide_connection():
+            pass
+    assert exc_info.value.__cause__ is driver_exc
+
+
+async def test_aiomysql_on_connection_create_runtime_error_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User hook RuntimeError during acquisition propagates without triggering replica failover."""
+    hook_conn = MagicMock(closed=False, get_autocommit=MagicMock(return_value=True), rollback=AsyncMock())
+    acquire_ctx = MagicMock(__aenter__=AsyncMock(return_value=hook_conn), __aexit__=AsyncMock(return_value=None))
+    pool = MagicMock(acquire=MagicMock(return_value=acquire_ctx), close=MagicMock(), wait_closed=AsyncMock())
+    monkeypatch.setattr(aiomysql, "create_pool", AsyncMock(return_value=pool))
+    attempted: list[str] = []
+
+    async def failing_hook(_conn: Any) -> None:
+        attempted.append("called")
+        raise RuntimeError("hook boom")
+
+    config = AiomysqlConfig(
+        connection_config={"host": "writer", "user": "app", "database": "db"},
+        driver_features={"on_connection_create": failing_hook},
+        replicas=["r1", "r2"],
+    )
+    with pytest.raises(RuntimeError, match="hook boom"):
+        async with config.provide_read_session():
+            pass
+    assert attempted == ["called"]

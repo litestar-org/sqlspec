@@ -12,12 +12,14 @@ from sqlspec.adapters.aiomysql._typing import (
     AiomysqlDictCursor,
     AiomysqlModule,
     AiomysqlPool,
+    AiomysqlPymysqlMySQLError,
     AiomysqlRawCursor,
     AiomysqlSessionContext,
 )
 from sqlspec.adapters.aiomysql.core import (
     append_read_only_init_command,
     apply_driver_features,
+    create_mapped_exception,
     default_statement_config,
     merge_derive_overrides,
     parse_mysql_replica_shorthand,
@@ -26,7 +28,13 @@ from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHa
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    ImproperConfigurationError,
+    OperationalError,
+    ReadOnlyTransactionError,
+    SQLSpecError,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
@@ -191,9 +199,13 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AiomysqlConnection":
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
-        connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._contexts[id(connection)] = ctx
         try:
             ensure_conn = self._config._ensure_connection
@@ -232,10 +244,14 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
         self._connection: AiomysqlConnection | None = None
 
     async def __aenter__(self) -> AiomysqlConnection:
-        pool = await self._config.provide_pool()
-        ctx = pool.acquire()
+        try:
+            pool = await self._config.provide_pool()
+            ctx = pool.acquire()
+            connection = cast("AiomysqlConnection", await ctx.__aenter__())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         self._ctx = ctx
-        connection = cast("AiomysqlConnection", await ctx.__aenter__())
         self._connection = connection
         try:
             ensure_conn = self._config._ensure_connection
@@ -353,7 +369,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         Returns:
             An aiomysql connection instance.
         """
-        connection = await aiomysql.connect(**self._connection_kwargs())
+        try:
+            connection = await aiomysql.connect(**self._connection_kwargs())
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
         try:
             await self._ensure_connection(connection)
         except BaseException:
@@ -434,7 +454,11 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         type handlers. JSON serialization is handled via type_coercion_map in the
         driver's statement_config (see driver.py).
         """
-        return cast("AiomysqlPool", await aiomysql.create_pool(**self._pool_kwargs()))
+        try:
+            return cast("AiomysqlPool", await aiomysql.create_pool(**self._pool_kwargs()))
+        except Exception as exc:
+            _raise_mapped_connection_error(exc)
+            raise
 
     def _connection_kwargs(self) -> "dict[str, Any]":
         """Return aiomysql.connect-compatible kwargs without pool-only settings."""
@@ -517,3 +541,16 @@ async def _rollback_before_release(connection: Any) -> None:
         with contextlib.suppress(Exception):
             connection.close()
         raise
+
+
+def _raise_mapped_connection_error(exc: Exception) -> None:
+    """Map driver connection and pool errors so replica failover can trigger."""
+    if isinstance(exc, (SQLSpecError, OSError, TimeoutError)):
+        return
+    mapped = create_mapped_exception(exc)
+    if isinstance(exc, AiomysqlPymysqlMySQLError) or isinstance(
+        mapped, (DatabaseConnectionError, OperationalError, ReadOnlyTransactionError)
+    ):
+        if mapped.__cause__ is None:
+            mapped.__cause__ = exc
+        raise mapped from exc

@@ -132,6 +132,7 @@ _MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str
     3024: (QueryTimeoutError, "query execution timeout"),
 }
 _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1040: (DatabaseConnectionError, "too many connections"),
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
@@ -538,6 +539,14 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    type_name = type(error).__name__
+    if type_name == "PoolError" or "PoolError" in str(type(error)):
+        return _create_mysql_error(error, sqlstate, error_code, ConnectionTimeoutError, "connection pool error")
+    if type_name == "InterfaceError":
+        return _create_mysql_error(error, sqlstate, error_code, DatabaseConnectionError, "interface error")
+    if type_name == "OperationalError":
+        return _create_mysql_error(error, sqlstate, error_code, OperationalError, "operational error")
+
     return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
@@ -643,7 +652,7 @@ def parse_mysql_replica_shorthand(spec: str | bool | Mapping[str, Any]) -> dict[
     if not endpoint.startswith(("mysql://", "mariadb://")):
         msg = "Replica endpoint must use mysql:// or mariadb://"
         raise ImproperConfigurationError(msg)
-    options = parse_mysql_dsn(endpoint)
+    options: dict[str, Any] = parse_mysql_dsn(endpoint)
     if not options.get("host"):
         msg = "Replica endpoint requires a host"
         raise ImproperConfigurationError(msg)
