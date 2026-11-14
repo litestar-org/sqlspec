@@ -34,6 +34,7 @@ from sqlspec.core import (
     ParameterStyle,
     ParameterStyleConfig,
     ParameterValidator,
+    StatementConfig,
     TypedParameter,
     build_statement_config_from_profile,
     get_driver_profile,
@@ -43,6 +44,7 @@ from sqlspec.core import (
     replace_placeholders_with_literals,
     wrap_with_type,
 )
+from sqlspec.core.cache import get_default_cache
 from sqlspec.core.parameters import _alignment as _alignment_module
 from sqlspec.core.parameters import _converter as _converter_module
 from sqlspec.core.parameters import _processor as _processor_module
@@ -3610,3 +3612,164 @@ def test_extract_parameters_skips_mysql_session_variable_lhs_assignments(
 ) -> None:
     validator = ParameterValidator()
     assert [info.placeholder_text for info in validator.extract_parameters(sql, dialect=dialect)] == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "style", "sql", "prime_params", "test_params", "expected"),
+    [
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?, ?", {"1": "X", "2": "Y"}, {"2": "B", "1": "A"}, ("A", "B")),
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT ?, ?",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?, ?", {"a": "X", "b": "Y"}, {"b": "B", "a": "A"}, ("B", "A")),
+        ("sqlite", ParameterStyle.QMARK, "SELECT ?1, ?2", {"1": "X", "2": "Y"}, {"2": "B", "1": "A"}, ("A", "B")),
+        ("sqlite", ParameterStyle.QMARK, "SELECT :2, :1", {":1": "X", ":2": "Y"}, {":2": "B", ":1": "A"}, ("B", "A")),
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT :2, :1",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            "SELECT %s, %s",
+            {"1": "X", "2": "Y"},
+            {"2": "B", "1": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.POSITIONAL_PYFORMAT,
+            "SELECT %s, %s",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $1, $2",
+            {"$1": "X", "$2": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("A", "B"),
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            {"$1": "X", "$2": "Y"},
+            {"$2": "B", "$1": "A"},
+            ("A", "B"),
+        ),
+        ("postgres", ParameterStyle.NUMERIC, "SELECT $2, $1", {"a": "X", "b": "Y"}, {"b": "B", "a": "A"}, ("B", "A")),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            {"param_0": "X", "param_1": "Y"},
+            {"param_1": "B", "param_0": "A"},
+            ("B", "A"),
+        ),
+        ("postgres", ParameterStyle.NUMERIC, "SELECT $1, $2", {"$1": "X", "$2": "Y"}, {"1": "A", "b": "B"}, ("A", "B")),
+    ],
+)
+def test_warm_cache_mapping_rebinds_match_cold_positional_order(
+    dialect: str,
+    style: ParameterStyle,
+    sql: str,
+    prime_params: "dict[str, str]",
+    test_params: "dict[str, str]",
+    expected: "tuple[str, ...]",
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=style,
+            supported_parameter_styles={style},
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    cache = get_default_cache()
+    cache.clear()
+    cold_sql, cold_params = SQL(sql, test_params, statement_config=config).compile()
+    assert tuple(cold_params) == expected
+
+    cache.clear()
+    primed = SQL(sql, prime_params, statement_config=config)
+    primed.compile()
+
+    warm_sql, warm_params = SQL(sql, test_params, statement_config=config).compile()
+    assert warm_sql == cold_sql
+    assert tuple(warm_params) == expected
+
+    copy_sql, copy_params = primed.copy(parameters=test_params).compile()
+    assert copy_sql == cold_sql
+    assert tuple(copy_params) == expected
+
+
+@pytest.mark.parametrize(
+    ("dialect", "style", "sql", "prime_rows", "test_rows", "expected"),
+    [
+        (
+            "sqlite",
+            ParameterStyle.QMARK,
+            "SELECT ?, ?",
+            [{"1": "X", "2": "Y"}],
+            [{"2": "B", "1": "A"}, {"param_1": "D", "param_0": "C"}],
+            [("A", "B"), ("C", "D")],
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $1, $2",
+            [{"$1": "X", "$2": "Y"}],
+            [{"param_1": "B", "param_0": "A"}, {"$2": "D", "$1": "C"}],
+            [("A", "B"), ("C", "D")],
+        ),
+        (
+            "postgres",
+            ParameterStyle.NUMERIC,
+            "SELECT $2, $1",
+            [{"$1": "X", "$2": "Y"}],
+            [{"$2": "B", "$1": "A"}, {"b": "D", "a": "C"}],
+            [("A", "B"), ("D", "C")],
+        ),
+    ],
+)
+def test_warm_cache_execute_many_mapping_rebinds_match_cold_order(
+    dialect: str,
+    style: ParameterStyle,
+    sql: str,
+    prime_rows: "list[dict[str, str]]",
+    test_rows: "list[dict[str, str]]",
+    expected: "list[tuple[str, ...]]",
+) -> None:
+    config = StatementConfig(
+        dialect=dialect,
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=style,
+            supported_parameter_styles={style},
+            default_execution_parameter_style=style,
+            supported_execution_parameter_styles={style},
+        ),
+    )
+    cache = get_default_cache()
+    cache.clear()
+    cold_sql, cold_params = SQL(sql, test_rows, statement_config=config, is_many=True).compile()
+    assert [tuple(row) for row in cold_params] == expected
+
+    cache.clear()
+    SQL(sql, prime_rows, statement_config=config, is_many=True).compile()
+
+    warm_sql, warm_params = SQL(sql, test_rows, statement_config=config, is_many=True).compile()
+    assert warm_sql == cold_sql
+    assert [tuple(row) for row in warm_params] == expected

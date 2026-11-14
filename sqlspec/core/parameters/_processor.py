@@ -329,9 +329,10 @@ class ParameterProcessor:
                     is_many,
                     strict=config.strict_named_parameters,
                     index_order=index_order if expands_indexes else (),
+                    cached_param_info=cached_profile.parameters,
                 )
             elif not input_named_parameters and any(style in _POSITIONAL_STYLE_VALUES for style in cached_styles):
-                processed = _mapping_rows_to_positional(processed, is_many)
+                processed = _mapping_rows_to_positional(processed, is_many, cached_profile.parameters)
             elif any(style in _NAMED_STYLE_VALUES for style in cached_styles):
                 processed = self._map_positional_to_named(processed, cached_profile, is_many, index_order)
 
@@ -734,6 +735,7 @@ class ParameterProcessor:
         is_many: bool,
         strict: bool = False,
         index_order: "tuple[int, ...]" = (),
+        cached_param_info: "Sequence[ParameterInfo]" = (),
     ) -> "ConvertedParameters":
         """Map named parameters (dict) to positional (tuple) using cached order.
 
@@ -743,6 +745,7 @@ class ParameterProcessor:
             is_many: Whether this is execute_many.
             strict: Whether to raise an error if required parameters are missing.
             index_order: Source sequence slots in output occurrence order.
+            cached_param_info: Cached placeholder metadata aligned with SQL order.
 
         Returns:
             Parameters converted to positional tuple if input was dict, else unchanged.
@@ -754,13 +757,16 @@ class ParameterProcessor:
             return parameters
 
         param_type = type(parameters)
+        ordinal_by_name: dict[str, int] | None = None
 
         if is_many and (param_type is list or param_type is tuple):
             parameter_rows = cast("Sequence[Any]", parameters)
             updated_rows: list[Any] | None = None
             for idx, row in enumerate(parameter_rows):
                 if type(row) is dict or isinstance(row, Mapping):
-                    mapped_row: Any = _named_row_to_positional(row, named_order, strict)
+                    if ordinal_by_name is None and cached_param_info:
+                        ordinal_by_name = _profile_ordinal_by_name(cached_param_info)
+                    mapped_row: Any = _named_row_to_positional(row, named_order, strict, ordinal_by_name)
                 elif index_order and isinstance(row, (list, tuple)):
                     mapped_row = _expand_index_row(row, index_order)
                 else:
@@ -779,7 +785,9 @@ class ParameterProcessor:
             return updated_rows
 
         if isinstance(parameters, Mapping):
-            return _named_row_to_positional(parameters, named_order, strict)
+            if cached_param_info:
+                ordinal_by_name = _profile_ordinal_by_name(cached_param_info)
+            return _named_row_to_positional(parameters, named_order, strict, ordinal_by_name)
 
         if index_order and isinstance(parameters, (list, tuple)):
             return _expand_index_row(parameters, index_order)
@@ -1298,10 +1306,21 @@ def _is_generated_name(name: str) -> bool:
     return name.isdigit() or (name.startswith("param_") and name[6:].rstrip("_p").isdigit())
 
 
+def _profile_ordinal_by_name(cached_param_info: "Sequence[ParameterInfo]") -> "dict[str, int]":
+    ordinal_by_name: dict[str, int] = {}
+    for param in cached_param_info:
+        if param.name is not None and param.name not in ordinal_by_name:
+            ordinal_by_name[param.name] = param.ordinal
+    return ordinal_by_name
+
+
 def _named_row_to_positional(
-    row: "Mapping[str, Any]", named_order: "tuple[str, ...]", strict: bool
+    row: "Mapping[str, Any]",
+    named_order: "tuple[str, ...]",
+    strict: bool,
+    ordinal_by_name: "Mapping[str, int] | None" = None,
 ) -> "tuple[Any, ...]":
-    """Resolve cached placeholder names from a mapping without binding named values positionally."""
+    """Resolve cached placeholder names from a mapping using cold lookup precedence."""
     generated = [name for name in dict.fromkeys(named_order) if name not in row and _is_generated_name(name)]
     if not generated:
         if strict:
@@ -1309,13 +1328,38 @@ def _named_row_to_positional(
         return tuple(row.get(name) for name in named_order)
 
     reserved = set(named_order)
-    spare_keys = [key for key in row if key not in reserved]
-    all_indexes = all(name.isdigit() for name in named_order)
+    consumed_keys: set[str] = {name for name in named_order if name in row}
     resolved: dict[str, Any] = {}
+    unresolved: list[str] = []
+
     for rank, name in enumerate(generated):
-        position = int(name) - 1 if all_indexes else rank
-        if 0 <= position < len(spare_keys):
-            resolved[name] = row[spare_keys[position]]
+        if name.isdigit():
+            ordinal = ordinal_by_name[name] if ordinal_by_name is not None and name in ordinal_by_name else rank
+            candidates: tuple[str, ...] = (f"${name}", f":{name}", f"?{name}", f"param_{ordinal}")
+        else:
+            candidates = (str(_generated_name_order(name) + 1),)
+
+        matched_key: str | None = None
+        for candidate in candidates:
+            if candidate in row and candidate not in consumed_keys and candidate not in reserved:
+                matched_key = candidate
+                break
+
+        if matched_key is not None:
+            consumed_keys.add(matched_key)
+            resolved[name] = row[matched_key]
+        else:
+            unresolved.append(name)
+
+    if unresolved:
+        spare_keys = [key for key in row if key not in reserved and key not in consumed_keys]
+        all_indexes = all(name.isdigit() for name in named_order)
+        use_direct_index = all_indexes and len(unresolved) == len(named_order)
+        for spare_rank, name in enumerate(unresolved):
+            position = int(name) - 1 if use_direct_index else spare_rank
+            if 0 <= position < len(spare_keys):
+                resolved[name] = row[spare_keys[position]]
+
     missing = [name for name in named_order if name not in row and name not in resolved]
     if missing and strict:
         msg = f"Missing required parameters: {sorted(set(missing))}"
@@ -1488,9 +1532,41 @@ def _sequence_row_to_named(row: "Sequence[Any]", cached_param_info: "Sequence[Pa
     return named
 
 
-def _mapping_rows_to_positional(parameters: "ConvertedParameters", is_many: bool) -> "ConvertedParameters":
+def _mapping_row_to_positional(
+    row: "Mapping[str, Any]", cached_param_info: "Sequence[ParameterInfo]"
+) -> "tuple[Any, ...]":
+    """Extract positional values from a mapping aligned with cached placeholder metadata."""
+    if not cached_param_info:
+        return tuple(row.values())
+
+    values: list[Any] = []
+    consumed_keys: set[str] = set()
+    for param in cached_param_info:
+        matched_key: str | None = None
+        for candidate in (param.name, param.placeholder_text, f"param_{param.ordinal}", str(param.ordinal + 1)):
+            if candidate is not None and candidate in row and candidate not in consumed_keys:
+                matched_key = candidate
+                break
+        if matched_key is None:
+            for key in row:
+                if key not in consumed_keys:
+                    matched_key = key
+                    break
+        if matched_key is None:
+            return tuple(row.values())
+        consumed_keys.add(matched_key)
+        values.append(row[matched_key])
+    return tuple(values)
+
+
+def _mapping_rows_to_positional(
+    parameters: "ConvertedParameters", is_many: bool, cached_param_info: "Sequence[ParameterInfo]" = ()
+) -> "ConvertedParameters":
     if is_many and isinstance(parameters, (list, tuple)):
-        return [tuple(row.values()) if isinstance(row, Mapping) else row for row in parameters]
+        return [
+            _mapping_row_to_positional(row, cached_param_info) if isinstance(row, Mapping) else row
+            for row in parameters
+        ]
     if isinstance(parameters, Mapping):
-        return tuple(parameters.values())
+        return _mapping_row_to_positional(parameters, cached_param_info)
     return parameters
