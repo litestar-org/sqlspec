@@ -274,15 +274,16 @@ class SybaseConnectionPool:
             stale = holder.connection
             holder.connection = None
             if stale is not None:
-                self._retire_connection(cast("SybaseConnection", stale))
+                self._retire_connection(stale)
             holder.depth = 0
             holder.generation = self._generation
         if holder.connection is None and not self._claim_idle_connection(holder):
             holder.connection = self._create_connection()
             holder.created_at = time.time()
             holder.last_used = time.time()
-            return cast("SybaseConnection", holder.connection)
+            return holder.connection
 
+        connection = cast("SybaseConnection", holder.connection)
         if self._recycle_seconds > 0 and time.time() - holder.created_at > self._recycle_seconds:
             log_with_context(
                 logger,
@@ -294,17 +295,17 @@ class SybaseConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            self._retire_connection(cast("SybaseConnection", holder.connection))
+            self._retire_connection(connection)
             holder.connection = self._create_connection()
             holder.created_at = time.time()
             holder.last_used = time.time()
-            return cast("SybaseConnection", holder.connection)
+            return holder.connection
 
         idle_time = time.time() - holder.last_used
         if (
             self._health_check_interval > 0
             and idle_time > self._health_check_interval
-            and not self._is_connection_alive(holder.connection)
+            and not self._is_connection_alive(connection)
         ):
             log_with_context(
                 logger,
@@ -316,7 +317,7 @@ class SybaseConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            self._retire_connection(cast("SybaseConnection", holder.connection))
+            self._retire_connection(connection)
             holder.connection = self._create_connection()
             holder.created_at = time.time()
 

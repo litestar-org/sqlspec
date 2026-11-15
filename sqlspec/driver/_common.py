@@ -16,7 +16,20 @@ from decimal import Decimal
 from itertools import count as _itertools_count
 from time import perf_counter
 from types import BuiltinFunctionType, FunctionType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    Protocol,
+    Self,
+    TypeVar,
+    cast,
+    overload,
+)
 from uuid import UUID
 
 import sqlglot
@@ -180,6 +193,7 @@ _INT64_MIN: Final[int] = -9223372036854775808
 _INT64_MAX: Final[int] = 9223372036854775807
 _MAX_NUMERIC_PRECISION: Final[int] = 38
 
+StreamT = TypeVar("StreamT")
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
 _DETACHED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
@@ -2256,7 +2270,7 @@ class CommonDriverAttributesMixin:
             last_inserted_id=last_inserted_id,
         )
 
-    def _register_open_stream(self, stream: "Any") -> "Any":
+    def _register_open_stream(self, stream: StreamT) -> StreamT:
         """Track a returned row stream so session teardown can close it.
 
         Args:

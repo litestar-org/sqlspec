@@ -939,7 +939,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
                 exec_result = driver.execute(sql)
                 if store_session.owned:
                     driver.commit()
-                count = exec_result.rows_affected
+                count = int(exec_result.rows_affected)
                 if count > 0:
                     self._log_delete_expired(count)
             except Exception:

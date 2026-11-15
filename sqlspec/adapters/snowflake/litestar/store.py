@@ -157,7 +157,7 @@ class SnowflakeStore(BaseSQLSpecStore[SnowflakeConfig]):
             result = driver.execute(f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP()")
             if store_session.owned:
                 driver.commit()
-        count = max(result.get_affected_count(), 0)
+        count = int(max(result.get_affected_count(), 0))
         if count:
             self._log_delete_expired(count)
         return count

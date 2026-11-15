@@ -361,7 +361,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
             result = driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
             if store_session.owned:
                 driver.commit()
-        count = max(result.rows_affected, 0)
+        count = int(max(result.rows_affected, 0))
         if count > 0:
             self._log_delete_expired(count)
         return count
@@ -454,7 +454,7 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
             result = await driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
             if store_session.owned:
                 await driver.commit()
-        count = max(result.rows_affected, 0)
+        count = int(max(result.rows_affected, 0))
         if count > 0:
             self._log_delete_expired(count)
         return count
