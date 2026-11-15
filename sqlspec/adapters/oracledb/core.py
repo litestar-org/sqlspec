@@ -4271,13 +4271,18 @@ def _convert_p12_to_pem_bytes(p12_bytes: bytes, wallet_password: "str | bytes | 
         msg = "Oracle 'ewallet.p12' did not contain a private key or certificate"
         raise ImproperConfigurationError(msg)
 
+    key_encryption: Any = serialization_mod.NoEncryption()
+    if wallet_password:
+        key_password = wallet_password.encode("utf-8") if isinstance(wallet_password, str) else bytes(wallet_password)
+        key_encryption = serialization_mod.BestAvailableEncryption(key_password)
+
     pem_chunks: list[bytes] = []
     if private_key is not None:
         pem_chunks.append(
             private_key.private_bytes(
                 encoding=serialization_mod.Encoding.PEM,
                 format=serialization_mod.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization_mod.NoEncryption(),
+                encryption_algorithm=key_encryption,
             )
         )
     if certificate is not None:

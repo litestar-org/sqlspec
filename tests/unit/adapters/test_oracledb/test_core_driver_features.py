@@ -349,9 +349,13 @@ def test_extract_oracle_wallet_zip_converts_ewallet_p12_to_pem() -> None:
     try:
         pem_path = extracted_dir / "ewallet.pem"
         assert pem_path.is_file()
-        pem_text = pem_path.read_text(encoding="utf-8")
-        assert "-----BEGIN PRIVATE KEY-----" in pem_text
+        pem_bytes = pem_path.read_bytes()
+        pem_text = pem_bytes.decode("utf-8")
+        assert "-----BEGIN ENCRYPTED PRIVATE KEY-----" in pem_text
         assert "-----BEGIN CERTIFICATE-----" in pem_text
+        assert serialization.load_pem_private_key(pem_bytes, password=b"WalletSecret123") is not None
+        with pytest.raises(TypeError):
+            serialization.load_pem_private_key(pem_bytes, password=None)
         assert (pem_path.stat().st_mode & 0o777) == 0o600
         assert (extracted_dir.stat().st_mode & 0o777) == 0o700
     finally:
@@ -377,6 +381,9 @@ def test_extract_oracle_wallet_zip_deterministic_hash_and_directory_input(tmp_pa
     try:
         assert first_dir == second_dir
         assert (first_dir / "ewallet.pem").is_file()
+        unencrypted_pem = (first_dir / "ewallet.pem").read_bytes()
+        assert b"-----BEGIN PRIVATE KEY-----" in unencrypted_pem
+        assert serialization.load_pem_private_key(unencrypted_pem, password=None) is not None
     finally:
         shutil.rmtree(first_dir, ignore_errors=True)
 

@@ -127,6 +127,8 @@ rac_config = OracleAsyncConfig(
 )
 ```
 
+When a wallet archive or directory contains only `ewallet.p12`, SQLSpec converts it to `ewallet.pem` in a temporary directory with owner-only permissions. With `wallet_password` set, the converted private key is encrypted with that password and Thin mode decrypts it using the same `wallet_password`; without a password, the key is written unencrypted. An existing `ewallet.pem` is used as supplied.
+
 ## Connection & Pool Configuration
 
 ### Connection and Pool Parameters
