@@ -2,13 +2,13 @@
 
 import datetime as dt
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from starlette.middleware import Middleware
 
 from sqlspec.base import SQLSpec, coerce_sqlspec
+from sqlspec.core._cursor import resolve_plugin_cursor_settings
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._state import SQLSpecConfigState
 from sqlspec.extensions.starlette._utils import (
@@ -32,7 +32,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import ensure_async_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     from starlette.applications import Starlette
     from starlette.requests import Request
@@ -109,7 +109,7 @@ class SQLSpecPlugin:
             self._config_states.append(state)
 
         self._pagination_cursor_secret, self._pagination_cursor_ttl, self._pagination_cursor_encrypted = (
-            _resolve_plugin_cursor_settings(
+            resolve_plugin_cursor_settings(
                 extracted_settings,
                 pagination_cursor_secret=pagination_cursor_secret,
                 pagination_cursor_ttl=pagination_cursor_ttl,
@@ -396,8 +396,8 @@ class SQLSpecPlugin:
             return await ensure_request_connection_async(request, config_state)
         return get_state_value(request.state, config_state.connection_key)
 
-    def get_replica_session(self, request: "Request", key: Any = None) -> Any:
-        """Return a request-owned read session."""
+    def get_db_replica_session(self, request: "Request", key: Any = None) -> Any:
+        """Return a request-owned replica session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.replica_session_key
         if resource_key is None:
@@ -405,8 +405,8 @@ class SQLSpecPlugin:
             raise ImproperConfigurationError(msg)
         return get_request_resource(request, selected, resource_key, "session")
 
-    async def get_replica_session_async(self, request: "Request", key: Any = None) -> Any:
-        """Open and return a request-owned read session."""
+    async def get_db_replica_session_async(self, request: "Request", key: Any = None) -> Any:
+        """Open and return a request-owned replica session."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.replica_session_key
         if resource_key is None:
@@ -415,7 +415,7 @@ class SQLSpecPlugin:
         return await get_request_resource_async(request, selected, resource_key, "session")
 
     def get_replica_connection(self, request: "Request", key: Any = None) -> Any:
-        """Return a request-owned read connection."""
+        """Return a request-owned replica connection."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.replica_connection_key
         if resource_key is None:
@@ -424,7 +424,7 @@ class SQLSpecPlugin:
         return get_request_resource(request, selected, resource_key, "connection")
 
     async def get_replica_connection_async(self, request: "Request", key: Any = None) -> Any:
-        """Open and return a request-owned read connection."""
+        """Open and return a request-owned replica connection."""
         selected = self._config_states[0] if key is None else self._config_state_by_key(key)
         resource_key = selected.replica_connection_key
         if resource_key is None:
@@ -681,65 +681,3 @@ class SQLSpecPlugin:
                 return state
         msg = f"No configuration found for: {key!r}"
         raise ValueError(msg)
-
-
-def _normalize_pagination_cursor_ttl(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
-        msg = "pagination_cursor_ttl must be an int, float, or datetime.timedelta"
-        raise ImproperConfigurationError(msg)
-    return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
-
-
-def _resolve_env_pagination_cursor_secret() -> str | None:
-    return os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
-
-
-def _resolve_plugin_cursor_settings(
-    settings_list: "Sequence[Mapping[str, Any]]",
-    *,
-    pagination_cursor_secret: str | bytes | None,
-    pagination_cursor_ttl: float | dt.timedelta | None,
-    pagination_cursor_encrypted: bool | None,
-) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
-    resolved_secret: str | bytes | None = pagination_cursor_secret
-    for settings in settings_list:
-        candidate = settings.get("pagination_cursor_secret")
-        if candidate is None:
-            continue
-        if resolved_secret is None:
-            resolved_secret = candidate
-        elif resolved_secret != candidate:
-            msg = "Conflicting 'pagination_cursor_secret' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-    if resolved_secret is None:
-        resolved_secret = _resolve_env_pagination_cursor_secret()
-
-    resolved_ttl: int | float | dt.timedelta | None = None
-    resolved_ttl_seconds: float | None = None
-    if pagination_cursor_ttl is not None:
-        resolved_ttl = pagination_cursor_ttl
-        resolved_ttl_seconds = _normalize_pagination_cursor_ttl(pagination_cursor_ttl)
-    for settings in settings_list:
-        candidate_ttl = settings.get("pagination_cursor_ttl")
-        if candidate_ttl is None:
-            continue
-        candidate_seconds = _normalize_pagination_cursor_ttl(candidate_ttl)
-        if resolved_ttl_seconds is None:
-            resolved_ttl = candidate_ttl
-            resolved_ttl_seconds = candidate_seconds
-        elif resolved_ttl_seconds != candidate_seconds:
-            msg = "Conflicting 'pagination_cursor_ttl' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-
-    resolved_encrypt: bool | None = pagination_cursor_encrypted
-    for settings in settings_list:
-        candidate_encrypt = settings.get("pagination_cursor_encrypted")
-        if candidate_encrypt is None:
-            continue
-        if resolved_encrypt is None:
-            resolved_encrypt = bool(candidate_encrypt)
-        elif resolved_encrypt != bool(candidate_encrypt):
-            msg = "Conflicting 'pagination_cursor_encrypted' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-
-    return resolved_secret, resolved_ttl, resolved_encrypt

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         type_coercion_fallbacks,
         validate_savepoint_name,
     )
+    from sqlspec.driver._deferred import DeferredAsyncSession, raise_async_connection_required
     from sqlspec.driver._exception_handler import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
     from sqlspec.driver._routing import AsyncRoutingSession, SyncRoutingSession
     from sqlspec.driver._sql_helpers import convert_to_dialect
@@ -59,6 +60,7 @@ __all__ = (
     "CommonDriverAttributesMixin",
     "DataDictionaryDialectMixin",
     "DataDictionaryMixin",
+    "DeferredAsyncSession",
     "DriverAdapterProtocol",
     "ExecutionResult",
     "StackExecutionObserver",
@@ -75,6 +77,7 @@ __all__ = (
     "hash_stack_operations",
     "parameter_value_needs_processing",
     "parameter_values_need_processing",
+    "raise_async_connection_required",
     "rows_to_dicts",
     "type_coercion_fallbacks",
     "validate_savepoint_name",
@@ -95,6 +98,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "CommonDriverAttributesMixin": ("sqlspec.driver._common", "CommonDriverAttributesMixin"),
     "DataDictionaryDialectMixin": ("sqlspec.driver._common", "DataDictionaryDialectMixin"),
     "DataDictionaryMixin": ("sqlspec.driver._common", "DataDictionaryMixin"),
+    "DeferredAsyncSession": ("sqlspec.driver._deferred", "DeferredAsyncSession"),
     "ExecutionResult": ("sqlspec.driver._common", "ExecutionResult"),
     "StackExecutionObserver": ("sqlspec.driver._common", "StackExecutionObserver"),
     "SyncDataDictionaryBase": ("sqlspec.driver._sync", "SyncDataDictionaryBase"),
@@ -110,6 +114,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "hash_stack_operations": ("sqlspec.driver._common", "hash_stack_operations"),
     "parameter_value_needs_processing": ("sqlspec.driver._common", "parameter_value_needs_processing"),
     "parameter_values_need_processing": ("sqlspec.driver._common", "parameter_values_need_processing"),
+    "raise_async_connection_required": ("sqlspec.driver._deferred", "raise_async_connection_required"),
     "rows_to_dicts": ("sqlspec.driver._stream", "rows_to_dicts"),
     "type_coercion_fallbacks": ("sqlspec.driver._common", "type_coercion_fallbacks"),
     "validate_savepoint_name": ("sqlspec.driver._common", "validate_savepoint_name"),

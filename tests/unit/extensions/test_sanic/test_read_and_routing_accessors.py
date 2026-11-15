@@ -13,10 +13,10 @@ from sanic.response import json
 from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.driver import DeferredAsyncSession
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.extensions.sanic import SQLSpecPlugin
-from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 
@@ -37,13 +37,13 @@ def test_sanic_read_routing_and_request_scope_reset(tmp_path: Path, async_config
     @app.get("/read")
     async def read(request: Any) -> Any:
         before = RoutingContext.get_entry("shop")
-        session = plugin.get_replica_session(request)
+        session = plugin.get_db_replica_session(request)
         if async_config:
             assert isinstance(session, DeferredAsyncSession)
             with pytest.raises(ImproperConfigurationError):
                 plugin.get_replica_connection(request)
             one, two = await asyncio.gather(
-                plugin.get_replica_session_async(request), plugin.get_replica_session_async(request)
+                plugin.get_db_replica_session_async(request), plugin.get_db_replica_session_async(request)
             )
             assert one is two
             origin = await session.select_value("SELECT origin FROM notes WHERE id=1")
@@ -135,22 +135,22 @@ def test_sanic_safe_routing_defaults_and_deferred_routing_error(tmp_path: Path) 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("aborted", [False, True], ids=["response", "abort"])
-async def test_sanic_unawaited_deferred_sessions_are_detached(tmp_path: Path, aborted: bool) -> None:
-    """Unawaited primary, read, and routing DeferredAsyncSessions in Sanic are detached after completion or abort."""
+async def test_sanic_unawaited_deferred_sessions_are_closed(tmp_path: Path, aborted: bool) -> None:
+    """Unawaited primary, read, and routing DeferredAsyncSessions in Sanic are closed after completion or abort."""
     primary, replica = seed_routing_databases(tmp_path)
     config = AiosqliteConfig(
         connection_config={"database": primary},
         replicas=[{"database": replica}],
         extension_config={"sanic": {"routing_session_key": "router", "commit_mode": "autocommit"}},
     )
-    app: Sanic[Any, Any] = Sanic("deferred_detach_" + uuid4().hex)
+    app: Sanic[Any, Any] = Sanic("deferred_close_" + uuid4().hex)
     plugin = SQLSpecPlugin(config, app)
     leaked: list[DeferredAsyncSession] = []
 
     @app.get("/leaked")
     async def leaked_route(request: Any) -> Any:
         primary_deferred = plugin.get_session(request)
-        read_deferred = plugin.get_replica_session(request)
+        read_deferred = plugin.get_db_replica_session(request)
         routing_deferred = plugin.get_db_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)

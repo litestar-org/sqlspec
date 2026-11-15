@@ -8,13 +8,13 @@ resolution and commit or rollback bookkeeping are the same as for the asynchrono
 
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Generator
-from typing import Any, Final, NoReturn
+from typing import Any, NoReturn
 
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE
 from sqlspec.exceptions import ImproperConfigurationError
 
 __all__ = ("DeferredAsyncSession", "raise_async_connection_required")
 
-_CLOSED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
 _CONFIG_ATTRIBUTES = frozenset({"driver_features", "statement_config"})
 
 
@@ -107,7 +107,7 @@ class DeferredAsyncSession:
         return f"<DeferredAsyncSession {self._config.driver_type.__name__}>"
 
     async def _close_open_streams(self, *, error: bool = False) -> None:
-        """Close the opened driver session's row streams, if the connection was ever opened.
+        """Close the opened database session's row streams, if the connection was ever opened.
 
         Args:
             error: Whether the request is ending because of an error.
@@ -117,13 +117,11 @@ class DeferredAsyncSession:
             await session._close_open_streams(error=error)
 
     def _mark_closed(self) -> None:
-        """Mark the deferred session closed and detach the underlying driver session when open."""
+        """Mark the deferred session closed and close the underlying database session when open."""
         self._closed = True
         session = self._current()
         if session is not None:
-            mark_closed = getattr(session, "_mark_closed", None)
-            if mark_closed is not None:
-                mark_closed()
+            session._mark_closed()
 
     def _raise_not_open(self, name: str) -> NoReturn:
         msg = (

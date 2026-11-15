@@ -20,6 +20,7 @@ from starlette.requests import HTTPConnection, Request
 
 from sqlspec.core import CorrelationExtractor
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.driver import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette._utils import (
@@ -33,7 +34,6 @@ from sqlspec.extensions.starlette._utils import (
     set_state_value,
 )
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.utils.routing import (
     RoutingContext,
     RoutingContextPayload,
@@ -566,7 +566,7 @@ def get_request_resource(request: "Request", config_state: "SQLSpecConfigState",
             accessor = (
                 "await plugin.get_db_routing_session_async(request)"
                 if kind == "routing"
-                else "await plugin.get_replica_session_async(request)"
+                else "await plugin.get_db_replica_session_async(request)"
             )
             current = DeferredAsyncSession(
                 config_state.config,
@@ -659,12 +659,10 @@ async def _clear_published_connection(request: "Request", config_state: "SQLSpec
     finally:
         pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
         pop_state_value(request.state, f"{config_state.session_key}_instance")
-        deferred = pop_state_value(request.state, deferred_session_key(config_state))
+        deferred: DeferredAsyncSession | None = pop_state_value(request.state, deferred_session_key(config_state))
         pop_state_value(request.state, config_state.connection_key)
         if deferred is not None:
-            mark_deferred_closed = getattr(deferred, "_mark_closed", None)
-            if mark_deferred_closed is not None:
-                mark_deferred_closed()
+            deferred._mark_closed()
 
 
 @asynccontextmanager
@@ -819,14 +817,14 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
 
 
 async def _pop_and_close_session(request: "Request", key: str, *, error: bool) -> None:
-    """Pop one deferred session key from request state, closing its open streams and detaching it.
+    """Pop one deferred session key from request state, closing its open streams and the session.
 
     Args:
         request: The Starlette request.
         key: Request-state key holding the deferred session.
         error: Whether the request ended with an error.
     """
-    deferred = pop_state_value(request.state, key)
+    deferred: DeferredAsyncSession | None = pop_state_value(request.state, key)
     if deferred is not None:
         try:
             await deferred._close_open_streams(error=error)

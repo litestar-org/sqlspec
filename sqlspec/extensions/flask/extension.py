@@ -292,12 +292,12 @@ class SQLSpecPlugin:
         config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
         return self._ensure_request_connection(config_state)
 
-    def get_replica_session(self, key: Any = None) -> Any:
-        """Return the request's read session, bridging async drivers through the portal."""
+    def get_db_replica_session(self, key: Any = None) -> Any:
+        """Return the request's replica session, bridging async drivers through the portal."""
         return self._get_read_routing_resource(key, "session")
 
     def get_replica_connection(self, key: Any = None) -> Any:
-        """Return the request-owned raw read connection."""
+        """Return the request-owned raw replica connection."""
         return self._get_read_routing_resource(key, "connection")
 
     def get_db_routing_session(self, key: Any = None) -> Any:
@@ -750,7 +750,7 @@ class SQLSpecPlugin:
         has_captured_payload: bool,
         exc_info: "tuple[Any, Any, Any]",
     ) -> None:
-        """Emit session end, detach the session, and exit the request connection context."""
+        """Emit session end, close the session, and exit the request connection context."""
         try:
             if session is not None:
                 try:

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from litestar.types import Message
 
     from sqlspec.config import DatabaseConfigProtocol, DriverT
+    from sqlspec.driver import DeferredAsyncSession
     from sqlspec.extensions.litestar.plugin import CommitMode
     from sqlspec.typing import ConnectionT, PoolT
 
@@ -96,7 +97,7 @@ def tenant_payload_key(connection_key: str) -> str:
 def build_db_session(
     config: "DatabaseConfigProtocol[Any, Any, Any]", connection: Any, commit_mode: "CommitMode"
 ) -> Any:
-    """Construct and arm a request-scoped driver session for a Litestar connection.
+    """Construct and arm a request-scoped database session for a Litestar connection.
 
     Args:
         config: Database configuration supplying the driver class and runtime settings.
@@ -104,7 +105,7 @@ def build_db_session(
         commit_mode: Configured Litestar transaction commit mode.
 
     Returns:
-        Prepared driver session bound to ``connection``.
+        Prepared database session bound to ``connection``.
     """
     driver = config._prepare_driver(
         config.driver_type(
@@ -126,7 +127,7 @@ def manual_handler_maker(
 
     Args:
         connection_scope_key: The key used to store the connection in the ASGI scope.
-        session_scope_key: Optional key used to store the driver session in the ASGI scope.
+        session_scope_key: Optional key used to store the database session in the ASGI scope.
 
     Returns:
         The handler callable.
@@ -205,7 +206,7 @@ def autocommit_handler_maker(
         commit_on_redirect: Issue a commit when the response status is a redirect (3XX).
         extra_commit_statuses: A set of additional status codes that trigger a commit.
         extra_rollback_statuses: A set of additional status codes that trigger a rollback.
-        session_scope_key: Optional key used to store the driver session in the ASGI scope.
+        session_scope_key: Optional key used to store the database session in the ASGI scope.
 
     Raises:
         ImproperConfigurationError: If extra_commit_statuses and extra_rollback_statuses share status codes.
@@ -434,12 +435,12 @@ def db_session_provider_maker(
     session_scope_key: str | None = None,
     commit_mode: "CommitMode" = "autocommit",
 ) -> "Callable[..., AsyncGenerator[DriverT, None]]":
-    """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
+    """Create a Litestar dependency provider yielding a configured SQLSpec database session.
 
     Args:
         config: Database configuration supplying the driver class and statement settings.
         connection_dependency_key: Dependency key used to inject the active connection.
-        session_scope_key: Optional key used to cache the driver session in the ASGI scope.
+        session_scope_key: Optional key used to cache the database session in the ASGI scope.
         commit_mode: Configured Litestar transaction commit mode.
 
     Returns:
@@ -508,9 +509,7 @@ def has_tenant_strategy(config: Any) -> bool:
     return isinstance(features, Mapping) and features.get("tenant_strategy") not in (None, False)
 
 
-def db_replica_pool_provider_maker(
-    config: Any, pool_key: str, replica_pool_key: str
-) -> "Callable[[State, Scope], Awaitable[Any]]":
+def db_replica_pool_provider_maker(pool_key: str, replica_pool_key: str) -> "Callable[[State, Scope], Awaitable[Any]]":
     """Build an explicitly typed DI provider for replica groups or the primary pool."""
 
     async def provide_replica_pool(state: "State", scope: "Scope") -> Any:
@@ -520,9 +519,9 @@ def db_replica_pool_provider_maker(
 
 
 def db_replica_connection_provider_maker(
-    config: Any, pool_key: str, replica_pool_key: str, replica_connection_key: str, *, tenant_settings: Any = None
+    config: Any, replica_connection_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
-    """Build a request-owned read connection provider with manual finalization."""
+    """Build a request-owned replica connection provider with manual finalization."""
 
     async def provide_replica_connection(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
         yield await _open_request_resource_async(config, scope, replica_connection_key, "connection")
@@ -531,15 +530,9 @@ def db_replica_connection_provider_maker(
 
 
 def db_replica_session_provider_maker(
-    config: Any,
-    pool_key: str,
-    replica_pool_key: str,
-    replica_connection_key: str,
-    replica_session_key: str,
-    *,
-    tenant_settings: Any = None,
+    config: Any, replica_session_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
-    """Build a request-owned read session provider using the adapter's read seam."""
+    """Build a request-owned replica session provider using the adapter's read seam."""
 
     async def provide_replica_session(state: "State", scope: "Scope") -> "AsyncGenerator[Any, None]":
         yield await _open_request_resource_async(config, scope, replica_session_key, "session")
@@ -547,8 +540,8 @@ def db_replica_session_provider_maker(
     return provide_replica_session
 
 
-def routing_session_provider_maker(
-    config: Any, pool_key: str, routing_session_key: str, *, tenant_settings: Any = None
+def db_routing_session_provider_maker(
+    config: Any, routing_session_key: str
 ) -> "Callable[[State, Scope], AsyncGenerator[Any, None]]":
     """Build an opt-in lazy routing facade provider with explicit DI parameters."""
 
@@ -559,7 +552,7 @@ def routing_session_provider_maker(
 
 
 async def _finalize_request_transaction(session: Any, connection: Any, *, commit: bool) -> None:
-    """Finalize a request transaction through the driver session or raw connection."""
+    """Finalize a request transaction through the database session or raw connection."""
     if (
         session is not None
         and getattr(session, "_auto_begin_on_write", False) is True
@@ -591,12 +584,17 @@ async def _release_request_connection(
     connection: Any,
     exc_override: BaseException | None = None,
 ) -> None:
-    """Emit session end, detach the session, exit the connection context, and clear scope state."""
+    """Emit session end, close the session, exit the connection context, and clear scope state."""
     connection_cm = get_sqlspec_scope_state(scope, f"{connection_scope_key}_ctx", pop=True)
     session = get_sqlspec_scope_state(scope, session_scope_key) if session_scope_key is not None else None
     if session is None:
         session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
     delete_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+    deferred_scope_key = (
+        f"{session_scope_key.removesuffix('_instance')}_deferred"
+        if session_scope_key is not None and session_scope_key.endswith("_instance")
+        else None
+    )
     request_exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     try:
         try:
@@ -608,8 +606,8 @@ async def _release_request_connection(
             if session is not None:
                 clear_request_session(session, failed=request_exc is not None)
             stream_owner = session
-            if stream_owner is None and session_scope_key is not None and session_scope_key.endswith("_instance"):
-                stream_owner = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred")
+            if stream_owner is None and deferred_scope_key is not None:
+                stream_owner = get_sqlspec_scope_state(scope, deferred_scope_key)
             try:
                 if stream_owner is not None:
                     await ensure_async_(stream_owner._close_open_streams)(error=request_exc is not None)
@@ -627,12 +625,10 @@ async def _release_request_connection(
             delete_sqlspec_scope_state(scope, f"{connection_scope_key}_stream_deferred")
             if session_scope_key is not None:
                 delete_sqlspec_scope_state(scope, session_scope_key)
-                if session_scope_key.endswith("_instance"):
-                    deferred = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred", pop=True)
+                if deferred_scope_key is not None:
+                    deferred: DeferredAsyncSession | None = get_sqlspec_scope_state(scope, deferred_scope_key, pop=True)
                     if deferred is not None:
-                        mark_deferred_closed = getattr(deferred, "_mark_closed", None)
-                        if mark_deferred_closed is not None:
-                            mark_deferred_closed()
+                        deferred._mark_closed()
 
 
 async def _resolve_connection_tenant_async(
@@ -791,7 +787,7 @@ def session_provider_maker(
     session_scope_key: str | None = None,
     commit_mode: "CommitMode" = "autocommit",
 ) -> "Callable[..., AsyncGenerator[DriverT, None]]":
-    """Create a Litestar dependency provider yielding a configured SQLSpec driver session.
+    """Create a Litestar dependency provider yielding a configured SQLSpec database session.
 
     Deprecated alias of :func:`db_session_provider_maker`.
     """

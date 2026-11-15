@@ -14,11 +14,10 @@ statements inside compiled ``__anext__`` methods.
 """
 
 import builtins
-from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, Self, TypeVar, cast, overload
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.driver._common import _CLOSED_CONNECTION_MESSAGE
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import to_schema
@@ -37,6 +36,8 @@ __all__ = (
     "SyncRowStream",
     "rows_to_dicts",
 )
+
+_CLOSED_CONNECTION_MESSAGE: Final[str] = "Database session has already closed and its connection has been released."
 
 logger = get_logger("sqlspec.driver")
 

@@ -93,8 +93,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         """
 
         try:
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                     await cursor.execute(sql, (key,))
                     row = await cursor.fetchone()
@@ -118,7 +118,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                                 WHERE session_id = %s
                                 """
                             await cursor.execute(update_sql, (naive_expires_at, key))
-                            if store_conn.owned:
+                            if store_connection.owned:
                                 await conn.commit()
 
                     return bytes(data_value)
@@ -148,11 +148,11 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                 await cursor.execute(sql, (key, data, naive_expires_at))
-                if store_conn.owned:
+                if store_connection.owned:
                     await conn.commit()
 
     async def delete(self, key: str) -> None:
@@ -163,11 +163,11 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                 await cursor.execute(sql, (key,))
-                if store_conn.owned:
+                if store_connection.owned:
                     await conn.commit()
 
     async def delete_all(self) -> None:
@@ -176,11 +176,11 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                     await cursor.execute(sql)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
             self._log_delete_all()
         except AsyncmyProgrammingError as exc:
@@ -206,8 +206,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         """
 
         try:
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                     await cursor.execute(sql, (key,))
                     result = await cursor.fetchone()
@@ -232,8 +232,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         """
 
         try:
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                     await cursor.execute(sql, (key,))
                     row = await cursor.fetchone()
@@ -266,11 +266,11 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                     await cursor.execute(sql)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
                     count = resolve_rowcount(cursor)
                     if count > 0:

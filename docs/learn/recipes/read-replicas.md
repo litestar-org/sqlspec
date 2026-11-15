@@ -108,4 +108,4 @@ An explicit `RoutingContext.replica()` choice requires a reader. It never falls 
 
 Each scope works with `with` or `async with` and restores its caller's state. `primary`, `replica`, and `auto` can target a `bind_key`. A write pins only the active logical bind in the active request scope. An explicit conflicting replica choice during a primary transaction fails rather than splitting that transaction across sockets.
 
-Frameworks expose `db_replica_session`, `get_replica_session`, or FastAPI's `provide_replica_session` dependency factory. The [integration guides](../../integrations/index.md) show each form. For lag, failures, tenant policies, and request headers, continue with [replica operations](read-replicas-operations.md).
+Frameworks expose `db_replica_session`, `get_db_replica_session`, or FastAPI's `provide_replica_session` dependency factory. The [integration guides](../../integrations/index.md) show each form. For lag, failures, tenant policies, and request headers, continue with [replica operations](read-replicas-operations.md).

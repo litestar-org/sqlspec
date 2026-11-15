@@ -212,8 +212,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -236,7 +236,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
                     WHERE session_id = ?
                     """
                     _close_cursor(conn.execute(update_sql, (new_expires_at_julian, key)))
-                    if store_conn.owned:
+                    if store_connection.owned:
                         end_transaction(conn, commit=True)
 
             return bytes(data)
@@ -252,33 +252,33 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         VALUES (?, ?, ?)
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key, data, expires_at_julian)))
-            if store_conn.owned:
+            if store_connection.owned:
                 end_transaction(conn, commit=True)
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql, (key,)))
-            if store_conn.owned:
+            if store_connection.owned:
                 end_transaction(conn, commit=True)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             _close_cursor(conn.execute(sql))
-            if store_conn.owned:
+            if store_connection.owned:
                 end_transaction(conn, commit=True)
         self._log_delete_all()
 
@@ -290,8 +290,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -307,8 +307,8 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         WHERE session_id = ?
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
             try:
@@ -340,12 +340,12 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             self._ensure_pragmas(conn)
             cursor = conn.execute(sql)
             try:
-                if store_conn.owned:
+                if store_connection.owned:
                     end_transaction(conn, commit=True)
                 count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:

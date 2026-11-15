@@ -406,9 +406,9 @@ class FlaskConfig(TypedDict):
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
     replica_session_key: NotRequired[str]
-    """Request key for a read session."""
+    """Request key for a replica session."""
     replica_connection_key: NotRequired[str]
-    """Request key for a read connection."""
+    """Request key for a replica connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
@@ -537,9 +537,9 @@ class LitestarConfig(TypedDict):
     """Extension migration strategy (``'versioned'`` or ``'reconcile'``). Default: ``'reconcile'``."""
 
     replica_session_key: NotRequired[str]
-    """Request key for a read session."""
+    """Request key for a replica session."""
     replica_connection_key: NotRequired[str]
-    """Request key for a read connection."""
+    """Request key for a replica connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
@@ -553,7 +553,7 @@ class LitestarConfig(TypedDict):
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     replica_pool_key: NotRequired[str]
-    """Request key for the selected read pool."""
+    """Request key for the selected replica pool."""
     pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
     pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
@@ -626,9 +626,9 @@ class StarletteConfig(TypedDict):
     """Read standard trace context headers as correlation ID fallbacks. Default: True."""
 
     replica_session_key: NotRequired[str]
-    """Request key for a read session."""
+    """Request key for a replica session."""
     replica_connection_key: NotRequired[str]
-    """Request key for a read connection."""
+    """Request key for a replica connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
@@ -642,7 +642,7 @@ class StarletteConfig(TypedDict):
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     replica_pool_key: NotRequired[str]
-    """Request key for the selected read pool."""
+    """Request key for the selected replica pool."""
     pagination_cursor_secret: NotRequired[str | bytes]
     """Application-wide secret enabling HMAC-SHA256 signed pagination cursors."""
     pagination_cursor_ttl: NotRequired[int | float | dt.timedelta]
@@ -721,9 +721,9 @@ class SanicConfig(TypedDict):
     """Framework name for SQLCommenter attributes. Default: 'sanic'."""
 
     replica_session_key: NotRequired[str]
-    """Request key for a read session."""
+    """Request key for a replica session."""
     replica_connection_key: NotRequired[str]
-    """Request key for a read connection."""
+    """Request key for a replica connection."""
     routing_session_key: NotRequired[str]
     """Request key for a routing session."""
     default_routing_mode: NotRequired[Literal["primary", "auto"]]
@@ -737,7 +737,7 @@ class SanicConfig(TypedDict):
     primary_pin_secret: NotRequired[str | bytes | None]
     """Optional HMAC secret verifying signed primary pin cookies. Default: None."""
     replica_pool_key: NotRequired[str]
-    """Request key for the selected read pool."""
+    """Request key for the selected replica pool."""
 
 
 class ADKConfig(TypedDict):
@@ -1230,7 +1230,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
-        """Provide a read session while retaining the selected config's tenant lease."""
+        """Provide a replica session while retaining the selected config's tenant lease."""
         kwargs.update(statement_config=statement_config, tenant=tenant, bypass_tenant=bypass_tenant)
         return cast(
             "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]",
@@ -2353,7 +2353,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
     def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
-        """Provide a read connection with this config's execution mode."""
+        """Provide a replica connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
             super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
@@ -2368,7 +2368,7 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
-        """Provide a read session with this config's execution mode."""
+        """Provide a replica session with this config's execution mode."""
         return cast(
             "AbstractContextManager[DriverT]",
             super().provide_replica_session(
@@ -2474,7 +2474,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide a read connection with this config's execution mode."""
+        """Provide a replica connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
             super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
@@ -2489,7 +2489,7 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide a read session with this config's execution mode."""
+        """Provide a replica session with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[DriverT]",
             super().provide_replica_session(
@@ -2635,7 +2635,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
     def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractContextManager[ConnectionT]":
-        """Provide a read connection with this config's execution mode."""
+        """Provide a replica connection with this config's execution mode."""
         return cast(
             "AbstractContextManager[ConnectionT]",
             super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
@@ -2650,7 +2650,7 @@ class SyncDatabaseConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]":
-        """Provide a read session with this config's execution mode."""
+        """Provide a replica session with this config's execution mode."""
         return cast(
             "AbstractContextManager[DriverT]",
             super().provide_replica_session(
@@ -2819,7 +2819,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
     def provide_replica_connection(
         self, *args: Any, replica_group: str | None = None, **kwargs: Any
     ) -> "AbstractAsyncContextManager[ConnectionT]":
-        """Provide a read connection with this config's execution mode."""
+        """Provide a replica connection with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[ConnectionT]",
             super().provide_replica_connection(*args, replica_group=replica_group, **kwargs),
@@ -2834,7 +2834,7 @@ class AsyncDatabaseConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[Connectio
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]":
-        """Provide a read session with this config's execution mode."""
+        """Provide a replica session with this config's execution mode."""
         return cast(
             "AbstractAsyncContextManager[DriverT]",
             super().provide_replica_session(
@@ -2950,7 +2950,7 @@ class _ReadAsyncContext(Generic[ConfigT]):
 
 
 class ReplicaGroup(Generic[ConfigT]):
-    """Managed homogeneous read pools with checkout-only failover."""
+    """Managed homogeneous replica pools with checkout-only failover."""
 
     __slots__ = (
         "_breaker",

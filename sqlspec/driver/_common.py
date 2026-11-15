@@ -95,6 +95,7 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, SyncRowStream
 from sqlspec.exceptions import (
     ImproperConfigurationError,
     NotFoundError,
@@ -221,7 +222,6 @@ _SCRIPT_INDEX_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
 })
 _DEFAULT_DML_METADATA: Final = {"status_message": "OK"}
 _EMPTY_DML_DATA: Final[tuple[()]] = ()
-_CLOSED_CONNECTION_MESSAGE: Final[str] = "Driver session has already closed and its connection has been released."
 _READ_ONLY_OPERATION_TYPES: Final[frozenset[str]] = frozenset({"SELECT", "PRAGMA", "COPY_TO"})
 
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
@@ -2319,7 +2319,7 @@ class CommonDriverAttributesMixin:
         open_streams = self._open_streams
         self._open_streams = []
         for open_stream in open_streams:
-            if hasattr(open_stream, "_close_for_session_exit"):
+            if isinstance(open_stream, SyncRowStream):
                 open_stream._close_for_session_exit(error=True)
             else:
                 open_stream._mark_session_closed()

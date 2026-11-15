@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from litestar.types import Scope
 
 __all__ = (
-    "RequestSessionHolder",
     "StoreLease",
     "clear_request_session",
     "delete_sqlspec_scope_state",
@@ -93,7 +92,7 @@ class _HeldSession:
         self.failed = False
 
 
-class RequestSessionHolder:
+class _RequestSessionHolder:
     """Mutable record of the database sessions one Litestar request opens.
 
     The plugin middleware installs one holder in the outer request context before
@@ -110,31 +109,26 @@ class RequestSessionHolder:
         self._owner = owner
         self._entries: list[_HeldSession] = []
 
-    @property
-    def owner(self) -> "asyncio.Task[Any] | None":
-        """Return the task that serves the request."""
-        return self._owner
-
     def fill(self, config: Any, session: Any, *, manual: bool = False) -> None:
         """Record the open request session for a database configuration.
 
         Args:
             config: Database configuration that owns the session.
-            session: Open driver session holding the request connection.
+            session: Open database session holding the request connection.
             manual: Whether the request session uses ``manual`` commit mode.
         """
         self._entries = [entry for entry in self._entries if entry.config is not config]
         self._entries.append(_HeldSession(config, session, manual))
 
-    def release(self, config_or_session: Any, *, failed: bool = False) -> None:
-        """Mark a request session closed by its configuration or by the session itself.
+    def release(self, session: Any, *, failed: bool = False) -> None:
+        """Mark a recorded request session closed.
 
         Args:
-            config_or_session: Database configuration, or the recorded session object.
+            session: The recorded session object.
             failed: Whether the request ended with an error.
         """
         for entry in self._entries:
-            if not entry.closed and (entry.config is config_or_session or entry.session is config_or_session):
+            if not entry.closed and entry.session is session:
                 entry.closed = True
                 entry.failed = failed
 
@@ -160,7 +154,7 @@ class RequestSessionHolder:
         return _OWN_SESSION_LEASE
 
 
-_REQUEST_HOLDER: "ContextVar[RequestSessionHolder | None]" = ContextVar(
+_REQUEST_HOLDER: "ContextVar[_RequestSessionHolder | None]" = ContextVar(
     "sqlspec_litestar_request_session_holder", default=None
 )
 
@@ -173,13 +167,13 @@ def _current_task() -> "asyncio.Task[Any] | None":
 
 
 @contextmanager
-def request_session_scope() -> "Iterator[RequestSessionHolder]":
+def request_session_scope() -> "Iterator[_RequestSessionHolder]":
     """Install a request session holder owned by the current task for the enclosed request.
 
     Yields:
         The installed holder.
     """
-    holder = RequestSessionHolder(_current_task())
+    holder = _RequestSessionHolder(_current_task())
     token = _REQUEST_HOLDER.set(holder)
     try:
         yield holder
@@ -192,7 +186,7 @@ def publish_request_session(config: Any, session: Any, *, manual: bool = False) 
 
     Args:
         config: Database configuration that owns the session.
-        session: Open driver session holding the request connection.
+        session: Open database session holding the request connection.
         manual: Whether the request session uses ``manual`` commit mode.
     """
     holder = _REQUEST_HOLDER.get()
@@ -200,17 +194,17 @@ def publish_request_session(config: Any, session: Any, *, manual: bool = False) 
         holder.fill(config, session, manual=manual)
 
 
-def clear_request_session(config_or_session: Any, *, failed: bool = False) -> None:
+def clear_request_session(session: Any, *, failed: bool = False) -> None:
     """Mark a request session closed in the current request's holder.
 
     Args:
-        config_or_session: Database configuration, or the published session object.
+        session: The published session object.
         failed: Whether the request ended with an error. Later store operations in the
             owning request task then discard their writes instead of committing them.
     """
     holder = _REQUEST_HOLDER.get()
     if holder is not None:
-        holder.release(config_or_session, failed=failed)
+        holder.release(session, failed=failed)
 
 
 def resolve_store_lease(config: Any) -> StoreLease:

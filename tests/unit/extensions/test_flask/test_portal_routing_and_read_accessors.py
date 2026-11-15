@@ -126,8 +126,8 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
     @app.get("/read")
     def read() -> dict[str, Any]:
         before = RoutingContext.get_entry("shop")
-        session = plugin.get_replica_session()
-        assert plugin.get_replica_session() is session
+        session = plugin.get_db_replica_session()
+        assert plugin.get_db_replica_session() is session
         return {
             "origin": session.select_value("SELECT origin FROM notes WHERE id=1"),
             "was_pinned": bool(before and before.pinned_by_write),
@@ -139,7 +139,7 @@ def test_flask_read_and_routing_sessions_with_autocommit(tmp_path: Path, async_c
         before = router.select_value("SELECT origin FROM notes WHERE id=1")
         router.execute("INSERT INTO notes VALUES (4,'new')")
         assert cast(RoutingEntry, RoutingContext.get_entry("shop")).pinned_by_write
-        after = plugin.get_replica_session().select_value("SELECT origin FROM notes WHERE id=1")
+        after = plugin.get_db_replica_session().select_value("SELECT origin FROM notes WHERE id=1")
         return {"before": before, "after": after}
 
     try:

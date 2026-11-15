@@ -140,7 +140,7 @@ def _get_connected_db_session(request: "Request", config_state: "SQLSpecConfigSt
 
 
 async def get_or_create_db_session_async(request: "Request", config_state: "SQLSpecConfigState") -> Any:
-    """Get or create the driver session asynchronously, awaiting session-start hooks.
+    """Get or create the database session asynchronously, awaiting session-start hooks.
 
     Args:
         request: Starlette request instance.
@@ -226,7 +226,7 @@ def get_scope_tenant(scope: "Mapping[str, Any]", config_state: "SQLSpecConfigSta
 
 
 def _resolve_or_build_db_session(request: "Request", config_state: "SQLSpecConfigState") -> "tuple[Any, bool]":
-    """Return the cached driver session or build and cache a fresh one."""
+    """Return the cached database session or build and cache a fresh one."""
     session_instance_key = f"{config_state.session_key}_instance"
     existing_session = get_state_value(request.state, session_instance_key, None)
     if existing_session is not None:

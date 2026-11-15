@@ -71,15 +71,15 @@ Configure `commit_mode` inside `extension_config["starlette"]` (`"autocommit"` b
 | `correlation_header` | `str` | `X-Request-ID` | HTTP header to read the request correlation ID from when middleware is enabled. Default: `X-Request-ID` |
 | `correlation_headers` | `tuple[str, ...] or list[str]` | - | Additional HTTP headers to read as correlation ID fallbacks. |
 | `auto_trace_headers` | `bool` | `True` | Read standard trace context headers as correlation ID fallbacks. Default: True. |
-| `replica_session_key` | `str` | - | Request key for a read session. |
-| `replica_connection_key` | `str` | - | Request key for a read connection. |
+| `replica_session_key` | `str` | - | Request key for a replica session. |
+| `replica_connection_key` | `str` | - | Request key for a replica connection. |
 | `routing_session_key` | `str` | - | Request key for a routing session. |
 | `default_routing_mode` | `Literal['primary', 'auto']` | `'auto'` | Default request routing mode. Default: `'auto'`. |
 | `enable_routing_middleware` | `bool` | `True` | Install request-scoped routing middleware. Default: True. |
 | `routing_header` | `str or None` | `None` | Trusted application routing header name when explicitly enabled behind a gateway. Default: None. |
 | `primary_pin_cookie` | `str or None` | `None` | Optional application primary pin cookie name. Default: None. |
 | `primary_pin_secret` | `str or bytes or None` | `None` | Optional HMAC secret verifying signed primary pin cookies. Default: None. |
-| `replica_pool_key` | `str` | - | Request key for the selected read pool. |
+| `replica_pool_key` | `str` | - | Request key for the selected replica pool. |
 | `pagination_cursor_secret` | `str or bytes` | - | Application-wide secret enabling HMAC-SHA256 signed pagination cursors. |
 | `pagination_cursor_ttl` | `int or float or dt.timedelta` | - | Default cursor expiration window in seconds or timedelta. |
 | `pagination_cursor_encrypted` | `bool` | - | Encrypt cursor payloads at rest when a cursor secret is configured. |
@@ -89,7 +89,7 @@ Set `enable_correlation_middleware=False` to stop this plugin from reading reque
 
 ## Read Replica and Routing Sessions
 
-`db_ext.get_replica_session(request, key=...)` returns a reader session. For an async config it is a `DeferredAsyncSession`: the first awaited database call opens the physical connection. Use `await db_ext.get_replica_session_async(request, key=...)` when the handler needs an acquired session immediately. The raw helpers are `get_replica_connection` and `get_replica_connection_async`.
+`db_ext.get_db_replica_session(request, key=...)` returns a reader session. For an async config it is a `DeferredAsyncSession`: the first awaited database call opens the physical connection. Use `await db_ext.get_db_replica_session_async(request, key=...)` when the handler needs an acquired session immediately. The raw helpers are `get_replica_connection` and `get_replica_connection_async`.
 
 `get_db_routing_session` and `get_db_routing_session_async` create an opt-in facade that selects a reader or pins primary as work requires. Pure ASGI middleware scopes the request and closes owned checkouts. Add `SQLSpecRoutingMiddleware` from `sqlspec.utils.routing` to read routing hints and scope primary pins. Tenant identity remains a separate access check. See [Read Replicas](../learn/recipes/read-replicas.md).
 

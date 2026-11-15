@@ -103,8 +103,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._store_connection_sync() as store_conn:
-                conn = store_conn.connection
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor(PyMysqlDictCursor)
                 try:
                     cursor.execute(sql, (key,))
@@ -122,7 +122,7 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                             WHERE session_id = %s
                             """
                             cursor.execute(update_sql, (naive_expires_at, key))
-                            if store_conn.owned:
+                            if store_connection.owned:
                                 conn.commit()
                 finally:
                     cursor.close()
@@ -147,41 +147,41 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             updated_at = UTC_TIMESTAMP(6)
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key, data, naive_expires_at))
             finally:
                 cursor.close()
-            if store_conn.owned:
+            if store_connection.owned:
                 conn.commit()
 
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             cursor = conn.cursor()
             try:
                 cursor.execute(sql, (key,))
             finally:
                 cursor.close()
-            if store_conn.owned:
+            if store_connection.owned:
                 conn.commit()
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name}"
 
         try:
-            with self._store_connection_sync() as store_conn:
-                conn = store_conn.connection
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
                 finally:
                     cursor.close()
-                if store_conn.owned:
+                if store_connection.owned:
                     conn.commit()
             self._log_delete_all()
         except PyMysqlMySQLError as exc:
@@ -198,8 +198,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._store_connection_sync() as store_conn:
-                conn = store_conn.connection
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -219,8 +219,8 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         """
 
         try:
-            with self._store_connection_sync() as store_conn:
-                conn = store_conn.connection
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql, (key,))
@@ -249,12 +249,12 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
         try:
-            with self._store_connection_sync() as store_conn:
-                conn = store_conn.connection
+            with self._store_connection_sync() as store_connection:
+                conn = store_connection.connection
                 cursor = conn.cursor()
                 try:
                     cursor.execute(sql)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
                     count = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
                 finally:

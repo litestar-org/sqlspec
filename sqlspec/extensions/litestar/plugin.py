@@ -3,7 +3,6 @@
 import asyncio
 import datetime as dt
 import logging
-import os
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -31,7 +30,9 @@ from sqlspec.config import (
     SyncDatabaseConfig,
 )
 from sqlspec.core import CorrelationExtractor, OffsetPagination
+from sqlspec.core._cursor import resolve_plugin_cursor_settings
 from sqlspec.core.sqlcommenter import SQLCommenterContext
+from sqlspec.driver import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.driver._routing import AsyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError, IntegrityError, NotFoundError
 from sqlspec.extensions.litestar._utils import (
@@ -57,12 +58,12 @@ from sqlspec.extensions.litestar.handlers import (
     db_replica_connection_provider_maker,
     db_replica_pool_provider_maker,
     db_replica_session_provider_maker,
+    db_routing_session_provider_maker,
     db_session_provider_maker,
     has_tenant_strategy,
     lifespan_handler_maker,
     manual_handler_maker,
     record_request_exception,
-    routing_session_provider_maker,
     tenant_payload_key,
 )
 from sqlspec.extensions.litestar.tenant import (
@@ -73,7 +74,6 @@ from sqlspec.extensions.litestar.tenant import (
 )
 from sqlspec.typing import NUMPY_INSTALLED, ConnectionT, PoolT, SchemaT, import_optional_attr
 from sqlspec.utils.correlation import CorrelationContext
-from sqlspec.utils.deferred_session import DeferredAsyncSession, raise_async_connection_required
 from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.routing import (
@@ -435,7 +435,7 @@ class ConnectionCleanupMiddleware:
                     delete_sqlspec_scope_state(scope, session_scope_key)
                     _pop_and_close_session(scope, deferred_scope_key)
                     delete_sqlspec_scope_state(scope, lock_scope_key)
-                    _pop_and_close_session(scope, stream_deferred_scope_key)
+                    delete_sqlspec_scope_state(scope, stream_deferred_scope_key)
                     continue
 
                 if effective_exc is not None and get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY) is None:
@@ -475,7 +475,7 @@ class ConnectionCleanupMiddleware:
                         )
                     finally:
                         _pop_and_close_session(scope, deferred_scope_key)
-                        _pop_and_close_session(scope, stream_deferred_scope_key)
+                        delete_sqlspec_scope_state(scope, stream_deferred_scope_key)
                         delete_sqlspec_scope_state(scope, lock_scope_key)
             except BaseException as exc:
                 primary_exc = _select_teardown_exception(primary_exc, exc)
@@ -573,7 +573,7 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             self._plugin_configs.append(state)
 
         self._pagination_cursor_secret, self._pagination_cursor_ttl, self._pagination_cursor_encrypted = (
-            _resolve_plugin_cursor_settings(
+            resolve_plugin_cursor_settings(
                 extracted_settings,
                 pagination_cursor_secret=pagination_cursor_secret,
                 pagination_cursor_ttl=pagination_cursor_ttl,
@@ -691,26 +691,18 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
                     state.pool_key: Provide(state.pool_provider),
                     state.session_key: Provide(state.session_provider),
                     state.replica_connection_key: Provide(
-                        db_replica_connection_provider_maker(
-                            state.config, state.pool_key, state.replica_pool_key, state.replica_connection_key
-                        )
+                        db_replica_connection_provider_maker(state.config, state.replica_connection_key)
                     ),
                     state.replica_pool_key: Provide(
-                        db_replica_pool_provider_maker(state.config, state.pool_key, state.replica_pool_key)
+                        db_replica_pool_provider_maker(state.pool_key, state.replica_pool_key)
                     ),
                     state.replica_session_key: Provide(
-                        db_replica_session_provider_maker(
-                            state.config,
-                            state.pool_key,
-                            state.replica_pool_key,
-                            state.replica_connection_key,
-                            state.replica_session_key,
-                        )
+                        db_replica_session_provider_maker(state.config, state.replica_session_key)
                     ),
                 })
                 if state.routing_session_key is not None:
                     app_config.dependencies[state.routing_session_key] = Provide(
-                        routing_session_provider_maker(state.config, state.pool_key, state.routing_session_key)
+                        db_routing_session_provider_maker(state.config, state.routing_session_key)
                     )
 
         if self._plugin_configs:
@@ -954,20 +946,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         return TenantResolutionSettings()
 
     def get_db_replica_session(self, request: Any, key: Any = None) -> Any:
-        """Return the request's lazy read session view."""
+        """Return the request's lazy replica session view."""
         selected, state, scope = self._read_request_parts(request, key)
         return self._request_resource(selected.config, state, scope, "session")
 
     def provide_db_replica_session(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Return the request-owned read session without eager async checkout."""
+        """Return the request-owned replica session without eager async checkout."""
         return self._request_resource(key, state, scope, "session")
 
     def provide_db_replica_session_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Return the synchronous request read session view."""
+        """Return the synchronous request replica session view."""
         return self._request_resource(key, state, scope, "session")
 
     async def provide_db_replica_session_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Open and return the request-owned read session."""
+        """Open and return the request-owned replica session."""
         selected = self._plugin_configs[0] if key is None else self._registry_state(key)
         if selected is None:
             selected = self._get_plugin_state(cast("Any", key))
@@ -978,20 +970,20 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         return await _open_request_resource_async(selected.config, scope, resource_key, "session")
 
     def get_db_replica_connection(self, request: Any, key: Any = None) -> Any:
-        """Return the request's lazy read connection view."""
+        """Return the request's lazy replica connection view."""
         selected, state, scope = self._read_request_parts(request, key)
         return self._request_resource(selected.config, state, scope, "connection")
 
     def provide_db_replica_connection(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Return the request-owned read connection without eager async checkout."""
+        """Return the request-owned replica connection without eager async checkout."""
         return self._request_resource(key, state, scope, "connection")
 
     def provide_db_replica_connection_sync(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Return the synchronous request read connection view."""
+        """Return the synchronous request replica connection view."""
         return self._request_resource(key, state, scope, "connection")
 
     async def provide_db_replica_connection_async(self, key: Any = None, state: Any = None, scope: Any = None) -> Any:
-        """Open and return the request-owned read connection."""
+        """Open and return the request-owned replica connection."""
         selected = self._plugin_configs[0] if key is None else self._registry_state(key)
         if selected is None:
             selected = self._get_plugin_state(cast("Any", key))
@@ -2012,64 +2004,6 @@ def _resource_cleanup_modes(state: PluginConfigState) -> tuple[tuple[str | None,
     )
 
 
-def _normalize_pagination_cursor_ttl(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
-        msg = "pagination_cursor_ttl must be an int, float, or datetime.timedelta"
-        raise ImproperConfigurationError(msg)
-    return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
-
-
-def _resolve_plugin_cursor_settings(
-    settings_list: "Sequence[Mapping[str, Any]]",
-    *,
-    pagination_cursor_secret: str | bytes | None,
-    pagination_cursor_ttl: float | dt.timedelta | None,
-    pagination_cursor_encrypted: bool | None,
-) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
-    resolved_secret: str | bytes | None = pagination_cursor_secret
-    for settings in settings_list:
-        candidate = settings.get("pagination_cursor_secret")
-        if candidate is None:
-            continue
-        if resolved_secret is None:
-            resolved_secret = candidate
-        elif resolved_secret != candidate:
-            msg = "Conflicting 'pagination_cursor_secret' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-    if resolved_secret is None:
-        resolved_secret = os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
-
-    resolved_ttl: int | float | dt.timedelta | None = None
-    resolved_ttl_seconds: float | None = None
-    if pagination_cursor_ttl is not None:
-        resolved_ttl = pagination_cursor_ttl
-        resolved_ttl_seconds = _normalize_pagination_cursor_ttl(pagination_cursor_ttl)
-    for settings in settings_list:
-        candidate_ttl = settings.get("pagination_cursor_ttl")
-        if candidate_ttl is None:
-            continue
-        candidate_seconds = _normalize_pagination_cursor_ttl(candidate_ttl)
-        if resolved_ttl_seconds is None:
-            resolved_ttl = candidate_ttl
-            resolved_ttl_seconds = candidate_seconds
-        elif resolved_ttl_seconds != candidate_seconds:
-            msg = "Conflicting 'pagination_cursor_ttl' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-
-    resolved_encrypt: bool | None = pagination_cursor_encrypted
-    for settings in settings_list:
-        candidate_encrypt = settings.get("pagination_cursor_encrypted")
-        if candidate_encrypt is None:
-            continue
-        if resolved_encrypt is None:
-            resolved_encrypt = bool(candidate_encrypt)
-        elif resolved_encrypt != bool(candidate_encrypt):
-            msg = "Conflicting 'pagination_cursor_encrypted' values across plugin configuration"
-            raise ImproperConfigurationError(msg)
-
-    return resolved_secret, resolved_ttl, resolved_encrypt
-
-
 def _select_teardown_exception(current: BaseException | None, candidate: BaseException) -> BaseException:
     """Select the primary teardown exception to re-raise after completing all targets."""
     if current is None:
@@ -2212,12 +2146,10 @@ def _build_litestar_type_decoders() -> "list[tuple[Callable[[Any], bool], Callab
 
 
 def _pop_and_close_session(scope: "Scope", key: str) -> None:
-    """Pop one scope entry and detach it if it is a deferred or active session."""
-    value = get_sqlspec_scope_state(scope, key, pop=True)
-    if value is not None:
-        mark_closed = getattr(value, "_mark_closed", None)
-        if mark_closed is not None:
-            mark_closed()
+    """Pop one deferred session from scope state and mark it closed when present."""
+    deferred: DeferredAsyncSession | None = get_sqlspec_scope_state(scope, key, pop=True)
+    if deferred is not None:
+        deferred._mark_closed()
 
 
 def _uses_request_routing(state: PluginConfigState) -> bool:

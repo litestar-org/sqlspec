@@ -7,15 +7,16 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 import secrets
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlspec.exceptions import InvalidCursorError
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
 
 __all__ = (
     "CURSOR_TOKEN_MAX_LENGTH",
@@ -23,8 +24,11 @@ __all__ = (
     "decode_cursor",
     "encode_cursor",
     "normalize_cursor_ttl",
+    "normalize_pagination_cursor_ttl",
     "order_fingerprint",
     "register_cursor_type",
+    "resolve_env_pagination_cursor_secret",
+    "resolve_plugin_cursor_settings",
 )
 
 CURSOR_TOKEN_MAX_LENGTH = 4096
@@ -90,6 +94,98 @@ def normalize_cursor_ttl(ttl: "float | dt.timedelta | None") -> "float | None":
         msg = "ttl must be positive and finite"
         raise ValueError(msg)
     return seconds
+
+
+def normalize_pagination_cursor_ttl(value: Any) -> float:
+    """Return a cursor TTL in seconds.
+
+    Args:
+        value: TTL given as seconds or as a ``datetime.timedelta``.
+
+    Returns:
+        The TTL in seconds.
+
+    Raises:
+        ImproperConfigurationError: If the value is not an int, float, or ``datetime.timedelta``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, dt.timedelta)):
+        msg = "pagination_cursor_ttl must be an int, float, or datetime.timedelta"
+        raise ImproperConfigurationError(msg)
+    return value.total_seconds() if isinstance(value, dt.timedelta) else float(value)
+
+
+def resolve_env_pagination_cursor_secret() -> str | None:
+    """Return the cursor secret from ``SQLSPEC_PAGINATION_CURSOR_SECRET`` or ``SECRET_KEY``.
+
+    Returns:
+        The first non-empty environment value, otherwise ``None``.
+    """
+    return os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
+
+
+def resolve_plugin_cursor_settings(
+    settings_list: "Sequence[Mapping[str, Any]]",
+    *,
+    pagination_cursor_secret: str | bytes | None,
+    pagination_cursor_ttl: float | dt.timedelta | None,
+    pagination_cursor_encrypted: bool | None,
+) -> "tuple[str | bytes | None, float | dt.timedelta | None, bool | None]":
+    """Merge application-wide cursor settings with per-configuration framework settings.
+
+    Args:
+        settings_list: Framework extension settings of every registered configuration.
+        pagination_cursor_secret: Secret passed to the plugin, if any.
+        pagination_cursor_ttl: Cursor expiration window passed to the plugin, if any.
+        pagination_cursor_encrypted: Cursor encryption flag passed to the plugin, if any.
+
+    Returns:
+        The resolved secret, TTL, and encryption flag. The secret falls back to the environment.
+
+    Raises:
+        ImproperConfigurationError: If configurations disagree on a setting or a TTL has an invalid type.
+    """
+    resolved_secret: str | bytes | None = pagination_cursor_secret
+    for settings in settings_list:
+        candidate = settings.get("pagination_cursor_secret")
+        if candidate is None:
+            continue
+        if resolved_secret is None:
+            resolved_secret = candidate
+        elif resolved_secret != candidate:
+            msg = "Conflicting 'pagination_cursor_secret' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+    if resolved_secret is None:
+        resolved_secret = resolve_env_pagination_cursor_secret()
+
+    resolved_ttl: int | float | dt.timedelta | None = None
+    resolved_ttl_seconds: float | None = None
+    if pagination_cursor_ttl is not None:
+        resolved_ttl = pagination_cursor_ttl
+        resolved_ttl_seconds = normalize_pagination_cursor_ttl(pagination_cursor_ttl)
+    for settings in settings_list:
+        candidate_ttl = settings.get("pagination_cursor_ttl")
+        if candidate_ttl is None:
+            continue
+        candidate_seconds = normalize_pagination_cursor_ttl(candidate_ttl)
+        if resolved_ttl_seconds is None:
+            resolved_ttl = candidate_ttl
+            resolved_ttl_seconds = candidate_seconds
+        elif resolved_ttl_seconds != candidate_seconds:
+            msg = "Conflicting 'pagination_cursor_ttl' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    resolved_encrypt: bool | None = pagination_cursor_encrypted
+    for settings in settings_list:
+        candidate_encrypt = settings.get("pagination_cursor_encrypted")
+        if candidate_encrypt is None:
+            continue
+        if resolved_encrypt is None:
+            resolved_encrypt = bool(candidate_encrypt)
+        elif resolved_encrypt != bool(candidate_encrypt):
+            msg = "Conflicting 'pagination_cursor_encrypted' values across plugin configuration"
+            raise ImproperConfigurationError(msg)
+
+    return resolved_secret, resolved_ttl, resolved_encrypt
 
 
 def register_cursor_type(

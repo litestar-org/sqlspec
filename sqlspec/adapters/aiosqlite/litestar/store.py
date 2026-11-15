@@ -102,8 +102,8 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             async with conn.execute(sql, (key,)) as cursor:
                 raw_row = await cursor.fetchone()
@@ -123,7 +123,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
                     WHERE session_id = ?
                     """
                     await _close_cursor(await conn.execute(update_sql, (new_expires_at_julian, key)))
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await end_transaction(conn, commit=True)
 
             return bytes(data)
@@ -145,11 +145,11 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         VALUES (?, ?, ?)
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             await _close_cursor(await conn.execute(sql, (key, data, expires_at_julian)))
-            if store_conn.owned:
+            if store_connection.owned:
                 await end_transaction(conn, commit=True)
 
     async def delete(self, key: str) -> None:
@@ -160,22 +160,22 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             await _close_cursor(await conn.execute(sql, (key,)))
-            if store_conn.owned:
+            if store_connection.owned:
                 await end_transaction(conn, commit=True)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             await _close_cursor(await conn.execute(sql))
-            if store_conn.owned:
+            if store_connection.owned:
                 await end_transaction(conn, commit=True)
         self._log_delete_all()
 
@@ -194,8 +194,8 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             async with conn.execute(sql, (key,)) as cursor:
                 result = await cursor.fetchone()
@@ -215,8 +215,8 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         WHERE session_id = ?
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             async with conn.execute(sql, (key,)) as cursor:
                 raw_row = await cursor.fetchone()
@@ -249,12 +249,12 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await self._ensure_pragmas(conn)
             cursor = await conn.execute(sql)
             try:
-                if store_conn.owned:
+                if store_connection.owned:
                     await end_transaction(conn, commit=True)
                 count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:

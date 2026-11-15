@@ -96,8 +96,8 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > CURRENT UTC TIMESTAMP)
         """
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -118,7 +118,7 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
 
             return _coerce_bytes(_row_value(row, "data", 0))
@@ -132,29 +132,29 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
         ON EXISTING UPDATE
         VALUES (?, ?, ?, CURRENT UTC TIMESTAMP)
         """
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(sql, (key, data, expires_at))
-                if store_conn.owned:
+                if store_connection.owned:
                     conn.commit()
 
     def _delete(self, key: str) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
-                if store_conn.owned:
+                if store_connection.owned:
                     conn.commit()
 
     def _delete_all(self) -> None:
         table_ref = _table_ref(self._table_name)
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(f"TRUNCATE TABLE {table_ref}")
-                if store_conn.owned:
+                if store_connection.owned:
                     conn.commit()
         self._log_delete_all()
 
@@ -165,8 +165,8 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > CURRENT UTC TIMESTAMP)
         """
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 return cursor.fetchone() is not None
@@ -177,8 +177,8 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
         SELECT expires_at FROM {table_ref}
         WHERE session_id = ?
         """
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -198,11 +198,11 @@ class SqlanywhereStore(BaseSQLSpecStore["SqlanywhereConfig"]):
     def _delete_expired(self) -> int:
         table_ref = _table_ref(self._table_name)
         sql = f"DELETE FROM {table_ref} WHERE expires_at <= CURRENT UTC TIMESTAMP"
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with SqlanywhereCursor(conn) as cursor:
                 cursor.execute(sql)
-                if store_conn.owned:
+                if store_connection.owned:
                     conn.commit()
                 count = resolve_rowcount(cursor)
         if count > 0:

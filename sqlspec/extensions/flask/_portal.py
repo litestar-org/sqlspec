@@ -23,7 +23,7 @@ __all__ = ("PortalSession", "call_portal_with_context")
 
 def call_portal_with_context(
     portal: "Portal",
-    coro_fn: Callable[..., Awaitable[Any]],
+    coroutine_function: Callable[..., Awaitable[Any]],
     /,
     *args: Any,
     tenant_override: TenantContextPayload | Literal["ambient"] | None = "ambient",
@@ -34,7 +34,7 @@ def call_portal_with_context(
 
     Args:
         portal: Running background event-loop portal.
-        coro_fn: Async operation to execute.
+        coroutine_function: Async operation to execute.
         args: Positional arguments forwarded to the operation.
         tenant_override: Explicit checkout identity, or ambient caller identity.
         routing_bind_key: Owning bind conservatively pinned if completion is unknown.
@@ -57,7 +57,7 @@ def call_portal_with_context(
         )
         routing_token = RoutingContext.set(routing)
         try:
-            return await coro_fn(*args, **kwargs)
+            return await coroutine_function(*args, **kwargs)
         finally:
             updated = RoutingContext.current()
             RoutingContext.reset(routing_token)
@@ -81,7 +81,7 @@ def call_portal_with_context(
 
 
 class PortalSession:
-    """Blocking view of an asynchronous driver session for synchronous request handlers.
+    """Blocking view of an asynchronous database session for synchronous request handlers.
 
     Every call runs on the portal's event loop and blocks until it finishes, so
     ``session.select(...)`` returns rows, ``for row in session.select_stream(...)`` iterates rows,
@@ -94,10 +94,10 @@ class PortalSession:
     __slots__ = ("_portal", "_routing_bind_key", "_session")
 
     def __init__(self, session: Any, portal: "Portal", *, routing_bind_key: str | None = None) -> None:
-        """Wrap an asynchronous driver session.
+        """Wrap an asynchronous database session.
 
         Args:
-            session: Asynchronous driver session bound to the request connection.
+            session: Asynchronous database session bound to the request connection.
             portal: Portal whose event loop owns the session's connection.
             routing_bind_key: Owning database bind for conservative primary pinning.
         """
@@ -138,10 +138,8 @@ class PortalSession:
         call_portal_with_context(self._portal, run, tenant_override=None)
 
     def _mark_closed(self) -> None:
-        """Detach the wrapped asynchronous driver session directly without dispatching via the portal."""
-        mark_closed = getattr(self._session, "_mark_closed", None)
-        if mark_closed is not None:
-            mark_closed()
+        """Mark the wrapped asynchronous database session closed without dispatching via the portal."""
+        self._session._mark_closed()
 
 
 class _PortalResource:

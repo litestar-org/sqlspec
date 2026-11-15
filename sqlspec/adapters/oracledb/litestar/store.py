@@ -144,8 +144,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
@@ -169,11 +169,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                         """
                         try:
                             await cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
-                            if store_conn.owned:
+                            if store_connection.owned:
                                 await conn.commit()
                         except BaseException:
                             with contextlib.suppress(Exception):
-                                if store_conn.owned:
+                                if store_connection.owned:
                                     await conn.rollback()
                             raise
 
@@ -217,8 +217,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             try:
                 bind_data: Any = (
                     await conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
@@ -227,11 +227,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                     await cursor.execute(
                         sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
                     )
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.rollback()
                 raise
 
@@ -244,16 +244,16 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = :1"
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, (key,))
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.rollback()
                 raise
 
@@ -262,16 +262,16 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.rollback()
                 raise
         self._log_delete_all()
@@ -292,8 +292,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
@@ -314,8 +314,8 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
@@ -345,20 +345,20 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
 
         conn_context = self._store_connection()
-        async with conn_context as store_conn:
-            conn = store_conn.connection
+        async with conn_context as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     await cursor.execute(sql)
                     count = resolve_rowcount(cursor)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.commit()
                     if count > 0:
                         self._log_delete_expired(count)
                     return count
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         await conn.rollback()
                 raise
 
@@ -532,8 +532,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -557,11 +557,11 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
                         """
                         try:
                             cursor.execute(update_sql, (expires_in_seconds, expires_in_seconds, key))
-                            if store_conn.owned:
+                            if store_connection.owned:
                                 conn.commit()
                         except BaseException:
                             with contextlib.suppress(Exception):
-                                if store_conn.owned:
+                                if store_connection.owned:
                                     conn.rollback()
                             raise
 
@@ -598,19 +598,19 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             )
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             try:
                 bind_data: Any = conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
                 with conn.cursor() as cursor:
                     cursor.execute(
                         sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
                     )
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.rollback()
                 raise
 
@@ -618,16 +618,16 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = :1"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(sql, (key,))
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.rollback()
                 raise
 
@@ -635,16 +635,16 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(sql)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.rollback()
                 raise
         self._log_delete_all()
@@ -657,8 +657,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 cursor.execute(sql, (key,))
                 result = cursor.fetchone()
@@ -671,8 +671,8 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         WHERE session_id = :1
         """
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             with conn.cursor() as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
@@ -697,20 +697,20 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
 
-        with self._store_connection_sync() as store_conn:
-            conn = store_conn.connection
+        with self._store_connection_sync() as store_connection:
+            conn = store_connection.connection
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(sql)
                     count = resolve_rowcount(cursor)
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.commit()
                     if count > 0:
                         self._log_delete_expired(count)
                     return count
             except BaseException:
                 with contextlib.suppress(Exception):
-                    if store_conn.owned:
+                    if store_connection.owned:
                         conn.rollback()
                 raise
 

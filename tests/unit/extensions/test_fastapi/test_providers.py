@@ -985,7 +985,12 @@ def _cursor_request(plugin: Any = None) -> Any:
 def _tenant_plugin(*configs: Any, pagination_cursor_secret: str | None = "plugin-secret") -> Any:
     from types import SimpleNamespace
 
-    return SimpleNamespace(pagination_cursor_secret=pagination_cursor_secret, _tenant_configs=lambda: tuple(configs))
+    return SimpleNamespace(
+        pagination_cursor_secret=pagination_cursor_secret,
+        pagination_cursor_ttl=None,
+        pagination_cursor_encrypted=None,
+        _tenant_configs=lambda: tuple(configs),
+    )
 
 
 def _cursor_provider(secret: str | None = None) -> Any:

@@ -9,14 +9,13 @@ import datetime as dt
 import hashlib
 import hmac
 import inspect
-import os
 import typing
 from collections.abc import Callable, Mapping
 from enum import Enum
 from functools import lru_cache, partial
 from inspect import isclass
 from types import GenericAlias
-from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, NotRequired, TypeVar, cast
 from uuid import UUID
 
 from fastapi import Depends, Query, Request
@@ -40,9 +39,13 @@ from sqlspec.core import (
     SearchFilter,
     normalize_cursor_keys,
 )
+from sqlspec.core._cursor import resolve_env_pagination_cursor_secret
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
-from sqlspec.utils.tenant import TenantContext
+from sqlspec.utils.tenant import resolve_cursor_tenant_identity
 from sqlspec.utils.text import camelize
+
+if TYPE_CHECKING:
+    from sqlspec.extensions.fastapi.extension import SQLSpecPlugin
 
 __all__ = (
     "DEPENDENCY_DEFAULTS",
@@ -243,7 +246,7 @@ def provide_filters(
         return _empty_filter_list
 
     env_secret = (
-        _resolve_env_pagination_cursor_secret()
+        resolve_env_pagination_cursor_secret()
         if config.get("pagination_type") == "cursor" and config.get("pagination_cursor_secret") is None
         else None
     )
@@ -443,10 +446,6 @@ def _make_hashable(value: Any) -> HashableType:
     return str(value)
 
 
-def _resolve_env_pagination_cursor_secret() -> str | None:
-    return os.environ.get("SQLSPEC_PAGINATION_CURSOR_SECRET") or os.environ.get("SECRET_KEY") or None
-
-
 def _resolve_cursor_route_identity(request: Any) -> str:
     if request is None:
         return "fastapi:standalone"
@@ -462,34 +461,6 @@ def _resolve_cursor_route_identity(request: Any) -> str:
 
 
 _CURSOR_KEY_REQUIRED_MESSAGE = "Cursor pagination requires a cursor secret; set pagination_cursor_secret or the SQLSPEC_PAGINATION_CURSOR_SECRET environment variable"
-
-
-def _tenant_identity_of(payload: Any) -> str:
-    if payload is None or payload.is_bypass:
-        return ""
-    return str(payload.tenant_id)
-
-
-async def _resolve_cursor_tenant_identity(plugin: Any) -> str:
-    """Return the cursor key suffix naming the request tenant of every tenant-enabled configuration.
-
-    Args:
-        plugin: The SQLSpec plugin bound to the application, or ``None``.
-
-    Returns:
-        An empty string without tenant-enabled configurations, otherwise a suffix carrying each tenant.
-    """
-    tenant_configs = getattr(plugin, "_tenant_configs", None)
-    configs = cast("tuple[Any, ...]", tenant_configs()) if callable(tenant_configs) else ()
-    if not configs:
-        return ""
-    if len(configs) == 1:
-        return f"|tenant:{_tenant_identity_of(await TenantContext.get_async(configs[0]))}"
-    parts: list[str] = []
-    for index, config in enumerate(configs):
-        label = getattr(config, "bind_key", None) or str(index)
-        parts.append(f"{label}={_tenant_identity_of(await TenantContext.get_async(config))}")
-    return "|tenants:" + ",".join(parts)
 
 
 @lru_cache(maxsize=256)
@@ -752,21 +723,19 @@ class _CursorFilterProvider:
         keys = _effective_cursor_keys(self, field_name, sort_order)
         app = getattr(request, "app", None) if request is not None else None
         app_state = getattr(app, "state", None) if app is not None else None
-        plugin = getattr(app_state, "sqlspec_plugin", None) if app_state is not None else None
+        plugin: SQLSpecPlugin | None = getattr(app_state, "sqlspec_plugin", None) if app_state is not None else None
 
         if self.secret is not None:
             resolved_secret: str | bytes | None = self.secret
-        elif plugin is not None and getattr(plugin, "pagination_cursor_secret", None) is not None:
-            resolved_secret = getattr(plugin, "pagination_cursor_secret", None)
+        elif plugin is not None and plugin.pagination_cursor_secret is not None:
+            resolved_secret = plugin.pagination_cursor_secret
         else:
             resolved_secret = self.env_secret
 
         resolved_ttl = (
-            self.ttl
-            if self.ttl is not None
-            else (getattr(plugin, "pagination_cursor_ttl", None) if plugin is not None else None)
+            self.ttl if self.ttl is not None else (plugin.pagination_cursor_ttl if plugin is not None else None)
         )
-        plugin_encrypted = getattr(plugin, "pagination_cursor_encrypted", None) if plugin is not None else None
+        plugin_encrypted = plugin.pagination_cursor_encrypted if plugin is not None else None
         resolved_encrypted = bool(
             self.encrypted
             if self.encrypted is not None
@@ -775,8 +744,9 @@ class _CursorFilterProvider:
 
         if resolved_secret is None:
             raise ImproperConfigurationError(_CURSOR_KEY_REQUIRED_MESSAGE)
+        tenant_identity = await resolve_cursor_tenant_identity(plugin._tenant_configs() if plugin is not None else ())
         derived_secret = _derive_route_cursor_key(
-            resolved_secret, _resolve_cursor_route_identity(request) + await _resolve_cursor_tenant_identity(plugin)
+            resolved_secret, _resolve_cursor_route_identity(request) + tenant_identity
         )
         try:
             return CursorFilter(

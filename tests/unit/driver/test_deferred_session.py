@@ -6,16 +6,14 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.driver import DeferredAsyncSession
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.utils.deferred_session import DeferredAsyncSession
 
 
 @pytest.mark.parametrize("opened", [False, True])
-async def test_deferred_async_session_detach_connection_blocks_reuse_and_detaches_driver(
-    opened: bool, tmp_path: Path
-) -> None:
-    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "deferred_detach.db")})
+async def test_deferred_async_session_close_blocks_reuse_and_closes_driver(opened: bool, tmp_path: Path) -> None:
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "deferred_close.db")})
     session_ctx = config.provide_session()
     active_session: Any = None
     open_calls = 0
@@ -35,13 +33,11 @@ async def test_deferred_async_session_detach_connection_blocks_reuse_and_detache
     try:
         if opened:
             assert await deferred.select_value("SELECT 1") == 1
-            assert active_session is not None
             assert active_session.connection is not _CLOSED_CONNECTION
 
         deferred._mark_closed()
 
         if opened:
-            assert active_session is not None
             assert active_session.connection is _CLOSED_CONNECTION
 
         with pytest.raises(ImproperConfigurationError, match="already closed"):

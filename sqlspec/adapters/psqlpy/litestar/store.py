@@ -91,8 +91,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             RETURNING data
             """
-            async with self._store_connection() as store_conn:
-                conn = store_conn.connection
+            async with self._store_connection() as store_connection:
+                conn = store_connection.connection
                 query_result = await conn.fetch(sql, [new_expires_at, key])
                 rows = query_result.result() if query_result else []
                 if not rows:
@@ -104,8 +104,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result() if query_result else []
             if not rows:
@@ -133,8 +133,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             updated_at = CURRENT_TIMESTAMP
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await conn.execute(sql, [key, data, expires_at])
 
     async def delete(self, key: str) -> None:
@@ -145,16 +145,16 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await conn.execute(sql, [key])
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             await conn.execute(sql)
         self._log_delete_all()
 
@@ -173,8 +173,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result() if query_result else []
             return len(rows) > 0
@@ -193,8 +193,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         WHERE session_id = $1
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             query_result = await conn.fetch(sql, [key])
             rows = query_result.result() if query_result else []
 
@@ -225,8 +225,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         RETURNING session_id
         """
 
-        async with self._store_connection() as store_conn:
-            conn = store_conn.connection
+        async with self._store_connection() as store_connection:
+            conn = store_connection.connection
             query_result = await conn.fetch(sql, [])
             rows = query_result.result() if query_result else []
             count = len(rows)

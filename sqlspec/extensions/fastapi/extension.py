@@ -200,27 +200,27 @@ class SQLSpecPlugin(_StarlettePlugin):
         return dependency
 
     def provide_replica_session(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a mode-aware read session dependency for a registered configuration."""
+        """Build a mode-aware replica session dependency for a registered configuration."""
         return self._read_routing_dependency(key, "session")
 
     def provide_async_replica_session(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a read session dependency requiring an asynchronous configuration."""
+        """Build a replica session dependency requiring an asynchronous configuration."""
         return self._read_routing_dependency(key, "session", require_async=True)
 
     def provide_sync_replica_session(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a read session dependency requiring a synchronous configuration."""
+        """Build a replica session dependency requiring a synchronous configuration."""
         return self._read_routing_dependency(key, "session", require_async=False)
 
     def provide_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a mode-aware raw read connection dependency."""
+        """Build a mode-aware raw replica connection dependency."""
         return self._read_routing_dependency(key, "connection")
 
     def provide_async_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a raw read connection dependency requiring an async configuration."""
+        """Build a raw replica connection dependency requiring an async configuration."""
         return self._read_routing_dependency(key, "connection", require_async=True)
 
     def provide_sync_replica_connection(self, key: Any = None) -> "Callable[..., Any]":
-        """Build a raw read connection dependency requiring a sync configuration."""
+        """Build a raw replica connection dependency requiring a sync configuration."""
         return self._read_routing_dependency(key, "connection", require_async=False)
 
     def provide_routing_session(self, key: Any = None) -> "Callable[..., Any]":
@@ -270,7 +270,7 @@ class SQLSpecPlugin(_StarlettePlugin):
 
             async def async_dependency(request: Request) -> Any:
                 if kind == "session":
-                    return await self.get_replica_session_async(request, state.config)
+                    return await self.get_db_replica_session_async(request, state.config)
                 if kind == "connection":
                     return await self.get_replica_connection_async(request, state.config)
                 return await self.get_db_routing_session_async(request, state.config)
@@ -279,7 +279,7 @@ class SQLSpecPlugin(_StarlettePlugin):
 
         def sync_dependency(request: Request) -> Any:
             if kind == "session":
-                return self.get_replica_session(request, state.config)
+                return self.get_db_replica_session(request, state.config)
             if kind == "connection":
                 return self.get_replica_connection(request, state.config)
             return self.get_db_routing_session(request, state.config)

@@ -19,10 +19,10 @@ from typing_extensions import TypeVar
 from sqlspec.core import SQL, ArrowResult, SQLResult, StackResult, Statement, StatementConfig, StatementFilter
 from sqlspec.core.stack import StatementStack
 from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._common import _CLOSED_CONNECTION_MESSAGE, CommonDriverAttributesMixin
+from sqlspec.driver._common import CommonDriverAttributesMixin
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect
-from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
+from sqlspec.driver._stream import _CLOSED_CONNECTION_MESSAGE, AsyncRowStream, SyncRowStream
 from sqlspec.driver._sync import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, RoutingContextError, SQLSpecError, TransactionError
 from sqlspec.utils.routing import RoutingContext
@@ -194,11 +194,7 @@ class _RoutingSessionState:
         """Close underlying driver connections and mark the routing session closed."""
         for driver in (self._primary_driver, self._replica_driver):
             if driver is not None:
-                mark_closed = getattr(driver, "_mark_closed", None)
-                if callable(mark_closed):
-                    mark_closed()
-                else:
-                    driver.connection = None
+                driver._mark_closed()
         self._primary_driver = None
         self._replica_driver = None
         self._closed = True

@@ -311,7 +311,7 @@ class SQLSpec:
         replica_group: str | None = None,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT] | AbstractAsyncContextManager[ConnectionT]":
-        """Provide a read connection with lifecycle events owned by the selected configuration.
+        """Provide a replica connection with lifecycle events owned by the selected configuration.
 
         Args:
             config: Configuration instance owning the replica topology.
@@ -360,7 +360,7 @@ class SQLSpec:
         bypass_tenant: bool = False,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT] | AbstractAsyncContextManager[DriverT]":
-        """Provide a read session with lifecycle events owned by the selected configuration.
+        """Provide a replica session with lifecycle events owned by the selected configuration.
 
         Args:
             config: Configuration instance owning the replica topology.
@@ -970,7 +970,7 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
                             self._runtime.emit_connection_destroy_sync(raw_connection)
                 finally:
                     if driver is not None:
-                        _mark_driver_closed(driver)
+                        driver._mark_closed()
                 raise
             self._value = prepared
             return cast("ContextValueT", prepared)
@@ -1005,7 +1005,7 @@ class _RuntimeSyncContext(Generic[ContextValueT]):
                             if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                                 self._runtime.emit_connection_destroy_sync(raw_connection)
                     finally:
-                        _mark_driver_closed(value)
+                        value._mark_closed()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1052,7 +1052,7 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                             await self._runtime.emit_connection_destroy_async(raw_connection)
                 finally:
                     if driver is not None:
-                        _mark_driver_closed(driver)
+                        driver._mark_closed()
                 raise
             self._value = prepared
             return cast("ContextValueT", prepared)
@@ -1087,7 +1087,7 @@ class _RuntimeAsyncContext(Generic[ContextValueT]):
                             if raw_connection is not None and raw_connection is not _CLOSED_CONNECTION:
                                 await self._runtime.emit_connection_destroy_async(raw_connection)
                     finally:
-                        _mark_driver_closed(value)
+                        value._mark_closed()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1128,7 +1128,7 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                         runtime.emit_connection_destroy_sync(connection)
             finally:
                 if self._session:
-                    _mark_driver_closed(value)
+                    value._mark_closed()
             raise
         self._runtime = runtime
         self._value = value
@@ -1155,7 +1155,7 @@ class _RuntimeReadSyncContext(Generic[ContextValueT]):
                             runtime.emit_connection_destroy_sync(connection)
             finally:
                 if self._session and value is not None:
-                    _mark_driver_closed(value)
+                    value._mark_closed()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -1196,7 +1196,7 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                         await runtime.emit_connection_destroy_async(connection)
             finally:
                 if self._session:
-                    _mark_driver_closed(value)
+                    value._mark_closed()
             raise
         self._runtime = runtime
         self._value = value
@@ -1223,10 +1223,4 @@ class _RuntimeReadAsyncContext(Generic[ContextValueT]):
                             await runtime.emit_connection_destroy_async(connection)
             finally:
                 if self._session and value is not None:
-                    _mark_driver_closed(value)
-
-
-def _mark_driver_closed(value: Any) -> None:
-    mark_closed = getattr(value, "_mark_closed", None)
-    if mark_closed is not None:
-        mark_closed()
+                    value._mark_closed()

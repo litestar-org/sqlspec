@@ -1074,7 +1074,7 @@ def test_deferred_session_streams_close_with_request_outcome(
     monkeypatch: pytest.MonkeyPatch, path: str, expected_error: bool
 ) -> None:
     """Deferred request sessions close their streams with the request's own error outcome."""
-    from sqlspec.utils.deferred_session import DeferredAsyncSession
+    from sqlspec.driver import DeferredAsyncSession
 
     recorded: list[bool] = []
 

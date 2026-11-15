@@ -12,11 +12,11 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.aiosqlite.litestar import AiosqliteStore
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LitestarConfig
+from sqlspec.driver import DeferredAsyncSession
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 
@@ -242,7 +242,7 @@ def test_litestar_disabled_routing_middleware_and_outer_context_precedence(tmp_p
 
 
 @pytest.mark.anyio
-async def test_litestar_unawaited_deferred_sessions_are_detached_after_response(tmp_path: Any) -> None:
+async def test_litestar_unawaited_deferred_sessions_are_closed_after_response(tmp_path: Any) -> None:
     """Unawaited DeferredAsyncSession handles from primary, read, and routing accessors cannot run post-request."""
     primary, replica = seed_routing_databases(tmp_path)
     config = AiosqliteConfig(

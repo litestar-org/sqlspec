@@ -17,11 +17,11 @@ from sqlspec import sign_primary_pin
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.adapters.sqlite.driver import SqliteDriver
+from sqlspec.driver import DeferredAsyncSession
 from sqlspec.driver._routing import SyncRoutingSession
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.starlette import SQLSpecPlugin
 from sqlspec.extensions.starlette.middleware import SQLSpecTransactionMiddleware
-from sqlspec.utils.deferred_session import DeferredAsyncSession
 from sqlspec.utils.routing import RoutingContext, RoutingEntry
 from tests.unit.driver.test_sync_routing_session import seed_routing_databases
 
@@ -38,17 +38,17 @@ def test_read_and_routing_accessors_select_and_pin(tmp_path: Path, async_config:
 
     async def read(request: Request) -> JSONResponse:
         if async_config:
-            session = plugin.get_replica_session(request)
+            session = plugin.get_db_replica_session(request)
             assert isinstance(session, DeferredAsyncSession)
             with pytest.raises(ImproperConfigurationError):
                 plugin.get_replica_connection(request)
             one, two = await asyncio.gather(
-                plugin.get_replica_session_async(request), plugin.get_replica_session_async(request)
+                plugin.get_db_replica_session_async(request), plugin.get_db_replica_session_async(request)
             )
             assert one is two
             origin = await session.select_value("SELECT origin FROM notes WHERE id=1")
         else:
-            origin = plugin.get_replica_session(request).select_value("SELECT origin FROM notes WHERE id=1")
+            origin = plugin.get_db_replica_session(request).select_value("SELECT origin FROM notes WHERE id=1")
         return JSONResponse({"origin": origin})
 
     async def route(request: Request) -> JSONResponse:
@@ -89,13 +89,13 @@ def test_streaming_and_background_can_use_read_lease(tmp_path: Path) -> None:
 
     async def endpoint(request: Request) -> StreamingResponse:
         async def body() -> AsyncIterator[str]:
-            session = await plugin.get_replica_session_async(request)
+            session = await plugin.get_db_replica_session_async(request)
             yield await session.select_value("SELECT origin FROM notes WHERE id=1")
             await asyncio.sleep(0)
             yield await session.select_value("SELECT origin FROM notes WHERE id=2")
 
         async def background() -> None:
-            session = await plugin.get_replica_session_async(request)
+            session = await plugin.get_db_replica_session_async(request)
             events.append(await session.select_value("SELECT origin FROM notes WHERE id=3"))
 
         return StreamingResponse(body(), background=BackgroundTask(background))
@@ -257,8 +257,8 @@ def test_starlette_commit_failure_rolls_back_and_finalizes_remaining_configs(
 
 
 @pytest.mark.anyio
-async def test_starlette_unawaited_deferred_sessions_are_detached_after_response(tmp_path: Path) -> None:
-    """Unawaited DeferredAsyncSession handles in Starlette are detached when the request finishes."""
+async def test_starlette_unawaited_deferred_sessions_are_closed_after_response(tmp_path: Path) -> None:
+    """Unawaited DeferredAsyncSession handles in Starlette are closed when the request finishes."""
     primary, replica = seed_routing_databases(tmp_path)
     config = AiosqliteConfig(
         connection_config={"database": primary},
@@ -269,7 +269,7 @@ async def test_starlette_unawaited_deferred_sessions_are_detached_after_response
 
     async def leaked_route(request: Request) -> JSONResponse:
         primary_deferred = plugin.get_session(request)
-        read_deferred = plugin.get_replica_session(request)
+        read_deferred = plugin.get_db_replica_session(request)
         routing_deferred = plugin.get_db_routing_session(request)
         assert isinstance(primary_deferred, DeferredAsyncSession)
         assert isinstance(read_deferred, DeferredAsyncSession)
