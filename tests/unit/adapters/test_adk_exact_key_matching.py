@@ -180,7 +180,7 @@ def test_new_table_ddl_declares_exact_collation(
     store = store_cls(config)
     memory = memory_cls(config)
 
-    ddl = [store._sessions_table_ddl(), store._events_table_ddl(), memory._memory_table_ddl()]  # pyright: ignore[reportPrivateUsage]
+    ddl = [store._sessions_table_ddl(), store._events_table_ddl(), memory._memory_table_ddl()]
 
     for statement in ddl:
         for column in ("id", "app_name", "user_id"):

@@ -34,7 +34,9 @@ def test_pymssql_list_sessions_defaults_to_recent_first_without_a_page(monkeypat
     store.list_sessions("app")
 
     sql, params = calls[0]
-    assert _normalized(sql).endswith("WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 ORDER BY update_time DESC, id DESC")
+    assert _normalized(sql).endswith(
+        "WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 ORDER BY update_time DESC, id DESC"
+    )
     assert params == ("app", "app")
 
 
@@ -380,8 +382,14 @@ def test_pymssql_events_join_and_delete_session_scoping(monkeypatch: "pytest.Mon
     PymssqlADKStore(del_config).delete_session("app", "u1", "s1")
     executed = [(_normalized(call.args[0]), call.args[1]) for call in cursor.execute.call_args_list]
     assert executed == [
-        ("DELETE FROM [dbo].[adk_event] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2 AND session_id = %s AND session_id = %s COLLATE Latin1_General_100_BIN2", ("app", "app", "u1", "u1", "s1", "s1")),
-        ("DELETE FROM [dbo].[adk_session] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2 AND id = %s AND id = %s COLLATE Latin1_General_100_BIN2", ("app", "app", "u1", "u1", "s1", "s1")),
+        (
+            "DELETE FROM [dbo].[adk_event] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2 AND session_id = %s AND session_id = %s COLLATE Latin1_General_100_BIN2",
+            ("app", "app", "u1", "u1", "s1", "s1"),
+        ),
+        (
+            "DELETE FROM [dbo].[adk_session] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2 AND id = %s AND id = %s COLLATE Latin1_General_100_BIN2",
+            ("app", "app", "u1", "u1", "s1", "s1"),
+        ),
     ]
     conn.commit.assert_called_once()
 
@@ -472,11 +480,18 @@ def test_pymssql_create_session_merges_and_reads_scoped_state_under_autocommit()
     executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
     assert executed[0] == "BEGIN TRANSACTION"
     assert executed[1].startswith("INSERT INTO [dbo].[adk_session]")
-    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
     assert (
-        executed[3] == "UPDATE [dbo].[adk_app_state] SET state = %s, update_time = SYSUTCDATETIME() WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
+        executed[2]
+        == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
     )
-    assert executed[4] == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2"
+    assert (
+        executed[3]
+        == "UPDATE [dbo].[adk_app_state] SET state = %s, update_time = SYSUTCDATETIME() WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
+    )
+    assert (
+        executed[4]
+        == "SELECT state FROM [dbo].[adk_user_state] WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2"
+    )
     assert executed[-1] == "IF @@TRANCOUNT > 0 COMMIT TRANSACTION"
 
 
@@ -497,7 +512,10 @@ def test_pymssql_append_event_and_update_state_atomic_merge_and_rejects_old_kwar
 
     assert updated["state"] == {"turn": 2, "app:a": 1, "app:a2": 2, "user:u2": 3}
     executed = [_normalized(call.args[0]) for call in cursor.execute.call_args_list]
-    assert executed[2] == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
+    assert (
+        executed[2]
+        == "SELECT state FROM [dbo].[adk_app_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2"
+    )
     assert executed[3].startswith("UPDATE [dbo].[adk_app_state]")
     assert executed[4] == (
         "SELECT state FROM [dbo].[adk_user_state] WITH (UPDLOCK, HOLDLOCK) WHERE app_name = %s AND app_name = %s COLLATE Latin1_General_100_BIN2 AND user_id = %s AND user_id = %s COLLATE Latin1_General_100_BIN2"

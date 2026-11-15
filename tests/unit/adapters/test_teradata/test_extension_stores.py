@@ -61,8 +61,10 @@ def test_teradata_adk_public_pagination_and_atomic_delete(monkeypatch) -> None:
     assert statements[0][1] == ("app", "app", "user", "user", 11, 15)
     store.delete_session("app", "user", "session")
     assert statements[-2] == (
-        'DELETE FROM "ADK_EVENT" WHERE app_name = ? AND app_name (CASESPECIFIC) = ? '
-        "AND user_id = ? AND user_id (CASESPECIFIC) = ? AND session_id = ? AND session_id (CASESPECIFIC) = ?",
+        (
+            'DELETE FROM "ADK_EVENT" WHERE app_name = ? AND app_name (CASESPECIFIC) = ? '
+            "AND user_id = ? AND user_id (CASESPECIFIC) = ? AND session_id = ? AND session_id (CASESPECIFIC) = ?"
+        ),
         ("app", "app", "user", "user", "session", "session"),
     )
     assert states[-2:] == [False, False]
