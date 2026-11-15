@@ -26,6 +26,7 @@ _ADAPTER_NAME = "pymysql"
 _pymysql_connect: "PyMysqlConnect" = cast("PyMysqlConnect", PyMysqlConnect)
 _MAX_IDLE_TASK_CONNECTIONS: Final[int] = 8
 _SERVER_STATUS_IN_TRANS: Final[int] = 1
+_COM_RESET_CONNECTION: Final[int] = 0x1F
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -50,6 +51,7 @@ class PyMysqlConnectionPool:
         "_read_only",
         "_recycle_seconds",
         "_registry_lock",
+        "_reset_session_on_release",
         "_task_holders",
         "_thread_local",
     )
@@ -62,6 +64,7 @@ class PyMysqlConnectionPool:
         on_connection_create: "Callable[[PyMysqlConnection], None] | None" = None,
         connection_factory: "Callable[[], PyMysqlConnection] | None" = None,
         read_only: bool = False,
+        reset_session_on_release: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -72,10 +75,12 @@ class PyMysqlConnectionPool:
             on_connection_create: Callback executed when connection is created
             connection_factory: Optional factory for custom connection creation
             read_only: Initialize each connection in session read-only mode
+            reset_session_on_release: Send ``COM_RESET_CONNECTION`` and re-initialize the connection on release
         """
         self._connection_parameters = connection_parameters
         self._connection_factory = connection_factory
         self._read_only = read_only
+        self._reset_session_on_release = reset_session_on_release
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
         self._connection_threads: dict[PyMysqlConnection, threading.Thread] = {}
@@ -111,17 +116,31 @@ class PyMysqlConnectionPool:
             connection = _pymysql_connect(**self._connection_parameters)
 
         try:
-            if self._read_only:
-                with connection.cursor() as cursor:
-                    cursor.execute("SET SESSION TRANSACTION READ ONLY")
-            if self._on_connection_create is not None:
-                self._on_connection_create(connection)
+            self._initialize_connection(connection)
         except BaseException:
             with contextlib.suppress(Exception):
                 connection.close()
             raise
 
         return connection
+
+    def _initialize_connection(self, connection: PyMysqlConnection) -> None:
+        if self._read_only:
+            with connection.cursor() as cursor:
+                cursor.execute("SET SESSION TRANSACTION READ ONLY")
+        if self._on_connection_create is not None:
+            self._on_connection_create(connection)
+
+    def _reset_connection(self, connection: PyMysqlConnection) -> bool:
+        """Reset server session state; return ``False`` when the connection must be replaced."""
+        execute_command = getattr(connection, "_execute_command", None)
+        read_ok_packet = getattr(connection, "_read_ok_packet", None)
+        if not callable(execute_command) or not callable(read_ok_packet):
+            return False
+        execute_command(_COM_RESET_CONNECTION, b"")
+        read_ok_packet()
+        self._initialize_connection(connection)
+        return True
 
     @contextmanager
     def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
@@ -196,6 +215,26 @@ class PyMysqlConnectionPool:
                     else:
                         self._retire_connection(connection)
                     raise
+
+            if outermost and self._reset_session_on_release:
+                try:
+                    reset_done = self._reset_connection(connection)
+                except Exception as exc:
+                    log_with_context(
+                        logger,
+                        logging.DEBUG,
+                        "pool.connection.reset_failed",
+                        adapter=_ADAPTER_NAME,
+                        pool_id=self._pool_id,
+                        database=self._database_name,
+                        error_type=type(exc).__name__,
+                    )
+                    reset_done = False
+                if not reset_done:
+                    if is_thread_conn:
+                        self._close_thread_connection()
+                    else:
+                        self._retire_connection(connection)
         finally:
             with self._registry_lock:
                 self._checked_out = max(0, self._checked_out - 1)

@@ -197,6 +197,8 @@ class PyMysqlDriverFeatures(TypedDict):
     """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[PyMysqlConnection], None]]"
     """Synchronous hook invoked with each raw ``pymysql.Connection`` upon creation."""
+    reset_session_on_release: NotRequired[bool]
+    """Send ``COM_RESET_CONNECTION`` and re-initialize each connection when it is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -501,6 +503,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
                 on_connection_create=self._user_connection_hook,
                 connection_factory=connection_factory,
                 read_only=self._read_only,
+                reset_session_on_release=bool(self.driver_features.get("reset_session_on_release", False)),
             )
         except BaseException as exc:
             if self._cloud_sql_connector is not None:

@@ -104,9 +104,12 @@ Pooled connections are reused, so a temporary table, attached database, or chang
 | Adapter | What the reset removes or restores |
 | --- | --- |
 | SQLite, aiosqlite | Detaches every database except `main` and `temp`, drops every object in the temp schema, restores the `foreign_keys`, `query_only`, `trusted_schema`, `cell_size_check`, and `recursive_triggers` settings, then re-applies the pool's configured PRAGMAs |
+| psycopg, cockroach_psycopg | Runs `DISCARD ALL` through the pool `reset` callback, then your own `reset` callback |
+| asyncpg, cockroach_asyncpg, psqlpy | Closes cursors, restores session authorization, resets settings, unlistens, releases session-level locks, and discards plans, temp objects, and sequences, without `DEALLOCATE ALL`, so the client statement cache stays valid. CockroachDB runs only the cursor, authorization, and settings statements |
+| pymysql, aiomysql, asyncmy | Sends `COM_RESET_CONNECTION`, then re-applies read-only session mode and `on_connection_create`. A driver without a command path closes the connection so the pool opens a new one |
 | DuckDB | Drops temporary tables, views, sequences, and macros, detaches databases that were not attached when the connection opened, then runs `on_connection_create` again |
 
-The option is off by default. Custom resets keep using each driver's native pool callbacks, and the built-in reset runs first when both are set.
+mysqlconnector keeps its native `pool_reset_session` option, which is on by default. The option is off by default. Custom resets keep using each driver's native pool callbacks, and the built-in reset runs first when both are set.
 
 ## Startup Warmup and Shutdown Cleanup
 

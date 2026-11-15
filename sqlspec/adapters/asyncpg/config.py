@@ -85,6 +85,10 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "reset",
     "setup",
 })
+_SESSION_RESET_SQL: Final[str] = (
+    "CLOSE ALL; SET SESSION AUTHORIZATION DEFAULT; RESET ALL; UNLISTEN *; SELECT pg_advisory_unlock_all(); "
+    "DISCARD PLANS; DISCARD TEMP; DISCARD SEQUENCES"
+)
 _CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
 _ALLOYDB_URI_PARTS: Final[int] = 8
 _AUTH_TOKEN_DEFAULT_INACTIVE_LIFETIME: Final[float] = 1800.0
@@ -233,6 +237,8 @@ class AsyncpgDriverFeatures(TypedDict):
     """Event transport backend (``notify`` for LISTEN/NOTIFY, ``notify_queue``, or ``poll_queue``)."""
     on_connection_create: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
     """Async hook invoked with each raw ``asyncpg`` connection after internal codec setup."""
+    reset_session_on_release: NotRequired[bool]
+    """Clear cursors, session authorization, settings, listeners, session-level locks, plans, temp objects, and sequences when a connection is released (defaults to ``False``)."""
     pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
     """External pooler compatibility mode; sets ``statement_cache_size=0`` in ``transaction`` or ``statement`` mode."""
     direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
@@ -780,6 +786,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         elif self.driver_features.get("enable_alloydb", False):
             self._setup_alloydb_connector(config)
 
+        if self.driver_features.get("reset_session_on_release", False):
+            config["reset"] = self._build_session_reset(config.pop("reset", None))
+
         user_init = config.pop("init", None)
         if user_init is not None and user_init != self._init_connection:
             config["init"] = self._build_chained_init(user_init)
@@ -800,6 +809,26 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             if isinstance(exc, (AsyncpgPostgresError, AsyncpgInterfaceError, TimeoutError, OSError)):
                 raise create_mapped_exception(exc) from exc
             raise
+
+    @staticmethod
+    def _build_session_reset(
+        user_reset: "Callable[[AsyncpgConnection], Awaitable[None]] | None",
+    ) -> "Callable[[AsyncpgConnection], Awaitable[None]]":
+        """Chain the built-in session reset ahead of a user ``reset`` callback.
+
+        Args:
+            user_reset: Optional callback supplied through the pool configuration.
+
+        Returns:
+            Coroutine function that resets the session and then runs the user callback.
+        """
+
+        async def reset(connection: "AsyncpgConnection") -> None:
+            await connection.execute(_SESSION_RESET_SQL)
+            if user_reset is not None:
+                await user_reset(connection)
+
+        return reset
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
         """Initialize connection with JSON codecs, pgvector support, custom codecs, and user callback.

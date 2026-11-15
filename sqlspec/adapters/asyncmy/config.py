@@ -206,6 +206,8 @@ class AsyncmyDriverFeatures(TypedDict):
     """Custom JSON deserializer applied to JSON result columns (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[AsyncmyConnection], Awaitable[None]]]"
     """Async callback invoked once per physical ``asyncmy`` connection acquired from the pool."""
+    reset_session_on_release: NotRequired[bool]
+    """Send ``COM_RESET_CONNECTION`` and re-initialize each connection when it is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable table-backed SQLSpec event queue support."""
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -250,6 +252,8 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
                 except BaseException:
                     if exc_type is None:
                         raise
+                if self._config.driver_features.get("reset_session_on_release", False):
+                    await _reset_session(self._config, _conn)
         finally:
             await ctx.__aexit__(exc_type, kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
@@ -299,6 +303,8 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
                 except BaseException:
                     if exc_type is None:
                         raise
+                if self._config.driver_features.get("reset_session_on_release", False):
+                    await _reset_session(self._config, conn)
         finally:
             if ctx is not None:
                 exit_result = cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
@@ -586,6 +592,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = None
 
 
+_COM_RESET_CONNECTION: Final[int] = 0x1F
 _FALLBACK_ASYNCMY_CONNECT_PARAMS: Final[frozenset[str]] = frozenset({
     "host",
     "user",
@@ -676,6 +683,35 @@ def _autocommit_enabled(connection: Any) -> bool:
     if callable(get_autocommit):
         return bool(get_autocommit())
     return bool(getattr(connection, "autocommit_mode", False))
+
+
+async def _reset_session(config: Any, connection: Any) -> None:
+    """Reset server session state on a released connection, closing it when the reset cannot complete.
+
+    Sends ``COM_RESET_CONNECTION`` through the driver command path and re-runs connection
+    initialization. Without a command path, or when the reset fails, the connection is closed
+    so the pool opens a fresh one.
+    """
+    if getattr(connection, "closed", False):
+        return
+    execute_command = getattr(connection, "_execute_command", None)
+    read_ok_packet = getattr(connection, "_read_ok_packet", None)
+    if not callable(execute_command) or not callable(read_ok_packet):
+        with contextlib.suppress(Exception):
+            connection.close()
+        return
+    try:
+        result = execute_command(_COM_RESET_CONNECTION, b"")
+        if inspect.isawaitable(result):
+            await result
+        result = read_ok_packet()
+        if inspect.isawaitable(result):
+            await result
+        config._initialized_connections.discard(connection)
+        await config._ensure_connection(connection)
+    except Exception:
+        with contextlib.suppress(Exception):
+            connection.close()
 
 
 async def _rollback_before_release(connection: Any) -> None:

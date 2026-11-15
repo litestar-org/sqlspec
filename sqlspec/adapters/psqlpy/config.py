@@ -200,6 +200,8 @@ class PsqlpyDriverFeatures(TypedDict):
     """Custom JSON deserializer retained alongside ``json_serializer`` (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
     """Async callback invoked once per physical ``psqlpy`` connection acquired from the pool."""
+    reset_session_on_release: NotRequired[bool]
+    """Clear cursors, session authorization, settings, listeners, session-level locks, plans, temp objects, and sequences when a connection is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable SQLSpec event channel pub/sub support (defaults to ``True`` when ``events`` is configured)."""
     enable_pgcopy_binary: NotRequired[bool]
@@ -249,6 +251,12 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
             if _conn is not None and (exc_type is not None or await _psqlpy_in_transaction(_conn)):
                 try:
                     await _rollback_or_terminate(_conn)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+            if _conn is not None and self._config.driver_features.get("reset_session_on_release", False):
+                try:
+                    await _reset_or_terminate(_conn)
                 except BaseException:
                     if exc_type is None:
                         raise
@@ -309,6 +317,12 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
             if connection is not None and (exc_type is not None or await _psqlpy_in_transaction(connection)):
                 try:
                     await _rollback_or_terminate(connection)
+                except BaseException:
+                    if exc_type is None:
+                        raise
+            if connection is not None and self._config.driver_features.get("reset_session_on_release", False):
+                try:
+                    await _reset_or_terminate(connection)
                 except BaseException:
                     if exc_type is None:
                         raise
@@ -777,6 +791,29 @@ async def _psqlpy_in_transaction(connection: Any) -> bool:
         res = in_transaction()
         return bool(await res) if inspect.isawaitable(res) else bool(res)
     return False
+
+
+_SESSION_RESET_STATEMENTS: Final[tuple[str, ...]] = (
+    "CLOSE ALL",
+    "SET SESSION AUTHORIZATION DEFAULT",
+    "RESET ALL",
+    "UNLISTEN *",
+    "SELECT pg_advisory_unlock_all()",
+    "DISCARD PLANS",
+    "DISCARD TEMP",
+    "DISCARD SEQUENCES",
+)
+
+
+async def _reset_or_terminate(connection: Any) -> None:
+    """Clear session state on a psqlpy connection or terminate the backend on failure."""
+    try:
+        for statement in _SESSION_RESET_STATEMENTS:
+            await connection.execute(statement)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await connection.execute("SELECT pg_terminate_backend(pg_backend_pid())")
+        raise
 
 
 async def _rollback_or_terminate(connection: Any) -> None:

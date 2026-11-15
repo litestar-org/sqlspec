@@ -235,10 +235,60 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     """Custom JSON deserializer retained alongside ``json_serializer`` (defaults to ``from_json``)."""
     on_connection_create: "NotRequired[Callable[..., Any]]"
     """Sync or async callback invoked with each raw Psycopg connection after internal setup."""
+    reset_session_on_release: NotRequired[bool]
+    """Run ``DISCARD ALL`` on each connection before it returns to the pool (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable queue-backed SQLSpec event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
     """Event channel backend (``poll_queue`` for CockroachDB table-backed polling)."""
+
+
+def _build_session_reset(user_reset: "Callable[..., Any] | None") -> "Callable[..., Any]":
+    """Chain the built-in ``DISCARD ALL`` reset ahead of a user pool ``reset`` callback.
+
+    Args:
+        user_reset: Optional callback supplied through the pool configuration.
+
+    Returns:
+        Callback that resets the session and then runs the user callback.
+    """
+
+    def reset(connection: Any) -> None:
+        autocommit = connection.autocommit
+        connection.autocommit = True
+        try:
+            connection.execute("DISCARD ALL")
+        finally:
+            connection.autocommit = autocommit
+        if user_reset is not None:
+            user_reset(connection)
+
+    return reset
+
+
+def _build_async_session_reset(user_reset: "Callable[..., Any] | None") -> "Callable[..., Any]":
+    """Chain the built-in ``DISCARD ALL`` reset ahead of a user pool ``reset`` callback.
+
+    Args:
+        user_reset: Optional callback supplied through the pool configuration.
+
+    Returns:
+        Coroutine function that resets the session and then runs the user callback.
+    """
+
+    async def reset(connection: Any) -> None:
+        autocommit = connection.autocommit
+        await connection.set_autocommit(True)
+        try:
+            await connection.execute("DISCARD ALL")
+        finally:
+            await connection.set_autocommit(autocommit)
+        if user_reset is not None:
+            result = user_reset(connection)
+            if inspect.isawaitable(result):
+                await result
+
+    return reset
 
 
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
@@ -597,6 +647,8 @@ class CockroachPsycopgSyncConfig(
             "close_returns": all_config.pop("close_returns", False),
         }
 
+        if self.driver_features.get("reset_session_on_release", False):
+            pool_parameters["reset"] = _build_session_reset(pool_parameters.get("reset"))
         pool_parameters["configure"] = self._configure_connection
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
@@ -1018,6 +1070,8 @@ class CockroachPsycopgAsyncConfig(
         open_pool = all_config.pop("open", True)
         pool_parameters["open"] = False if open_pool is True else open_pool
 
+        if self.driver_features.get("reset_session_on_release", False):
+            pool_parameters["reset"] = _build_async_session_reset(pool_parameters.get("reset"))
         pool_parameters["configure"] = self._configure_async_connection
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 

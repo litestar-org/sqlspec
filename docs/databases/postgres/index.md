@@ -139,7 +139,7 @@ config = AsyncpgConfig(
 
 ### Running Behind PgBouncer (pooler_mode and direct_dsn)
 
-Transaction-mode poolers multiplex backend server connections across clients after each transaction commits, breaking session-scoped prepared statements, advisory locks, and `LISTEN/NOTIFY` channels. Configure `pooler_mode="transaction"` alongside `direct_dsn`:
+Transaction-mode poolers multiplex backend server connections across clients after each transaction commits, breaking session-scoped prepared statements, session-level locks, and `LISTEN/NOTIFY` channels. Configure `pooler_mode="transaction"` alongside `direct_dsn`:
 
 ```python
 from sqlspec.adapters.asyncpg import AsyncpgConfig
@@ -158,6 +158,10 @@ config = AsyncpgConfig(
 ```
 
 With both settings active, HTTP traffic uses PgBouncer safely without prepared-statement collisions while `sqlspec upgrade` and `EventChannel` `LISTEN/NOTIFY` route through `config.derive_direct_config()`.
+
+## Session Reset on Release
+
+Set `driver_features["reset_session_on_release"] = True` on the asyncpg, psycopg, psqlpy, and CockroachDB configs to clear temporary tables, session settings, session-level locks, and listeners when a connection returns to the pool. See [Session Reset on Release](../../learn/configuration.md#session-reset-on-release).
 
 ## Type Mappings & Dialect Notes
 

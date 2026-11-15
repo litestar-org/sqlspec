@@ -72,6 +72,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "reset",
     "setup",
 })
+_SESSION_RESET_SQL: Final[str] = "CLOSE ALL; SET SESSION AUTHORIZATION DEFAULT; RESET ALL"
 _COCKROACH_ENDPOINT_IDENTITY_KEYS: Final[tuple[str, ...]] = (
     "dsn",
     "conninfo",
@@ -230,6 +231,8 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
     """Register ``pgvector`` codecs for CockroachDB ``VECTOR`` columns when ``pgvector`` is installed."""
     on_connection_create: "NotRequired[Callable[[CockroachAsyncpgConnection], Awaitable[None]]]"
     """Async callback invoked with each raw ``asyncpg`` connection after codec initialization."""
+    reset_session_on_release: NotRequired[bool]
+    """Clear cursors, session authorization, and session settings when a connection is released (defaults to ``False``)."""
     enable_events: NotRequired[bool]
     """Enable durable queue-backed SQLSpec event channel support."""
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -572,10 +575,32 @@ class CockroachAsyncpgConfig(
     async def _create_pool(self) -> "CockroachAsyncpgPool":
         config = build_connection_config(self.connection_config)
         config.setdefault("init", self._init_connection)
+        if self.driver_features.get("reset_session_on_release", False):
+            config["reset"] = self._build_session_reset(config.pop("reset", None))
         try:
             return await asyncpg_create_pool(**config)
         except (CockroachAsyncpgPostgresError, CockroachAsyncpgInterfaceError, TimeoutError, OSError) as exc:
             raise create_mapped_exception(exc) from exc
+
+    @staticmethod
+    def _build_session_reset(
+        user_reset: "Callable[[CockroachAsyncpgConnection], Awaitable[None]] | None",
+    ) -> "Callable[[CockroachAsyncpgConnection], Awaitable[None]]":
+        """Chain the built-in session reset ahead of a user ``reset`` callback.
+
+        Args:
+            user_reset: Optional callback supplied through the pool configuration.
+
+        Returns:
+            Coroutine function that resets the session and then runs the user callback.
+        """
+
+        async def reset(connection: "CockroachAsyncpgConnection") -> None:
+            await connection.execute(_SESSION_RESET_SQL)
+            if user_reset is not None:
+                await user_reset(connection)
+
+        return reset
 
     async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
         """Initialize connection with JSON codecs and user callback."""

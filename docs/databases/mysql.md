@@ -404,6 +404,10 @@ SQLSpec provides four adapters for MySQL 8.0+ and MariaDB 10.5+ sharing unified 
     | `enable_local_infile_bulk_load` | `bool` | - | Route `load_from_arrow` through `LOAD DATA LOCAL INFILE` when local infile is enabled. |
     <!-- GENERATED:END config-table:sqlspec.adapters.mysqlconnector.config.MysqlConnectorDriverFeatures -->
 
+## Session Reset on Release
+
+Set `driver_features["reset_session_on_release"] = True` on `PyMysqlConfig`, `AiomysqlConfig`, or `AsyncmyConfig` to send `COM_RESET_CONNECTION` when a connection is released, which clears temporary tables, user variables, and session settings. `MysqlConnectorConfig` uses the driver's native `pool_reset_session`, which is already on by default. See [Session Reset on Release](../learn/configuration.md#session-reset-on-release).
+
 ## Type Mappings & Dialect Notes
 
 | Database Type | Python Type | Notes / Feature Flag |
