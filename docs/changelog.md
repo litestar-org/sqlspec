@@ -35,6 +35,7 @@ important operational fixes.
 * Added `AmbiguousIdentifierError` (`sqlspec.exceptions`), raised when a catalog lookup matches several names that differ only by case and none matches exactly. Snowflake catalog reads and migration schema reconciliation match names exactly first, then case-insensitively only when one candidate remains.
 * Added FTS5 search for ADK memory on ADBC SQLite when `memory_use_fts` is enabled, and one-time FTS companion index creation/rebuild when `memory_use_fts` is enabled on an existing `sqlite`, `aiosqlite`, ADBC SQLite, or `duckdb` ADK memory table.
 * New `reset_session_on_release` driver feature resets session state (temporary tables, attached databases, settings, and similar) when a pooled connection is returned, for the SQLite, aiosqlite, DuckDB, PostgreSQL, CockroachDB, and MySQL adapters. See [Session Reset on Release](learn/configuration.md#session-reset-on-release).
+* Mutating migration commands hold a lease lock (`<version_table>_lock`) on CockroachDB, Oracle, DuckDB, Spanner, Db2, Sybase ASE, SQL Anywhere, Teradata, and ADBC/Arrow ODBC SQLite and DuckDB. `migration_config["lock_lease_seconds"]` (default 900) sets the lease, which must exceed the longest single migration. BigQuery and Snowflake log a warning; run one migrator at a time there.
 
 **Breaking changes:**
 
@@ -51,6 +52,8 @@ important operational fixes.
 * FastAPI and Litestar cursor pagination requires a cursor secret (`cursor_secret`, `SQLSPEC_CURSOR_SECRET`, or `SECRET_KEY`) and raises `ImproperConfigurationError` without one. Cursor tokens are bound to the request tenant of every tenant-enabled configuration, so tokens issued earlier restart from the first page.
 * FastAPI and Litestar search providers escape `%`, `_`, and `/` in search input by default; set `search_escape_wildcards=False` in the filter config to keep wildcard matching.
 * Explicit builder parameter names passed to `add_parameter(name=...)` or `load_parameters` must be ASCII identifiers or positional numbers.
+* `upgrade` and `downgrade` refuse to run when an applied migration file no longer matches its recorded checksum. Restore the file, or review the change and set `migration_config={"verify_checksums": False}`.
+* On PostgreSQL, the migration tracking table is resolved in the configured `version_table_schema` or the session's `current_schema()`, never through `search_path`, and must be owned by the migrating role, a role it belongs to, or a superuser.
 
 **Changed:**
 
@@ -124,6 +127,9 @@ important operational fixes.
 * `alter_column_type(using=)`, column `check=`, CHECK constraint conditions, and partial-index `where()` accept a single expression and raise `SQLBuilderError` otherwise.
 * Inlined script literals render Enum values, valid GoogleSQL strings on Spanner, and backslash strings that are correct under MySQL `NO_BACKSLASH_ESCAPES`.
 * Forged cursor values raise `InvalidCursorError`; deeply nested statements raise `SQLParsingError`; statement splitting past the nesting limit raises `SQLParsingError`; ADBC conversion failures raise `DataError`; builder `where_in(col, [])` matches no rows instead of rendering `IN ()`; statement cache keys use 128-bit digests over the full SQL text.
+* Migration messages, authors, and squash descriptions containing Unicode line separators, vertical tabs, form feeds, or other control characters no longer create extra header lines.
+* Migration checksums detect every edit outside the exact single-line `-- name: migrate-<version>-up/down` and `Version:` headers, including moving an up/down header. Checksums recorded by earlier releases still verify for unchanged files and are re-recorded in the new form the next time `verify`, `upgrade`, or `downgrade` runs.
+* Schema extraction (`--from-schema`, `dump-schema`) and `squash --strategy schema` refuse tables protected by Oracle VPD or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit.
 
 ### v0.71.1 - Documentation overhaul, generated configuration tables, and query builder fixes
 
