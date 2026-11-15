@@ -1180,10 +1180,8 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             raise NotImplementedError(msg)
         return self._search_entries(query, app_name, user_id, limit, scope_filter, read=True)
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         return self._delete_entries_by_session(session_id, app_name=app_name, user_id=user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -1503,9 +1501,7 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             records.append(record)
         return records
 
-    def _delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Synchronous implementation of delete_entries_by_session."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1513,12 +1509,10 @@ class DuckDBADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
         clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = ?")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = ?")
-            params.append(user_id)
+        clauses.append("app_name = ?")
+        params.append(app_name)
+        clauses.append("user_id = ?")
+        params.append(user_id)
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"
         with self._config.provide_connection() as conn:

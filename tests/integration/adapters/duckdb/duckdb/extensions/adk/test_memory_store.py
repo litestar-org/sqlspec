@@ -84,7 +84,7 @@ def test_duckdb_memory_store_delete_by_session(tmp_path: Path) -> None:
     record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
     store.insert_memory_entries([record1, record2])
 
-    deleted = store.delete_entries_by_session("s1")
+    deleted = store.delete_entries_by_session("s1", "app", "user")
     assert deleted == 1
 
     remaining = store.search_entries(query="latte", app_name="app", user_id="user")

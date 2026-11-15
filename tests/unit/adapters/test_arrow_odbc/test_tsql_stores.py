@@ -607,8 +607,11 @@ _TSQL_ADK_MEMORY_CALLS = [
         ["app", "%hello%"],
     ),
     ("BEGIN TRANSACTION", None),
-    ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
-    ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
+    (
+        "SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?",
+        ["s1", "app", "user"],
+    ),
+    ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?", ["s1", "app", "user"]),
     ("COMMIT TRANSACTION", None),
     ("BEGIN TRANSACTION", None),
     (
@@ -648,7 +651,7 @@ def test_tsql_adk_memory_store_statements() -> None:
     store.insert_memory_entries([_ADK_MEMORY_ENTRY], owner_id=7)
     store.search_entries("hello", "app", "u", limit=3)
     store.search_entries("hello", "app", "u", scope_filter="app")
-    store.delete_entries_by_session("s1")
+    store.delete_entries_by_session("s1", "app", "user")
     store.delete_entries_older_than(30, app_name="app", scope="user")
 
     assert normalized_calls(connection) == _TSQL_ADK_MEMORY_CALLS
@@ -737,7 +740,7 @@ def test_tsql_adk_memory_delete_missing_table_returns_zero_and_search_escapes_wi
     monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
     missing_error = FakeOdbcError("State: 42S02, Native error: 208, Message: Invalid object name 'dbo.adk_memory'.")
     missing_store = ArrowOdbcADKMemoryStore(_tsql_adk_config(FakeArrowOdbcConnection(error=missing_error)))
-    assert missing_store.delete_entries_by_session("s1") == 0
+    assert missing_store.delete_entries_by_session("s1", "app", "user") == 0
     assert missing_store.delete_entries_older_than(7) == 0
 
     connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)

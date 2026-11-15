@@ -1368,36 +1368,17 @@ def test_sqlanywhere_adk_events_join_and_delete_session_scoping(monkeypatch: pyt
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_sql", "expected_params"),
     [
-        pytest.param(None, None, 'DELETE FROM "DBA"."adk_memory" WHERE session_id = ?', ("s1",), id="session-only"),
-        pytest.param(
-            "app",
-            None,
-            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND app_name = ?',
-            ("s1", "app"),
-            id="session-and-app",
-        ),
-        pytest.param(
-            None,
-            "u1",
-            'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND user_id = ?',
-            ("s1", "u1"),
-            id="session-and-user",
-        ),
         pytest.param(
             "app",
             "u1",
             'DELETE FROM "DBA"."adk_memory" WHERE session_id = ? AND app_name = ? AND user_id = ?',
             ("s1", "app", "u1"),
             id="session-app-and-user",
-        ),
+        )
     ],
 )
 def test_sqlanywhere_adk_memory_delete_entries_by_session_owner_filters(
-    monkeypatch: pytest.MonkeyPatch,
-    app_name: "str | None",
-    user_id: "str | None",
-    expected_sql: str,
-    expected_params: "tuple[str, ...]",
+    monkeypatch: pytest.MonkeyPatch, app_name: str, user_id: str, expected_sql: str, expected_params: "tuple[str, ...]"
 ) -> None:
     """SqlanywhereADKMemoryStore.delete_entries_by_session appends owner predicates when provided."""
     calls: list[tuple[str, tuple[Any, ...]]] = []

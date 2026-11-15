@@ -635,7 +635,7 @@ def test_db2_adk_memory_search_and_delete() -> None:
     store = _memory_store(connection)
 
     found = store.search_entries("hello", "app", "u", limit=3)
-    deleted = store.delete_entries_by_session("s1")
+    deleted = store.delete_entries_by_session("s1", "app", "user")
 
     assert [(entry["id"], entry["content_json"], entry["timestamp"]) for entry in found] == [
         ("m1", {"t": 1}, _EVENT_TIME)
@@ -651,8 +651,11 @@ def test_db2_adk_memory_search_and_delete() -> None:
         ["app", "u", "%hello%"],
     )
     assert calls[1:] == [
-        ("SELECT COUNT(*) AS row_count FROM adk_memory WHERE session_id = ?", ["s1"]),
-        ("DELETE FROM adk_memory WHERE session_id = ?", ["s1"]),
+        (
+            "SELECT COUNT(*) AS row_count FROM adk_memory WHERE session_id = ? AND app_name = ? AND user_id = ?",
+            ["s1", "app", "user"],
+        ),
+        ("DELETE FROM adk_memory WHERE session_id = ? AND app_name = ? AND user_id = ?", ["s1", "app", "user"]),
     ]
 
 

@@ -675,18 +675,14 @@ class SnowflakeADKMemoryStore(BaseSyncADKMemoryStore[SnowflakeConfig]):
         else:
             return memories
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: str | None = None, user_id: str | None = None
-    ) -> int:
-        """Delete memories originating from the specified session, optionally scoped by owner."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memories originating from the specified session, owned by an app and user."""
         predicate = "session_id = ?"
         parameters: list[Any] = [session_id]
-        if app_name is not None:
-            predicate += " AND app_name = ?"
-            parameters.append(app_name)
-        if user_id is not None:
-            predicate += " AND user_id = ?"
-            parameters.append(user_id)
+        predicate += " AND app_name = ?"
+        parameters.append(app_name)
+        predicate += " AND user_id = ?"
+        parameters.append(user_id)
         return self._delete(predicate, parameters)
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:

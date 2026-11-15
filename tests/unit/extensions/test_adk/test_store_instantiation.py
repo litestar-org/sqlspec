@@ -169,8 +169,8 @@ def test_store_method_signatures_match_base_contract(class_path: str) -> None:
             f"{concrete_signature} != {base_signature}"
         )
         if method_name == "delete_entries_by_session":
-            assert concrete_signature.parameters["app_name"].default is None
-            assert concrete_signature.parameters["user_id"].default is None
+            assert concrete_signature.parameters["app_name"].default is inspect.Parameter.empty
+            assert concrete_signature.parameters["user_id"].default is inspect.Parameter.empty
 
 
 @pytest.mark.parametrize("class_path", SYNC_SESSION_STORE_CLASSES)

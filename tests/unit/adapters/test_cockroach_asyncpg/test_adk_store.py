@@ -532,20 +532,17 @@ async def test_cockroach_asyncpg_get_events_joins_on_session_and_owner_columns()
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "WHERE session_id = $1", ("s1",), id="session-only"),
-        pytest.param("app", None, "WHERE session_id = $1 AND app_name = $2", ("s1", "app"), id="session-and-app"),
-        pytest.param(None, "u1", "WHERE session_id = $1 AND user_id = $2", ("s1", "u1"), id="session-and-user"),
         pytest.param(
             "app",
             "u1",
             "WHERE session_id = $1 AND app_name = $2 AND user_id = $3",
             ("s1", "app", "u1"),
             id="session-app-user",
-        ),
+        )
     ],
 )
 async def test_cockroach_asyncpg_delete_entries_by_session_scopes_predicates(
-    app_name: "str | None", user_id: "str | None", expected_where: str, expected_params: tuple[str, ...]
+    app_name: str, user_id: str, expected_where: str, expected_params: tuple[str, ...]
 ) -> None:
     conn = _RecordingConnection(status="DELETE 2")
     config = _mock_config({"enable_memory": True})
@@ -606,7 +603,7 @@ async def test_cockroach_asyncpg_memory_delete_parses_status_rowcount_safely(sta
     config.provide_connection = lambda *_a, **_k: conn
     store = CockroachAsyncpgADKMemoryStore(config)
 
-    assert await store.delete_entries_by_session("s1") == expected
+    assert await store.delete_entries_by_session("s1", "app", "user") == expected
     assert await store.delete_entries_older_than(7) == expected
 
 

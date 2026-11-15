@@ -944,11 +944,7 @@ def test_duckdb_memory_deduplicates_by_app_user_and_event_id(
 
 @pytest.mark.parametrize(
     ("filter_app", "filter_user", "expected_deleted", "expected_remaining_ids"),
-    [
-        pytest.param(None, None, 3, [], id="unscoped-session"),
-        pytest.param("app_a", None, 2, ["m3"], id="app-scoped"),
-        pytest.param("app_a", "user_1", 1, ["m2", "m3"], id="app-and-user-scoped"),
-    ],
+    [pytest.param("app_a", "user_1", 1, ["m2", "m3"], id="app-and-user-scoped")],
 )
 def test_duckdb_delete_entries_by_session_scoping(
     tmp_path: Path,

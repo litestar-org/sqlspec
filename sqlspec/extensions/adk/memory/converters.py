@@ -165,14 +165,14 @@ def memory_entry_to_record(
         except (ValueError, TypeError):
             timestamp = now
 
-    record_id = entry.id or str(uuid4())
+    record_id = str(uuid4())
     return StoredMemory(
         id=record_id,
         session_id=_UNKNOWN_SESSION_ID,
         app_name=app_name,
         user_id=user_id,
         scope=scope,
-        event_id=record_id,
+        event_id=entry.id or record_id,
         author=entry.author or "",
         timestamp=timestamp,
         content_json=content_dict,
@@ -234,8 +234,10 @@ def session_to_memory_records(
 def record_to_memory_entry(record: "StoredMemory") -> "MemoryEntry":
     """Convert a database record to an ADK MemoryEntry.
 
-    Preserves ``id``, ``custom_metadata``, and propagates ``scope``
-    into the entry's custom metadata.
+    Direct entries (stored under the unknown-session sentinel) return the
+    caller-supplied ``event_id`` as the entry id; event-derived records return
+    their generated ``id``. ``custom_metadata`` is preserved and ``scope`` is
+    propagated into the entry's custom metadata.
 
     Args:
         record: Memory database record.
@@ -251,12 +253,9 @@ def record_to_memory_entry(record: "StoredMemory") -> "MemoryEntry":
     if "scope" not in custom_metadata and record.get("scope"):
         custom_metadata["scope"] = record["scope"]
 
+    entry_id = record["event_id"] if record["session_id"] == _UNKNOWN_SESSION_ID else record["id"]
     return MemoryEntry(
-        id=record["id"],
-        content=content,
-        author=record["author"],
-        timestamp=timestamp_str,
-        custom_metadata=custom_metadata,
+        id=entry_id, content=content, author=record["author"], timestamp=timestamp_str, custom_metadata=custom_metadata
     )
 
 

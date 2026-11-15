@@ -95,6 +95,8 @@ Instantiate the adapter's `*ADKStore` (such as `AiosqliteADKStore`, `AsyncpgADKS
 --8<-- "docs/examples/extensions/adk/memory_store.py:example"
 ```
 
+Memory entry ids are unique per app and user, so two users can store entries with the same id. `delete_entries_by_session(session_id, app_name, user_id)` requires both owners and removes only that owner's rows.
+
 When wiring an ADK `Runner`, pass `SQLSpecSessionService(store)`, `SQLSpecMemoryService(memory_store)`, and `SQLSpecArtifactService(artifact_store, artifact_storage_uri)` inside an async context manager (`async with SQLSpecSessionService(store) as session_service:`) so session locks and resources close cleanly on shutdown.
 
 ## Full-Text, Vector, and Hybrid RRF Memory Search

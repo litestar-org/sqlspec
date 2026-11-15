@@ -678,19 +678,17 @@ async def test_aiomysql_get_events_joins_session_on_three_columns() -> None:
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "session_id = %s", ("sess-1",), id="session-only"),
-        pytest.param("app-a", None, "session_id = %s AND app_name = %s", ("sess-1", "app-a"), id="app-scoped"),
         pytest.param(
             "app-a",
             "user-1",
             "session_id = %s AND app_name = %s AND user_id = %s",
             ("sess-1", "app-a", "user-1"),
             id="app-user-scoped",
-        ),
+        )
     ],
 )
 async def test_aiomysql_delete_entries_by_session_scopes_predicates(
-    app_name: "str | None", user_id: "str | None", expected_where: str, expected_params: tuple[str, ...]
+    app_name: str, user_id: str, expected_where: str, expected_params: tuple[str, ...]
 ) -> None:
     """delete_entries_by_session appends app_name and user_id predicates when provided."""
     config, _conn, cursor = _make_aiomysql_scoping_mocks(rowcount=2)

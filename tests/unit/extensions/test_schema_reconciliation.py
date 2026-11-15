@@ -568,9 +568,7 @@ async def test_adk_memory_targets_follow_enabled_flag(monkeypatch: pytest.Monkey
             del query, app_name, user_id, limit, scope_filter, embedding
             return []
 
-        def delete_entries_by_session(
-            self, session_id: str, app_name: str | None = None, user_id: str | None = None
-        ) -> int:
+        def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
             del session_id, app_name, user_id
             return 0
 

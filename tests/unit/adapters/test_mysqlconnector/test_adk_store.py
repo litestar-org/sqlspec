@@ -517,7 +517,7 @@ async def test_mysqlconnector_memory_store_missing_table_handling() -> None:
 
     sync_store = MysqlConnectorSyncADKMemoryStore(sync_config)
     assert sync_store.search_entries("test", "app", "u1") == []
-    assert sync_store.delete_entries_by_session("sess-1") == 0
+    assert sync_store.delete_entries_by_session("sess-1", "app", "user") == 0
     assert sync_store.delete_entries_older_than(30) == 0
 
     async_cursor = MagicMock()
@@ -532,7 +532,7 @@ async def test_mysqlconnector_memory_store_missing_table_handling() -> None:
 
     async_store = MysqlConnectorAsyncADKMemoryStore(async_config)
     assert await async_store.search_entries("test", "app", "u1") == []
-    assert await async_store.delete_entries_by_session("sess-1") == 0
+    assert await async_store.delete_entries_by_session("sess-1", "app", "user") == 0
     assert await async_store.delete_entries_older_than(30) == 0
 
 
@@ -939,19 +939,17 @@ async def test_mysqlconnector_get_events_joins_session_on_three_columns(mode: st
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "session_id = %s", ("sess-1",), id="session-only"),
-        pytest.param("app-a", None, "session_id = %s AND app_name = %s", ("sess-1", "app-a"), id="app-scoped"),
         pytest.param(
             "app-a",
             "user-1",
             "session_id = %s AND app_name = %s AND user_id = %s",
             ("sess-1", "app-a", "user-1"),
             id="app-user-scoped",
-        ),
+        )
     ],
 )
 async def test_mysqlconnector_delete_entries_by_session_scopes_predicates(
-    mode: str, app_name: "str | None", user_id: "str | None", expected_where: str, expected_params: tuple[str, ...]
+    mode: str, app_name: str, user_id: str, expected_where: str, expected_params: tuple[str, ...]
 ) -> None:
     """delete_entries_by_session appends app_name and user_id predicates when provided."""
     _store, memory_store, _conn, cursor = _make_mysqlconnector_scoping_mocks(mode, rowcount=2)

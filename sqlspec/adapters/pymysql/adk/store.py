@@ -369,10 +369,8 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         """Search memory entries by text query."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter, read=True)
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         return self._delete_entries_by_session(session_id, app_name, user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -568,21 +566,17 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             records.append(record)
         return records
 
-    def _delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = %s")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = %s")
-            params.append(user_id)
+        clauses.append("app_name = %s")
+        params.append(app_name)
+        clauses.append("user_id = %s")
+        params.append(user_id)
         sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {' AND '.join(clauses)}"
         try:
             with self._config.provide_connection() as conn:

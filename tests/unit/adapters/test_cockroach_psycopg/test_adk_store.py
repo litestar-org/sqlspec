@@ -763,25 +763,17 @@ async def test_cockroach_psycopg_get_events_joins_on_session_and_owner_columns(s
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "WHERE session_id = %s", ("s1",), id="session-only"),
-        pytest.param("app", None, "WHERE session_id = %s AND app_name = %s", ("s1", "app"), id="session-and-app"),
-        pytest.param(None, "u1", "WHERE session_id = %s AND user_id = %s", ("s1", "u1"), id="session-and-user"),
         pytest.param(
             "app",
             "u1",
             "WHERE session_id = %s AND app_name = %s AND user_id = %s",
             ("s1", "app", "u1"),
             id="session-app-user",
-        ),
+        )
     ],
 )
 async def test_cockroach_psycopg_delete_entries_by_session_scopes_predicates(
-    store_cls: Any,
-    is_async: bool,
-    app_name: "str | None",
-    user_id: "str | None",
-    expected_where: str,
-    expected_params: tuple[str, ...],
+    store_cls: Any, is_async: bool, app_name: str, user_id: str, expected_where: str, expected_params: tuple[str, ...]
 ) -> None:
     store, cursor, connection = _build_cockroach_psycopg_store(
         store_cls, is_async=is_async, adk_config={"enable_memory": True}, rowcount=2

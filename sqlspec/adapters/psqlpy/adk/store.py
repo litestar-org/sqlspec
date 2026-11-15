@@ -986,9 +986,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                 return []
             raise
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -996,12 +994,10 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
         clauses = ["session_id = $1"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            params.append(app_name)
-            clauses.append(f"app_name = ${len(params)}")
-        if user_id is not None:
-            params.append(user_id)
-            clauses.append(f"user_id = ${len(params)}")
+        params.append(app_name)
+        clauses.append(f"app_name = ${len(params)}")
+        params.append(user_id)
+        clauses.append(f"user_id = ${len(params)}")
         where_clause = " AND ".join(clauses)
 
         sql = (

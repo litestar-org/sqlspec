@@ -219,7 +219,7 @@ async def test_adapter_store_offloads_only_pure_reads(
     if artifact:
         await _invoke(store.get_next_version, "app", "user", "artifact")
     elif memory:
-        await _invoke(store.delete_entries_by_session, "session")
+        await _invoke(store.delete_entries_by_session, "session", "app", "user")
     else:
         assert await _invoke(store.get_session, "app", "user", "session", renew_for=0) is None
     assert calls

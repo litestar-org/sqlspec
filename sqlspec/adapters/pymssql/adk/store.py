@@ -722,18 +722,14 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"), read=True)
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = %s")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = %s")
-            params.append(user_id)
+        clauses.append("app_name = %s")
+        params.append(app_name)
+        clauses.append("user_id = %s")
+        params.append(user_id)
         where_sql = " AND ".join(clauses)
         return self._execute(
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True

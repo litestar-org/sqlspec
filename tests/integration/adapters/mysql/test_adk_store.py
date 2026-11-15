@@ -447,7 +447,7 @@ async def test_mysql_adk_qualified_memory_round_trip(
         assert len(found) == 1
         assert found[0]["id"] == "m1"
 
-        deleted = await _call(mysql_adk_store_harness, store.delete_entries_by_session, "s1")
+        deleted = await _call(mysql_adk_store_harness, store.delete_entries_by_session, "s1", "app", "user")
         assert deleted == 1
 
         entry2: StoredMemory = {

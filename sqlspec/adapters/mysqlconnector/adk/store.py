@@ -1557,22 +1557,18 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             records.append(rec)
         return records
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = %s")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = %s")
-            params.append(user_id)
+        clauses.append("app_name = %s")
+        params.append(app_name)
+        clauses.append("user_id = %s")
+        params.append(user_id)
         sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {' AND '.join(clauses)}"
         try:
             async with self._config.provide_connection() as conn:
@@ -1823,22 +1819,18 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             records.append(rec)
         return records
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         clauses = ["session_id = %s"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = %s")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = %s")
-            params.append(user_id)
+        clauses.append("app_name = %s")
+        params.append(app_name)
+        clauses.append("user_id = %s")
+        params.append(user_id)
         sql = f"DELETE FROM {_mysql_table_ref(self._memory_table)} WHERE {' AND '.join(clauses)}"
         try:
             with self._config.provide_connection() as conn:

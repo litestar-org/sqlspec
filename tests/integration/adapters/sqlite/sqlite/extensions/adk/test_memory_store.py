@@ -104,7 +104,7 @@ def test_sqlite_memory_store_delete_by_session() -> None:
         record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
         store.insert_memory_entries([record1, record2])
 
-        deleted = store.delete_entries_by_session("s1")
+        deleted = store.delete_entries_by_session("s1", "app", "user")
         assert deleted == 1
 
         remaining = store.search_entries(query="latte", app_name="app", user_id="user")
@@ -289,7 +289,7 @@ def test_sqlite_fts_companions_create_for_empty_source() -> None:
             assert len(fts_store.search_entries("latte", "app", "user")) == 1
             assert len(fts_store.search_entries("espresso", "app", "user")) == 0
 
-            fts_store.delete_entries_by_session("s1")
+            fts_store.delete_entries_by_session("s1", "app", "user")
             assert len(fts_store.search_entries("latte", "app", "user")) == 0
         finally:
             plain_config.close_pool()

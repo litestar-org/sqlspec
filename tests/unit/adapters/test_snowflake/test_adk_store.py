@@ -476,8 +476,11 @@ def test_memory_guards_and_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
         store.insert_memory_entries([entry])
     with pytest.raises(NotImplementedError, match="vector embeddings"):
         store.search_entries("budget", "app", "u1", embedding=[0.1])
-    assert store.delete_entries_by_session("s1") == 1
-    assert driver.execute.call_args.args == ("DELETE FROM adk_memory WHERE session_id = ?", ["s1"])
+    assert store.delete_entries_by_session("s1", "app", "user") == 1
+    assert driver.execute.call_args.args == (
+        "DELETE FROM adk_memory WHERE session_id = ? AND app_name = ? AND user_id = ?",
+        ["s1", "app", "user"],
+    )
     assert store.delete_entries_older_than(7, "app", "user") == 1
     assert "inserted_at < ? AND app_name = ? AND scope = ?" in driver.execute.call_args.args[0]
     disabled_config, disabled_driver = store_config(monkeypatch, {"adk": {"enable_memory": False}})
@@ -518,7 +521,7 @@ def test_memory_missing_tables_and_other_failures(monkeypatch: pytest.MonkeyPatc
     driver.select.side_effect = NotFoundError("Table does not exist")
     driver.execute.side_effect = NotFoundError("Table does not exist")
     assert store.search_entries("budget", "app", "u1") == []
-    assert store.delete_entries_by_session("s1") == 0
+    assert store.delete_entries_by_session("s1", "app", "user") == 0
     assert store.delete_entries_older_than(7) == 0
     driver.select.side_effect = SQLSpecError("permission denied")
     with pytest.raises(SQLSpecError, match="permission denied"):
@@ -605,27 +608,16 @@ def test_adk_append_event_requires_session_ownership_and_mismatch_fails_fast(mon
     ("app_name", "user_id", "expected_sql", "expected_params"),
     [
         pytest.param(
-            "app", None, "DELETE FROM adk_memory WHERE session_id = ? AND app_name = ?", ["s1", "app"], id="app"
-        ),
-        pytest.param(
             "app",
             "u1",
             "DELETE FROM adk_memory WHERE session_id = ? AND app_name = ? AND user_id = ?",
             ["s1", "app", "u1"],
             id="both",
-        ),
-        pytest.param(
-            None, "u1", "DELETE FROM adk_memory WHERE session_id = ? AND user_id = ?", ["s1", "u1"], id="user"
-        ),
-        pytest.param(None, None, "DELETE FROM adk_memory WHERE session_id = ?", ["s1"], id="session"),
+        )
     ],
 )
 def test_memory_delete_entries_by_session_scopes_owner_predicates_and_composite_ddl(
-    monkeypatch: pytest.MonkeyPatch,
-    app_name: str | None,
-    user_id: str | None,
-    expected_sql: str,
-    expected_params: list[str],
+    monkeypatch: pytest.MonkeyPatch, app_name: str, user_id: str, expected_sql: str, expected_params: list[str]
 ) -> None:
     """delete_entries_by_session appends owner predicates and DDL declares composite UNIQUE."""
     config, driver = store_config(monkeypatch)

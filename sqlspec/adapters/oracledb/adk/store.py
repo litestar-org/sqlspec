@@ -2797,17 +2797,13 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 return []
             raise
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         clauses = ["session_id = :session_id"]
         params: dict[str, Any] = {"session_id": session_id}
-        if app_name is not None:
-            clauses.append("app_name = :app_name")
-            params["app_name"] = app_name
-        if user_id is not None:
-            clauses.append("user_id = :user_id")
-            params["user_id"] = user_id
+        clauses.append("app_name = :app_name")
+        params["app_name"] = app_name
+        clauses.append("user_id = :user_id")
+        params["user_id"] = user_id
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
@@ -3329,18 +3325,14 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 return []
             raise
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         clauses = ["session_id = :session_id"]
         params: dict[str, Any] = {"session_id": session_id}
-        if app_name is not None:
-            clauses.append("app_name = :app_name")
-            params["app_name"] = app_name
-        if user_id is not None:
-            clauses.append("user_id = :user_id")
-            params["user_id"] = user_id
+        clauses.append("app_name = :app_name")
+        params["app_name"] = app_name
+        clauses.append("user_id = :user_id")
+        params["user_id"] = user_id
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn, conn.cursor() as cursor:

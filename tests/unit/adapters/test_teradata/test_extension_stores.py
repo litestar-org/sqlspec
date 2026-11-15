@@ -212,7 +212,7 @@ def test_teradata_memory_insert_search_and_delete(teradata_connection) -> None:
     assert "TOP 3" in cursor.execute.call_args.args[0]
     assert store.search_entries("hello", "app", "user", limit=0) == []
     assert store.insert_memory_entries([]) == 0
-    assert store.delete_entries_by_session("session") == 1
+    assert store.delete_entries_by_session("session", "app", "user") == 1
     assert store.delete_entries_older_than(3, "app", "user") == 1
     assert cursor.execute.call_args.args[1][1:] == ("app", "user")
 
@@ -866,28 +866,17 @@ def test_teradata_adk_append_event_checks_session_ownership_and_rejects_mismatch
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_sql", "expected_params"),
     [
-        pytest.param(None, None, 'DELETE FROM "ADK_MEMORY" WHERE session_id = ?', ("s1",), id="session-only"),
-        pytest.param(
-            "app", None, 'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND app_name = ?', ("s1", "app"), id="with-app"
-        ),
-        pytest.param(
-            None, "u1", 'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND user_id = ?', ("s1", "u1"), id="with-user"
-        ),
         pytest.param(
             "app",
             "u1",
             'DELETE FROM "ADK_MEMORY" WHERE session_id = ? AND app_name = ? AND user_id = ?',
             ("s1", "app", "u1"),
             id="with-app-and-user",
-        ),
+        )
     ],
 )
 def test_teradata_memory_composite_dedup_ddl_and_scoped_session_delete(
-    teradata_connection: Any,
-    app_name: str | None,
-    user_id: str | None,
-    expected_sql: str,
-    expected_params: tuple[str, ...],
+    teradata_connection: Any, app_name: str, user_id: str, expected_sql: str, expected_params: tuple[str, ...]
 ) -> None:
     """Memory DDL declares composite UNIQUE, batch dedup keeps cross-owner event_ids, and session delete scopes owner."""
     _conn, cursor = teradata_connection

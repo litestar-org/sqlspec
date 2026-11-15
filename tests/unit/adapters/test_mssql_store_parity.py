@@ -731,17 +731,9 @@ def test_adk_memory_duplicate_predicate_matches_modulo_placeholder(
     assert mssql_batch[0] == pymssql_params
 
 
-@pytest.mark.parametrize(
-    ("app_name", "user_id"),
-    [
-        pytest.param(None, None, id="session-only"),
-        pytest.param("app", None, id="session-and-app"),
-        pytest.param(None, "u1", id="session-and-user"),
-        pytest.param("app", "u1", id="session-app-and-user"),
-    ],
-)
+@pytest.mark.parametrize(("app_name", "user_id"), [pytest.param("app", "u1", id="session-app-and-user")])
 def test_adk_memory_delete_entries_by_session_matches_modulo_placeholder(
-    monkeypatch: pytest.MonkeyPatch, app_name: "str | None", user_id: "str | None"
+    monkeypatch: pytest.MonkeyPatch, app_name: str, user_id: str
 ) -> None:
     """Scoped delete_entries_by_session SQL and bindings match across SQL Server drivers."""
     calls: dict[str, tuple[str, tuple[Any, ...]]] = {}

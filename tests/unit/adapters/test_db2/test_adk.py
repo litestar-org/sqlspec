@@ -599,13 +599,16 @@ async def test_memory_search_decodes_rows_and_session_delete_counts(db2_mode: Dr
     )
 
     [memory] = await db2_mode.call(store.search_entries, query="hi", app_name="app", user_id="u1", scope_filter="user")
-    deleted = await db2_mode.call(store.delete_entries_by_session, "s1")
+    deleted = await db2_mode.call(store.delete_entries_by_session, "s1", "app", "user")
 
     assert memory["inserted_at"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert memory["author"] is None
     assert memory["metadata_json"] is None
     assert deleted == 1
-    assert config.executed[-1] == (f"DELETE FROM {store.memory_table} WHERE session_id = ?", ("s1",))
+    assert config.executed[-1] == (
+        f"DELETE FROM {store.memory_table} WHERE session_id = ? AND app_name = ? AND user_id = ?",
+        ("s1", "app", "user"),
+    )
     assert store._drop_memory_table_sql() == [f"DROP TABLE {store.memory_table}"]
 
 
@@ -737,7 +740,7 @@ async def test_memory_operations_on_missing_table_return_empty_or_zero(db2_mode:
     assert await db2_mode.call(store1.search_entries, query="q", app_name="app", user_id="u1") == []
 
     store2, _ = _memory_store(db2_mode, missing_cursor())
-    assert await db2_mode.call(store2.delete_entries_by_session, "s1") == 0
+    assert await db2_mode.call(store2.delete_entries_by_session, "s1", "app", "user") == 0
 
     store3, _ = _memory_store(db2_mode, missing_cursor())
     assert await db2_mode.call(store3.delete_entries_older_than, 7) == 0
@@ -1053,24 +1056,17 @@ async def test_append_event_and_update_state_rejects_mismatched_scope(
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "session_id = ?", ("s1",), id="session-only"),
-        pytest.param("app", None, "session_id = ? AND app_name = ?", ("s1", "app"), id="session-and-app"),
-        pytest.param(None, "u1", "session_id = ? AND user_id = ?", ("s1", "u1"), id="session-and-user"),
         pytest.param(
             "app",
             "u1",
             "session_id = ? AND app_name = ? AND user_id = ?",
             ("s1", "app", "u1"),
             id="session-app-and-user",
-        ),
+        )
     ],
 )
 async def test_memory_composite_dedup_and_scoped_delete_by_session(
-    db2_mode: DriverMode,
-    app_name: "str | None",
-    user_id: "str | None",
-    expected_where: str,
-    expected_params: "tuple[str, ...]",
+    db2_mode: DriverMode, app_name: str, user_id: str, expected_where: str, expected_params: "tuple[str, ...]"
 ) -> None:
     """Memory DDL and batch deduplication use (app_name, user_id, event_id) and deletes scope by owner."""
     existing = FakeDb2Cursor(

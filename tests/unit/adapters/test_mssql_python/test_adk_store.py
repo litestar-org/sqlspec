@@ -604,34 +604,19 @@ def test_mssql_python_delete_session_deletes_scoped_events_before_session() -> N
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_sql", "expected_params"),
     [
-        pytest.param(None, None, "DELETE FROM [dbo].[adk_memory] WHERE session_id = ?", ("s1",), id="session-only"),
-        pytest.param(
-            "app",
-            None,
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ?",
-            ("s1", "app"),
-            id="session-and-app",
-        ),
-        pytest.param(
-            None,
-            "u1",
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND user_id = ?",
-            ("s1", "u1"),
-            id="session-and-user",
-        ),
         pytest.param(
             "app",
             "u1",
             "DELETE FROM [dbo].[adk_memory] WHERE session_id = ? AND app_name = ? AND user_id = ?",
             ("s1", "app", "u1"),
             id="session-app-and-user",
-        ),
+        )
     ],
 )
 def test_mssql_python_memory_dedup_and_scoped_delete_entries_by_session(
     monkeypatch: "pytest.MonkeyPatch",
-    app_name: "str | None",
-    user_id: "str | None",
+    app_name: str,
+    user_id: str,
     expected_sql: str,
     expected_params: "tuple[str, ...]",
 ) -> None:

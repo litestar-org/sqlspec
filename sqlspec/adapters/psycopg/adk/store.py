@@ -1806,9 +1806,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -1816,12 +1814,10 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
 
         clauses: list[pg_sql.Composable] = [pg_sql.SQL("session_id = %s")]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append(pg_sql.SQL("app_name = %s"))
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append(pg_sql.SQL("user_id = %s"))
-            params.append(user_id)
+        clauses.append(pg_sql.SQL("app_name = %s"))
+        params.append(app_name)
+        clauses.append(pg_sql.SQL("user_id = %s"))
+        params.append(user_id)
 
         sql = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
             table=_pg_table_identifier(self._memory_table), where=pg_sql.SQL(" AND ").join(clauses)
@@ -2174,9 +2170,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         except errors.UndefinedTable:
             return []
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Delete memory entries for a specific session."""
         if not self._enabled:
             msg = "Memory store is disabled"
@@ -2184,12 +2178,10 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
 
         clauses: list[pg_sql.Composable] = [pg_sql.SQL("session_id = %s")]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append(pg_sql.SQL("app_name = %s"))
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append(pg_sql.SQL("user_id = %s"))
-            params.append(user_id)
+        clauses.append(pg_sql.SQL("app_name = %s"))
+        params.append(app_name)
+        clauses.append(pg_sql.SQL("user_id = %s"))
+        params.append(user_id)
 
         sql = pg_sql.SQL("DELETE FROM {table} WHERE {where}").format(
             table=_pg_table_identifier(self._memory_table), where=pg_sql.SQL(" AND ").join(clauses)

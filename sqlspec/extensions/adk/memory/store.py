@@ -369,15 +369,13 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner.
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session owned by an app and user.
 
         Args:
             session_id: Session ID to delete entries for.
-            app_name: Optional application name owner filter.
-            user_id: Optional user identifier owner filter.
+            app_name: Application name that owns the entries.
+            user_id: User identifier that owns the entries.
 
         Returns:
             Number of entries deleted.
@@ -523,15 +521,13 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner.
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session owned by an app and user.
 
         Args:
             session_id: Session ID to delete entries for.
-            app_name: Optional application name owner filter.
-            user_id: Optional user identifier owner filter.
+            app_name: Application name that owns the entries.
+            user_id: User identifier that owns the entries.
 
         Returns:
             Number of entries deleted.

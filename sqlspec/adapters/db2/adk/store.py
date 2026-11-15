@@ -1102,9 +1102,7 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: str | None = None, user_id: str | None = None
-    ) -> int:
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Delete memory entries for a specific session, optionally scoped by owner."""
         _, delete_sql, params = _memory_session_delete_statements(self._memory_table, session_id, app_name, user_id)
         try:
@@ -1241,9 +1239,7 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
             raise
         return [_memory_record_from_row(row) for row in rows]
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: str | None = None, user_id: str | None = None
-    ) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         """Delete memory entries for a specific session, optionally scoped by owner."""
         _, delete_sql, params = _memory_session_delete_statements(self._memory_table, session_id, app_name, user_id)
         try:
@@ -1925,16 +1921,10 @@ def _memory_search_statement(
 
 
 def _memory_session_delete_statements(
-    table: str, session_id: str, app_name: str | None = None, user_id: str | None = None
+    table: str, session_id: str, app_name: str, user_id: str
 ) -> "tuple[str, str, tuple[Any, ...]]":
-    clauses = ["session_id = ?"]
-    params: list[Any] = [session_id]
-    if app_name is not None:
-        clauses.append("app_name = ?")
-        params.append(app_name)
-    if user_id is not None:
-        clauses.append("user_id = ?")
-        params.append(user_id)
+    clauses = ["session_id = ?", "app_name = ?", "user_id = ?"]
+    params: list[Any] = [session_id, app_name, user_id]
     where_sql = " AND ".join(clauses)
     return (
         f"SELECT COUNT(*) AS row_count FROM {table} WHERE {where_sql}",

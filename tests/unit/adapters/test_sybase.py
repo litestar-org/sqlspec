@@ -1654,36 +1654,17 @@ def test_sybase_adk_delete_session_deletes_scoped_events_before_session() -> Non
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_sql", "expected_params"),
     [
-        pytest.param(None, None, "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s", ("s1",), id="session-only"),
-        pytest.param(
-            "app",
-            None,
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND app_name = %s",
-            ("s1", "app"),
-            id="session-and-app",
-        ),
-        pytest.param(
-            None,
-            "u1",
-            "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND user_id = %s",
-            ("s1", "u1"),
-            id="session-and-user",
-        ),
         pytest.param(
             "app",
             "u1",
             "DELETE FROM [dbo].[adk_memory] WHERE session_id = %s AND app_name = %s AND user_id = %s",
             ("s1", "app", "u1"),
             id="session-app-and-user",
-        ),
+        )
     ],
 )
 def test_sybase_adk_memory_dedup_and_scoped_delete_entries_by_session(
-    monkeypatch: pytest.MonkeyPatch,
-    app_name: "str | None",
-    user_id: "str | None",
-    expected_sql: str,
-    expected_params: "tuple[str, ...]",
+    monkeypatch: pytest.MonkeyPatch, app_name: str, user_id: str, expected_sql: str, expected_params: "tuple[str, ...]"
 ) -> None:
     """SybaseADKMemoryStore deduplicates on (app_name, user_id, event_id) and scopes session deletes."""
     config = MagicMock()

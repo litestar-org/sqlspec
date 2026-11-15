@@ -188,7 +188,7 @@ async def test_psqlpy_memory_store_disabled_guards_raise_runtime_error() -> None
     store = PsqlpyADKMemoryStore(_mock_config({"enable_memory": False}))
 
     with pytest.raises(RuntimeError, match="Memory store is disabled"):
-        await store.delete_entries_by_session("s1")
+        await store.delete_entries_by_session("s1", "app", "user")
 
     with pytest.raises(RuntimeError, match="Memory store is disabled"):
         await store.delete_entries_older_than(7)
@@ -632,20 +632,17 @@ async def test_psqlpy_get_events_joins_on_session_and_owner_columns() -> None:
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "WHERE session_id = $1", ["s1"], id="session-only"),
-        pytest.param("app", None, "WHERE session_id = $1 AND app_name = $2", ["s1", "app"], id="session-and-app"),
-        pytest.param(None, "u1", "WHERE session_id = $1 AND user_id = $2", ["s1", "u1"], id="session-and-user"),
         pytest.param(
             "app",
             "u1",
             "WHERE session_id = $1 AND app_name = $2 AND user_id = $3",
             ["s1", "app", "u1"],
             id="session-app-user",
-        ),
+        )
     ],
 )
 async def test_psqlpy_delete_entries_by_session_scopes_predicates(
-    app_name: "str | None", user_id: "str | None", expected_where: str, expected_params: list[str]
+    app_name: str, user_id: str, expected_where: str, expected_params: list[str]
 ) -> None:
     conn = _FakeMemoryConnection([{"count": 2}])
     config = _mock_config()

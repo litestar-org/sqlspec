@@ -2483,10 +2483,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """Search memory entries by text query or vector embedding."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         return self._delete_entries_by_session(session_id, app_name=app_name, user_id=user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -3436,9 +3434,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.close()
         return self._rows_to_records(rows)
 
-    def _delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
@@ -3446,12 +3442,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = ?")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = ?")
-            params.append(user_id)
+        clauses.append("app_name = ?")
+        params.append(app_name)
+        clauses.append("user_id = ?")
+        params.append(user_id)
         where_sql = " AND ".join(clauses)
         if use_returning:
             sql = f"DELETE FROM {self._memory_table} WHERE {where_sql} RETURNING 1"

@@ -927,21 +927,17 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             rows = await conn.fetch(sql, *params)
         return [cast("StoredMemory", dict(row)) for row in rows]
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         clauses = ["session_id = $1"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            params.append(app_name)
-            clauses.append(f"app_name = ${len(params)}")
-        if user_id is not None:
-            params.append(user_id)
-            clauses.append(f"user_id = ${len(params)}")
+        params.append(app_name)
+        clauses.append(f"app_name = ${len(params)}")
+        params.append(user_id)
+        clauses.append(f"user_id = ${len(params)}")
 
         sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
         async with self._config.provide_connection() as conn:

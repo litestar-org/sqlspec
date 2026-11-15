@@ -92,7 +92,7 @@ def test_adbc_memory_store_delete_by_session(tmp_path: Path) -> None:
     record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
     store.insert_memory_entries([record1, record2])
 
-    deleted = store.delete_entries_by_session("s1")
+    deleted = store.delete_entries_by_session("s1", "app", "user")
     assert deleted == 1
 
     remaining = store.search_entries(query="latte", app_name="app", user_id="user")
@@ -231,7 +231,7 @@ def test_adbc_sqlite_fts_search_tracks_update_and_delete(tmp_path: Path) -> None
     assert len(updated) == 1
     assert updated[0]["content_text"] == "latte foam"
 
-    store.delete_entries_by_session("s1")
+    store.delete_entries_by_session("s1", "app", "user")
     assert store.search_entries(query="latte", app_name="app", user_id="user") == []
 
 

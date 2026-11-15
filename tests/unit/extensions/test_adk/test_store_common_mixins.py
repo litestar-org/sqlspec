@@ -273,11 +273,11 @@ def test_adk_store_common_should_renew_requires_positive_duration(
     ],
 )
 def test_memory_store_base_delete_entries_by_session_signature(base_cls: type) -> None:
-    """Both abstract memory bases expose optional app_name and user_id owner filters."""
+    """Both abstract memory bases require app_name and user_id owners."""
     params = inspect.signature(base_cls.delete_entries_by_session).parameters
     assert list(params) == ["self", "session_id", "app_name", "user_id"]
-    assert params["app_name"].default is None
-    assert params["user_id"].default is None
+    assert params["app_name"].default is inspect.Parameter.empty
+    assert params["user_id"].default is inspect.Parameter.empty
 
 
 def test_concrete_memory_store_accepts_owner_filters_through_base_reference() -> None:

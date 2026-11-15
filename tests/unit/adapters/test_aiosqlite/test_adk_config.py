@@ -508,18 +508,10 @@ async def test_aiosqlite_adk_memory_deduplicates_per_app_user_event_id(
 @pytest.mark.parametrize("use_fts", [False, True], ids=["simple", "fts5"])
 @pytest.mark.parametrize(
     ("filter_app", "filter_user", "expected_deleted", "expected_remaining"),
-    [
-        pytest.param(None, None, 3, [], id="session-only"),
-        pytest.param("app-a", None, 2, ["m-3"], id="app-scoped"),
-        pytest.param("app-a", "user-1", 1, ["m-2", "m-3"], id="app-and-user-scoped"),
-    ],
+    [pytest.param("app-a", "user-1", 1, ["m-2", "m-3"], id="app-and-user-scoped")],
 )
 async def test_aiosqlite_adk_delete_entries_by_session_scopes_and_syncs_fts(
-    use_fts: bool,
-    filter_app: "str | None",
-    filter_user: "str | None",
-    expected_deleted: int,
-    expected_remaining: list[str],
+    use_fts: bool, filter_app: str, filter_user: str, expected_deleted: int, expected_remaining: list[str]
 ) -> None:
     """Scoped delete_entries_by_session removes only matching rows and keeps FTS5 content synchronized."""
     config = AiosqliteConfig(

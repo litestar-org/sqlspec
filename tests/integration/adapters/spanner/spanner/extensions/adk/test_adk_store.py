@@ -86,7 +86,7 @@ async def test_spanner_adk_memory_store_round_trip(
         matches = await _resolve(store.search_entries("coffee", "app", "user"))
         assert [match["id"] for match in matches] == ["memory-1"]
 
-        assert await _resolve(store.delete_entries_by_session("session-memory")) == 1
+        assert await _resolve(store.delete_entries_by_session("session-memory", "app", "user")) == 1
         assert await _resolve(store.search_entries("coffee", "app", "user")) == []
     finally:
         await _resolve(config.close_pool())

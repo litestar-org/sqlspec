@@ -506,7 +506,7 @@ _DML_CASES: list[_DMLCase] = [
         "delete_entries_by_session",
         True,
         "delete_entries_by_session",
-        lambda: ("s",),
+        lambda: ("s", "app", "user"),
         dict,
         None,
         False,

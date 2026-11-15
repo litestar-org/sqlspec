@@ -876,7 +876,7 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
     assert results[0]["embedding"] == [0.1, 0.2]
 
     with patch.object(type(store), "_execute_update", new_callable=AsyncMock, return_value=2) as exec_update:
-        deleted = await store.delete_entries_by_session("session-1")
+        deleted = await store.delete_entries_by_session("session-1", "app", "user")
         assert deleted == 2
         deleted_old = await store.delete_entries_older_than(7, app_name="app")
         assert deleted_old == 2
@@ -1373,32 +1373,17 @@ async def test_spanner_memory_deduplicates_by_composite_owner_tuple(is_async: bo
 @pytest.mark.parametrize(
     ("app_name", "user_id", "expected_where", "expected_params"),
     [
-        pytest.param(None, None, "session_id = @session_id", {"session_id": "s1"}, id="session-only"),
-        pytest.param(
-            "app",
-            None,
-            "session_id = @session_id AND app_name = @app_name",
-            {"session_id": "s1", "app_name": "app"},
-            id="with-app",
-        ),
-        pytest.param(
-            None,
-            "u1",
-            "session_id = @session_id AND user_id = @user_id",
-            {"session_id": "s1", "user_id": "u1"},
-            id="with-user",
-        ),
         pytest.param(
             "app",
             "u1",
             "session_id = @session_id AND app_name = @app_name AND user_id = @user_id",
             {"session_id": "s1", "app_name": "app", "user_id": "u1"},
             id="with-app-and-user",
-        ),
+        )
     ],
 )
 async def test_spanner_memory_delete_entries_by_session_scopes_owner_predicates(
-    is_async: bool, app_name: str | None, user_id: str | None, expected_where: str, expected_params: dict[str, Any]
+    is_async: bool, app_name: str, user_id: str, expected_where: str, expected_params: dict[str, Any]
 ) -> None:
     """delete_entries_by_session appends @app_name and @user_id predicates when provided."""
     if is_async:

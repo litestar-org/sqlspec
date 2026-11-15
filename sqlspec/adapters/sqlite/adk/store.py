@@ -1189,22 +1189,18 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         return records
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by app and user."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
         clauses = ["session_id = ?"]
         params: list[Any] = [session_id]
-        if app_name is not None:
-            clauses.append("app_name = ?")
-            params.append(app_name)
-        if user_id is not None:
-            clauses.append("user_id = ?")
-            params.append(user_id)
+        clauses.append("app_name = ?")
+        params.append(app_name)
+        clauses.append("user_id = ?")
+        params.append(user_id)
         sql = f"DELETE FROM {self._memory_table} WHERE {' AND '.join(clauses)}"
 
         try:

@@ -1930,19 +1930,17 @@ CREATE TABLE {self._memory_table} (
         return (sql, params, types)
 
     def _build_delete_entries_by_session_statement(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
+        self, session_id: str, app_name: str, user_id: str
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
         clauses = ["session_id = @session_id"]
         params: dict[str, Any] = {"session_id": session_id}
         types: dict[str, Any] = {"session_id": SPANNER_PARAM_TYPES.STRING}
-        if app_name is not None:
-            clauses.append("app_name = @app_name")
-            params["app_name"] = app_name
-            types["app_name"] = SPANNER_PARAM_TYPES.STRING
-        if user_id is not None:
-            clauses.append("user_id = @user_id")
-            params["user_id"] = user_id
-            types["user_id"] = SPANNER_PARAM_TYPES.STRING
+        clauses.append("app_name = @app_name")
+        params["app_name"] = app_name
+        types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        clauses.append("user_id = @user_id")
+        params["user_id"] = user_id
+        types["user_id"] = SPANNER_PARAM_TYPES.STRING
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         return (sql, params, types)
@@ -2052,10 +2050,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         """Search memory entries by text query or vector embedding."""
         return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner."""
+    def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         return self._delete_entries_by_session(session_id, app_name, user_id)
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -2175,9 +2171,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         rows = self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
-    def _delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         sql, params, types = self._build_delete_entries_by_session_statement(session_id, app_name, user_id)
         return self._execute_update(sql, params, types)
 
@@ -2247,10 +2241,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         """Search memory entries by text query or vector embedding."""
         return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding, read=True)
 
-    async def delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
-        """Delete memory entries for a specific session, optionally scoped by owner."""
+    async def delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
+        """Delete memory entries for a specific session, owned by an app and user."""
         return await self._delete_entries_by_session(session_id, app_name, user_id)
 
     async def delete_entries_older_than(
@@ -2376,9 +2368,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         rows = await self._run_read(sql, params, types, read=read)
         return self._rows_to_records(rows)
 
-    async def _delete_entries_by_session(
-        self, session_id: str, app_name: "str | None" = None, user_id: "str | None" = None
-    ) -> int:
+    async def _delete_entries_by_session(self, session_id: str, app_name: str, user_id: str) -> int:
         sql, params, types = self._build_delete_entries_by_session_statement(session_id, app_name, user_id)
         return await self._execute_update(sql, params, types)
 
