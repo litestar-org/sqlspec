@@ -204,7 +204,7 @@ class PortalProvider:
         result: _R = await func(*args, **kwargs)
         return result
 
-    def _schedule_coro(
+    def _submit_coroutine(
         self, func: "Callable[..., Coroutine[Any, Any, _R]]", args: "tuple[Any, ...]", kwargs: "dict[str, Any]"
     ) -> "concurrent.futures.Future[_R]":
         if self._loop is None:
@@ -234,9 +234,9 @@ class PortalProvider:
             caller_context = None
 
         future = (
-            caller_context.run(self._schedule_coro, func, args, kwargs)
+            caller_context.run(self._submit_coroutine, func, args, kwargs)
             if caller_context is not None
-            else self._schedule_coro(func, args, kwargs)
+            else self._submit_coroutine(func, args, kwargs)
         )
         if future_holder is not None:
             future_holder.append(future)

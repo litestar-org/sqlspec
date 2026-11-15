@@ -29,7 +29,7 @@ from sqlspec.storage._staging_sql import (
     build_stage_merge_sql,
     build_stage_table_ddl,
     format_storage_identifier,
-    quote_dialect_column,
+    quote_storage_identifier_part,
     resolve_stage_table_name,
     validate_sql_cast_type,
 )
@@ -490,8 +490,8 @@ def test_snowflake_staging_sql_identifiers_arrow_ddl_and_merge_quoting() -> None
 def test_dialect_native_storage_quoting_and_checkpoint_sql(
     dialect: str, raw_col: str, expected_col: str, raw_ident: str, expected_ident: str
 ) -> None:
-    """quote_dialect_column, format_storage_identifier, and checkpoint SQL builders quote per dialect."""
-    assert quote_dialect_column(raw_col, dialect=dialect) == expected_col
+    """quote_storage_identifier_part, format_storage_identifier, and checkpoint SQL builders quote per dialect."""
+    assert quote_storage_identifier_part(raw_col, dialect=dialect) == expected_col
     assert format_storage_identifier(raw_ident, dialect=dialect, allow_qualified=True) == expected_ident
     assert expected_ident in build_checkpoint_table_ddl(dialect, raw_ident)
     assert expected_ident in build_checkpoint_select_sql(raw_ident, dialect=dialect)

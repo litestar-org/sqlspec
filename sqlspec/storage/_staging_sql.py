@@ -28,7 +28,7 @@ __all__ = (
     "compute_worker_thread_budget",
     "format_storage_identifier",
     "normalize_storage_dialect",
-    "quote_dialect_column",
+    "quote_storage_identifier_part",
     "resolve_stage_table_name",
     "validate_sql_cast_type",
 )
@@ -117,7 +117,7 @@ def compute_worker_thread_budget(
     }
 
 
-def quote_dialect_column(column: str, dialect: str | None = None) -> str:
+def quote_storage_identifier_part(column: str, dialect: str | None = None) -> str:
     """Quote a single column or identifier component using dialect-native delimiters.
 
     Args:
@@ -189,7 +189,7 @@ def format_storage_identifier(identifier: str, dialect: str | None = None, *, al
         ):
             rendered.append(raw)
         else:
-            rendered.append(quote_dialect_column(raw, dialect=dialect))
+            rendered.append(quote_storage_identifier_part(raw, dialect=dialect))
     return ".".join(rendered)
 
 
@@ -246,7 +246,7 @@ def validate_sql_cast_type(type_sql: str, dialect: str | None = None) -> str:
         raise ValueError(msg)
 
     norm = normalize_storage_dialect(dialect) if dialect else ""
-    cast_dialect = _sqlglot_cast_dialect(norm)
+    cast_dialect = _resolve_sqlglot_dialect(norm)
     try:
         parsed_type = exp.DataType.build(stripped, dialect=cast_dialect, udt=True)
         statements = sqlglot.parse(f"SELECT CAST(x AS {stripped})", read=cast_dialect)
@@ -470,7 +470,7 @@ def resolve_stage_table_name(
     raw_base, base_was_quoted = _unwrap_identifier_delimiters(tokens[-1].strip())
     stage_leaf_raw = f"{raw_base}_stage_{suffix}"
     formatted_leaf = (
-        quote_dialect_column(stage_leaf_raw, dialect=norm_dialect)
+        quote_storage_identifier_part(stage_leaf_raw, dialect=norm_dialect)
         if base_was_quoted or not _BARE_STORAGE_IDENTIFIER_RE.fullmatch(stage_leaf_raw)
         else stage_leaf_raw
     )
@@ -528,16 +528,18 @@ def build_stage_merge_sql(
     norm = normalize_storage_dialect(dialect)
     formatted_target = format_storage_identifier(target_table, dialect=norm, allow_qualified=True)
     formatted_stage = format_storage_identifier(stage_table, dialect=norm, allow_qualified=True)
-    quoted_columns = [quote_dialect_column(column, dialect=norm) for column in columns]
-    quoted_keys = [quote_dialect_column(column, dialect=norm) for column in conflict_keys] if conflict_keys else None
+    quoted_columns = [quote_storage_identifier_part(column, dialect=norm) for column in columns]
+    quoted_keys = (
+        [quote_storage_identifier_part(column, dialect=norm) for column in conflict_keys] if conflict_keys else None
+    )
     quoted_excluded = (
-        [quote_dialect_column(column, dialect=norm) for column in exclude_update_columns]
+        [quote_storage_identifier_part(column, dialect=norm) for column in exclude_update_columns]
         if exclude_update_columns
         else None
     )
     validated_casts = (
         {
-            quote_dialect_column(column, dialect=norm): validate_sql_cast_type(cast_type, dialect=norm)
+            quote_storage_identifier_part(column, dialect=norm): validate_sql_cast_type(cast_type, dialect=norm)
             for column, cast_type in type_casts.items()
         }
         if type_casts
@@ -678,7 +680,7 @@ def _split_storage_identifier_tokens(identifier: str) -> list[str]:
     return tokens
 
 
-def _sqlglot_cast_dialect(norm_dialect: str) -> str | None:
+def _resolve_sqlglot_dialect(norm_dialect: str) -> str | None:
     """Map normalized storage dialect names to SQLGlot dialect names for type parsing."""
     if norm_dialect in {"cockroachdb", "spangres"}:
         return "postgres"

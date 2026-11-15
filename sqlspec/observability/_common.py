@@ -184,11 +184,11 @@ def redact_sql_literals(sql: str, *, dialect: str | None = None) -> str:
     else:
         backslash_pattern = _SQL_REDACT_BACKSLASH_PATTERN
         ansi_pattern = _SQL_REDACT_ANSI_PATTERN
-    spans, saw_bs_quote = _scan_sql_literals(sql, backslash_pattern)
+    spans, saw_bs_quote = _find_literal_ranges(sql, backslash_pattern)
     if saw_bs_quote:
-        ansi_spans, _ = _scan_sql_literals(sql, ansi_pattern)
-        spans = _merge_redacted_spans(spans, ansi_spans)
-    return _apply_redacted_spans(sql, spans)
+        ansi_spans, _ = _find_literal_ranges(sql, ansi_pattern)
+        spans = _merge_literal_ranges(spans, ansi_spans)
+    return _mask_literal_ranges(sql, spans)
 
 
 _OTEL_TRACE_MODULE: Any = None
@@ -237,7 +237,7 @@ def _get_sqlcommenter_context() -> Any:
     return _SQLCOMMENTER_CONTEXT.get()
 
 
-def _scan_sql_literals(sql: str, pattern: re.Pattern[str]) -> tuple[list[tuple[int, int, bool]], bool]:
+def _find_literal_ranges(sql: str, pattern: re.Pattern[str]) -> tuple[list[tuple[int, int, bool]], bool]:
     r"""Collect literal redaction intervals and detect ``\'`` sequences inside single-quoted spans."""
     spans: list[tuple[int, int, bool]] = []
     saw_bs_quote = False
@@ -256,7 +256,7 @@ def _scan_sql_literals(sql: str, pattern: re.Pattern[str]) -> tuple[list[tuple[i
     return spans, saw_bs_quote
 
 
-def _merge_redacted_spans(
+def _merge_literal_ranges(
     primary_spans: list[tuple[int, int, bool]], secondary_spans: list[tuple[int, int, bool]]
 ) -> list[tuple[int, int, bool]]:
     """Compute the merged sorted union of backslash and ANSI literal intervals."""
@@ -276,7 +276,7 @@ def _merge_redacted_spans(
     return merged
 
 
-def _apply_redacted_spans(sql: str, spans: list[tuple[int, int, bool]]) -> str:
+def _mask_literal_ranges(sql: str, spans: list[tuple[int, int, bool]]) -> str:
     """Replace sorted disjoint intervals with string or numeric redaction masks."""
     if not spans:
         return sql

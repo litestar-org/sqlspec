@@ -94,7 +94,7 @@ class _BridgeAbortedError(Exception):
     """Internal signal indicating an async sink bridge was aborted."""
 
 
-class _PoisonableCountingSink:
+class _ByteCountingSink:
     """Wrap a WritableBytesSink for pyarrow.PythonFile without closing the backend sink."""
 
     __slots__ = ("_closed", "_sink", "bytes_written")
@@ -111,7 +111,7 @@ class _PoisonableCountingSink:
     def writable(self) -> bool:
         return not self._closed
 
-    def poison(self) -> None:
+    def close_for_writes(self) -> None:
         self._closed = True
 
     def write(self, data: Any, /) -> int:
@@ -478,12 +478,12 @@ def encode_arrow_to_sink(
             return (0, 0)
 
         is_native = isinstance(sink, pa.NativeFile) and not isinstance(sink, pa.PythonFile)
-        proxy: _PoisonableCountingSink | None = None
+        proxy: _ByteCountingSink | None = None
         if is_native:
             pa_sink = sink
             start_offset = sink.tell()
         else:
-            proxy = _PoisonableCountingSink(sink)
+            proxy = _ByteCountingSink(sink)
             pa_sink = pa.PythonFile(proxy, mode="w")
             start_offset = 0
 
@@ -507,7 +507,7 @@ def encode_arrow_to_sink(
                 proxy.close()
         except BaseException:
             if proxy is not None:
-                proxy.poison()
+                proxy.close_for_writes()
             if writer is not None:
                 with contextlib.suppress(Exception):
                     writer.close()

@@ -1743,7 +1743,7 @@ def _reject_lost_struct_fields(inferred_schema: Any, target_schema: Any) -> None
             raise pa.ArrowTypeError(msg)
 
 
-def _pinned_type_family(pa: Any, data_type: Any) -> str | None:
+def _locked_type_family(pa: Any, data_type: Any) -> str | None:
     types = pa.types
     if types.is_integer(data_type):
         return "integer"
@@ -1771,13 +1771,13 @@ def _pinned_type_family(pa: Any, data_type: Any) -> str | None:
     return None
 
 
-def _pinned_type_accepts(pa: Any, target_type: Any, found_type: Any) -> bool:
+def _locked_type_accepts(pa: Any, target_type: Any, found_type: Any) -> bool:
     if pa.types.is_null(found_type) or target_type == found_type:
         return True
     if _is_any_list_type(pa, target_type) and _is_any_list_type(pa, found_type):
-        return _pinned_type_accepts(pa, target_type.value_type, found_type.value_type)
-    target_family = _pinned_type_family(pa, target_type)
-    found_family = _pinned_type_family(pa, found_type)
+        return _locked_type_accepts(pa, target_type.value_type, found_type.value_type)
+    target_family = _locked_type_family(pa, target_type)
+    found_family = _locked_type_family(pa, found_type)
     if target_family is not None and target_family == found_family:
         return True
     return target_family == "floating" and found_family == "integer"
@@ -1795,7 +1795,7 @@ def _convert_later_chunk(chunk: "list[dict[str, Any]]", schema: Any, *, explicit
                 msg = f"Column {field.name!r} appeared after schema was pinned during streaming"
                 raise pa.ArrowTypeError(msg)
             target_type = target_fields[field.name]
-            if not _pinned_type_accepts(pa, target_type, field.type):
+            if not _locked_type_accepts(pa, target_type, field.type):
                 msg = f"Column {field.name!r} changed type from {target_type} to {field.type} during streaming"
                 raise pa.ArrowTypeError(msg)
     if inferred.column_names != schema.names and set(inferred.column_names) <= set(schema.names):

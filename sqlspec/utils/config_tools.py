@@ -73,12 +73,12 @@ def find_pyproject_toml() -> "Path | None":
     current = Path.cwd()
 
     while True:
-        if not _is_trusted_owner(current, current_uid):
+        if not _is_owned_by_user_or_root(current, current_uid):
             return None
 
         pyproject = current / "pyproject.toml"
         if pyproject.exists():
-            if not _is_trusted_owner(pyproject, current_uid):
+            if not _is_owned_by_user_or_root(pyproject, current_uid):
                 return None
             return pyproject
 
@@ -508,7 +508,7 @@ def _is_valid_config(config: Any) -> bool:
     return False
 
 
-def _is_trusted_owner(path: Path, current_uid: int | None) -> bool:
+def _is_owned_by_user_or_root(path: Path, current_uid: int | None) -> bool:
     if current_uid is None:
         return True
     try:
