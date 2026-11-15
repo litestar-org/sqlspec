@@ -110,6 +110,7 @@ important operational fixes.
 * DuckDB pooled connections now roll back uncommitted work when returned instead of committing it. Call `commit()` before the session ends to keep changes.
 * `execute_script` binds parameters per statement for `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `VALUES`, `CALL`/`EXEC`, and Oracle PL/SQL blocks. Other statements (DDL, `SET`, `PRAGMA`, `DO`, `NOTIFY`, `COPY`, `VACUUM`) still receive escaped literals.
 * `SQLFile.checksum` is a SHA-256 digest.
+* Schema extraction (`--from-schema`, `dump-schema`) and `squash --strategy schema` refuse tables protected by Oracle VPD or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit.
 
 **Fixed:**
 
@@ -166,7 +167,6 @@ important operational fixes.
 * Forged cursor values raise `InvalidCursorError`; deeply nested statements raise `SQLParsingError`; statement splitting past the nesting limit raises `SQLParsingError`; ADBC conversion failures raise `DataError`; builder `where_in(col, [])` matches no rows instead of rendering `IN ()`; statement cache keys use 128-bit digests over the full SQL text.
 * Migration messages, authors, and squash descriptions containing Unicode line separators, vertical tabs, form feeds, or other control characters no longer create extra header lines.
 * Migration checksums detect every edit outside the exact single-line `-- name: migrate-<version>-up/down` and `Version:` headers, including moving an up/down header. Checksums recorded by earlier releases still verify for unchanged files and are re-recorded in the new form the next time `verify`, `upgrade`, or `downgrade` runs.
-* Schema extraction (`--from-schema`, `dump-schema`) and `squash --strategy schema` refuse tables protected by Oracle VPD or SQL Server security policies, and warn about PostgreSQL grants, functions, triggers, and domains they do not emit.
 * ADK memory entries with the same id no longer collide across apps and users.
 * SQLite and aiosqlite ADK sessions can append events right after `create_session`.
 * Table-backed event queues apply `ack` and `nack` only to events the same channel instance leased, and count only those.
