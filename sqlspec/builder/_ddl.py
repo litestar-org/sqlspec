@@ -369,7 +369,8 @@ def build_column_expression(
         )
 
     if col.check:
-        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=exp.maybe_parse(col.check, dialect=norm_dialect))))
+        check_expr = _parse_ddl_expression(col.check, label="column CHECK expression", dialect=norm_dialect)
+        constraints.append(exp.ColumnConstraint(kind=exp.Check(this=check_expr)))
 
     if col.comment:
         constraints.append(exp.ColumnConstraint(kind=exp.CommentColumnConstraint(this=exp.convert(col.comment))))
@@ -447,13 +448,16 @@ def build_constraint_expression(
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
-        check_expr = exp.Check(
-            this=constraint.condition_expr
-            if constraint.condition_expr is not None
-            else exp.maybe_parse(constraint.condition, dialect=dialect)
-            if constraint.condition
-            else None
-        )
+        check_condition: exp.Expr | None = None
+        if constraint.condition_expr is not None:
+            check_condition = _check_ddl_expression_nodes(
+                constraint.condition_expr, label="CHECK constraint condition", text=constraint.condition_expr.sql()
+            )
+        elif constraint.condition:
+            check_condition = _parse_ddl_expression(
+                constraint.condition, label="CHECK constraint condition", dialect=dialect
+            )
+        check_expr = exp.Check(this=check_condition)
 
         if constraint.name:
             return exp.Constraint(
@@ -769,6 +773,9 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         if any(col.name == name for col in self._columns):
             self._raise_builder_error(f"Column '{name}' already defined")
 
+        if check:
+            _parse_ddl_expression(check, label="column CHECK expression", dialect=self.dialect)
+
         column_def = ColumnDefinition(
             name=name,
             dtype=dtype,
@@ -872,8 +879,13 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         if has_sqlglot_expression(condition):
             sqlglot_expr = condition.sqlglot_expression
             condition_expr = sqlglot_expr if isinstance(sqlglot_expr, exp.Expr) else None
+            if condition_expr is not None:
+                _check_ddl_expression_nodes(
+                    condition_expr, label="CHECK constraint condition", text=condition_expr.sql()
+                )
         else:
             condition_str = str(condition)
+            _parse_ddl_expression(condition_str, label="CHECK constraint condition", dialect=self.dialect)
 
         constraint = ConstraintDefinition(
             constraint_type=CONSTRAINT_TYPE_CHECK, name=name, condition=condition_str, condition_expr=condition_expr
@@ -1619,6 +1631,10 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         return self
 
     def where(self, condition: str | exp.Expr) -> Self:
+        if isinstance(condition, str):
+            _parse_ddl_expression(condition, label="partial index predicate", dialect=self.dialect)
+        else:
+            _check_ddl_expression_nodes(condition, label="partial index predicate", text=condition.sql())
         self._where = condition
         return self
 
@@ -1823,9 +1839,11 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
                     "DuckDB does not support partial indexes; a full index would change the index semantics."
                 )
             where_expr = (
-                exp.condition(self._where, dialect=norm_dialect, copy=False)
+                _parse_ddl_expression(self._where, label="partial index predicate", dialect=norm_dialect)
                 if isinstance(self._where, str)
-                else self._where.copy()
+                else _check_ddl_expression_nodes(
+                    self._where.copy(), label="partial index predicate", text=self._where.sql()
+                )
             )
 
         index_params = exp.IndexParameters(columns=cols) if cols else None
@@ -2307,6 +2325,9 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         if not new_type:
             self._raise_builder_error("New type must be a non-empty string")
 
+        if using is not None:
+            _parse_ddl_expression(using, label="ALTER COLUMN TYPE USING expression", dialect=self.dialect)
+
         operation = AlterOperation(
             operation_type="ALTER COLUMN TYPE", column_name=name, new_type=new_type, using_expression=using
         )
@@ -2368,6 +2389,9 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
                 condition_str = sqlglot_expr.sql(dialect=self.dialect, copy=False) if sqlglot_expr else str(condition)
             else:
                 condition_str = str(condition)
+
+        if condition_str is not None and constraint_type.upper() == CONSTRAINT_TYPE_CHECK:
+            _parse_ddl_expression(condition_str, label="CHECK constraint condition", dialect=self.dialect)
 
         constraint_def = ConstraintDefinition(
             constraint_type=constraint_type.upper(),
@@ -2493,7 +2517,11 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             return exp.AlterColumn(
                 this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect),
                 dtype=_parse_column_type(op.column_name, op.new_type, effective_dialect),
-                using=exp.maybe_parse(op.using_expression, dialect=effective_dialect) if op.using_expression else None,
+                using=_parse_ddl_expression(
+                    op.using_expression, label="ALTER COLUMN TYPE USING expression", dialect=effective_dialect
+                )
+                if op.using_expression
+                else None,
             )
 
         if op_type == "RENAME COLUMN":
@@ -4396,34 +4424,60 @@ def _validate_clause_identifier(value: Any, *, label: str) -> str:
     return value
 
 
-def _parse_partition_by(spec: str, dialect: "DialectType | None") -> exp.Expr:
-    """Parse and validate a CREATE TABLE PARTITION BY specification."""
+_FORBIDDEN_CLAUSE_NODES: Final = (*_FORBIDDEN_STATEMENT_NODES, exp.Select, exp.Subquery, exp.SetOperation)
+
+
+def _check_ddl_expression_nodes(expression: exp.Expr, *, label: str, text: Any) -> exp.Expr:
+    """Reject statement, subquery, and set-operation nodes inside a raw DDL expression."""
+    if isinstance(expression, _FORBIDDEN_CLAUSE_NODES) or expression.find(*_FORBIDDEN_CLAUSE_NODES) is not None:
+        msg = f"Invalid {label}: {text!r}"
+        raise SQLBuilderError(msg)
+    return expression
+
+
+def _parse_ddl_expression(text: str, *, label: str, dialect: "DialectType | None") -> exp.Expr:
+    """Parse trusted raw DDL expression text and require exactly one plain expression.
+
+    Args:
+        text: Raw expression text supplied to a DDL builder.
+        label: Clause name used in the error message.
+        dialect: Dialect used to parse the text.
+
+    Returns:
+        The parsed expression.
+
+    Raises:
+        SQLBuilderError: When the text is blank, contains a statement terminator, fails to parse,
+            holds more than one statement, or contains a statement, subquery, or set operation.
+    """
     norm_dialect = _normalize_dialect(dialect) if dialect else None
     if (
-        not isinstance(spec, str)
-        or not spec.strip()
-        or "\x00" in spec
-        or contains_statement_terminator(spec, dialect=norm_dialect)
+        not isinstance(text, str)
+        or not text.strip()
+        or "\x00" in text
+        or contains_statement_terminator(text, dialect=norm_dialect)
     ):
-        msg = f"Invalid PARTITION BY specification: {spec!r}"
+        msg = f"Invalid {label}: {text!r}"
         raise SQLBuilderError(msg)
     try:
-        statements = sqlglot.parse(spec, read=norm_dialect)
+        statements = sqlglot.parse(text, read=norm_dialect)
     except (ParseError, TokenError) as exc:
-        if _BARE_IDENTIFIER_RE.fullmatch(spec):
-            return exp.var(spec)
-        msg = f"Invalid PARTITION BY specification: {spec!r}"
+        msg = f"Invalid {label}: {text!r}"
         raise SQLBuilderError(msg) from exc
     if len(statements) != 1 or statements[0] is None:
-        msg = f"Invalid PARTITION BY specification: {spec!r}"
+        msg = f"Invalid {label}: {text!r}"
         raise SQLBuilderError(msg)
-    parsed = statements[0]
-    if isinstance(parsed, (*_FORBIDDEN_STATEMENT_NODES, exp.Select, exp.SetOperation)) or (
-        parsed.find(*_FORBIDDEN_STATEMENT_NODES) is not None
-    ):
-        msg = f"Invalid PARTITION BY specification: {spec!r}"
-        raise SQLBuilderError(msg)
-    return parsed
+    return _check_ddl_expression_nodes(statements[0], label=label, text=text)
+
+
+def _parse_partition_by(spec: str, dialect: "DialectType | None") -> exp.Expr:
+    """Parse and validate a CREATE TABLE PARTITION BY specification."""
+    try:
+        return _parse_ddl_expression(spec, label="PARTITION BY specification", dialect=dialect)
+    except SQLBuilderError:
+        if isinstance(spec, str) and _BARE_IDENTIFIER_RE.fullmatch(spec):
+            return exp.var(spec)
+        raise
 
 
 def _coerce_int_argument(value: Any, *, name: str) -> int:

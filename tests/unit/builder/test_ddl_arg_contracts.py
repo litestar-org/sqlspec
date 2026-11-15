@@ -5,8 +5,11 @@ sqlglot expression's ``arg_types``; the generator ignores unknown keys, so the
 clause vanished from rendered SQL without an error.
 """
 
+import pytest
+
 from sqlspec import sql
 from sqlspec.builder._ddl import CreateTable
+from sqlspec.exceptions import SQLBuilderError
 
 
 def test_named_primary_key_constraint_renders_body() -> None:
@@ -127,3 +130,49 @@ def test_alter_table_drop_constraint_renders_constraint_name() -> None:
     result = sql.alter_table("users").drop_constraint("fk_users_orders").build()
     assert "DROP CONSTRAINT" in result.sql
     assert "fk_users_orders" in result.sql
+
+
+def test_column_check_rejects_bad_text_with_builder_error() -> None:
+    with pytest.raises(SQLBuilderError):
+        sql.create_table("t").column("a", "INT", check="a > 0); DROP TABLE t; --")
+
+
+def test_column_check_rejected_at_build() -> None:
+    builder = sql.create_table("t").column("a", "INT", check="a > 0")
+    builder._columns[-1].check = "a > 0 OR a IN (SELECT secret FROM s)"  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(SQLBuilderError):
+        builder.build()
+
+
+def test_column_check_accepts_single_expression() -> None:
+    rendered = sql.create_table("t").column("a", "INT", check="a > 0").build().sql
+
+    assert "CHECK" in rendered
+    assert "DROP" not in rendered
+
+
+@pytest.mark.parametrize("condition", ["a > 0; DROP TABLE t", "a IN (SELECT secret FROM s)"])
+def test_check_constraint_rejects_terminator_and_subquery(condition: str) -> None:
+    with pytest.raises(SQLBuilderError):
+        sql.create_table("t").column("a", "INT").check_constraint(condition)
+
+
+def test_partial_index_where_rejects_bad_text() -> None:
+    with pytest.raises(SQLBuilderError):
+        sql.create_index("i").on_table("t").columns("a").where("a > 0; DROP TABLE t")
+
+
+def test_partial_index_where_rejected_at_build() -> None:
+    builder = sql.create_index("i").on_table("t").columns("a").where("a > 0")
+    builder._where = "a > 0 OR a IN (SELECT secret FROM s)"  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(SQLBuilderError):
+        builder.build(dialect="postgres")
+
+
+def test_partial_index_where_accepts_single_expression() -> None:
+    rendered = sql.create_index("i").on_table("t").columns("a").where("a > 0").build(dialect="postgres").sql
+
+    assert "WHERE" in rendered
+    assert '"a" > 0' in rendered
