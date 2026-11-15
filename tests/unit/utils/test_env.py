@@ -206,3 +206,25 @@ def test_get_env_parse_errors_omit_raw_values(
             cast("Callable[[], Any]", get_env(key, default, type_hint))()
 
     assert raw_value not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("annotation_default", "value"),
+    [
+        pytest.param({"a": 1}, "{secret-value", id="dict"),
+        pytest.param([1], "[secret-value", id="list"),
+        pytest.param(1, "secret-value", id="int"),
+        pytest.param(True, "secret-value", id="bool"),
+    ],
+)
+def test_env_parse_error_has_no_cause_or_value(
+    monkeypatch: pytest.MonkeyPatch, annotation_default: Any, value: str
+) -> None:
+    monkeypatch.setenv("SQLSPEC_TEST_SECRET", value)
+
+    with pytest.raises(ValueError, match="SQLSPEC_TEST_SECRET") as exc_info:
+        get_env("SQLSPEC_TEST_SECRET", annotation_default)()
+
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None or exc_info.value.__suppress_context__
+    assert "secret-value" not in str(exc_info.value)

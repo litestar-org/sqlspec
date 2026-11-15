@@ -50,8 +50,8 @@ class StrictEnvelope(msgspec.Struct, rename="camel", forbid_unknown_fields=True)
     child: CamelChild
 
 
-def test_msgspec_single_word_envelope_decodes_nested_python_field_names() -> None:
-    result = to_schema({"rows": [{"item_name": "a", "item_count": 1}], "total": 1}, schema_type=SingleWordEnvelope)
+def test_msgspec_single_word_envelope_decodes_nested_encoded_field_names() -> None:
+    result = to_schema({"rows": [{"itemName": "a", "itemCount": 1}], "total": 1}, schema_type=SingleWordEnvelope)
 
     assert result == SingleWordEnvelope(rows=[CamelChild(item_name="a", item_count=1)], total=1)
 
@@ -59,8 +59,8 @@ def test_msgspec_single_word_envelope_decodes_nested_python_field_names() -> Non
 def test_msgspec_single_word_envelope_decodes_batch() -> None:
     result = to_schema(
         [
-            {"rows": [{"item_name": "a", "item_count": 1}], "total": 1},
-            {"rows": [{"item_name": "b", "item_count": 2}], "total": 1},
+            {"rows": [{"itemName": "a", "itemCount": 1}], "total": 1},
+            {"rows": [{"itemName": "b", "itemCount": 2}], "total": 1},
         ],
         schema_type=SingleWordEnvelope,
     )
@@ -72,19 +72,19 @@ def test_msgspec_single_word_envelope_decodes_batch() -> None:
 
 
 def test_msgspec_mixed_parent_and_child_rename_conventions() -> None:
-    result = to_schema({"child_rows": [{"item_name": "a", "item_count": 1}]}, schema_type=KebabEnvelope)
+    result = to_schema({"child_rows": [{"itemName": "a", "itemCount": 1}]}, schema_type=KebabEnvelope)
 
     assert result == KebabEnvelope(child_rows=[CamelChild(item_name="a", item_count=1)])
 
 
 def test_msgspec_callable_and_explicit_aliases() -> None:
-    result = to_schema({"child": {"display_name": "Ada"}, "item_count": 1}, schema_type=CallableAliasEnvelope)
+    result = to_schema({"child": {"label": "Ada"}, "item_count": 1}, schema_type=CallableAliasEnvelope)
 
     assert result == CallableAliasEnvelope(child=ExplicitAliasChild(display_name="Ada"), item_count=1)
 
 
 def test_msgspec_optional_and_collection_fields() -> None:
-    child = {"item_name": "a", "item_count": 1}
+    child = {"itemName": "a", "itemCount": 1}
     result = to_schema(
         {"child": child, "children": [child], "children_by_key": {"arbitrary_key": child}},
         schema_type=OptionalCollectionEnvelope,
@@ -151,3 +151,35 @@ def test_msgspec_field_plan_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     assert to_schema({"item_name": "a"}, schema_type=CachedStruct) == CachedStruct(item_name="a")
     assert to_schema({"item_name": "b"}, schema_type=CachedStruct) == CachedStruct(item_name="b")
     assert call_count == 1
+
+
+class Prefs(msgspec.Struct, rename="camel"):
+    theme: str = "light"
+    is_admin: bool = False
+
+
+class PrefsUser(msgspec.Struct, rename="camel"):
+    id: int
+    is_admin: bool = False
+    prefs: Prefs | None = None
+
+
+def test_nested_python_name_does_not_set_renamed_field() -> None:
+    payload = {"id": 1, "prefs": {"theme": "dark", "is_admin": True}}
+
+    result = to_schema(payload, schema_type=PrefsUser)
+
+    assert result.prefs is not None
+    assert result.prefs.is_admin is False
+    assert result == msgspec.convert(payload, PrefsUser)
+
+
+def test_nested_python_name_does_not_set_renamed_field_in_batch() -> None:
+    result = to_schema([{"id": 1, "prefs": {"theme": "dark", "is_admin": True}}], schema_type=PrefsUser)
+
+    assert result[0].prefs is not None
+    assert result[0].prefs.is_admin is False
+
+
+def test_top_level_python_names_still_normalize() -> None:
+    assert to_schema({"id": 1, "is_admin": True}, schema_type=PrefsUser).is_admin is True

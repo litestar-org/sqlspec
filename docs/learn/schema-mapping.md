@@ -87,7 +87,7 @@ Schema mapping matches SQL result column names to schema field names:
 
 - Alias computed expressions explicitly in SQL (`SELECT COUNT(*) AS total_orders`) so column names match your struct or model attributes.
 - Enterprise engines that return unquoted column identifiers in uppercase (`Oracle`, `IBM Db2`, and `ADBC` over Oracle/Db2) enable `driver_features={"enable_lowercase_column_names": True}` in SQLSpec so `SELECT id, email FROM accounts` maps cleanly onto lowercase `id` and `email` Python fields without quoting every alias.
-- For camelCase JSON APIs backed by `snake_case` SQL columns, configure `rename="camel"` on your `msgspec.Struct` or alias generator on `BaseModel` while keeping SQL column projections in `snake_case`.
+- For camelCase JSON APIs backed by `snake_case` SQL columns, configure `rename="camel"` on your `msgspec.Struct` or alias generator on `BaseModel` while keeping SQL column projections in `snake_case`. `msgspec` aliases apply to result column names only; values inside nested JSON columns must use the nested struct's encoded field names.
 
 ## Recap
 

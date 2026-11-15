@@ -562,11 +562,11 @@ def _normalize_msgspec_struct(data: Any, schema_type: type) -> Any:
     fields, python_names, encoded_names = _msgspec_field_plan(schema_type)
     normalized = {key: value for key, value in data.items() if key not in python_names and key not in encoded_names}
 
-    for name, encode_name, field_type in fields:
+    for name, encode_name, _ in fields:
         if encode_name in data:
-            normalized[encode_name] = _normalize_msgspec_input(data[encode_name], field_type)
+            normalized[encode_name] = data[encode_name]
         elif name in data:
-            normalized[encode_name] = _normalize_msgspec_input(data[name], field_type)
+            normalized[encode_name] = data[name]
 
     return normalized
 

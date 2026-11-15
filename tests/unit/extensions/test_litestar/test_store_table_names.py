@@ -5,7 +5,9 @@ import pytest
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 
-@pytest.mark.parametrize("table_name", ["sess\n", "sess;drop table x", "sess\x00", "se\u017f\u017f", "", "1sess", "a b"])
+@pytest.mark.parametrize(
+    "table_name", ["sess\n", "sess;drop table x", "sess\x00", "se\u017f\u017f", "", "1sess", "a b"]
+)
 def test_invalid_table_name_rejected(table_name: str) -> None:
     with pytest.raises(ValueError, match=r"Table name|Invalid table name"):
         BaseSQLSpecStore._ensure_table_name(table_name)
