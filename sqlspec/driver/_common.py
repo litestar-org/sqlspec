@@ -58,7 +58,7 @@ from sqlspec.core import (
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
-from sqlspec.core.compiler import _leading_statement_keyword_and_rest  # pyright: ignore[reportPrivateUsage]
+from sqlspec.core.compiler import _split_leading_keyword  # pyright: ignore[reportPrivateUsage]
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -2498,7 +2498,7 @@ class CommonDriverAttributesMixin:
                     sequential_cursor += 1
             for position, length, replacement in reversed(rewrites):
                 piece = piece[:position] + replacement + piece[position + length :]
-            parsed_keyword = _leading_statement_keyword_and_rest(_skip_leading_line_comments(piece, dialect))
+            parsed_keyword = _split_leading_keyword(_skip_leading_line_comments(piece, dialect))
             binds = parsed_keyword is not None and parsed_keyword[0] in bind_keywords
             piece_statement = SQL(
                 piece, *piece_positional, statement_config=config if binds else script_config, **piece_named

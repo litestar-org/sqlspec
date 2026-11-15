@@ -1295,15 +1295,15 @@ class SQLProcessor:
         if modifies_rows:
             return False
         if isinstance(expression, exp.Command):
-            return _command_explain_is_read_only(expression, dialect)
+            return _is_read_only_explain(expression, dialect)
         if not isinstance(expression, _READ_ONLY_ROOT_TYPES):
             return False
-        if isinstance(expression, exp.Copy) and not _copy_is_read_only(expression):
+        if isinstance(expression, exp.Copy) and not _is_read_only_copy(expression):
             return False
-        if isinstance(expression, exp.Describe) and _describe_is_analyze(expression):
+        if isinstance(expression, exp.Describe) and _is_describe_analyze(expression):
             return False
         for node in expression.walk():
-            if isinstance(node, _NON_READ_ONLY_AST_TYPES) or _node_disqualifies_read_only_extra(node):
+            if isinstance(node, _NON_READ_ONLY_AST_TYPES) or _is_side_effecting_node(node):
                 return False
         return True
 
@@ -1350,7 +1350,7 @@ class SQLProcessor:
         Returns:
             True when the statement text opens with a row-returning keyword and an operand.
         """
-        parsed = _leading_statement_keyword_and_rest(sql)
+        parsed = _split_leading_keyword(sql)
         if parsed is None:
             return False
         keyword, remainder = parsed
@@ -1384,7 +1384,7 @@ def validate_placeholder_names(expression: "exp.Expr") -> None:
             raise sqlspec.exceptions.SQLBuilderError(msg)
 
 
-def _leading_statement_keyword_and_rest(sql: str) -> "tuple[str, str] | None":
+def _split_leading_keyword(sql: str) -> "tuple[str, str] | None":
     """Return ``(UPPER_KEYWORD, remainder)`` after skipping leading whitespace, comments, and ``(``."""
     pos = 0
     length = len(sql)
@@ -1423,7 +1423,7 @@ def _leading_statement_keyword_and_rest(sql: str) -> "tuple[str, str] | None":
     return sql[pos:end].upper(), sql[end:]
 
 
-def _describe_is_analyze(expression: "exp.Describe") -> bool:
+def _is_describe_analyze(expression: "exp.Describe") -> bool:
     for key in ("style", "kind", "format"):
         val = expression.args.get(key)
         if isinstance(val, str) and "ANALYZE" in val.upper():
@@ -1431,7 +1431,7 @@ def _describe_is_analyze(expression: "exp.Describe") -> bool:
     return False
 
 
-def _dot_package_name(node: "exp.Func") -> str | None:
+def _qualifying_package_name(node: "exp.Func") -> str | None:
     parent = node.parent
     if not isinstance(parent, exp.Dot):
         return None
@@ -1445,7 +1445,7 @@ def _dot_package_name(node: "exp.Func") -> str | None:
     return None
 
 
-def _copy_is_read_only(expression: "exp.Copy") -> bool:
+def _is_read_only_copy(expression: "exp.Copy") -> bool:
     """Return True only for COPY ... TO STDOUT streaming without file, stage, or program targets."""
     if expression.args.get("kind") is not False:
         return False
@@ -1472,17 +1472,18 @@ def _copy_is_read_only(expression: "exp.Copy") -> bool:
     return True
 
 
-def _func_is_volatile(node: "exp.Func") -> bool:
+def _is_volatile_function(node: "exp.Func") -> bool:
     name = node.name.upper() if isinstance(node, exp.Anonymous) else node.sql_name().upper()
     if name in VOLATILE_FUNCTIONS or name.startswith(_VOLATILE_FUNCTION_PREFIXES):
         return True
-    package = _dot_package_name(node)
+    package = _qualifying_package_name(node)
     if package == "DBMS_SESSION":
         return name not in _READ_ONLY_DBMS_SESSION_FUNCTIONS
     return package == "DBMS_LOCK"
 
 
-def _node_disqualifies_read_only_extra(node: "exp.Expr") -> bool:
+def _is_side_effecting_node(node: "exp.Expr") -> bool:
+    """Return whether a node is a sequence NEXTVAL/CURRVAL column, a non-read-only table hint, or a volatile function."""
     if isinstance(node, exp.Column) and node.table and node.name.upper() in {"NEXTVAL", "CURRVAL"}:
         identifier = node.this
         if isinstance(identifier, exp.Identifier) and not identifier.args.get("quoted"):
@@ -1492,11 +1493,11 @@ def _node_disqualifies_read_only_extra(node: "exp.Expr") -> bool:
             if not isinstance(hint, exp.Var) or hint.name.upper() not in _READ_ONLY_TABLE_HINTS:
                 return True
     if isinstance(node, exp.Func):
-        return _func_is_volatile(node)
+        return _is_volatile_function(node)
     return False
 
 
-def _command_explain_is_read_only(expression: "exp.Command", dialect: "str | None") -> bool:
+def _is_read_only_explain(expression: "exp.Command", dialect: "str | None") -> bool:
     if expression.name.upper() != "EXPLAIN":
         return False
     payload = expression.args.get("expression")
@@ -1571,10 +1572,10 @@ def _classify_root_operation(
     need_ro_walk = False
     if not modifies_rows:
         if isinstance(expr, exp.Command):
-            is_read_only = _command_explain_is_read_only(expr, dialect)
+            is_read_only = _is_read_only_explain(expr, dialect)
         elif isinstance(expr, _READ_ONLY_ROOT_TYPES):
-            if (isinstance(expr, exp.Copy) and not _copy_is_read_only(expr)) or (
-                isinstance(expr, exp.Describe) and _describe_is_analyze(expr)
+            if (isinstance(expr, exp.Copy) and not _is_read_only_copy(expr)) or (
+                isinstance(expr, exp.Describe) and _is_describe_analyze(expr)
             ):
                 is_read_only = False
             else:
@@ -1610,7 +1611,7 @@ def _inspect_operation_profile(
                     need_ro_walk = False
                     if isinstance(node, _MODIFIES_ROWS_AST_TYPES):
                         modifies_rows = True
-                elif isinstance(node, _READ_ONLY_EXTRA_AST_TYPES) and _node_disqualifies_read_only_extra(node):
+                elif isinstance(node, _READ_ONLY_EXTRA_AST_TYPES) and _is_side_effecting_node(node):
                     is_read_only = False
                     need_ro_walk = False
             elif not modifies_rows and isinstance(node, _MODIFIES_ROWS_AST_TYPES):
