@@ -1303,16 +1303,16 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
 
     script_update = driver.execute_script("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1))
     assert script_update.rows_affected == 1
-    assert cursor.execute.call_count == 2
-    assert cursor.execute.call_args_list[1].args == ("UPDATE items SET name = 'gamma' WHERE id = 1",)
-    assert cursor.executemany.call_count == 2
+    assert cursor.execute.call_count == 1
+    assert cursor.executemany.call_count == 3
+    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
 
     direct_single_script = driver.dispatch_execute_script(
         cursor, SQL("UPDATE items SET name = ? WHERE id = ?", ("gamma", 1), statement_config=driver.statement_config)
     )
     assert direct_single_script.rowcount_override == 1
-    assert cursor.executemany.call_count == 3
-    assert cursor.executemany.call_args_list[2].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
+    assert cursor.executemany.call_count == 4
+    assert cursor.executemany.call_args_list[3].args == ("UPDATE items SET name = ? WHERE id = ?", [["gamma", 1]])
 
     direct_multi_script = driver.dispatch_execute_script(
         cursor,
@@ -1323,18 +1323,18 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
         ),
     )
     assert direct_multi_script.rowcount_override == 1
-    assert cursor.execute.call_count == 3
-    assert cursor.executemany.call_count == 4
-    assert cursor.executemany.call_args_list[3].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
+    assert cursor.execute.call_count == 2
+    assert cursor.executemany.call_count == 5
+    assert cursor.executemany.call_args_list[4].args == ("INSERT INTO items (id, name) VALUES (?, ?)", [[3, "delta"]])
 
     named_delete = driver.execute("DELETE FROM items WHERE id = :item_id", {"item_id": 2})
     assert named_delete.rows_affected == 1
-    assert cursor.executemany.call_count == 5
-    assert cursor.executemany.call_args_list[4].args == ("DELETE FROM items WHERE id = ?", [[2]])
+    assert cursor.executemany.call_count == 6
+    assert cursor.executemany.call_args_list[5].args == ("DELETE FROM items WHERE id = ?", [[2]])
 
     driver.execute("SELECT id FROM items WHERE id = ?", (1,))
-    assert cursor.execute.call_count == 4
-    assert cursor.executemany.call_count == 5
+    assert cursor.execute.call_count == 3
+    assert cursor.executemany.call_count == 6
 
     class _ArrowStreamStub:
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
@@ -1342,8 +1342,8 @@ def test_adbc_driver_db2_routes_parameterized_non_query_via_executemany() -> Non
 
     arrow_stream = _ArrowStreamStub()
     AdbcDriver._execute_db2_non_query(cursor, "INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
-    assert cursor.executemany.call_count == 6
-    assert cursor.executemany.call_args_list[5].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
+    assert cursor.executemany.call_count == 7
+    assert cursor.executemany.call_args_list[6].args == ("INSERT INTO items (id, name) VALUES (?, ?)", arrow_stream)
 
 
 def _postgres_pool_config(**overrides: Any) -> AdbcConfig:

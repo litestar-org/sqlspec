@@ -188,6 +188,10 @@ class SybaseDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "SybaseRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         normalized_params = normalize_execute_parameters(prepared_parameters)

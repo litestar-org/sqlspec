@@ -237,13 +237,17 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
+        script_params = normalize_execute_parameters(prepared_parameters)
 
         successful_count = 0
-        for stmt, params in zip(statements, statement_params, strict=False):
-            cursor.execute(stmt, params)
+        for stmt in statements:
+            cursor.execute(stmt, script_params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -609,13 +613,17 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
-        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
+        script_params = normalize_execute_parameters(prepared_parameters)
 
         successful_count = 0
-        for stmt, params in zip(statements, statement_params, strict=False):
-            await cursor.execute(stmt, params)
+        for stmt in statements:
+            await cursor.execute(stmt, script_params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -827,30 +835,6 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             return not connection_autocommit_enabled(self.connection)
         except (MissingDependencyError, Db2Error, AttributeError, KeyError, TypeError, ValueError):
             return False
-
-
-def _resolve_script_statement_params(
-    statements: "list[str]", prepared_parameters: Any
-) -> "list[tuple[Any, ...] | None]":
-    """Resolve positional parameter tuples for each statement in a split script."""
-    if len(statements) <= 1:
-        return [normalize_execute_parameters(prepared_parameters) for _ in statements]
-    if not prepared_parameters:
-        return [None for _ in statements]
-    if isinstance(prepared_parameters, (list, tuple)):
-        offset = 0
-        resolved: list[tuple[Any, ...] | None] = []
-        for stmt in statements:
-            count = stmt.count("?")
-            if count > 0:
-                slice_params = tuple(prepared_parameters[offset : offset + count])
-                offset += count
-                resolved.append(slice_params or None)
-            else:
-                resolved.append(None)
-        return resolved
-    normalized = normalize_execute_parameters(prepared_parameters)
-    return [normalized if index == 0 else None for index in range(len(statements))]
 
 
 register_driver_profile("db2", driver_profile)

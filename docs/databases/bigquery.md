@@ -155,6 +155,10 @@ Pass `BigQueryDriverFeatures` keys inside `driver_features={...}` on `BigQueryCo
 - **Multi-Statement Procedural Scripts**: `session.execute_script(sql)` submits `DECLARE`, `BEGIN ... END`, temporary tables, and script-level transactions as a single un-split BigQuery script job rather than splitting on semicolons client-side.
 - **Preserving Verbatim Alias Casing in QueryBuilder**: SQLGlot's default optimizer (`enable_optimization=True`) qualifies and lowercases BigQuery column aliases. Configure `StatementConfig(dialect="bigquery", enable_optimization=False)` on `BigQueryConfig` when downstream consumers require exact mixed-case aliases.
 
+### Script Parameters
+
+`execute_script` submits a script as one job and binds its parameters as query parameters. When a statement outside `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `VALUES` and `CALL` (for example `CREATE TABLE`) uses a placeholder, every value is written into the script as an escaped literal instead.
+
 ## See Also
 
 - [BigQuery API Reference](/reference/adapters/bigquery/)

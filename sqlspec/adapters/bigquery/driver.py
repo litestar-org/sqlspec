@@ -53,6 +53,7 @@ from sqlspec.adapters.bigquery.core import (
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.core import (
+    SQL,
     StatementConfig,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
@@ -77,7 +78,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery._typing import bigquery_storage_read_module as bigquery_storage
     from sqlspec.adapters.bigquery.core import BigQueryLoadFormat
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter
+    from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
@@ -299,8 +300,23 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute a procedural script as one native BigQuery job with bound parameters."""
-        sql, parameters = self._compiled_sql(statement, self.statement_config)
+        """Execute a procedural script as one native BigQuery job.
+
+        Parameters bind natively unless a statement outside the DML and DQL set uses a placeholder,
+        in which case every value is written into the script as an escaped literal.
+        """
+        script_statement = statement
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None and not any(
+            piece.statement_config.parameter_config.needs_static_script_compilation for piece in bound_statements
+        ):
+            script_statement = SQL(
+                statement.raw_sql,
+                *statement.positional_parameters,
+                statement_config=self.statement_config,
+                **statement.named_parameters,
+            )
+        sql, parameters = self._compiled_sql(script_statement, self.statement_config)
         stmt_count = max(
             len(self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)), 1
         )

@@ -196,6 +196,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution metadata
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config

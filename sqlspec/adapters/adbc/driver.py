@@ -457,9 +457,15 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Execution result with statement counts
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-
-        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        entries: list[tuple[str, Any]] | None = None
+        if bound_statements is not None:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
+            prepared_parameters: Any = None
+        else:
+            sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
         last_rowcount = 0
@@ -477,13 +483,21 @@ class AdbcDriver(SyncDriverAdapterBase):
             for idx, stmt in enumerate(statements):
                 stmt_started = perf_counter() if has_observers else 0.0
                 stmt_params: Any = ()
-                placeholders = (
-                    validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
-                )
-                if prepared_parameters and (total_statements == 1 or placeholders):
-                    stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+                placeholders: list[Any] = []
+                if entries is not None:
+                    source_parameters = entries[idx][1]
+                    has_statement_parameters = bool(source_parameters)
+                else:
+                    source_parameters = prepared_parameters
+                    placeholders = (
+                        validator.extract_parameters(stmt, dialect=self._dialect_name) if prepared_parameters else []
+                    )
+                    has_statement_parameters = bool(prepared_parameters and (total_statements == 1 or placeholders))
+                if has_statement_parameters:
+                    stmt_params = normalize_postgres_empty_parameters(self._dialect_name, source_parameters)
                     if (
-                        self._dialect_name == "snowflake"
+                        entries is None
+                        and self._dialect_name == "snowflake"
                         and total_statements > 1
                         and isinstance(stmt_params, (list, tuple))
                     ):

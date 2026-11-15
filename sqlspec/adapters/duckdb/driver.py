@@ -255,6 +255,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with script execution metadata
         """
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 

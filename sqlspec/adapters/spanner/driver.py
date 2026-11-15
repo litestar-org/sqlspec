@@ -281,21 +281,24 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is None:
+            sql, params = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            entries = [(stmt, params) for stmt in statements]
+        else:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerReadProtocol", cursor)
 
         count = 0
-        script_params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(script_params)
-        coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         ddl_timeout = write_execute_kwargs.get("timeout")
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         pending_ddl: list[str] = []
-        for index, stmt in enumerate(statements):
+        for index, (stmt, params) in enumerate(entries):
             if is_ddl_statement(stmt):
                 if not is_transaction:
                     raise SQLConversionError(_READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE)
@@ -308,6 +311,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerReadProtocol", cursor)
+            script_params = cast("dict[str, Any] | None", params)
+            param_types_map = self._infer_param_types(script_params)
+            coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise ReadOnlyTransactionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
@@ -961,21 +967,24 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
-        sql, params = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is None:
+            sql, params = self._compiled_sql(statement, self.statement_config)
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            entries = [(stmt, params) for stmt in statements]
+        else:
+            entries = [self._compiled_sql(piece, piece.statement_config) for piece in bound_statements]
+            statements = [entry[0] for entry in entries]
         is_transaction = supports_write(cursor)
         reader = cast("_SpannerAsyncReadProtocol", cursor)
 
         count = 0
-        script_params = cast("dict[str, Any] | None", params)
-        param_types_map = self._infer_param_types(script_params)
-        coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         ddl_timeout = write_execute_kwargs.get("timeout")
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         pending_ddl: list[str] = []
-        for index, stmt in enumerate(statements):
+        for index, (stmt, params) in enumerate(entries):
             if is_ddl_statement(stmt):
                 if not is_transaction:
                     raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE)
@@ -988,6 +997,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 pending_ddl = []
                 cursor = self.connection
                 reader = cast("_SpannerAsyncReadProtocol", cursor)
+            script_params = cast("dict[str, Any] | None", params)
+            param_types_map = self._infer_param_types(script_params)
+            coerced_params = self._coerce_params(script_params)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise ReadOnlyTransactionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)

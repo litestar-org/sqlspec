@@ -2498,7 +2498,7 @@ class CommonDriverAttributesMixin:
                     sequential_cursor += 1
             for position, length, replacement in reversed(rewrites):
                 piece = piece[:position] + replacement + piece[position + length :]
-            parsed_keyword = _leading_statement_keyword_and_rest(piece)
+            parsed_keyword = _leading_statement_keyword_and_rest(_skip_leading_line_comments(piece, dialect))
             binds = parsed_keyword is not None and parsed_keyword[0] in bind_keywords
             piece_statement = SQL(
                 piece, *piece_positional, statement_config=config if binds else script_config, **piece_named
@@ -4157,6 +4157,23 @@ def _parameters_for_repeated_names(original_sql: "SQL", excluded_names: "set[str
     return tuple(
         value for name, value in zip(input_names, execution_parameters, strict=False) if name not in excluded_names
     )
+
+
+_LINE_COMMENT_MARKERS: Final[dict[str, str]] = {"snowflake": "//", "mysql": "#", "mariadb": "#"}
+
+
+def _skip_leading_line_comments(sql: str, dialect: "str | None") -> str:
+    """Drop leading dialect-specific line comments that the keyword scanner does not recognize."""
+    marker = _LINE_COMMENT_MARKERS.get(dialect or "")
+    if marker is None:
+        return sql
+    text = sql.lstrip()
+    while text.startswith(marker):
+        newline = text.find("\n")
+        if newline < 0:
+            return ""
+        text = text[newline + 1 :].lstrip()
+    return text
 
 
 def _build_rewritten_sql(

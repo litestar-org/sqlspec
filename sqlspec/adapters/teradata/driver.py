@@ -285,6 +285,10 @@ class TeradataDriver(SyncDriverAdapterBase):
         )
 
     def dispatch_execute_script(self, cursor: "TeradataRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         for text in statements:

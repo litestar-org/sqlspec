@@ -732,6 +732,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling."""
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = coerce_large_parameters_sync(
             self.connection,
@@ -1848,6 +1852,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute async SQL script with statement splitting and parameter handling."""
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return await self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = await coerce_large_parameters_async(
             self.connection,

@@ -241,6 +241,10 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=-1 if executed else 0, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
+        bound_statements = self._bound_script_statements(statement)
+        if bound_statements is not None:
+            return self._dispatch_bound_script(cursor, bound_statements)
+
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             self._execute_statement(cursor, sql, _odbc_parameters(prepared_parameters))

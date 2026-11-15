@@ -602,7 +602,7 @@ def test_oracle_dispatch_execute_script_ignores_colons_in_literals_and_slices_po
     res = driver.dispatch_execute_script(cursor, stmt)
     assert res.statement_count == 2
     assert len(executed_statements) == 2
-    assert executed_statements[0][1] == []
+    assert not executed_statements[0][1]
     assert executed_statements[1][1] == [101, "Alice"]
 
 

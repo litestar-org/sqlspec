@@ -211,8 +211,12 @@ def test_script_second_statement_failure_closes_all_owned_cursors(snowflake_conn
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
 
 
-@pytest.mark.parametrize("paramstyle", ["qmark", "numeric", "pyformat", "format"])
-def test_script_parameters_compile_statically_in_configured_modes(snowflake_connection: Any, paramstyle: str) -> None:
+@pytest.mark.parametrize(
+    ("paramstyle", "placeholder"), [("qmark", "?"), ("numeric", ":1"), ("pyformat", "%s"), ("format", "%s")]
+)
+def test_script_parameters_bind_in_configured_modes(
+    snowflake_connection: Any, paramstyle: str, placeholder: str
+) -> None:
     from sqlspec.adapters.snowflake.core import build_statement_config
 
     driver = SnowflakeDriver(snowflake_connection, statement_config=build_statement_config(paramstyle=paramstyle))
@@ -222,9 +226,9 @@ def test_script_parameters_compile_statically_in_configured_modes(snowflake_conn
         second=2,
     )
     assert result.total_statements == 2
-    assert snowflake_connection.calls[0][0] == "INSERT INTO orders VALUES (1)"
-    assert snowflake_connection.calls[1][0].endswith("INSERT INTO orders VALUES (2)")
-    assert [call[1] for call in snowflake_connection.calls] == [None, None]
+    assert snowflake_connection.calls[0][0] == f"INSERT INTO orders VALUES ({placeholder})"
+    assert snowflake_connection.calls[1][0].endswith(f"INSERT INTO orders VALUES ({placeholder})")
+    assert [list(call[1]) for call in snowflake_connection.calls] == [[1], [2]]
     assert all(cursor.closed for cursor in snowflake_connection.cursors)
 
 

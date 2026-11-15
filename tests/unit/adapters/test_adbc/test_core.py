@@ -1313,7 +1313,7 @@ def test_snowflake_script_binds_only_real_placeholders() -> None:
     connection = SimpleNamespace(cursor=lambda: cursor, adbc_get_info=lambda: {"vendor_name": "Snowflake"})
     driver = AdbcDriver(cast("Any", connection), dialect="snowflake")
     result = driver.execute_script("SELECT $1 FROM @stage; SELECT ? AS value; SELECT ? AS other", (7, 8))
-    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT 7 AS value", None), ("SELECT 8 AS other", None)]
+    assert executed == [("SELECT $1 FROM @stage", None), ("SELECT ? AS value", [7]), ("SELECT ? AS other", [8])]
     assert result.successful_statements == 3
 
 
