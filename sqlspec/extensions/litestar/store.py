@@ -4,14 +4,15 @@ import inspect
 import re
 from abc import abstractmethod
 from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NamedTuple, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, NamedTuple, TypeVar, cast
 
 from litestar.stores.base import Store
 
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.litestar._utils import borrowed_request_session, request_failed
+from sqlspec.extensions.litestar._utils import StoreLease, resolve_store_lease
 from sqlspec.migrations.schema import (
     DropStatement,
     SchemaTarget,
@@ -26,12 +27,13 @@ from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import has_extension_config
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator
 
 __all__ = ("BaseSQLSpecStore", "CompanionIndex", "StoreConnection", "StoreSession")
 
 
 ConfigT = TypeVar("ConfigT")
+ReturnT = TypeVar("ReturnT")
 
 
 logger = get_logger("sqlspec.extensions.litestar.store")
@@ -49,6 +51,7 @@ _STANDALONE_CREATE_INDEX_PATTERN: Final = re.compile(
 _INLINE_MYSQL_INDEX_PATTERN: Final = re.compile(
     r"\bINDEX\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*expires_at\s*\)", re.IGNORECASE
 )
+_PINNED_LEASE: "ContextVar[StoreLease | None]" = ContextVar("sqlspec_litestar_store_lease", default=None)
 
 
 class CompanionIndex(NamedTuple):
@@ -58,10 +61,6 @@ class CompanionIndex(NamedTuple):
     table: str
     schema: str | None
     ddl: str
-
-
-class _DiscardStoreWritesError(Exception):
-    """Raised inside an owned connection to roll back writes made after a failed request."""
 
 
 class StoreConnection(NamedTuple):
@@ -90,10 +89,14 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
     - Session expiration calculation
     - Table creation utilities
 
-    While a Litestar request holds an open session for the store's config, store operations
-    run on that session's connection inside the request transaction and leave commit and
-    rollback to the request. Outside a request the store opens its own short connection and
-    commits itself.
+    Inside a Litestar request that holds an open session for the store's config, store
+    operations started by the request task run on that session inside the request
+    transaction. In ``autocommit`` modes the request commits or rolls back the write. In
+    ``manual`` mode the write joins uncommitted handler work when a transaction is open;
+    otherwise the store begins its own transaction on the request session and commits it.
+    After a request fails and releases its session, later store writes from the request
+    task are rolled back. Outside a request, from other tasks, and after a successful
+    release the store opens its own short session and commits itself.
 
     Subclasses must implement dialect-specific SQL queries.
 
@@ -122,93 +125,132 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
 
     @asynccontextmanager
     async def _store_connection(self) -> "AsyncIterator[StoreConnection]":
-        """Yield the request session's connection, or open an owned connection outside a request.
+        """Yield the connection a store operation runs on for the current task.
 
         Yields:
             The connection to use and whether the store must commit it.
         """
-        session = borrowed_request_session(self._config)
-        if session is not None:
-            await _begin_if_needed_async(session)
-            yield StoreConnection(session.connection, False)
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            async with _borrowed_session_async(lease) as session:
+                yield StoreConnection(session.connection, False)
             return
-        if request_failed(self._config):
-            try:
-                async with cast("Any", self._config).provide_connection() as connection:
-                    yield StoreConnection(connection, False)
-                    _discard_store_writes()
-            except _DiscardStoreWritesError:
-                return
+        if lease.discard:
+            async with self._discarding_session_async() as session:
+                yield StoreConnection(session.connection, False)
+            return
         async with cast("Any", self._config).provide_connection() as connection:
             yield StoreConnection(connection, True)
 
     @contextmanager
     def _store_connection_sync(self) -> "Iterator[StoreConnection]":
-        """Yield the request session's connection, or open an owned connection outside a request.
+        """Yield the connection a store operation runs on for the current task.
 
         Yields:
             The connection to use and whether the store must commit it.
         """
-        session = borrowed_request_session(self._config)
-        if session is not None:
-            _begin_if_needed_sync(session)
-            yield StoreConnection(session.connection, False)
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            with _borrowed_session_sync(lease) as session:
+                yield StoreConnection(session.connection, False)
             return
-        if request_failed(self._config):
-            try:
-                with cast("Any", self._config).provide_connection() as connection:
-                    yield StoreConnection(connection, False)
-                    _discard_store_writes()
-            except _DiscardStoreWritesError:
-                return
+        if lease.discard:
+            with self._discarding_session_sync() as session:
+                yield StoreConnection(session.connection, False)
+            return
         with cast("Any", self._config).provide_connection() as connection:
             yield StoreConnection(connection, True)
 
     @asynccontextmanager
     async def _store_session(self) -> "AsyncIterator[StoreSession]":
-        """Yield the request session, or open an owned session outside a request.
+        """Yield the driver session a store operation runs on for the current task.
 
         Yields:
             The driver session to use and whether the store must commit it.
         """
-        session = borrowed_request_session(self._config)
-        if session is not None:
-            await _begin_if_needed_async(session)
-            yield StoreSession(session, False)
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            async with _borrowed_session_async(lease) as session:
+                yield StoreSession(session, False)
             return
-        if request_failed(self._config):
-            try:
-                async with cast("Any", self._config).provide_session() as owned_session:
-                    await _begin_if_needed_async(owned_session)
-                    yield StoreSession(owned_session, False)
-                    _discard_store_writes()
-            except _DiscardStoreWritesError:
-                return
+        if lease.discard:
+            async with self._discarding_session_async() as session:
+                yield StoreSession(session, False)
+            return
         async with cast("Any", self._config).provide_session() as owned_session:
             yield StoreSession(owned_session, True)
 
     @contextmanager
     def _store_session_sync(self) -> "Iterator[StoreSession]":
-        """Yield the request session, or open an owned session outside a request.
+        """Yield the driver session a store operation runs on for the current task.
 
         Yields:
             The driver session to use and whether the store must commit it.
         """
-        session = borrowed_request_session(self._config)
-        if session is not None:
-            _begin_if_needed_sync(session)
-            yield StoreSession(session, False)
+        lease = _current_lease(self._config)
+        if lease.session is not None:
+            with _borrowed_session_sync(lease) as session:
+                yield StoreSession(session, False)
             return
-        if request_failed(self._config):
-            try:
-                with cast("Any", self._config).provide_session() as owned_session:
-                    _begin_if_needed_sync(owned_session)
-                    yield StoreSession(owned_session, False)
-                    _discard_store_writes()
-            except _DiscardStoreWritesError:
-                return
+        if lease.discard:
+            with self._discarding_session_sync() as session:
+                yield StoreSession(session, False)
+            return
         with cast("Any", self._config).provide_session() as owned_session:
             yield StoreSession(owned_session, True)
+
+    @asynccontextmanager
+    async def _discarding_session_async(self) -> "AsyncIterator[Any]":
+        """Yield an owned session inside a transaction that is always rolled back.
+
+        Yields:
+            The owned driver session.
+        """
+        async with cast("Any", self._config).provide_session() as session:
+            await _begin_async(session)
+            try:
+                yield session
+            finally:
+                await _await_if_needed(session.rollback())
+
+    @contextmanager
+    def _discarding_session_sync(self) -> "Iterator[Any]":
+        """Yield an owned session inside a transaction that is always rolled back.
+
+        Yields:
+            The owned driver session.
+        """
+        with cast("Any", self._config).provide_session() as session:
+            _begin_sync(session)
+            try:
+                yield session
+            finally:
+                session.rollback()
+
+    async def _run_sync(self, function: "Callable[..., ReturnT]", /, *args: Any, **kwargs: Any) -> ReturnT:
+        """Run a blocking store operation in a worker thread with the caller's store lease.
+
+        The lease is resolved in the calling task, so a worker thread borrows the request
+        session only when the request task itself started the operation.
+
+        Args:
+            function: Blocking store operation.
+            *args: Positional arguments for ``function``.
+            **kwargs: Keyword arguments for ``function``.
+
+        Returns:
+            The operation result.
+        """
+        lease = resolve_store_lease(self._config)
+
+        def run() -> ReturnT:
+            token = _PINNED_LEASE.set(lease)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                _PINNED_LEASE.reset(token)
+
+        return await async_(run)()
 
     @property
     def config(self) -> ConfigT:
@@ -505,17 +547,74 @@ def _reconcile_schema_sync(store: "BaseSQLSpecStore[Any]", *, create_schema: boo
         )
 
 
-async def _begin_if_needed_async(session: Any) -> None:
+async def _await_if_needed(result: Any) -> Any:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _begin_async(session: Any) -> None:
     if not session._connection_in_transaction():
-        result = session.begin()
-        if inspect.isawaitable(result):
-            await result
+        await _await_if_needed(session.begin())
 
 
-def _begin_if_needed_sync(session: Any) -> None:
+def _begin_sync(session: Any) -> None:
     if not session._connection_in_transaction():
         session.begin()
 
 
-def _discard_store_writes() -> NoReturn:
-    raise _DiscardStoreWritesError
+def _current_lease(config: Any) -> StoreLease:
+    pinned = _PINNED_LEASE.get()
+    return pinned if pinned is not None else resolve_store_lease(config)
+
+
+@asynccontextmanager
+async def _borrowed_session_async(lease: StoreLease) -> "AsyncIterator[Any]":
+    """Yield the borrowed request session inside a transaction.
+
+    The store joins an open request transaction. When none is open it begins one; in
+    ``manual`` commit mode the store owns that transaction and commits it, otherwise the
+    request commits or rolls it back.
+
+    Yields:
+        The borrowed driver session.
+    """
+    session = lease.session
+    began = not session._connection_in_transaction()
+    if began:
+        await _await_if_needed(session.begin())
+    if not (began and lease.manual):
+        yield session
+        return
+    try:
+        yield session
+    except BaseException:
+        await _await_if_needed(session.rollback())
+        raise
+    await _await_if_needed(session.commit())
+
+
+@contextmanager
+def _borrowed_session_sync(lease: StoreLease) -> "Iterator[Any]":
+    """Yield the borrowed request session inside a transaction.
+
+    The store joins an open request transaction. When none is open it begins one; in
+    ``manual`` commit mode the store owns that transaction and commits it, otherwise the
+    request commits or rolls it back.
+
+    Yields:
+        The borrowed driver session.
+    """
+    session = lease.session
+    began = not session._connection_in_transaction()
+    if began:
+        session.begin()
+    if not (began and lease.manual):
+        yield session
+        return
+    try:
+        yield session
+    except BaseException:
+        session.rollback()
+        raise
+    session.commit()

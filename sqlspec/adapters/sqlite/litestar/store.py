@@ -17,7 +17,6 @@ from sqlspec.adapters.sqlite.core import (
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
@@ -76,7 +75,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     def prepare_schema_sync(self, driver: Any) -> None:
@@ -94,7 +93,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -104,7 +103,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
             value: Session data.
             expires_in: Time until expiration.
         """
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -112,11 +111,11 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Args:
             key: Session ID to delete.
         """
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -127,7 +126,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -138,7 +137,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -146,7 +145,7 @@ class SqliteStore(BaseSQLSpecStore["SqliteConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def _record_configured_connection(self, connection: Any) -> None:
         token = SqliteConnectionPool.resolve_connection_identity(connection, self._config)

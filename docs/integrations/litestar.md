@@ -215,7 +215,16 @@ Supported database adapters export a Litestar `Store` implementation under `sqls
 
 Call `await store.create_table()` during application startup (or configure `session_table=True` in `extension_config["litestar"]`, which auto-includes the `litestar_session` table in migrations) and pass the store to Litestar's `ServerSideSessionConfig` or `stores={"sessions": store}` registry.
 
-While a request holds an open database session for the store's configuration, the store runs on that session's connection and does not take a second one, so a one-connection pool cannot deadlock on its own session writes. Session changes belong to the request's transaction: they commit with a successful request and roll back with a failed one, or with a manual-mode request that never commits. A store call made outside a request, such as from startup code, a CLI command, or a background task, opens its own short session and commits itself. Stores bound to a different configuration also open their own session. No extra configuration is needed.
+While a request holds an open database session for the store's configuration, session writes made by the request itself (including the writes Litestar's session middleware makes when the response starts) run on that session and do not take a second connection, so a one-connection pool cannot deadlock on its own session writes. This holds however the request session is resolved: through `db_session` injection, inside a group of sibling dependencies, or from a sync handler running in a worker thread. No extra configuration is needed.
+
+How the write commits depends on the commit mode:
+
+- **`autocommit` and `autocommit_include_redirect`:** the write joins the request's transaction. It commits with a successful response and rolls back with an error response or an unhandled exception, including on adapters whose connections autocommit by default (such as asyncpg, psqlpy, and DuckDB).
+- **`manual`:** if the handler left uncommitted work open, the write joins it and rolls back with it when the request ends. If no transaction is open (for example, because the handler already committed), the store begins its own transaction on the request session and commits the write immediately.
+
+If a request fails after it has released its database session, later session writes from that request are rolled back.
+
+A store call made outside a request, such as from startup code or a CLI command, opens its own short session and commits itself. So do calls from tasks the request spawns (for example, with `asyncio.create_task`), calls made after a successful request has released its session, and stores bound to a different configuration. These writes are independent of the request's outcome. The BigQuery and Spanner stores always open their own session.
 
 SQL Server, Oracle, and Arrow ODBC session stores accept schema-qualified `session_table` names (such as `"auth.litestar_session"`, `"[auth].[litestar_session]"`, or `"APP.litestar_session"`). The schema must already exist.
 

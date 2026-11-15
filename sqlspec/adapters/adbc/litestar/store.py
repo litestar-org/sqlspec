@@ -31,7 +31,6 @@ from sqlspec.adapters.adbc.core import split_db2_table_name as _split_db2_table_
 from sqlspec.exceptions import IntegrityError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore, CompanionIndex
 from sqlspec.migrations.schema import DropStatement, SchemaTarget
-from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
@@ -79,7 +78,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -92,7 +91,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -102,7 +101,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
             value: Session data.
             expires_in: Time until expiration.
         """
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -110,11 +109,11 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Args:
             key: Session ID to delete.
         """
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired.
@@ -125,7 +124,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -136,7 +135,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Seconds until expiration, or None if no expiry or key doesn't exist.
         """
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -144,7 +143,7 @@ class AdbcStore(BaseSQLSpecStore["AdbcConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Cache dialect from explicit FlightSQL/GizmoSQL config hints or the active driver."""

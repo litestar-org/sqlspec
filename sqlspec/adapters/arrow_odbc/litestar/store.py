@@ -20,7 +20,6 @@ from sqlspec.extensions.litestar.store import (
     CompanionIndex,
 )
 from sqlspec.migrations.schema import SchemaTarget
-from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
@@ -64,36 +63,36 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key."""
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
         """Check if a session key exists and is not expired."""
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires."""
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions."""
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def get_schema_targets(self) -> list[SchemaTarget]:
         """Return primary session table and overflow chunk table SchemaTargets in FK order."""

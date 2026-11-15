@@ -1,26 +1,28 @@
 """ASGI scope state utilities for the Litestar SQLSpec plugin."""
 
+import asyncio
+from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from litestar.types import Scope
 
 __all__ = (
-    "borrowed_request_session",
+    "RequestSessionHolder",
+    "StoreLease",
     "clear_request_session",
     "delete_sqlspec_scope_state",
     "get_sqlspec_scope_state",
     "publish_request_session",
-    "request_failed",
+    "request_session_scope",
+    "resolve_store_lease",
     "set_sqlspec_scope_state",
 )
 
 _SCOPE_NAMESPACE = "_sqlspec"
-_REQUEST_FAILED: Any = object()
-_REQUEST_SESSIONS: "ContextVar[tuple[tuple[Any, Any], ...]]" = ContextVar(
-    "sqlspec_litestar_request_sessions", default=()
-)
 
 
 def get_sqlspec_scope_state(scope: "Scope", key: str, default: Any = None, pop: bool = False) -> Any:
@@ -60,62 +62,167 @@ def delete_sqlspec_scope_state(scope: "Scope", key: str) -> None:
     scope.setdefault(_SCOPE_NAMESPACE, {}).pop(key, None)  # type: ignore[misc]
 
 
-def publish_request_session(config: Any, session: Any) -> None:
-    """Record the open request session for a database configuration in the current context.
+class StoreLease(NamedTuple):
+    """How a session store operation reaches the database for the calling task.
+
+    Attributes:
+        session: Open request session to borrow, or ``None`` when the store opens its own session.
+        manual: Whether the borrowed request session runs in ``manual`` commit mode.
+        discard: Whether the store must roll back its own session because the request failed.
+    """
+
+    session: Any
+    manual: bool
+    discard: bool
+
+
+_OWN_SESSION_LEASE: Final = StoreLease(None, False, False)
+_DISCARD_LEASE: Final = StoreLease(None, False, True)
+
+
+class _HeldSession:
+    """Request session state for one database configuration."""
+
+    __slots__ = ("closed", "config", "failed", "manual", "session")
+
+    def __init__(self, config: Any, session: Any, manual: bool) -> None:
+        self.config = config
+        self.session = session
+        self.manual = manual
+        self.closed = False
+        self.failed = False
+
+
+class RequestSessionHolder:
+    """Mutable record of the database sessions one Litestar request opens.
+
+    The plugin middleware installs one holder in the outer request context before
+    dependencies resolve. Dependency providers fill it from any task or worker thread,
+    and session stores borrow from it only in the owning request task.
+
+    Args:
+        owner: The asyncio task serving the request, or ``None`` outside a running loop.
+    """
+
+    __slots__ = ("_entries", "_owner")
+
+    def __init__(self, owner: "asyncio.Task[Any] | None") -> None:
+        self._owner = owner
+        self._entries: list[_HeldSession] = []
+
+    @property
+    def owner(self) -> "asyncio.Task[Any] | None":
+        """Return the task that serves the request."""
+        return self._owner
+
+    def fill(self, config: Any, session: Any, *, manual: bool = False) -> None:
+        """Record the open request session for a database configuration.
+
+        Args:
+            config: Database configuration that owns the session.
+            session: Open driver session holding the request connection.
+            manual: Whether the request session uses ``manual`` commit mode.
+        """
+        self._entries = [entry for entry in self._entries if entry.config is not config]
+        self._entries.append(_HeldSession(config, session, manual))
+
+    def release(self, config_or_session: Any, *, failed: bool = False) -> None:
+        """Mark a request session closed by its configuration or by the session itself.
+
+        Args:
+            config_or_session: Database configuration, or the recorded session object.
+            failed: Whether the request ended with an error.
+        """
+        for entry in self._entries:
+            if not entry.closed and (entry.config is config_or_session or entry.session is config_or_session):
+                entry.closed = True
+                entry.failed = failed
+
+    def lease(self, config: Any, task: "asyncio.Task[Any] | None") -> StoreLease:
+        """Return how a store operation in ``task`` reaches the database for ``config``.
+
+        Args:
+            config: Database configuration to match by identity.
+            task: The task running the store operation.
+
+        Returns:
+            The open request session for the owning task, a discard lease for the owning
+            task after a failed request, and an own-session lease otherwise.
+        """
+        if task is None or task is not self._owner:
+            return _OWN_SESSION_LEASE
+        for entry in self._entries:
+            if entry.config is not config:
+                continue
+            if not entry.closed:
+                return StoreLease(entry.session, entry.manual, False)
+            return _DISCARD_LEASE if entry.failed else _OWN_SESSION_LEASE
+        return _OWN_SESSION_LEASE
+
+
+_REQUEST_HOLDER: "ContextVar[RequestSessionHolder | None]" = ContextVar(
+    "sqlspec_litestar_request_session_holder", default=None
+)
+
+
+def _current_task() -> "asyncio.Task[Any] | None":
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+@contextmanager
+def request_session_scope() -> "Iterator[RequestSessionHolder]":
+    """Install a request session holder owned by the current task for the enclosed request.
+
+    Yields:
+        The installed holder.
+    """
+    holder = RequestSessionHolder(_current_task())
+    token = _REQUEST_HOLDER.set(holder)
+    try:
+        yield holder
+    finally:
+        _REQUEST_HOLDER.reset(token)
+
+
+def publish_request_session(config: Any, session: Any, *, manual: bool = False) -> None:
+    """Fill the current request's holder with the open session for a database configuration.
 
     Args:
         config: Database configuration that owns the session.
         session: Open driver session holding the request connection.
+        manual: Whether the request session uses ``manual`` commit mode.
     """
-    remaining = tuple(pair for pair in _REQUEST_SESSIONS.get() if pair[0] is not config)
-    _REQUEST_SESSIONS.set((*remaining, (config, session)))
+    holder = _REQUEST_HOLDER.get()
+    if holder is not None:
+        holder.fill(config, session, manual=manual)
 
 
 def clear_request_session(config_or_session: Any, *, failed: bool = False) -> None:
-    """Remove a published request session by its configuration or by the session itself.
+    """Mark a request session closed in the current request's holder.
 
     Args:
         config_or_session: Database configuration, or the published session object.
-        failed: Whether the request ended with an error. Later store operations in the same
-            context then discard their writes instead of committing them.
+        failed: Whether the request ended with an error. Later store operations in the
+            owning request task then discard their writes instead of committing them.
     """
-    current = _REQUEST_SESSIONS.get()
-    remaining: list[tuple[Any, Any]] = []
-    removed_configs: list[Any] = []
-    for pair in current:
-        if pair[0] is config_or_session or pair[1] is config_or_session:
-            removed_configs.append(pair[0])
-        else:
-            remaining.append(pair)
-    if not removed_configs:
-        return
-    if failed:
-        remaining.extend((config, _REQUEST_FAILED) for config in removed_configs)
-    _REQUEST_SESSIONS.set(tuple(remaining))
+    holder = _REQUEST_HOLDER.get()
+    if holder is not None:
+        holder.release(config_or_session, failed=failed)
 
 
-def borrowed_request_session(config: Any) -> Any | None:
-    """Return the open request session published for a database configuration, if any.
+def resolve_store_lease(config: Any) -> StoreLease:
+    """Return how a store operation in the current task reaches the database for ``config``.
 
     Args:
         config: Database configuration to match by identity.
 
     Returns:
-        The published driver session, otherwise ``None``.
+        The lease for the current task, or an own-session lease outside a request.
     """
-    for published_config, session in _REQUEST_SESSIONS.get():
-        if published_config is config and session is not _REQUEST_FAILED:
-            return session
-    return None
-
-
-def request_failed(config: Any) -> bool:
-    """Return whether the request that held a session for this configuration ended with an error.
-
-    Args:
-        config: Database configuration to match by identity.
-
-    Returns:
-        ``True`` when the request's session was released after an error in the current context.
-    """
-    return any(published is config and session is _REQUEST_FAILED for published, session in _REQUEST_SESSIONS.get())
+    holder = _REQUEST_HOLDER.get()
+    if holder is None:
+        return _OWN_SESSION_LEASE
+    return holder.lease(config, _current_task())

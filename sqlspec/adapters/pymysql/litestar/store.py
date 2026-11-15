@@ -8,7 +8,6 @@ from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.pymysql.config import PyMysqlConfig
@@ -50,29 +49,29 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
-        await async_(self._create_table)()
+        await self._run_sync(self._create_table)
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        return await async_(self._get)(key, renew_for)
+        return await self._run_sync(self._get, key, renew_for)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        await async_(self._set)(key, value, expires_in)
+        await self._run_sync(self._set, key, value, expires_in)
 
     async def delete(self, key: str) -> None:
-        await async_(self._delete)(key)
+        await self._run_sync(self._delete, key)
 
     async def delete_all(self) -> None:
-        await async_(self._delete_all)()
+        await self._run_sync(self._delete_all)
 
     async def exists(self, key: str) -> bool:
-        return await async_(self._exists)(key)
+        return await self._run_sync(self._exists, key)
 
     async def expires_in(self, key: str) -> "int | None":
-        return await async_(self._expires_in)(key)
+        return await self._run_sync(self._expires_in, key)
 
     async def delete_expired(self) -> int:
-        return await async_(self._delete_expired)()
+        return await self._run_sync(self._delete_expired)
 
     def _table_ddl(self) -> str:
         return f"""

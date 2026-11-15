@@ -453,13 +453,13 @@ def db_session_provider_maker(
             existing = get_sqlspec_scope_state(scope, session_scope_key)
             if existing is not None and getattr(existing, "connection", None) is connection_obj:
                 set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", existing)
-                publish_request_session(config, existing)
+                publish_request_session(config, existing, manual=commit_mode == "manual")
                 yield cast("DriverT", existing)  # pyright: ignore
                 return
             session = build_db_session(config, connection_obj, commit_mode)
             set_sqlspec_scope_state(scope, session_scope_key, session)
             set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
-            publish_request_session(config, session)
+            publish_request_session(config, session, manual=commit_mode == "manual")
             runtime = session.observability
             if not runtime.is_idle:
                 await runtime.emit_session_start_async(session)
@@ -468,7 +468,7 @@ def db_session_provider_maker(
         session = build_db_session(config, connection_obj, commit_mode)
         if scope is not None:
             set_sqlspec_scope_state(scope, f"{connection_dependency_key}_session", session)
-        publish_request_session(config, session)
+        publish_request_session(config, session, manual=commit_mode == "manual")
         runtime = session.observability
         if not runtime.is_idle:
             await runtime.emit_session_start_async(session)

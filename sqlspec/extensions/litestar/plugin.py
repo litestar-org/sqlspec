@@ -38,6 +38,7 @@ from sqlspec.extensions.litestar._utils import (
     delete_sqlspec_scope_state,
     get_sqlspec_scope_state,
     publish_request_session,
+    request_session_scope,
     set_sqlspec_scope_state,
 )
 from sqlspec.extensions.litestar.cli import database_group
@@ -318,7 +319,8 @@ class SQLSpecTenantRequestMiddleware:
 class ConnectionCleanupMiddleware:
     """ASGI middleware guaranteeing residual HTTP request connections are finalized and released.
 
-    Cleans up handed-over injected connections when a request aborts before
+    Installs the request session holder that dependency providers fill and session stores
+    borrow from, and cleans up handed-over injected connections when a request aborts before
     ``http.response.start`` as well as on-demand connections acquired after
     ``http.response.start`` during streaming responses or ``after_response`` hooks.
     """
@@ -334,6 +336,10 @@ class ConnectionCleanupMiddleware:
         if scope.get("type") not in {ScopeType.HTTP, ScopeType.WEBSOCKET} or not self._targets:
             await self._app(scope, receive, send)
             return
+        with request_session_scope():
+            await self._route_request(scope, receive, send)
+
+    async def _route_request(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if not self._routing_targets:
             await self._run_request(scope, receive, send)
             return
@@ -1699,13 +1705,13 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         session = get_sqlspec_scope_state(scope, session_scope_key)
         if session is not None and getattr(session, "connection", None) is connection:
             set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
-            publish_request_session(plugin_state.config, session)
+            publish_request_session(plugin_state.config, session, manual=plugin_state.commit_mode == "manual")
             return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), False
 
         session = build_db_session(plugin_state.config, connection, plugin_state.commit_mode)
         set_sqlspec_scope_state(scope, session_scope_key, session)
         set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_session", session)
-        publish_request_session(plugin_state.config, session)
+        publish_request_session(plugin_state.config, session, manual=plugin_state.commit_mode == "manual")
         return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session), True
 
     def _get_or_create_db_session(
