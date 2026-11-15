@@ -24,7 +24,7 @@ _QQUOTE_PATTERN: Final[str] = (
     r"))"
 )
 _COMMON_SQL_HEAD: Final[str] = (
-    r"(?P<ident>(?:[ACDF-MOPR-WYZ_acdf-mopr-wyz]|[eEbBxXqQ](?!')|[nN](?![qQ]?'))[A-Za-z0-9_]*)"
+    r"(?P<ident>(?:[ \t\r\n,;()=+*<>!|]+|(?:[ACDF-MOPR-WYZ_acdf-mopr-wyz]|[eEbBxXqQ](?!')|[nN](?![qQ]?'))[A-Za-z0-9_]*)+)"
     r"|(?P<comment>--[^\n]*(?:\n|\Z)|/\*[\s\S]*?(?:\*/|\Z))"
     r"|(?P<dquote>\"(?>[^\"]+|\"\")*(?:\"|\Z))"
     r"|(?P<bquote>`(?>[^`]+|``)*(?:`|\Z))"

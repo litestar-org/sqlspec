@@ -432,16 +432,62 @@ class SqliteConnectionPool:
 
     def _get_or_create_task_slot(self, task: "asyncio.Task[Any]") -> "_TaskConnectionSlot":
         stale_conns: list[SqliteConnection] = []
+        created = False
         with self._registry_lock:
             slot = self._task_slots.get(task)
             if slot is None:
-                stale_conns.extend(self._prune_dead_owners_locked())
+                if not self._idle_task_connections and (self._thread_connections or self._task_connections):
+                    stale_conns.extend(self._prune_dead_owners_locked())
                 slot = _TaskConnectionSlot(self._generation)
                 self._task_slots[task] = slot
+                created = True
+        if created:
+            task.add_done_callback(self._retire_finished_task)
         for conn in stale_conns:
             with contextlib.suppress(Exception):
                 conn.close()
         return slot
+
+    def _retire_finished_task(self, task: "asyncio.Task[Any]") -> None:
+        stale_conn: SqliteConnection | None = None
+        current_thread = threading.current_thread()
+        with self._registry_lock:
+            self._task_slots.pop(task, None)
+            entry = self._task_connections.pop(weakref.ref(task), None)
+            if entry is None:
+                return
+            conn, slot = entry
+            if self._connection_depths.get(conn, 0) > 0:
+                self._task_connections[weakref.ref(task)] = entry
+                self._task_slots[task] = slot
+                return
+            created_at = slot.created_at
+            last_used = slot.last_used
+            owner_thread = slot.owner_thread
+            slot.connection = None
+            slot.created_at = 0.0
+            slot.last_used = 0.0
+            if conn not in self._connection_registry:
+                return
+            self._connection_registry.discard(conn)
+            reusable = False
+            if (
+                self._idle_task_generation == self._generation
+                and len(self._idle_task_connections) < _MAX_IDLE_TASK_CONNECTIONS
+                and (owner_thread is current_thread or not self._check_same_thread)
+            ):
+                try:
+                    reusable = not getattr(conn, "in_transaction", False)
+                except sqlite3.ProgrammingError:
+                    reusable = False
+            if reusable:
+                self._idle_task_connections.append((conn, created_at, last_used))
+            else:
+                self._connection_tokens.pop(conn, None)
+                stale_conn = conn
+        if stale_conn is not None:
+            with contextlib.suppress(Exception):
+                stale_conn.close()
 
     def _register_owner(
         self, conn: SqliteConnection, task: "asyncio.Task[Any] | None", slot: "_TaskConnectionSlot | None" = None
@@ -459,7 +505,7 @@ class SqliteConnectionPool:
             conn.close()
 
     def _pop_reusable_task_connection(
-        self, now: float, expected_generation: int
+        self, now: float, expected_generation: int, task: "asyncio.Task[Any]", slot: "_TaskConnectionSlot"
     ) -> "tuple[SqliteConnection, float] | None":
         while True:
             stale: list[tuple[SqliteConnection, float, float]] = []
@@ -474,6 +520,17 @@ class SqliteConnectionPool:
                     idle_entry = None
                 else:
                     idle_entry = self._idle_task_connections.pop()
+                    if (
+                        not (self._recycle_seconds > 0 and (now - idle_entry[1]) > self._recycle_seconds)
+                        and not self._check_same_thread
+                        and (now - idle_entry[2]) <= self._health_check_interval
+                    ):
+                        conn, created_at, _ = idle_entry
+                        self._connection_registry.add(conn)
+                        if conn not in self._connection_tokens:
+                            self._connection_tokens[conn] = _ConnectionToken()
+                        self._task_connections[weakref.ref(task)] = (conn, slot)
+                        return conn, created_at
             for stale_conn, _, _ in stale:
                 with contextlib.suppress(Exception):
                     stale_conn.close()
@@ -497,19 +554,19 @@ class SqliteConnectionPool:
                 self._connection_registry.add(conn)
                 if conn not in self._connection_tokens:
                     self._connection_tokens[conn] = _ConnectionToken()
+                self._task_connections[weakref.ref(task)] = (conn, slot)
                 return conn, created_at
 
     def _bind_context_connection(self, holder: Any, task: "asyncio.Task[Any] | None", now: float) -> SqliteConnection:
         if task is not None:
             slot = cast("_TaskConnectionSlot", holder)
             slot.owner_thread = threading.current_thread()
-            reused = self._pop_reusable_task_connection(now, slot.generation)
+            reused = self._pop_reusable_task_connection(now, slot.generation, task, slot)
             if reused is not None:
                 conn, created_at = reused
                 slot.connection = conn
                 slot.created_at = created_at
                 slot.last_used = now
-                self._register_owner(conn, task, slot)
                 return conn
         conn = self._create_connection()
         holder.connection = conn

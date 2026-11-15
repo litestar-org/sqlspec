@@ -1,6 +1,7 @@
 """MySQL pool acquisition, checkin rollback, eviction, and shutdown lifecycle regressions."""
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -250,7 +251,6 @@ def test_mysqlconnector_sync_release_reads_local_autocommit_without_server_query
     raw_autocommit: bool, in_transaction: bool, expected_rollbacks: int
 ) -> None:
     """Sync pool release inspects _cnx._autocommit and in_transaction without triggering .autocommit SQL."""
-    from types import SimpleNamespace
 
     class _PooledConn:
         def __init__(self) -> None:
@@ -270,7 +270,7 @@ def test_mysqlconnector_sync_release_reads_local_autocommit_without_server_query
         def close(self) -> None:
             self.closed += 1
 
-    conn = _PooledConn()
+    conn: Any = _PooledConn()
     pool_mock = MagicMock(get_connection=MagicMock(return_value=conn))
     config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": True}, connection_instance=pool_mock)
     with config.provide_connection() as acquired:

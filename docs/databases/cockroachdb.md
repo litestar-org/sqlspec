@@ -116,8 +116,8 @@ SQLSpec provides two dedicated CockroachDB adapters—`sqlspec.adapters.cockroac
     | `max_cacheable_statement_size` | `int` | - | Maximum SQL byte length eligible for prepared statement caching. |
     | `server_settings` | `dict[str, str]` | - | Startup CockroachDB session variables passed at connection time. |
     | `target_session_attrs` | `CockroachAsyncpgTargetSessionAttrs` | - | Required node session attribute when connecting across multiple hosts. |
-    | `statement_timeout` | `float or int or None` | - | Statement execution timeout in seconds forwarded via server_settings. |
-    | `idle_in_transaction_session_timeout` | `float or int or None` | - | Idle in transaction timeout in seconds forwarded via server_settings. |
+    | `statement_timeout` | `int` | - | Per-statement execution timeout in milliseconds forwarded via `server_settings`. |
+    | `idle_in_transaction_session_timeout` | `int` | - | Idle-in-transaction timeout in milliseconds before aborting open transactions. |
     | `krbsrvname` | `str` | - | Kerberos service principal name for GSSAPI authentication. |
     | `gsslib` | `CockroachAsyncpgGSSLib` | - | GSSAPI library implementation (`gssapi` or `sspi`). |
     | `min_size` | `int` | - | Minimum number of open connections maintained in the pool. |
