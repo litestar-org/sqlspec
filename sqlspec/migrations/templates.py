@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.exceptions import SQLSpecError
 
@@ -173,8 +173,18 @@ def build_template_settings(migration_config: dict[str, Any] | None) -> "Migrati
 
 
 def sanitize_header_field(value: str) -> str:
-    """Collapse line breaks and remove NUL bytes so comment header fields stay single-line."""
-    return re.sub(r"[\r\n]+", " ", value.replace("\x00", "")).strip()
+    """Fold control characters and line separators so comment header fields stay single-line.
+
+    Removes NUL bytes and replaces every run of C0/C1 control characters, line separators, and
+    paragraph separators with one space. The result is always one line under ``str.splitlines()``.
+
+    Args:
+        value: Raw header field text.
+
+    Returns:
+        The single-line, stripped field text.
+    """
+    return _HEADER_UNSAFE_PATTERN.sub(" ", value.replace("\x00", "")).strip()
 
 
 def escape_python_docstring(text: str) -> str:
@@ -252,6 +262,7 @@ def _format_template(template: str, context: "Mapping[str, str]", template_kind:
         raise TemplateValidationError(msg) from exc
 
 
+_HEADER_UNSAFE_PATTERN: Final[re.Pattern[str]] = re.compile("[\x01-\x1f\x7f-\x9f\u2028\u2029]+")
 _DEFAULT_TITLE = "SQLSpec Migration"
 
 _DEFAULT_SQL_TEMPLATE = SQLTemplateDefinition(

@@ -506,7 +506,7 @@ class BaseMigrationRunner:
 
     def _extract_sql_description(self, content: str) -> str:
         keys = self.description_hints.sql_keys
-        for line in content.splitlines():
+        for line in _split_header_lines(content):
             stripped = line.strip()
             if not stripped:
                 continue
@@ -529,7 +529,7 @@ class BaseMigrationRunner:
             return ""
         docstring = ast.get_docstring(module) or ""
         keys = self.description_hints.python_keys
-        for line in docstring.splitlines():
+        for line in _split_header_lines(docstring):
             stripped = line.strip()
             if not stripped:
                 continue
@@ -2022,10 +2022,15 @@ def extract_replaces_versions(content: str, suffix: str) -> list[str]:
     return _header_replaces_versions(_sql_header_lines(content))
 
 
+def _split_header_lines(text: str) -> list[str]:
+    """Split text on newline only, normalizing CRLF and lone CR line endings first."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _sql_header_lines(content: str) -> list[str]:
     """Return the comment text of the leading SQL comment header."""
     header: list[str] = []
-    for line in content.splitlines():
+    for line in _split_header_lines(content):
         stripped = line.strip()
         if not stripped:
             continue
@@ -2066,7 +2071,7 @@ def _python_replaces_versions(content: str) -> list[str]:
     docstring = ast.get_docstring(module)
     if docstring is None:
         return []
-    return _header_replaces_versions([line.strip() for line in docstring.splitlines()])
+    return _header_replaces_versions([line.strip() for line in _split_header_lines(docstring)])
 
 
 def _header_replaces_versions(header_lines: list[str]) -> list[str]:
