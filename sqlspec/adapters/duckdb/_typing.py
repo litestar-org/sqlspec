@@ -156,6 +156,10 @@ class DuckDBSessionContext:
                     rollback_exc = exc
                     if exc_type is None:
                         raise
+        except BaseException as exc:
+            if rollback_exc is None:
+                rollback_exc = exc
+            raise
         finally:
             try:
                 if self._driver is not None:

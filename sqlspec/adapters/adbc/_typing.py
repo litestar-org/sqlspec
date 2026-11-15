@@ -156,22 +156,26 @@ class AdbcSessionContext:
         connection = self._connection
         self._connection = None
         try:
+            close_error: BaseException | None = None
             if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
-            first_error: BaseException | None = None
+                try:
+                    driver._close_open_streams(error=exc_type is not None)
+                except BaseException as exc:
+                    close_error = exc
+            first_error = close_error
             driver_rolled_back = False
-            if driver is not None:
+            if driver is not None and close_error is None:
                 try:
                     driver.close_streams()
                 except BaseException as exc:
                     first_error = exc
-                if driver._connection_in_transaction():
-                    driver_rolled_back = True
-                    try:
+                try:
+                    if driver._connection_in_transaction():
+                        driver_rolled_back = True
                         driver.rollback()
-                    except BaseException as exc:
-                        if first_error is None:
-                            first_error = exc
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
             release_type = exc_type if exc_type is not None else (type(first_error) if first_error else None)
             release_val = exc_val if exc_val is not None else first_error
             release_tb = exc_tb if exc_tb is not None else (first_error.__traceback__ if first_error else None)
@@ -187,6 +191,8 @@ class AdbcSessionContext:
             except BaseException as exc:
                 if first_error is None:
                     first_error = exc
+            if close_error is not None:
+                raise close_error
             if exc_type is None and first_error is not None:
                 raise first_error
         finally:

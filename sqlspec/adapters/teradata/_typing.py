@@ -101,12 +101,16 @@ class TeradataSessionContext:
             try:
                 if driver is not None:
                     driver._close_open_streams(error=True)
-                self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
             finally:
-                self._connection = None
-                self._driver = None
-                if driver is not None:
-                    driver._mark_closed()
+                try:
+                    self._release_connection(
+                        self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
+                    )
+                finally:
+                    self._connection = None
+                    self._driver = None
+                    if driver is not None:
+                        driver._mark_closed()
             raise
 
     def __exit__(

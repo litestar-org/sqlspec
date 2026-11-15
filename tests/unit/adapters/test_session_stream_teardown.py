@@ -1,5 +1,6 @@
 """Session contexts close open streams before rollback, release, and detach."""
 
+import asyncio
 import importlib
 import inspect
 import sqlite3
@@ -15,6 +16,7 @@ from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import StatementConfig
 from sqlspec.driver._common import _CLOSED_CONNECTION
 from sqlspec.driver._stream import AsyncRowStream, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError
@@ -30,9 +32,17 @@ _EMBEDDED_CONFIGS = {
 class RecordingSource:
     """Stream source that logs its close and can fail while closing."""
 
-    def __init__(self, events: "list[str]", *, is_async: bool, fail_on_close: bool = False) -> None:
+    def __init__(
+        self,
+        events: "list[str]",
+        *,
+        is_async: bool,
+        fail_on_close: bool = False,
+        close_error: "BaseException | None" = None,
+    ) -> None:
         self._events = events
         self._fail_on_close = fail_on_close
+        self._close_error = close_error
         self._is_async = is_async
         self.closed = False
 
@@ -57,6 +67,8 @@ class RecordingSource:
     def _record_close(self) -> None:
         self.closed = True
         self._events.append("stream-close")
+        if self._close_error is not None:
+            raise self._close_error
         if self._fail_on_close:
             msg = "close failed"
             raise RuntimeError(msg)
@@ -73,10 +85,23 @@ class SyncRecordingSource(RecordingSource):
         self._record_close()
 
 
-def make_stream(events: "list[str]", *, is_async: bool, fail_on_close: bool = False) -> Any:
+def make_stream(
+    events: "list[str]", *, is_async: bool, fail_on_close: bool = False, close_error: "BaseException | None" = None
+) -> Any:
     if is_async:
-        return AsyncRowStream(RecordingSource(events, is_async=True, fail_on_close=fail_on_close))
-    return SyncRowStream(SyncRecordingSource(events, is_async=False, fail_on_close=fail_on_close))
+        return AsyncRowStream(
+            RecordingSource(events, is_async=True, fail_on_close=fail_on_close, close_error=close_error)
+        )
+    return SyncRowStream(
+        SyncRecordingSource(events, is_async=False, fail_on_close=fail_on_close, close_error=close_error)
+    )
+
+
+class StreamAbort(BaseException):
+    """Non-``Exception`` interrupt raised while a stream closes, like ``KeyboardInterrupt``."""
+
+
+ABORTS = (asyncio.CancelledError, StreamAbort)
 
 
 async def resolve(value: Any) -> Any:
@@ -95,6 +120,8 @@ def embedded(request: pytest.FixtureRequest, tmp_path: Path) -> "tuple[str, Any,
             connection.executemany("insert into t values (?)", [("A0",), ("A1",), ("A2",)])
     config_cls, key = _EMBEDDED_CONFIGS[name]
     connection_config: dict[str, Any] = {key: path}
+    if name == "aiosqlite":
+        connection_config.update(pool_size=1, connect_timeout=2.0)
     if name == "adbc":
         connection_config["driver_name"] = "adbc_driver_sqlite"
         with sqlite3.connect(path) as connection:
@@ -161,6 +188,28 @@ async def test_stream_close_error_does_not_skip_release(
         async with session_scope(config) as session:
             session._register_open_stream(make_stream(events, is_async=config.is_async, fail_on_close=True))
         assert events == ["stream-close", "release"]
+    finally:
+        await resolve(config.close_pool())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("abort", ABORTS, ids=lambda abort: abort.__name__)
+async def test_stream_close_interrupt_still_releases_connection(
+    embedded: "tuple[str, Any, str]", monkeypatch: pytest.MonkeyPatch, abort: "type[BaseException]"
+) -> None:
+    _, config, _ = embedded
+    events: list[str] = []
+    spy_on_release(monkeypatch, config, events)
+    sessions: list[Any] = []
+    try:
+        with pytest.raises(abort):
+            async with session_scope(config) as session:
+                sessions.append(session)
+                session._register_open_stream(make_stream(events, is_async=config.is_async, close_error=abort()))
+        assert events == ["stream-close", "release"]
+        assert sessions[0].connection is _CLOSED_CONNECTION
+        async with session_scope(config) as second:
+            assert await resolve(second.select_value("select 1")) == 1
     finally:
         await resolve(config.close_pool())
 
@@ -260,3 +309,89 @@ async def test_server_context_orders_stream_close_rollback_release_detach(
     assert driver.connection is _CLOSED_CONNECTION
     with pytest.raises(ImproperConfigurationError):
         driver.connection.cursor()
+
+
+SESSION_CONTEXTS = (
+    ("adbc._typing", "AdbcSessionContext", False),
+    ("aiomysql._typing", "AiomysqlSessionContext", True),
+    ("aiosqlite._typing", "AiosqliteSessionContext", True),
+    ("arrow_odbc._typing", "ArrowOdbcSessionContext", False),
+    ("asyncmy.config", "AsyncmySessionContext", True),
+    ("asyncpg._typing", "AsyncpgSessionContext", True),
+    ("bigquery._typing", "BigQuerySessionContext", False),
+    ("cockroach_asyncpg._typing", "CockroachAsyncpgSessionContext", True),
+    ("cockroach_psycopg._typing", "CockroachPsycopgSyncSessionContext", False),
+    ("cockroach_psycopg._typing", "CockroachPsycopgAsyncSessionContext", True),
+    ("db2._typing", "Db2SyncSessionContext", False),
+    ("db2._typing", "Db2AsyncSessionContext", True),
+    ("duckdb._typing", "DuckDBSessionContext", False),
+    ("mssql_python._typing", "MssqlPythonSessionContext", False),
+    ("mysqlconnector._typing", "MysqlConnectorSyncSessionContext", False),
+    ("mysqlconnector._typing", "MysqlConnectorAsyncSessionContext", True),
+    ("oracledb._typing", "OracleSyncSessionContext", False),
+    ("oracledb._typing", "OracleAsyncSessionContext", True),
+    ("psqlpy._typing", "PsqlpySessionContext", True),
+    ("psycopg._typing", "PsycopgSyncSessionContext", False),
+    ("psycopg._typing", "PsycopgAsyncSessionContext", True),
+    ("pymssql._typing", "PymssqlSessionContext", False),
+    ("pymysql._typing", "PyMysqlSessionContext", False),
+    ("snowflake._typing", "SnowflakeSessionContext", False),
+    ("spanner._typing", "SpannerSyncSessionContext", False),
+    ("spanner._typing", "SpannerAsyncSessionContext", True),
+    ("sqlanywhere._typing", "SqlanywhereSessionContext", False),
+    ("sqlite._typing", "SqliteSessionContext", False),
+    ("sybase._typing", "SybaseSessionContext", False),
+    ("teradata._typing", "TeradataSessionContext", False),
+)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("abort", ABORTS, ids=lambda abort: abort.__name__)
+@pytest.mark.parametrize(
+    ("module_name", "context_name", "is_async"), SESSION_CONTEXTS, ids=[context for _, context, _ in SESSION_CONTEXTS]
+)
+async def test_session_context_releases_when_stream_close_is_interrupted(
+    monkeypatch: pytest.MonkeyPatch, module_name: str, context_name: str, is_async: bool, abort: "type[BaseException]"
+) -> None:
+    try:
+        typing_module = importlib.import_module(f"sqlspec.adapters.{module_name}")
+    except ImportError as exc:
+        pytest.skip(f"optional driver dependency is not installed: {exc}")
+    context_cls = getattr(typing_module, context_name)
+    events: list[str] = []
+    released: list[dict[str, Any]] = []
+    connection = MagicMock()
+
+    def acquire() -> Any:
+        return connection
+
+    async def acquire_async() -> Any:
+        return connection
+
+    def release(*_args: Any, **kwargs: Any) -> None:
+        events.append("release")
+        released.append(kwargs)
+
+    async def release_async(*_args: Any, **kwargs: Any) -> None:
+        events.append("release")
+        released.append(kwargs)
+
+    def prepare(driver: Any) -> Any:
+        monkeypatch.setattr(type(driver), "_connection_in_transaction", lambda self: False)
+        driver._register_open_stream(make_stream(events, is_async=is_async, close_error=abort()))
+        return driver
+
+    context = context_cls(
+        acquire_async if is_async else acquire, release_async if is_async else release, StatementConfig(), {}, prepare
+    )
+    drivers: list[Any] = []
+    with pytest.raises(abort):
+        if is_async:
+            async with context as driver:
+                drivers.append(driver)
+        else:
+            with context as driver:
+                drivers.append(driver)
+    assert events == ["stream-close", "release"]
+    assert released[0]["exc_type"] is abort
+    assert drivers[0].connection is _CLOSED_CONNECTION

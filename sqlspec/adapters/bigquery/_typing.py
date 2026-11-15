@@ -157,6 +157,10 @@ class BigQuerySessionContext:
                 except BaseException:
                     if exc_type is None:
                         raise
+        except BaseException as cleanup_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(cleanup_exc), cleanup_exc, cleanup_exc.__traceback__
+            raise
         finally:
             try:
                 self._driver = None

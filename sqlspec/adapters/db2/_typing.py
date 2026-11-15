@@ -179,6 +179,10 @@ class Db2SyncSessionContext:
                 driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None:
                 self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
+        except BaseException as cleanup_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(cleanup_exc), cleanup_exc, cleanup_exc.__traceback__
+            raise
         finally:
             try:
                 self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
@@ -312,6 +316,10 @@ class Db2AsyncSessionContext:
                 await driver._close_open_streams(error=exc_type is not None)
             if self._driver is not None:
                 await self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
+        except BaseException as cleanup_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(cleanup_exc), cleanup_exc, cleanup_exc.__traceback__
+            raise
         finally:
             try:
                 await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)

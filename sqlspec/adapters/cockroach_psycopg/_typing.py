@@ -125,9 +125,9 @@ class CockroachPsycopgSyncSessionContext:
         driver = self._driver
         rollback_exc: BaseException | None = None
         try:
-            if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
             try:
+                if driver is not None:
+                    driver._close_open_streams(error=exc_type is not None)
                 if driver is not None and (
                     getattr(driver, "_transaction_active", False)
                     or getattr(driver, "_connection_in_transaction", lambda: False)()
@@ -138,6 +138,10 @@ class CockroachPsycopgSyncSessionContext:
                         rollback_exc = exc
                         if exc_type is None:
                             raise
+            except BaseException as exc:
+                if rollback_exc is None:
+                    rollback_exc = exc
+                raise
             finally:
                 self._driver = None
                 if self._connection is not None:
@@ -205,9 +209,9 @@ class CockroachPsycopgAsyncSessionContext:
         driver = self._driver
         rollback_exc: BaseException | None = None
         try:
-            if driver is not None:
-                await driver._close_open_streams(error=exc_type is not None)
             try:
+                if driver is not None:
+                    await driver._close_open_streams(error=exc_type is not None)
                 if driver is not None and (
                     getattr(driver, "_transaction_active", False)
                     or getattr(driver, "_connection_in_transaction", lambda: False)()
@@ -218,6 +222,10 @@ class CockroachPsycopgAsyncSessionContext:
                         rollback_exc = exc
                         if exc_type is None:
                             raise
+            except BaseException as exc:
+                if rollback_exc is None:
+                    rollback_exc = exc
+                raise
             finally:
                 self._driver = None
                 if self._connection is not None:

@@ -118,11 +118,15 @@ class SqlanywhereSessionContext:
     ) -> "bool | None":
         driver = self._driver
         try:
-            if driver is not None:
-                driver._close_open_streams(error=exc_type is not None)
             try:
+                if driver is not None:
+                    driver._close_open_streams(error=exc_type is not None)
                 if self._driver is not None:
                     self._driver._release_open_work()
+            except BaseException as cleanup_exc:
+                if exc_type is None:
+                    exc_type, exc_val, exc_tb = type(cleanup_exc), cleanup_exc, cleanup_exc.__traceback__
+                raise
             finally:
                 if self._connection is not None:
                     conn = self._connection

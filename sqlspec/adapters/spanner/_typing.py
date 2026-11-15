@@ -206,14 +206,20 @@ class SpannerSyncSessionContext:
         try:
             if driver is not None:
                 driver._close_open_streams(error=exc_type is not None)
-            if self._connection is not None:
-                connection = self._driver.connection if self._driver is not None else self._connection
-                self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                self._connection = None
+        except BaseException as close_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
+            raise
         finally:
-            self._driver = None
-            if driver is not None:
-                driver._mark_closed()
+            try:
+                if self._connection is not None:
+                    connection = self._driver.connection if self._driver is not None else self._connection
+                    self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._mark_closed()
         return None
 
 
@@ -267,14 +273,20 @@ class SpannerAsyncSessionContext:
         try:
             if driver is not None:
                 await driver._close_open_streams(error=exc_type is not None)
-            if self._connection is not None:
-                connection = self._driver.connection if self._driver is not None else self._connection
-                await self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                self._connection = None
+        except BaseException as close_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
+            raise
         finally:
-            self._driver = None
-            if driver is not None:
-                driver._mark_closed()
+            try:
+                if self._connection is not None:
+                    connection = self._driver.connection if self._driver is not None else self._connection
+                    await self._release_connection(connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._mark_closed()
         return None
 
 

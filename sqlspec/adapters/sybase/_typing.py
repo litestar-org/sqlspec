@@ -134,11 +134,17 @@ class SybaseSessionContext:
             if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
                 with contextlib.suppress(Exception):
                     self._driver.rollback()
-            if self._connection is not None:
-                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-                self._connection = None
+        except BaseException as close_exc:
+            if exc_type is None:
+                exc_type, exc_val, exc_tb = type(close_exc), close_exc, close_exc.__traceback__
+            raise
         finally:
-            self._driver = None
-            if driver is not None:
-                driver._mark_closed()
+            try:
+                if self._connection is not None:
+                    self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                    self._connection = None
+            finally:
+                self._driver = None
+                if driver is not None:
+                    driver._mark_closed()
         return None
