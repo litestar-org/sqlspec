@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sqlspec.adapters.asyncmy.adk import AsyncmyADKConfig, AsyncmyADKMemoryStore, AsyncmyADKStore
-from sqlspec.adapters.asyncmy.adk.store import _is_mysql_table_missing
+from sqlspec.adapters.asyncmy.adk.store import _is_table_missing
 from sqlspec.adapters.asyncmy.core import AsyncmyStreamSource
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import StoredEvent
@@ -25,7 +25,7 @@ class _MysqlMissingTableError(Exception):
 
 
 def test_asyncmy_table_missing_uses_errno_attribute() -> None:
-    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
+    assert _is_table_missing(_MysqlMissingTableError()) is True
 
 
 def test_asyncmy_adk_config_types_adapter_local_mysql_options() -> None:

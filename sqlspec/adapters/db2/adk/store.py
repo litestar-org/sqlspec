@@ -103,11 +103,11 @@ class _Db2ADKStoreMixin:
     def _upsert_user_state_sql(self) -> str:
         return _upsert_state_sql(self._user_state_table, ("app_name", "user_id"))
 
-    def _lock_app_state_select_sql(self) -> str:
-        return _lock_state_select_sql(self._app_state_table, ("app_name",))
+    def _select_app_state_for_update_sql(self) -> str:
+        return _select_state_for_update_sql(self._app_state_table, ("app_name",))
 
-    def _lock_user_state_select_sql(self) -> str:
-        return _lock_state_select_sql(self._user_state_table, ("app_name", "user_id"))
+    def _select_user_state_for_update_sql(self) -> str:
+        return _select_state_for_update_sql(self._user_state_table, ("app_name", "user_id"))
 
     def _insert_app_state_sql(self) -> str:
         return _insert_state_sql(self._app_state_table, ("app_name",))
@@ -192,19 +192,19 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                     current_app_state = (
                         self._apply_state_delta(
                             driver,
-                            self._lock_app_state_select_sql(),
+                            self._select_app_state_for_update_sql(),
                             self._insert_app_state_sql(),
                             self._update_app_state_sql(),
                             (app_name,),
                             app_state_delta,
                         )
                         if app_state_delta
-                        else self._select_state(driver, _app_state_select_sql(self._app_state_table), (app_name,))
+                        else self._select_state(driver, _select_app_state_sql(self._app_state_table), (app_name,))
                     )
                     current_user_state = (
                         self._apply_state_delta(
                             driver,
-                            self._lock_user_state_select_sql(),
+                            self._select_user_state_for_update_sql(),
                             self._insert_user_state_sql(),
                             self._update_user_state_sql(),
                             (app_name, user_id),
@@ -212,7 +212,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                         )
                         if user_state_delta
                         else self._select_state(
-                            driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
+                            driver, _select_user_state_sql(self._user_state_table), (app_name, user_id)
                         )
                     )
                     driver.commit()
@@ -349,7 +349,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                     merged_app_state = (
                         self._apply_state_delta(
                             driver,
-                            self._lock_app_state_select_sql(),
+                            self._select_app_state_for_update_sql(),
                             self._insert_app_state_sql(),
                             self._update_app_state_sql(),
                             (app_name,),
@@ -361,7 +361,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                     merged_user_state = (
                         self._apply_state_delta(
                             driver,
-                            self._lock_user_state_select_sql(),
+                            self._select_user_state_for_update_sql(),
                             self._insert_user_state_sql(),
                             self._update_user_state_sql(),
                             (app_name, user_id),
@@ -435,12 +435,12 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
 
     def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Return app-scoped state."""
-        row = self._fetch_scoped_row(_app_state_select_sql(self._app_state_table), (app_name,))
+        row = self._fetch_scoped_row(_select_app_state_sql(self._app_state_table), (app_name,))
         return _json_dict(row["state"]) if row is not None else None
 
     def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
-        row = self._fetch_scoped_row(_user_state_select_sql(self._user_state_table), (app_name, user_id))
+        row = self._fetch_scoped_row(_select_user_state_sql(self._user_state_table), (app_name, user_id))
         return _json_dict(row["state"]) if row is not None else None
 
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
@@ -618,19 +618,19 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                     current_app_state = (
                         await self._apply_state_delta(
                             driver,
-                            self._lock_app_state_select_sql(),
+                            self._select_app_state_for_update_sql(),
                             self._insert_app_state_sql(),
                             self._update_app_state_sql(),
                             (app_name,),
                             app_state_delta,
                         )
                         if app_state_delta
-                        else await self._select_state(driver, _app_state_select_sql(self._app_state_table), (app_name,))
+                        else await self._select_state(driver, _select_app_state_sql(self._app_state_table), (app_name,))
                     )
                     current_user_state = (
                         await self._apply_state_delta(
                             driver,
-                            self._lock_user_state_select_sql(),
+                            self._select_user_state_for_update_sql(),
                             self._insert_user_state_sql(),
                             self._update_user_state_sql(),
                             (app_name, user_id),
@@ -638,7 +638,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                         )
                         if user_state_delta
                         else await self._select_state(
-                            driver, _user_state_select_sql(self._user_state_table), (app_name, user_id)
+                            driver, _select_user_state_sql(self._user_state_table), (app_name, user_id)
                         )
                     )
                     await driver.commit()
@@ -777,7 +777,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                     merged_app_state = (
                         await self._apply_state_delta(
                             driver,
-                            self._lock_app_state_select_sql(),
+                            self._select_app_state_for_update_sql(),
                             self._insert_app_state_sql(),
                             self._update_app_state_sql(),
                             (app_name,),
@@ -789,7 +789,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                     merged_user_state = (
                         await self._apply_state_delta(
                             driver,
-                            self._lock_user_state_select_sql(),
+                            self._select_user_state_for_update_sql(),
                             self._insert_user_state_sql(),
                             self._update_user_state_sql(),
                             (app_name, user_id),
@@ -863,12 +863,12 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
 
     async def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Return app-scoped state."""
-        row = await self._fetch_scoped_row(_app_state_select_sql(self._app_state_table), (app_name,))
+        row = await self._fetch_scoped_row(_select_app_state_sql(self._app_state_table), (app_name,))
         return _json_dict(row["state"]) if row is not None else None
 
     async def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
-        row = await self._fetch_scoped_row(_user_state_select_sql(self._user_state_table), (app_name, user_id))
+        row = await self._fetch_scoped_row(_select_user_state_sql(self._user_state_table), (app_name, user_id))
         return _json_dict(row["state"]) if row is not None else None
 
     async def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
@@ -1411,7 +1411,7 @@ def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     """
 
 
-def _lock_state_select_sql(table: str, key_columns: tuple[str, ...]) -> str:
+def _select_state_for_update_sql(table: str, key_columns: tuple[str, ...]) -> str:
     where_clause = " AND ".join(f"{column} = ?" for column in key_columns)
     return f"SELECT state FROM {table} WHERE {where_clause} FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS"
 
@@ -1812,11 +1812,11 @@ def _retention_statements(
     )
 
 
-def _app_state_select_sql(table: str) -> str:
+def _select_app_state_sql(table: str) -> str:
     return f"SELECT state FROM {table} WHERE app_name = ? FETCH FIRST 1 ROWS ONLY"
 
 
-def _user_state_select_sql(table: str) -> str:
+def _select_user_state_sql(table: str) -> str:
     return f"""
     SELECT state
     FROM {table}

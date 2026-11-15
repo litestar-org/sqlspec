@@ -529,7 +529,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
         delta: "dict[str, Any]",
     ) -> "dict[str, Any]":
         sql_dialect = self._sql
-        row = driver.select_one_or_none(sql_dialect.lock_state_select_sql(table, key_columns), key_params)
+        row = driver.select_one_or_none(sql_dialect.select_state_for_update_sql(table, key_columns), key_params)
         if row is None:
             merged = dict(delta)
             driver.execute(
@@ -1312,7 +1312,7 @@ class _TsqlAdkSql:
     def upsert_state_sql(self, table: str, key_columns: "tuple[str, ...]") -> str:
         return _upsert_state_sql(table, key_columns, tuple("?" for _ in key_columns))
 
-    def lock_state_select_sql(self, table: str, key_columns: "tuple[str, ...]") -> str:
+    def select_state_for_update_sql(self, table: str, key_columns: "tuple[str, ...]") -> str:
         where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
         return f"SELECT TOP 1 state FROM {_table_ref(table)} WITH (UPDLOCK, HOLDLOCK) WHERE {where_clause}"
 
@@ -1500,7 +1500,7 @@ class _Db2AdkSql:
             f"WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})"
         )
 
-    def lock_state_select_sql(self, table: str, key_columns: "tuple[str, ...]") -> str:
+    def select_state_for_update_sql(self, table: str, key_columns: "tuple[str, ...]") -> str:
         where_clause = " AND ".join(f"{col} = ?" for col in key_columns)
         return f"SELECT state FROM {table} WHERE {where_clause} FETCH FIRST 1 ROWS ONLY FOR UPDATE WITH RS"
 

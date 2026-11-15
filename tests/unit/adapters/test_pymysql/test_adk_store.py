@@ -8,7 +8,7 @@ import pytest
 
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.adk import PyMysqlADKConfig, PyMysqlADKMemoryStore, PyMysqlADKStore
-from sqlspec.adapters.pymysql.adk.store import _is_mysql_table_missing
+from sqlspec.adapters.pymysql.adk.store import _is_table_missing
 from sqlspec.adapters.pymysql.core import PyMysqlStreamSource
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import StoredEvent
@@ -25,7 +25,7 @@ class _MysqlMissingTableError(Exception):
 
 
 def test_pymysql_table_missing_uses_errno_attribute() -> None:
-    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
+    assert _is_table_missing(_MysqlMissingTableError()) is True
 
 
 def test_pymysql_adk_config_types_adapter_local_mysql_options() -> None:

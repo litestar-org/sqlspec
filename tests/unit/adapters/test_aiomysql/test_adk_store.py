@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKConfig, AiomysqlADKMemoryStore, AiomysqlADKStore
-from sqlspec.adapters.aiomysql.adk.store import _is_mysql_table_missing
+from sqlspec.adapters.aiomysql.adk.store import _is_table_missing
 from sqlspec.adapters.aiomysql.core import AiomysqlStreamSource
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import StoredEvent
@@ -101,7 +101,7 @@ def test_aiomysql_adk_tables_apply_adapter_local_mysql_profile() -> None:
 
 
 def test_aiomysql_table_missing_uses_errno_attribute() -> None:
-    assert _is_mysql_table_missing(_MysqlMissingTableError()) is True
+    assert _is_table_missing(_MysqlMissingTableError()) is True
 
 
 class _RecordingCursor:
