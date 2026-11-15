@@ -61,3 +61,18 @@ def test_any_operator_binds_non_sequence_iterables(value: Any) -> None:
 
     assert sum(1 for _ in expression.find_all(exp.Placeholder)) == 2
     assert sorted(builder.parameters.values()) == [1, 2]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "tsql", "oracle"])
+def test_builder_where_in_empty_is_false(dialect: str) -> None:
+    rendered = sql.select("*").from_("t").where_in("c", []).build(dialect=dialect).sql
+
+    assert "1 = 0" in rendered
+    assert "IN ()" not in rendered
+
+
+def test_builder_where_not_in_empty_is_true() -> None:
+    rendered = sql.select("*").from_("t").where_not_in("c", []).build().sql
+
+    assert "1 = 1" in rendered
+    assert "IN ()" not in rendered

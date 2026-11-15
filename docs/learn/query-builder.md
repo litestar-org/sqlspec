@@ -125,6 +125,8 @@ filtered = (
 
 Explicit parameter names passed to `add_parameter(value, name=...)` or `load_parameters(...)` must be ASCII identifiers (`[A-Za-z_][A-Za-z0-9_]*`) or positional numbers; other names raise `SQLBuilderError`. Names carried in by embedded subqueries that are not identifiers are renamed automatically.
 
+`.where_in(column, [])` matches no rows (it renders `1 = 0`) and `.where_not_in(column, [])` matches every row (it renders `1 = 1`).
+
 The column argument of every `.where_*()` method is a trusted SQL identifier or expression and must never come from request input. The value argument is always bound as a parameter.
 
 ## Joins and Time-Travel Queries

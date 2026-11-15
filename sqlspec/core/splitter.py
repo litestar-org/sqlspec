@@ -26,6 +26,7 @@ from typing import Any, ClassVar, Final, TypeAlias, cast, final
 from mypy_extensions import mypyc_attr
 
 from sqlspec.core.cache import CacheKey, LRUCache
+from sqlspec.exceptions import SQLParsingError
 from sqlspec.utils.logging import get_logger
 
 __all__ = (
@@ -59,12 +60,13 @@ _TRANSACTION_BEGIN_PATTERN: Final[str] = (
     r"\bBEGIN\b(?=\s*(?:;|\Z|(?:TRANSACTION|TRAN|WORK|DEFERRED|IMMEDIATE|EXCLUSIVE|DISTRIBUTED)\b(?!\s*(?:\.|:=|\())))"
 )
 _WORD_PATTERN: Final[str] = r"[A-Za-z_][A-Za-z0-9_$]*"
-_BACKSLASH_STRING_PATTERN: Final[str] = r"'(?:''|\\.|[^'\\])*'"
-_BACKSLASH_DOUBLE_QUOTED_PATTERN: Final[str] = r'"(?:""|\\.|[^"\\])*"'
-_ESCAPE_STRING_PATTERN: Final[str] = r"(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*'"
-_BRACKET_IDENTIFIER_PATTERN: Final[str] = r"\[(?:\]\]|[^\]])*\]"
+_BACKSLASH_STRING_PATTERN: Final[str] = r"'(?:''|\\.|[^'\\])*(?:'|\\?\Z)"
+_BACKSLASH_DOUBLE_QUOTED_PATTERN: Final[str] = r'"(?:""|\\.|[^"\\])*(?:"|\\?\Z)'
+_ESCAPE_STRING_PATTERN: Final[str] = r"(?<![A-Za-z0-9_])E'(?:''|\\.|[^'\\])*(?:'|\\?\Z)"
+_BRACKET_IDENTIFIER_PATTERN: Final[str] = r"\[(?:\]\]|[^\]])*(?:\]|\Z)"
 _ORACLE_Q_STRING_PATTERN: Final[str] = (
-    r"(?<![A-Za-z0-9_])N?Q'(?:\[[\s\S]*?\]'|\{[\s\S]*?\}'|\([\s\S]*?\)'|<[\s\S]*?>'|([^\s\[{(<'])[\s\S]*?\1')"
+    r"(?<![A-Za-z0-9_])N?Q'(?:\[[\s\S]*?(?:\]'|\Z)|\{[\s\S]*?(?:\}'|\Z)|\([\s\S]*?(?:\)'|\Z)"
+    r"|<[\s\S]*?(?:>'|\Z)|([^\s\[{(<'])[\s\S]*?(?:\1'|\Z))"
 )
 
 DIALECT_CONFIG_SLOTS: Final = (
@@ -212,7 +214,7 @@ class DialectConfig:
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?(?:\*/|\Z)"),
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
-            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]|`(?:[^`]|``)*`'),
+            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*(?:"|\Z)|\[[^\]]*(?:\]|\Z)|`(?:[^`]|``)*(?:`|\Z)'),
         ])
         if _BEGIN_BLOCK_KEYWORD in self.block_starters and self.name != "oracle":
             patterns.append((TokenType.OTHER, _TRANSACTION_BEGIN_PATTERN))
@@ -607,8 +609,8 @@ class SnowflakeDialectConfig(_EagerDialectConfig):
     def get_all_token_patterns(self) -> list[tuple[TokenType, TokenPattern]]:
         """Match literals before comments and distinguish transactions from blocks."""
         patterns: list[tuple[TokenType, TokenPattern]] = [
-            (TokenType.STRING_LITERAL, r"'(?:''|\\.|[^'\\])*'"),
-            (TokenType.QUOTED_IDENTIFIER, r'"(?:""|\\.|[^"\\])*"'),
+            (TokenType.STRING_LITERAL, r"'(?:''|\\.|[^'\\])*(?:'|\\?\Z)"),
+            (TokenType.QUOTED_IDENTIFIER, r'"(?:""|\\.|[^"\\])*(?:"|\\?\Z)'),
             (TokenType.STRING_LITERAL, r"\$\$[\s\S]*?\$\$"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
             (TokenType.COMMENT_LINE, r"--[^\r\n]*"),
@@ -861,7 +863,7 @@ class StatementSplitter:
                         block_stack.append(token_upper)
                         if len(block_stack) > max_nesting_depth:
                             msg = f"Maximum nesting depth ({max_nesting_depth}) exceeded"
-                            raise ValueError(msg)
+                            raise SQLParsingError(msg)
                 elif (is_snowflake and token_upper.endswith("CASE") and block_stack and block_stack[-1] == "CASE") or (
                     token_upper in block_enders and block_stack and is_real_block_ender(all_tokens, token_idx)
                 ):

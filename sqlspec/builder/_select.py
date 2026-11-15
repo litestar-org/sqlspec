@@ -663,6 +663,8 @@ class WhereClauseMixin:
         if resolved is not None:
             return exp.In(this=column_exp, expressions=[resolved])
         if is_iterable_parameters(value):
+            if len(value) == 0:
+                return exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
             elements: list[exp.Expr] = []
             for index, element in enumerate(value):
                 name_seed = column_name if len(value) == 1 else f"{column_name}_{index + 1}"
@@ -680,6 +682,8 @@ class WhereClauseMixin:
         return exp.In(this=column_exp, expressions=[exp.Placeholder(this=param_name)])
 
     def _handle_not_in_operator(self, column_exp: exp.Expr, value: Any, column_name: str = "column") -> exp.Expr:
+        if is_iterable_parameters(value) and len(value) == 0:
+            return exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(1))
         return exp.Not(this=self._handle_in_operator(column_exp, value, column_name=column_name))
 
     def _handle_is_operator(self, column_exp: exp.Expr, value: Any) -> exp.Expr:

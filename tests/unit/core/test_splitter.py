@@ -1,11 +1,13 @@
 """Unit tests for SQL splitter helpers."""
 
+import time
 from typing import Any
 
 import pytest
 
 import sqlspec.core.splitter as splitter_module
 from sqlspec.core.splitter import GenericDialectConfig, StatementSplitter, Token, TokenType, split_sql_script
+from sqlspec.exceptions import SQLParsingError
 
 _SPLITTER_COMPILED = (splitter_module.__file__ or "").endswith((".so", ".pyd"))
 
@@ -519,3 +521,34 @@ def test_split_keeps_non_nested_block_comments_on_standard_dialects(dialect: str
         "SELECT /* a /* b */",
         "SELECT 2",
     ]
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "tsql", "mysql"])
+def test_split_nesting_overflow_raises_parsing_error(dialect: str) -> None:
+    script = "BEGIN " * 300 + "SELECT 1; " + "END; " * 300
+
+    with pytest.raises(SQLParsingError, match="Maximum nesting depth"):
+        split_sql_script(script, dialect)
+
+
+@pytest.mark.parametrize(
+    ("script", "dialect"),
+    [
+        ("[ " * 16000, "tsql"),
+        ("q'[ " * 16000, "oracle"),
+        ('"x ' * 16000, "tsql"),
+        ("`x " * 16000, "mysql"),
+        ("'\\" * 16000, "mysql"),
+    ],
+    ids=["tsql-bracket", "oracle-qstring", "tsql-dquote", "mysql-backtick", "mysql-backslash"],
+)
+def test_split_unterminated_tokens_linear(script: str, dialect: str) -> None:
+    started = time.perf_counter()
+    statements = split_sql_script(script, dialect)
+
+    assert time.perf_counter() - started < 0.5
+    assert len(statements) == 1
+
+
+def test_split_bracket_identifier_with_semicolon() -> None:
+    assert split_sql_script("SELECT [a;b] FROM t; SELECT 1", "tsql") == ["SELECT [a;b] FROM t;", "SELECT 1"]

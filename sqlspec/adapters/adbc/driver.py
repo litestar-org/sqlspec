@@ -51,12 +51,12 @@ from sqlspec.core import (
 from sqlspec.core.parameters import ParameterValidator
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError, TransactionError
+from sqlspec.exceptions import DatabaseConnectionError, DataError, SQLSpecError, TransactionError
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional, import_optional_attr
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import (
     normalize_identifier,
@@ -108,6 +108,20 @@ class AdbcExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = (
                 create_teradata_mapped_exception(exc_val) if self._assume_teradata else create_mapped_exception(exc_val)
             )
+            return True
+        arrow_errors = tuple(
+            error_type
+            for error_type in (
+                import_optional_attr("pyarrow", "ArrowInvalid"),
+                import_optional_attr("pyarrow", "ArrowTypeError"),
+            )
+            if isinstance(error_type, type)
+        )
+        if arrow_errors and issubclass(exc_type, arrow_errors):
+            msg = f"ADBC could not convert a parameter or result value: {exc_val}"
+            error = DataError(msg)
+            error.__cause__ = exc_val
+            self.pending_exception = error
             return True
         return False
 
