@@ -210,7 +210,7 @@ class SyncWithoutIndexesContext:
                 dd.get_constraints(self._driver, table=table_name, schema=schema_name)
             )
         droppable = filter_droppable_table_indexes(indexes_rows, constraints_rows)
-        in_tx = _safe_driver_in_transaction(self._driver)
+        in_transaction = _is_driver_in_transaction(self._driver)
         ddl_table, ddl_schema = _resolve_ddl_target(self._table, self._schema, table_name, dialect)
         for idx in droppable:
             ddl_override: str | None = None
@@ -231,7 +231,7 @@ class SyncWithoutIndexesContext:
                 ddl_table,
                 schema=ddl_schema,
                 concurrent=self._concurrent,
-                in_transaction=in_tx,
+                in_transaction=in_transaction,
                 ddl_override=ddl_override,
             )
             drop_sql = build_drop_index_sql(dialect, idx, ddl_table, schema=ddl_schema)
@@ -247,15 +247,15 @@ class SyncWithoutIndexesContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
-        in_tx = _safe_driver_in_transaction(self._driver)
+        in_transaction = _is_driver_in_transaction(self._driver)
         rebuild_errors: list[Exception] = []
         for stmt in self._rebuild_statements:
-            effective_stmt = _rewrite_rebuild_statement_for_tx(stmt, in_tx=in_tx)
+            effective_stmt = _strip_concurrently_in_transaction(stmt, in_transaction=in_transaction)
             try:
                 self._driver.execute(effective_stmt)
             except Exception as err:
                 rebuild_errors.append(err)
-        _handle_rebuild_exit_errors(rebuild_errors, exc_type, exc_val)
+        _raise_or_note_rebuild_errors(rebuild_errors, exc_type, exc_val)
         return False
 
     def _restore_dropped_indexes(self) -> None:
@@ -295,7 +295,7 @@ class AsyncWithoutIndexesContext:
                 await dd.get_constraints(self._driver, table=table_name, schema=schema_name)
             )
         droppable = filter_droppable_table_indexes(indexes_rows, constraints_rows)
-        in_tx = await _safe_driver_in_transaction_async(self._driver)
+        in_transaction = await _is_driver_in_transaction_async(self._driver)
         ddl_table, ddl_schema = _resolve_ddl_target(self._table, self._schema, table_name, dialect)
         for idx in droppable:
             ddl_override: str | None = None
@@ -316,7 +316,7 @@ class AsyncWithoutIndexesContext:
                 ddl_table,
                 schema=ddl_schema,
                 concurrent=self._concurrent,
-                in_transaction=in_tx,
+                in_transaction=in_transaction,
                 ddl_override=ddl_override,
             )
             drop_sql = build_drop_index_sql(dialect, idx, ddl_table, schema=ddl_schema)
@@ -332,15 +332,15 @@ class AsyncWithoutIndexesContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> Literal[False]:
-        in_tx = await _safe_driver_in_transaction_async(self._driver)
+        in_transaction = await _is_driver_in_transaction_async(self._driver)
         rebuild_errors: list[Exception] = []
         for stmt in self._rebuild_statements:
-            effective_stmt = _rewrite_rebuild_statement_for_tx(stmt, in_tx=in_tx)
+            effective_stmt = _strip_concurrently_in_transaction(stmt, in_transaction=in_transaction)
             try:
                 await self._driver.execute(effective_stmt)
             except Exception as err:
                 rebuild_errors.append(err)
-        _handle_rebuild_exit_errors(rebuild_errors, exc_type, exc_val)
+        _raise_or_note_rebuild_errors(rebuild_errors, exc_type, exc_val)
         return False
 
     async def _restore_dropped_indexes(self) -> None:
@@ -367,7 +367,7 @@ def ensure_teradata_ddl_outside_transaction(driver: Any, operation: str) -> None
     """
     if _canonical_index_dialect(str(getattr(driver, "dialect", "") or "")) != "teradata":
         return
-    if not _safe_driver_in_transaction(driver):
+    if not _is_driver_in_transaction(driver):
         return
     msg = (
         f"Teradata {operation} runs DDL, and Teradata requires DDL to be the last statement of a "
@@ -497,7 +497,7 @@ def _extract_ddl_text(result: Any) -> str | None:
     return None
 
 
-def _safe_driver_in_transaction(driver: Any) -> bool:
+def _is_driver_in_transaction(driver: Any) -> bool:
     """Return whether ``driver`` reports an active transaction without raising."""
     checker = getattr(driver, "is_in_transaction", None)
     if callable(checker):
@@ -510,9 +510,9 @@ def _safe_driver_in_transaction(driver: Any) -> bool:
     return False
 
 
-async def _safe_driver_in_transaction_async(driver: Any) -> bool:
+async def _is_driver_in_transaction_async(driver: Any) -> bool:
     """Return whether an async ``driver`` reports an active transaction without raising."""
-    for method_name in ("is_in_transaction", "_transaction_open", "_connection_in_transaction"):
+    for method_name in ("is_in_transaction", "_connection_in_transaction_async", "_connection_in_transaction"):
         checker = getattr(driver, method_name, None)
         if not callable(checker):
             continue
@@ -524,14 +524,14 @@ async def _safe_driver_in_transaction_async(driver: Any) -> bool:
     return False
 
 
-def _rewrite_rebuild_statement_for_tx(stmt: str, *, in_tx: bool) -> str:
+def _strip_concurrently_in_transaction(stmt: str, *, in_transaction: bool) -> str:
     """Strip CONCURRENTLY when rebuilding an index inside an active transaction."""
-    if in_tx and " INDEX CONCURRENTLY " in stmt.upper():
+    if in_transaction and " INDEX CONCURRENTLY " in stmt.upper():
         return re.sub(r"\bINDEX\s+CONCURRENTLY\s+", "INDEX ", stmt, count=1, flags=re.IGNORECASE)
     return stmt
 
 
-def _handle_rebuild_exit_errors(
+def _raise_or_note_rebuild_errors(
     rebuild_errors: list[Exception], exc_type: "type[BaseException] | None", exc_val: "BaseException | None"
 ) -> None:
     """Raise on clean exit or log and attach rebuild failure diagnostics onto the active error."""

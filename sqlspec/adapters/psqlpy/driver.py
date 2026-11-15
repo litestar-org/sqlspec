@@ -260,7 +260,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-        if not await self._transaction_open():
+        if not await self._connection_in_transaction_async():
             self._transaction_active = False
             return
         try:
@@ -272,7 +272,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-        if not await self._transaction_open():
+        if not await self._connection_in_transaction_async():
             self._transaction_active = False
             return
         try:
@@ -606,7 +606,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    async def _transaction_open(self) -> bool:
+    async def _connection_in_transaction_async(self) -> bool:
         """Return whether the driver or underlying connection holds an open transaction."""
         if self._transaction_active:
             return True

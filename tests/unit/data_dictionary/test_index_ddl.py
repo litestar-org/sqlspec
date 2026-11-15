@@ -489,7 +489,7 @@ def test_sync_without_indexes_preserves_multi_segment_schema_in_ddl(
 
 @pytest.mark.anyio
 async def test_async_without_indexes_uses_transaction_open_and_restores_on_cancellation() -> None:
-    """AsyncWithoutIndexesContext checks _transaction_open and restores already-dropped indexes on CancelledError."""
+    """AsyncWithoutIndexesContext checks _connection_in_transaction_async and restores already-dropped indexes on CancelledError."""
     executed: list[str] = []
 
     class _DD:
@@ -504,11 +504,13 @@ async def test_async_without_indexes_uses_transaction_open_and_restores_on_cance
         dialect = "postgres"
         data_dictionary = _DD()
 
-        async def _transaction_open(self) -> bool:
+        async def _connection_in_transaction_async(self) -> bool:
             return True
 
         def _connection_in_transaction(self) -> bool:
-            raise AssertionError("sync _connection_in_transaction should not run when _transaction_open exists")
+            raise AssertionError(
+                "sync _connection_in_transaction should not run when _connection_in_transaction_async exists"
+            )
 
         async def execute(self, sql: str) -> None:
             executed.append(sql)

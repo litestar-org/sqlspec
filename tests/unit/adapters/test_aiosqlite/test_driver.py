@@ -527,7 +527,7 @@ def test_lastrowid_resolution_reaches_metadata_for_successful_insert() -> None:
 
 
 async def test_aiosqlite_transaction_open_checks_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Async _transaction_open dispatches through _check_in_transaction on the worker thread."""
+    """Async _connection_in_transaction_async dispatches through _check_in_transaction on the worker thread."""
     conn = await aiosqlite.connect(":memory:")
     try:
         driver = AiosqliteDriver(connection=conn)
@@ -539,11 +539,11 @@ async def test_aiosqlite_transaction_open_checks_worker_thread(monkeypatch: pyte
             return original_read(raw_conn)
 
         monkeypatch.setattr("sqlspec.adapters.aiosqlite.driver._read_in_transaction_on_worker", _spy_read)
-        assert await driver._transaction_open() is False
+        assert await driver._connection_in_transaction_async() is False
         await driver.begin()
-        assert await driver._transaction_open() is True
+        assert await driver._connection_in_transaction_async() is True
         await driver.rollback()
-        assert await driver._transaction_open() is False
+        assert await driver._connection_in_transaction_async() is False
         assert observed_threads
         assert all(tid != threading.get_ident() for tid in observed_threads)
     finally:

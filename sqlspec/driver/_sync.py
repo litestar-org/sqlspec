@@ -247,7 +247,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             else:
                 compiled_sql, execution_parameters = statement.compile()
             if self._auto_begin_on_write:
-                self._begin_for_statement(statement)
+                self._ensure_transaction_for_statement(statement)
             result: SQLResult | None = None
 
             if runtime is None or runtime.is_idle:
@@ -538,7 +538,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             and fast_params is not None
         ):
             if self._auto_begin_on_write:
-                self._auto_begin_for_cached_sql(statement, fast_params)
+                self._ensure_transaction_for_cached_sql(statement, fast_params)
             fast_result = self._cached_execution(statement, fast_params)
             if fast_result is not None:
                 return cast("SQLResult", fast_result)
@@ -1821,7 +1821,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         if self._auto_begin_on_write:
-            self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+            self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         if sys.exc_info()[1] is None:
@@ -1862,7 +1862,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             if self._auto_begin_on_write:
-                self._begin_for_statement(statement)
+                self._ensure_transaction_for_statement(statement)
             if sys.exc_info()[1] is None:
                 with exc_handler:
                     result = self._execute_cached_statement_with_cursor(statement)
@@ -2009,7 +2009,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
 
-    def _auto_begin_for_cached_sql(
+    def _ensure_transaction_for_cached_sql(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> None:
         """Open a transaction before a cached positional statement when lazy write begin is armed."""
@@ -2018,21 +2018,21 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return
         if self.statement_config.parameter_config.ast_transformer is not None:
             return
-        self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+        self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
 
-    def _begin_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
+    def _ensure_transaction_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
         """Open a transaction before a mutating statement when lazy write begin is armed."""
         if operation_requires_transaction(operation_type, modifies_rows) and not self._connection_in_transaction():
             self.begin()
 
-    def _begin_for_statement(self, statement: "SQL") -> None:
+    def _ensure_transaction_for_statement(self, statement: "SQL") -> None:
         """Open a transaction before a mutating prepared statement when lazy write begin is armed."""
         if statement.is_script or statement.is_many:
             if not self._connection_in_transaction():
                 self.begin()
             return
         profile = statement.get_processed_state().operation_profile
-        self._begin_for_operation(statement.operation_type, profile.modifies_rows)
+        self._ensure_transaction_for_operation(statement.operation_type, profile.modifies_rows)
 
     def _execute_stack_operation(self, operation: "StackOperation") -> "SQLResult | ArrowResult | None":
         kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}

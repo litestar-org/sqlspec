@@ -276,7 +276,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             else:
                 compiled_sql, execution_parameters = statement.compile()
             if self._auto_begin_on_write:
-                await self._begin_for_statement(statement)
+                await self._ensure_transaction_for_statement(statement)
             result: SQLResult | None = None
 
             if runtime is None or runtime.is_idle:
@@ -1832,7 +1832,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         if self._auto_begin_on_write:
-            await self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+            await self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         if sys.exc_info()[1] is None:
@@ -1876,7 +1876,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult if cache hit and execution succeeds, None otherwise.
         """
         if self._auto_begin_on_write and self._stmt_cache_enabled:
-            await self._auto_begin_for_cached_sql(statement, params)
+            await self._ensure_transaction_for_cached_sql(statement, params)
         result = super()._cached_execution(statement, params)
         if result is None:
             return None
@@ -1892,7 +1892,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             if self._auto_begin_on_write:
-                await self._begin_for_statement(statement)
+                await self._ensure_transaction_for_statement(statement)
             if sys.exc_info()[1] is None:
                 async with exc_handler:
                     result = await self._execute_cached_statement_with_cursor(statement)
@@ -1987,7 +1987,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         msg = "Adapters must override _connection_in_transaction()"
         raise NotImplementedError(msg)
 
-    async def _auto_begin_for_cached_sql(
+    async def _ensure_transaction_for_cached_sql(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> None:
         """Open a transaction before a cached positional statement when lazy write begin is armed."""
@@ -1996,21 +1996,21 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             return
         if self.statement_config.parameter_config.ast_transformer is not None:
             return
-        await self._begin_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
+        await self._ensure_transaction_for_operation(cached.operation_type, cached.operation_profile.modifies_rows)
 
-    async def _begin_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
+    async def _ensure_transaction_for_operation(self, operation_type: "OperationType", modifies_rows: bool) -> None:
         """Open a transaction before a mutating statement when lazy write begin is armed."""
         if operation_requires_transaction(operation_type, modifies_rows) and not self._connection_in_transaction():
             await self.begin()
 
-    async def _begin_for_statement(self, statement: "SQL") -> None:
+    async def _ensure_transaction_for_statement(self, statement: "SQL") -> None:
         """Open a transaction before a mutating prepared statement when lazy write begin is armed."""
         if statement.is_script or statement.is_many:
             if not self._connection_in_transaction():
                 await self.begin()
             return
         profile = statement.get_processed_state().operation_profile
-        await self._begin_for_operation(statement.operation_type, profile.modifies_rows)
+        await self._ensure_transaction_for_operation(statement.operation_type, profile.modifies_rows)
 
     async def _dispatch_statement_with_cursor(
         self, connection: Any, statement: "SQL", *, has_execution_parameters: bool

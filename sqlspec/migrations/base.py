@@ -1478,10 +1478,10 @@ def _driver_in_transaction_sync(driver: Any) -> bool:
 
 async def _driver_in_transaction_async(driver: Any) -> bool:
     """Return True when ``driver`` reports an active transaction via async, sync, or implicit hooks."""
-    if _driver_has_explicit_hook(driver, "_transaction_open"):
-        transaction_open = getattr(driver, "_transaction_open", None)
-        if callable(transaction_open):
-            return bool(await cast("Awaitable[Any]", transaction_open()))
+    if _driver_has_explicit_hook(driver, "_connection_in_transaction_async"):
+        connection_in_transaction = getattr(driver, "_connection_in_transaction_async", None)
+        if callable(connection_in_transaction):
+            return bool(await cast("Awaitable[Any]", connection_in_transaction()))
     if _driver_has_explicit_hook(driver, "_connection_in_transaction"):
         conn_checker = getattr(driver, "_connection_in_transaction", None)
         if callable(conn_checker):

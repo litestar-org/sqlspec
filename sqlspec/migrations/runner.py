@@ -686,11 +686,13 @@ class BaseMigrationRunner:
         """Return True when an async non-transactional driver currently holds an open implicit transaction."""
         driver_dict = getattr(driver, "__dict__", {})
         driver_type = type(driver)
-        if "_transaction_open" in driver_dict or hasattr(driver_type, "_transaction_open"):
-            open_fn = getattr(driver, "_transaction_open", None)
-            if callable(open_fn):
+        if "_connection_in_transaction_async" in driver_dict or hasattr(
+            driver_type, "_connection_in_transaction_async"
+        ):
+            connection_in_transaction = getattr(driver, "_connection_in_transaction_async", None)
+            if callable(connection_in_transaction):
                 try:
-                    open_res: Any = open_fn()
+                    open_res: Any = connection_in_transaction()
                     if inspect.isawaitable(open_res):
                         open_res = await open_res
                 except (NotImplementedError, AttributeError):

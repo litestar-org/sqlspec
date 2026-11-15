@@ -2636,7 +2636,7 @@ async def test_nontransactional_failure_rolls_back_active_implicit_transaction(
         async def _tx_open_sql() -> bool:
             return True
 
-        sql_driver._transaction_open = _tx_open_sql
+        sql_driver._connection_in_transaction_async = _tx_open_sql
     else:
         sql_driver._connection_in_transaction = lambda: True
     sql_driver.execute_script.side_effect = ValueError("sql boom")
@@ -2677,7 +2677,7 @@ async def test_nontransactional_failure_rolls_back_active_implicit_transaction(
         async def _reset_schema_async() -> None:
             events.append("reset_schema")
 
-        rec_driver._transaction_open = _tx_open_rec
+        rec_driver._connection_in_transaction_async = _tx_open_rec
         rec_driver.set_migration_non_transactional_schema.side_effect = _set_schema_async
         rec_driver.rollback.side_effect = _rollback_async
         rec_driver.reset_migration_session_schema.side_effect = _reset_schema_async

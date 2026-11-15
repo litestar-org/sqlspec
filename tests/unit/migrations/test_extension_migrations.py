@@ -782,7 +782,7 @@ async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontrans
     assert await AsyncMigrationRunner._has_active_implicit_transaction_async(cast("Any", SimpleNamespace())) is False  # pyright: ignore[reportPrivateUsage]
     assert (
         await AsyncMigrationRunner._has_active_implicit_transaction_async(  # pyright: ignore[reportPrivateUsage]
-            cast("Any", SimpleNamespace(_transaction_open=_open_true))
+            cast("Any", SimpleNamespace(_connection_in_transaction_async=_open_true))
         )
         is True
     )
@@ -803,7 +803,7 @@ async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontrans
             cast(
                 "Any",
                 SimpleNamespace(
-                    _transaction_open=_not_impl,
+                    _connection_in_transaction_async=_not_impl,
                     _connection_in_transaction=_attr_err,
                     _has_implicit_transaction="not-callable",
                 ),
@@ -817,7 +817,7 @@ async def test_async_runner_implicit_transaction_helpers_and_reconciler_nontrans
     class _AsyncNontxDriver:
         dialect = "postgres"
 
-        async def _transaction_open(self) -> bool:
+        async def _connection_in_transaction_async(self) -> bool:
             events.append("tx_open")
             return True
 

@@ -1392,19 +1392,21 @@ async def test_tracker_migrate_schema_cleans_up_savepoint_and_tx_on_cancellation
 @pytest.mark.anyio
 @pytest.mark.parametrize("dialect", ["postgres", "mysql", "mssql", "sqlite"])
 async def test_async_acquire_lock_uses_transaction_open_and_unlocks_on_cancellation(dialect: str) -> None:
-    """Async lock context manager uses _transaction_open when available and releases locks on CancelledError."""
+    """Async lock context manager uses _connection_in_transaction_async when available and releases locks on CancelledError."""
     events: list[str] = []
     open_tx = {"active": False}
 
     class _AsyncLockDriver:
         dialect = ""
 
-        async def _transaction_open(self) -> bool:
+        async def _connection_in_transaction_async(self) -> bool:
             events.append("tx_open")
             return open_tx["active"]
 
         def _connection_in_transaction(self) -> bool:
-            raise AssertionError("sync _connection_in_transaction should not be called when _transaction_open exists")
+            raise AssertionError(
+                "sync _connection_in_transaction should not be called when _connection_in_transaction_async exists"
+            )
 
         async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
             sql_text = str(stmt)
@@ -1473,7 +1475,7 @@ async def test_lock_context_chains_commit_error_over_step_error(tmp_path: Path, 
         class _AsyncCommitFailDriver:
             dialect = "sqlite"
 
-            async def _transaction_open(self) -> bool:
+            async def _connection_in_transaction_async(self) -> bool:
                 return tx_state["active"]
 
             def _connection_in_transaction(self) -> bool:
@@ -1561,7 +1563,7 @@ async def test_lock_exit_tx_probe_failure_preserves_caller_error_and_unlocks(bac
             async def rollback(self) -> None:
                 raise AssertionError("rollback should not run when tx probe fails")
 
-            async def _transaction_open(self) -> bool:
+            async def _connection_in_transaction_async(self) -> bool:
                 if probe_state["fail"]:
                     raise RuntimeError("tx probe boom")
                 return False
@@ -1952,7 +1954,7 @@ async def test_postgres_acquire_lock_retries_until_acquired(is_async: bool, monk
             async def execute(self, stmt: Any, _params: Any = None) -> SQLResult:
                 return _next_result(str(stmt))
 
-            async def _transaction_open(self) -> bool:
+            async def _connection_in_transaction_async(self) -> bool:
                 return False
 
         driver_async: Any = _RetryAsyncDriver()
@@ -2005,7 +2007,7 @@ async def test_postgres_acquire_lock_timeout_raises_migration_error(
                 executed.append(str(stmt))
                 return SQLResult(data=[{"acquired": False}])
 
-            async def _transaction_open(self) -> bool:
+            async def _connection_in_transaction_async(self) -> bool:
                 return False
 
         driver_async: Any = _BusyAsyncDriver()
