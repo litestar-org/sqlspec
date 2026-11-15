@@ -182,14 +182,23 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-@pytest.fixture(params=KINDS)
-def harness(request: pytest.FixtureRequest, tmp_path: Path) -> Harness:
-    return Harness(str(request.param), tmp_path)
+async def _close_pool(harness: Harness) -> None:
+    """Close the pool a store reopens when a test uses it after the app lifespan ends."""
+    await _maybe_await(harness.config.close_pool())
 
 
 @pytest.fixture(params=KINDS)
-def manual_harness(request: pytest.FixtureRequest, tmp_path: Path) -> Harness:
-    return Harness(str(request.param), tmp_path, commit_mode="manual")
+async def harness(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Harness]:
+    created = Harness(str(request.param), tmp_path)
+    yield created
+    await _close_pool(created)
+
+
+@pytest.fixture(params=KINDS)
+async def manual_harness(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Harness]:
+    created = Harness(str(request.param), tmp_path, commit_mode="manual")
+    yield created
+    await _close_pool(created)
 
 
 async def test_concurrent_requests_single_connection_pool_complete(harness: Harness) -> None:
