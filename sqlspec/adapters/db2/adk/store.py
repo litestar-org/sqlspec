@@ -190,7 +190,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                     )
                     scoped_started = True
                     current_app_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._lock_app_state_select_sql(),
                             self._insert_app_state_sql(),
@@ -204,7 +204,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                         )
                     )
                     current_user_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._lock_user_state_select_sql(),
                             self._insert_user_state_sql(),
@@ -349,7 +349,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                     driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                     scoped_started = True
                     merged_app_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._lock_app_state_select_sql(),
                             self._insert_app_state_sql(),
@@ -361,7 +361,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
                         else None
                     )
                     merged_user_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._lock_user_state_select_sql(),
                             self._insert_user_state_sql(),
@@ -521,7 +521,7 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             raise
         return _json_dict(row["state"]) if row is not None else None
 
-    def _merge_state_locked(
+    def _apply_state_delta(
         self,
         driver: "Db2SyncDriver",
         lock_sql: str,
@@ -620,7 +620,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                     )
                     scoped_started = True
                     current_app_state = (
-                        await self._merge_state_locked(
+                        await self._apply_state_delta(
                             driver,
                             self._lock_app_state_select_sql(),
                             self._insert_app_state_sql(),
@@ -634,7 +634,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                         )
                     )
                     current_user_state = (
-                        await self._merge_state_locked(
+                        await self._apply_state_delta(
                             driver,
                             self._lock_user_state_select_sql(),
                             self._insert_user_state_sql(),
@@ -781,7 +781,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                     await driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                     scoped_started = True
                     merged_app_state = (
-                        await self._merge_state_locked(
+                        await self._apply_state_delta(
                             driver,
                             self._lock_app_state_select_sql(),
                             self._insert_app_state_sql(),
@@ -793,7 +793,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
                         else None
                     )
                     merged_user_state = (
-                        await self._merge_state_locked(
+                        await self._apply_state_delta(
                             driver,
                             self._lock_user_state_select_sql(),
                             self._insert_user_state_sql(),
@@ -954,7 +954,7 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             raise
         return _json_dict(row["state"]) if row is not None else None
 
-    async def _merge_state_locked(
+    async def _apply_state_delta(
         self,
         driver: "Db2AsyncDriver",
         lock_sql: str,

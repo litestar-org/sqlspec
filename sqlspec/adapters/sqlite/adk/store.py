@@ -161,12 +161,12 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 _close_cursor(conn.execute("BEGIN IMMEDIATE"))
                 _close_cursor(conn.execute(sql, params))
                 resolved_app = (
-                    self._merge_app_state_on_conn(conn, app_name, app_state_delta, now_julian)
+                    self._apply_app_state_delta(conn, app_name, app_state_delta, now_julian)
                     if app_state_delta
                     else self._select_app_state_on_conn(conn, app_name)
                 )
                 resolved_user = (
-                    self._merge_user_state_on_conn(conn, app_name, user_id, user_state_delta, now_julian)
+                    self._apply_user_state_delta(conn, app_name, user_id, user_state_delta, now_julian)
                     if user_state_delta
                     else self._select_user_state_on_conn(conn, app_name, user_id)
                 )
@@ -480,9 +480,9 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                         )
                     )
                     if app_state_delta:
-                        merged_app = self._merge_app_state_on_conn(conn, app_name, app_state_delta, now_julian)
+                        merged_app = self._apply_app_state_delta(conn, app_name, app_state_delta, now_julian)
                     if user_state_delta:
-                        merged_user = self._merge_user_state_on_conn(
+                        merged_user = self._apply_user_state_delta(
                             conn, app_name, user_id, user_state_delta, now_julian
                         )
             except Exception:
@@ -785,11 +785,11 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         row = _row_values(raw_row) if raw_row is not None else None
         return from_json(row[0]) if row is not None and row[0] else None
 
-    def _merge_app_state_on_conn(
+    def _apply_app_state_delta(
         self, conn: Any, app_name: str, delta: "dict[str, Any]", now_julian: float
     ) -> "dict[str, Any]":
         """Merge an app-scoped state delta under the active IMMEDIATE transaction."""
-        return self._merge_scoped_state_on_conn(
+        return self._apply_state_delta(
             conn,
             table=self._app_state_table,
             key_columns=("app_name",),
@@ -798,11 +798,11 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             now_julian=now_julian,
         )
 
-    def _merge_user_state_on_conn(
+    def _apply_user_state_delta(
         self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]", now_julian: float
     ) -> "dict[str, Any]":
         """Merge a user-scoped state delta under the active IMMEDIATE transaction."""
-        return self._merge_scoped_state_on_conn(
+        return self._apply_state_delta(
             conn,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -811,7 +811,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             now_julian=now_julian,
         )
 
-    def _merge_scoped_state_on_conn(
+    def _apply_state_delta(
         self,
         conn: Any,
         *,

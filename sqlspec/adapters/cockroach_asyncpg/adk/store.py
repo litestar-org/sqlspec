@@ -145,12 +145,12 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 raise RuntimeError(msg)
 
             resolved_app = (
-                await self._merge_app_state_on_conn(conn, app_name, app_state_delta)
+                await self._apply_app_state_delta(conn, app_name, app_state_delta)
                 if app_state_delta
                 else await self._select_app_state_on_conn(conn, app_name)
             )
             resolved_user = (
-                await self._merge_user_state_on_conn(conn, app_name, user_id, user_state_delta)
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                 if user_state_delta
                 else await self._select_user_state_on_conn(conn, app_name, user_id)
             )
@@ -352,11 +352,9 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
                 event_record["timestamp"],
                 event_record["event_data"],
             )
-            merged_app = (
-                await self._merge_app_state_on_conn(conn, app_name, app_state_delta) if app_state_delta else None
-            )
+            merged_app = await self._apply_app_state_delta(conn, app_name, app_state_delta) if app_state_delta else None
             merged_user = (
-                await self._merge_user_state_on_conn(conn, app_name, user_id, user_state_delta)
+                await self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                 if user_state_delta
                 else None
             )
@@ -550,15 +548,15 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             return None
         return _decode_json_state(row["state"])
 
-    async def _merge_app_state_on_conn(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_conn(
+    async def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
             conn, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
         )
 
-    async def _merge_user_state_on_conn(
+    async def _apply_user_state_delta(
         self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_conn(
+        return await self._apply_state_delta(
             conn,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -566,7 +564,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             delta=delta,
         )
 
-    async def _merge_scoped_state_on_conn(
+    async def _apply_state_delta(
         self,
         conn: Any,
         *,

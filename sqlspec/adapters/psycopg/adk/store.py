@@ -748,12 +748,12 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         await cur.execute(insert_query, insert_params)
         row = await cur.fetchone() if hasattr(cur, "fetchone") else None
         resolved_app = (
-            await self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+            await self._apply_app_state_delta(cur, app_name, app_state_delta)
             if app_state_delta
             else await self._select_app_state_on_cur(cur, app_name)
         )
         resolved_user = (
-            await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+            await self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
             if user_state_delta
             else await self._select_user_state_on_cur(cur, app_name, user_id)
         )
@@ -789,9 +789,9 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
                 jsonb_value,
             ),
         )
-        merged_app = await self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+        merged_app = await self._apply_app_state_delta(cur, app_name, app_state_delta) if app_state_delta else None
         merged_user = (
-            await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+            await self._apply_user_state_delta(cur, app_name, user_id, user_state_delta) if user_state_delta else None
         )
         return row, merged_app, merged_user
 
@@ -815,15 +815,15 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             return None
         return _decode_json_state(row["state"])
 
-    async def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_cur(
+    async def _apply_app_state_delta(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
             cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
         )
 
-    async def _merge_user_state_on_cur(
+    async def _apply_user_state_delta(
         self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_cur(
+        return await self._apply_state_delta(
             cur,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -831,7 +831,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             delta=delta,
         )
 
-    async def _merge_scoped_state_on_cur(
+    async def _apply_state_delta(
         self,
         cur: Any,
         *,
@@ -1439,12 +1439,12 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         cur.execute(insert_query, insert_params)
         row = cur.fetchone() if hasattr(cur, "fetchone") else None
         resolved_app = (
-            self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+            self._apply_app_state_delta(cur, app_name, app_state_delta)
             if app_state_delta
             else self._select_app_state_on_cur(cur, app_name)
         )
         resolved_user = (
-            self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+            self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
             if user_state_delta
             else self._select_user_state_on_cur(cur, app_name, user_id)
         )
@@ -1480,9 +1480,9 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
                 jsonb_value,
             ),
         )
-        merged_app = self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+        merged_app = self._apply_app_state_delta(cur, app_name, app_state_delta) if app_state_delta else None
         merged_user = (
-            self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+            self._apply_user_state_delta(cur, app_name, user_id, user_state_delta) if user_state_delta else None
         )
         return row, merged_app, merged_user
 
@@ -1506,15 +1506,15 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             return None
         return _decode_json_state(row["state"])
 
-    def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return self._merge_scoped_state_on_cur(
+    def _apply_app_state_delta(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._apply_state_delta(
             cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
         )
 
-    def _merge_user_state_on_cur(
+    def _apply_user_state_delta(
         self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return self._merge_scoped_state_on_cur(
+        return self._apply_state_delta(
             cur,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -1522,7 +1522,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             delta=delta,
         )
 
-    def _merge_scoped_state_on_cur(
+    def _apply_state_delta(
         self,
         cur: Any,
         *,

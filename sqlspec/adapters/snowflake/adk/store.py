@@ -72,12 +72,12 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 f"INSERT INTO {self._session_table} ({', '.join(columns)}) SELECT {', '.join(values)}", parameters
             )
             current_app_state = (
-                self._merge_state_delta(driver, self._app_state_table, app_name, app_state_delta)
+                self._apply_state_delta(driver, self._app_state_table, app_name, app_state_delta)
                 if app_state_delta
                 else self._read_state(self._app_state_table, app_name, driver=driver)
             )
             current_user_state = (
-                self._merge_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
+                self._apply_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
                 if user_state_delta
                 else self._read_state(self._user_state_table, app_name, user_id, driver=driver)
             )
@@ -225,12 +225,12 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
             )
             self._insert_event(driver, event_record)
             merged_app_state = (
-                self._merge_state_delta(driver, self._app_state_table, app_name, app_state_delta)
+                self._apply_state_delta(driver, self._app_state_table, app_name, app_state_delta)
                 if app_state_delta
                 else None
             )
             merged_user_state = (
-                self._merge_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
+                self._apply_state_delta(driver, self._user_state_table, app_name, user_state_delta, user_id=user_id)
                 if user_state_delta
                 else None
             )
@@ -338,13 +338,13 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
         """Insert or replace application-scoped state."""
         with self._config.provide_session() as driver:
-            self._merge_state(driver, self._app_state_table, app_name, state, datetime.now(UTC))
+            self._upsert_state(driver, self._app_state_table, app_name, state, datetime.now(UTC))
             driver.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
         """Insert or replace user-scoped state."""
         with self._config.provide_session() as driver:
-            self._merge_state(driver, self._user_state_table, app_name, state, datetime.now(UTC), user_id=user_id)
+            self._upsert_state(driver, self._user_state_table, app_name, state, datetime.now(UTC), user_id=user_id)
             driver.commit()
 
     def get_metadata(self, key: str) -> str | None:
@@ -420,7 +420,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
                 return None
             raise
 
-    def _merge_state_delta(
+    def _apply_state_delta(
         self, driver: Any, table: str, app_name: str, delta: dict[str, Any], *, user_id: str | None = None
     ) -> dict[str, Any]:
         predicate = "app_name = ?"
@@ -467,7 +467,7 @@ class SnowflakeADKStore(BaseSyncADKStore[SnowflakeConfig]):
         msg = f"Failed to merge state into {table} after {_MAX_STATE_MERGE_ATTEMPTS} compare-and-swap attempts."
         raise SerializationConflictError(msg)
 
-    def _merge_state(
+    def _upsert_state(
         self,
         driver: Any,
         table: str,

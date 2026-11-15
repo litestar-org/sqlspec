@@ -256,12 +256,12 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                 raise RuntimeError(msg)
 
             resolved_app = (
-                await self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+                await self._apply_app_state_delta(cur, app_name, app_state_delta)
                 if app_state_delta
                 else await self._select_app_state_on_cur(cur, app_name)
             )
             resolved_user = (
-                await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                await self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
                 if user_state_delta
                 else await self._select_user_state_on_cur(cur, app_name, user_id)
             )
@@ -474,9 +474,9 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
                     jsonb_value,
                 ),
             )
-            merged_app = await self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+            merged_app = await self._apply_app_state_delta(cur, app_name, app_state_delta) if app_state_delta else None
             merged_user = (
-                await self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                await self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
                 if user_state_delta
                 else None
             )
@@ -704,15 +704,15 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             return None
         return _decode_json_state(row["state"])
 
-    async def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_cur(
+    async def _apply_app_state_delta(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return await self._apply_state_delta(
             cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
         )
 
-    async def _merge_user_state_on_cur(
+    async def _apply_user_state_delta(
         self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return await self._merge_scoped_state_on_cur(
+        return await self._apply_state_delta(
             cur,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -720,7 +720,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             delta=delta,
         )
 
-    async def _merge_scoped_state_on_cur(
+    async def _apply_state_delta(
         self,
         cur: Any,
         *,
@@ -879,12 +879,12 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                 raise RuntimeError(msg)
 
             resolved_app = (
-                self._merge_app_state_on_cur(cur, app_name, app_state_delta)
+                self._apply_app_state_delta(cur, app_name, app_state_delta)
                 if app_state_delta
                 else self._select_app_state_on_cur(cur, app_name)
             )
             resolved_user = (
-                self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta)
+                self._apply_user_state_delta(cur, app_name, user_id, user_state_delta)
                 if user_state_delta
                 else self._select_user_state_on_cur(cur, app_name, user_id)
             )
@@ -1061,9 +1061,9 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
                     jsonb_value,
                 ),
             )
-            merged_app = self._merge_app_state_on_cur(cur, app_name, app_state_delta) if app_state_delta else None
+            merged_app = self._apply_app_state_delta(cur, app_name, app_state_delta) if app_state_delta else None
             merged_user = (
-                self._merge_user_state_on_cur(cur, app_name, user_id, user_state_delta) if user_state_delta else None
+                self._apply_user_state_delta(cur, app_name, user_id, user_state_delta) if user_state_delta else None
             )
             persisted_state = _decode_json_state(row["state"])
             merged_state = merge_scoped_state(persisted_state, merged_app, merged_user)
@@ -1299,15 +1299,15 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             return None
         return _decode_json_state(row["state"])
 
-    def _merge_app_state_on_cur(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return self._merge_scoped_state_on_cur(
+    def _apply_app_state_delta(self, cur: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._apply_state_delta(
             cur, table=self._app_state_table, key_columns=("app_name",), key_values=(app_name,), delta=delta
         )
 
-    def _merge_user_state_on_cur(
+    def _apply_user_state_delta(
         self, cur: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return self._merge_scoped_state_on_cur(
+        return self._apply_state_delta(
             cur,
             table=self._user_state_table,
             key_columns=("app_name", "user_id"),
@@ -1315,7 +1315,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             delta=delta,
         )
 
-    def _merge_scoped_state_on_cur(
+    def _apply_state_delta(
         self,
         cur: Any,
         *,

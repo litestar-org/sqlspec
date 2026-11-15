@@ -534,14 +534,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     conn.execute(sql, params)
                     scoped_started = True
                     current_app_state = (
-                        self._merge_app_state_delta_tx(conn, app_name, app_state_delta)
+                        self._apply_app_state_delta(conn, app_name, app_state_delta)
                         if app_state_delta
                         else self._read_state_tx(
                             conn, f"SELECT state FROM {self._app_state_table} WHERE app_name = ?", (app_name,)
                         )
                     )
                     current_user_state = (
-                        self._merge_user_state_delta_tx(conn, app_name, user_id, user_state_delta)
+                        self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                         if user_state_delta
                         else self._read_state_tx(
                             conn,
@@ -813,14 +813,14 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
                     )
                     merged_app_state: dict[str, Any] | None = None
                     if app_state_delta:
-                        merged_app_state = self._merge_app_state_delta_tx(conn, app_name, app_state_delta)
+                        merged_app_state = self._apply_app_state_delta(conn, app_name, app_state_delta)
                         if merged_app_state is None:
                             conn.rollback()
                             in_tx = False
                             continue
                     merged_user_state: dict[str, Any] | None = None
                     if user_state_delta:
-                        merged_user_state = self._merge_user_state_delta_tx(conn, app_name, user_id, user_state_delta)
+                        merged_user_state = self._apply_user_state_delta(conn, app_name, user_id, user_state_delta)
                         if merged_user_state is None:
                             conn.rollback()
                             in_tx = False
@@ -858,8 +858,8 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             return None
         return cast("dict[str, Any]", from_json(row[0]) if isinstance(row[0], str) else row[0])
 
-    def _merge_app_state_delta_tx(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any] | None":
-        return self._merge_scoped_state_tx(
+    def _apply_app_state_delta(self, conn: Any, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any] | None":
+        return self._apply_state_delta(
             conn,
             table=self._app_state_table,
             where_sql="app_name = ?",
@@ -870,10 +870,10 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             delta=delta,
         )
 
-    def _merge_user_state_delta_tx(
+    def _apply_user_state_delta(
         self, conn: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any] | None":
-        return self._merge_scoped_state_tx(
+        return self._apply_state_delta(
             conn,
             table=self._user_state_table,
             where_sql="app_name = ? AND user_id = ?",
@@ -884,7 +884,7 @@ class DuckDBADKStore(BaseSyncADKStore["DuckDBConfig"]):
             delta=delta,
         )
 
-    def _merge_scoped_state_tx(
+    def _apply_state_delta(
         self,
         conn: Any,
         *,

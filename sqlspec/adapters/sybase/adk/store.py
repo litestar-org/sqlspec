@@ -160,7 +160,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
             merged_app_state: dict[str, Any] | None
             if app_state_delta:
-                merged_app_state = _merge_sybase_state_locked(
+                merged_app_state = _apply_state_delta(
                     cursor, app_lock_sql, app_read_sql, app_update_sql, app_insert_sql, (app_name,), app_state_delta
                 )
             else:
@@ -170,7 +170,7 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
 
             merged_user_state: dict[str, Any] | None
             if user_state_delta:
-                merged_user_state = _merge_sybase_state_locked(
+                merged_user_state = _apply_state_delta(
                     cursor,
                     user_lock_sql,
                     user_read_sql,
@@ -353,14 +353,14 @@ class SybaseADKStore(BaseSyncADKStore["SybaseConfig"]):
             cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
             mark_scoped()
             merged_app_state = (
-                _merge_sybase_state_locked(
+                _apply_state_delta(
                     cursor, app_lock_sql, app_read_sql, app_update_sql, app_insert_sql, (app_name,), app_state_delta
                 )
                 if app_state_delta
                 else None
             )
             merged_user_state = (
-                _merge_sybase_state_locked(
+                _apply_state_delta(
                     cursor,
                     user_lock_sql,
                     user_read_sql,
@@ -1288,7 +1288,7 @@ def _session_list_query(
     return sql, tuple(params)
 
 
-def _merge_sybase_state_locked(
+def _apply_state_delta(
     cursor: Any,
     lock_sql: str,
     read_sql: str,

@@ -790,7 +790,7 @@ def test_bigquery_adk_merge_cas_raises_after_max_attempts(monkeypatch: pytest.Mo
     monkeypatch.setattr(BigQueryADKStore, "_run_query", fake_run_query)
 
     with pytest.raises(SerializationConflictError, match="compare-and-swap attempts"):
-        store._merge_app_state_delta("app", {"k": "v"})
+        store._apply_app_state_delta("app", {"k": "v"})
 
 
 def test_bigquery_adk_get_events_limit_reverses_desc_rows_to_chronological(monkeypatch: pytest.MonkeyPatch) -> None:

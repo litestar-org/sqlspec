@@ -334,10 +334,10 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             params.append(self._query_param("owner_id", owner_id, bq_type=owner_bq_type))
         self._run_query(sql, params)
         current_app_state = (
-            self._merge_app_state_delta(app_name, app_state_delta) if app_state_delta else self._get_app_state(app_name)
+            self._apply_app_state_delta(app_name, app_state_delta) if app_state_delta else self._get_app_state(app_name)
         )
         current_user_state = (
-            self._merge_user_state_delta(app_name, user_id, user_state_delta)
+            self._apply_user_state_delta(app_name, user_id, user_state_delta)
             if user_state_delta
             else self._get_user_state(app_name, user_id)
         )
@@ -524,9 +524,9 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             raise ValueError(msg)
 
         self._insert_event_row(event_record)
-        merged_app_state = self._merge_app_state_delta(app_name, app_state_delta) if app_state_delta else None
+        merged_app_state = self._apply_app_state_delta(app_name, app_state_delta) if app_state_delta else None
         merged_user_state = (
-            self._merge_user_state_delta(app_name, user_id, user_state_delta) if user_state_delta else None
+            self._apply_user_state_delta(app_name, user_id, user_state_delta) if user_state_delta else None
         )
         record["state"] = merge_scoped_state(record["state"], merged_app_state, merged_user_state)
         return record
@@ -650,8 +650,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             ],
         )
 
-    def _merge_app_state_delta(self, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return self._merge_scoped_state_cas(
+    def _apply_app_state_delta(self, app_name: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._apply_state_delta(
             table=self._app_state_table,
             where_sql="app_name = @app_name",
             insert_cols="app_name",
@@ -661,8 +661,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             label=f"app_state for app={app_name!r}",
         )
 
-    def _merge_user_state_delta(self, app_name: str, user_id: str, delta: "dict[str, Any]") -> "dict[str, Any]":
-        return self._merge_scoped_state_cas(
+    def _apply_user_state_delta(self, app_name: str, user_id: str, delta: "dict[str, Any]") -> "dict[str, Any]":
+        return self._apply_state_delta(
             table=self._user_state_table,
             where_sql="app_name = @app_name AND user_id = @user_id",
             insert_cols="app_name, user_id",
@@ -672,7 +672,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             label=f"user_state for app={app_name!r}, user={user_id!r}",
         )
 
-    def _merge_scoped_state_cas(
+    def _apply_state_delta(
         self,
         *,
         table: str,

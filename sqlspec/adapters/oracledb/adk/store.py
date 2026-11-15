@@ -520,7 +520,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                 with conn.cursor() as cursor:
                     await cursor.execute(sql, coerced_params)
                     current_app_state = (
-                        await self._merge_app_state_delta_async(conn, cursor, app_name, app_state_delta)
+                        await self._apply_app_state_delta_async(conn, cursor, app_name, app_state_delta)
                         if app_state_delta
                         else await self._read_scoped_state_async(
                             cursor,
@@ -529,7 +529,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                         )
                     )
                     current_user_state = (
-                        await self._merge_user_state_delta_async(conn, cursor, app_name, user_id, user_state_delta)
+                        await self._apply_user_state_delta_async(conn, cursor, app_name, user_id, user_state_delta)
                         if user_state_delta
                         else await self._read_scoped_state_async(
                             cursor,
@@ -840,11 +840,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                     )
                     await cursor.execute(insert_sql, insert_params)
                     if app_state_delta:
-                        merged_app_state = await self._merge_app_state_delta_async(
+                        merged_app_state = await self._apply_app_state_delta_async(
                             conn, cursor, app_name, app_state_delta
                         )
                     if user_state_delta:
-                        merged_user_state = await self._merge_user_state_delta_async(
+                        merged_user_state = await self._apply_user_state_delta_async(
                             conn, cursor, app_name, user_id, user_state_delta
                         )
                     await conn.commit()
@@ -1133,10 +1133,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             raise
         return await self._deserialize_state(row[0]) if row is not None else None
 
-    async def _merge_app_state_delta_async(
+    async def _apply_app_state_delta_async(
         self, conn: Any, cursor: Any, app_name: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return await self._merge_scoped_state_async(
+        return await self._apply_state_delta_async(
             conn,
             cursor,
             select_for_update_sql=f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name FOR UPDATE",
@@ -1146,10 +1146,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             delta=delta,
         )
 
-    async def _merge_user_state_delta_async(
+    async def _apply_user_state_delta_async(
         self, conn: Any, cursor: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return await self._merge_scoped_state_async(
+        return await self._apply_state_delta_async(
             conn,
             cursor,
             select_for_update_sql=(
@@ -1167,7 +1167,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             delta=delta,
         )
 
-    async def _merge_scoped_state_async(
+    async def _apply_state_delta_async(
         self,
         conn: Any,
         cursor: Any,
@@ -1665,7 +1665,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 with conn.cursor() as cursor:
                     cursor.execute(sql, coerced_params)
                     current_app_state = (
-                        self._merge_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
+                        self._apply_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
                         if app_state_delta
                         else self._read_scoped_state_sync(
                             cursor,
@@ -1674,7 +1674,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                         )
                     )
                     current_user_state = (
-                        self._merge_user_state_delta_sync(conn, cursor, app_name, user_id, user_state_delta)
+                        self._apply_user_state_delta_sync(conn, cursor, app_name, user_id, user_state_delta)
                         if user_state_delta
                         else self._read_scoped_state_sync(
                             cursor,
@@ -1973,9 +1973,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                 )
                 cursor.execute(insert_sql, insert_params)
                 if app_state_delta:
-                    merged_app_state = self._merge_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
+                    merged_app_state = self._apply_app_state_delta_sync(conn, cursor, app_name, app_state_delta)
                 if user_state_delta:
-                    merged_user_state = self._merge_user_state_delta_sync(
+                    merged_user_state = self._apply_user_state_delta_sync(
                         conn, cursor, app_name, user_id, user_state_delta
                     )
                 conn.commit()
@@ -2252,10 +2252,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             raise
         return self._deserialize_state(row[0]) if row is not None else None
 
-    def _merge_app_state_delta_sync(
+    def _apply_app_state_delta_sync(
         self, conn: Any, cursor: Any, app_name: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return self._merge_scoped_state_sync(
+        return self._apply_state_delta_sync(
             conn,
             cursor,
             select_for_update_sql=f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name FOR UPDATE",
@@ -2265,10 +2265,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             delta=delta,
         )
 
-    def _merge_user_state_delta_sync(
+    def _apply_user_state_delta_sync(
         self, conn: Any, cursor: Any, app_name: str, user_id: str, delta: "dict[str, Any]"
     ) -> "dict[str, Any]":
-        return self._merge_scoped_state_sync(
+        return self._apply_state_delta_sync(
             conn,
             cursor,
             select_for_update_sql=(
@@ -2286,7 +2286,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             delta=delta,
         )
 
-    def _merge_scoped_state_sync(
+    def _apply_state_delta_sync(
         self,
         conn: Any,
         cursor: Any,

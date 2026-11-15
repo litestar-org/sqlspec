@@ -1282,10 +1282,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     conn.commit()
                 finally:
                     cursor.close()
-            merged_app = self._bigquery_scoped_state(
+            merged_app = self._resolve_state_with_retry(
                 self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
             )
-            merged_user = self._bigquery_scoped_state(
+            merged_user = self._resolve_state_with_retry(
                 self._user_state_table, ("app_name", "user_id"), (app_name, user_id), user_state_delta, now_dt
             )
             result = self._get_session(app_name, user_id, session_id)
@@ -1313,10 +1313,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             session_id, app_name, user_id, state_json, now_val, owner_id
                         )
                         self._execute(cursor, sql, params)
-                        merged_app = self._resolve_scoped_state_in_cursor(
+                        merged_app = self._resolve_state(
                             cursor, self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
                         )
-                        merged_user = self._resolve_scoped_state_in_cursor(
+                        merged_user = self._resolve_state(
                             cursor,
                             self._user_state_table,
                             ("app_name", "user_id"),
@@ -1342,7 +1342,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             except Exception as exc:
                 if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
                     continue
-                if isinstance(exc, _StateCasConflictError) or self._is_retryable_tx_error(exc):
+                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_tx_error(exc):
                     msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
                     raise SerializationConflictError(msg) from exc
                 raise
@@ -1693,10 +1693,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     conn.commit()
                 finally:
                     cursor.close()
-            merged_app = self._bigquery_scoped_state(
+            merged_app = self._resolve_state_with_retry(
                 self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
             )
-            merged_user = self._bigquery_scoped_state(
+            merged_user = self._resolve_state_with_retry(
                 self._user_state_table, ("app_name", "user_id"), (app_name, user_id), user_state_delta, now_dt
             )
             return StoredSession(
@@ -1725,10 +1725,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             msg = f"Session {session_id} not found during append_event_and_update_state."
                             raise ValueError(msg)
                         self._execute(cursor, insert_sql, event_params)
-                        merged_app = self._resolve_scoped_state_in_cursor(
+                        merged_app = self._resolve_state(
                             cursor, self._app_state_table, ("app_name",), (app_name,), app_state_delta, now_dt
                         )
-                        merged_user = self._resolve_scoped_state_in_cursor(
+                        merged_user = self._resolve_state(
                             cursor,
                             self._user_state_table,
                             ("app_name", "user_id"),
@@ -1750,7 +1750,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             except Exception as exc:
                 if self._is_retryable_tx_error(exc) and attempt + 1 < max_attempts:
                     continue
-                if isinstance(exc, _StateCasConflictError) or self._is_retryable_tx_error(exc):
+                if isinstance(exc, _StateWriteConflictError) or self._is_retryable_tx_error(exc):
                     msg = f"Failed to merge scoped state after {max_attempts} attempts for session {session_id}"
                     raise SerializationConflictError(msg) from exc
                 raise
@@ -1764,7 +1764,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _is_retryable_tx_error(self, exc: Exception) -> bool:
         """Return True when an exception indicates a retryable lock, conflict, or CAS race."""
-        if isinstance(exc, _StateCasConflictError):
+        if isinstance(exc, _StateWriteConflictError):
             return True
         if self._dialect == DIALECT_DUCKDB:
             return _is_error_matching(exc, _DUCKDB_RETRYABLE_PATTERNS)
@@ -1787,7 +1787,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         minimum_next = current_dt + timedelta(microseconds=1)
         return max(minimum_next, candidate)
 
-    def _resolve_scoped_state_in_cursor(
+    def _resolve_state(
         self,
         cursor: Any,
         table: str,
@@ -1799,7 +1799,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Read scoped state when delta is empty, otherwise merge delta using dialect strategy."""
         if not delta:
             return self._read_scoped_state_in_cursor(cursor, table, key_columns, key_values)
-        return self._merge_scoped_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+        return self._apply_state_delta(cursor, table, key_columns, key_values, delta, now_dt)
 
     def _read_scoped_state_in_cursor(
         self, cursor: Any, table: str, key_columns: "tuple[str, ...]", key_values: "tuple[Any, ...]"
@@ -1810,7 +1810,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         row = cursor.fetchone()
         return self._deserialize_state(row[0]) if row is not None else {}
 
-    def _merge_scoped_state_in_cursor(
+    def _apply_state_delta(
         self,
         cursor: Any,
         table: str,
@@ -1908,16 +1908,16 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 )
             except Exception as exc:
                 if _is_error_matching(exc, unique_patterns):
-                    raise _StateCasConflictError from exc
+                    raise _StateWriteConflictError from exc
                 raise
             return merged
 
         if self._dialect == DIALECT_DUCKDB:
-            return self._merge_duckdb_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+            return self._apply_state_delta_duckdb(cursor, table, key_columns, key_values, delta, now_dt)
 
-        return self._merge_cas_state_in_cursor(cursor, table, key_columns, key_values, delta, now_dt)
+        return self._apply_state_delta_optimistic(cursor, table, key_columns, key_values, delta, now_dt)
 
-    def _merge_duckdb_state_in_cursor(
+    def _apply_state_delta_duckdb(
         self,
         cursor: Any,
         table: str,
@@ -1945,7 +1945,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         self._execute(cursor, f"SELECT state, update_time FROM {table} WHERE {where_clause}", key_values)
         existing = cursor.fetchone()
         if existing is None:
-            raise _StateCasConflictError
+            raise _StateWriteConflictError
 
         expected_raw_time = existing[1]
         next_dt = self._next_monotonic_timestamp(now_dt, expected_raw_time)
@@ -1961,10 +1961,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         updated_row = cursor.fetchone()
         if updated_row is None:
-            raise _StateCasConflictError
+            raise _StateWriteConflictError
         return self._deserialize_state(updated_row[0])
 
-    def _merge_cas_state_in_cursor(
+    def _apply_state_delta_optimistic(
         self,
         cursor: Any,
         table: str,
@@ -1991,7 +1991,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                     f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE {where_clause})"
                 )
                 self._execute(cursor, insert_sql, (*key_values, serialized, now_val, *key_values))
-                self._verify_cas_write(cursor, table, where_clause, key_values, now_dt)
+                self._ensure_state_row_written(cursor, table, where_clause, key_values, now_dt)
                 return merged
 
             insert_sql = (
@@ -2002,7 +2002,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 self._execute(cursor, insert_sql, (*key_values, serialized, now_val))
             except Exception as exc:
                 if _is_error_matching(exc, _GENERIC_UNIQUE_PATTERNS):
-                    raise _StateCasConflictError from exc
+                    raise _StateWriteConflictError from exc
                 raise
             return merged
 
@@ -2016,23 +2016,23 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             f"WHERE {where_clause} AND update_time = ?"
         )
         self._execute(cursor, update_sql, (self._serialize_state(merged), next_val, *key_values, expected_raw_time))
-        self._verify_cas_write(cursor, table, where_clause, key_values, next_dt)
+        self._ensure_state_row_written(cursor, table, where_clause, key_values, next_dt)
         return merged
 
-    def _verify_cas_write(
+    def _ensure_state_row_written(
         self, cursor: Any, table: str, where_clause: str, key_values: "tuple[Any, ...]", expected_dt: datetime
     ) -> None:
-        """Raise ``_StateCasConflictError`` when a CAS DML statement applied to zero rows."""
+        """Raise ``_StateWriteConflictError`` when a CAS DML statement applied to zero rows."""
         rowcount = getattr(cursor, "rowcount", None)
         if isinstance(rowcount, int) and rowcount == 0:
-            raise _StateCasConflictError
+            raise _StateWriteConflictError
         if isinstance(rowcount, int) and rowcount < 0:
             self._execute(cursor, f"SELECT update_time FROM {table} WHERE {where_clause}", key_values)
             check_row = cursor.fetchone()
             if check_row is None or self._decode_timestamp(check_row[0]) != expected_dt:
-                raise _StateCasConflictError
+                raise _StateWriteConflictError
 
-    def _bigquery_scoped_state(
+    def _resolve_state_with_retry(
         self,
         table: str,
         key_columns: "tuple[str, ...]",
@@ -2046,14 +2046,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 with self._config.provide_connection() as conn:
                     cursor = conn.cursor()
                     try:
-                        merged = self._resolve_scoped_state_in_cursor(
-                            cursor, table, key_columns, key_values, delta, now_dt
-                        )
+                        merged = self._resolve_state(cursor, table, key_columns, key_values, delta, now_dt)
                         conn.commit()
                         return merged
                     finally:
                         cursor.close()
-            except _StateCasConflictError as exc:
+            except _StateWriteConflictError as exc:
                 if attempt + 1 < _MAX_STATE_MERGE_ATTEMPTS:
                     now_dt = datetime.now(UTC)
                     continue
@@ -3994,7 +3992,7 @@ def _adbc_atomic_connection(config: "AdbcConfig", dialect: str) -> Iterator[Any]
                     set_autocommit(True)
 
 
-class _StateCasConflictError(Exception):
+class _StateWriteConflictError(Exception):
     """Internal sentinel raised when a compare-and-swap state update conflicts."""
 
 

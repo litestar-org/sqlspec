@@ -141,7 +141,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                         raise RuntimeError(msg)
                     scoped_started = True
                     current_app_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver, self._app_state_table, ("app_name",), (app_name,), app_state_delta
                         )
                         if app_state_delta
@@ -150,7 +150,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                         )
                     )
                     current_user_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._user_state_table,
                             ("app_name", "user_id"),
@@ -313,14 +313,14 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
                     )
                     scoped_started = True
                     merged_app_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver, self._app_state_table, ("app_name",), (app_name,), app_state_delta
                         )
                         if app_state_delta
                         else None
                     )
                     merged_user_state = (
-                        self._merge_state_locked(
+                        self._apply_state_delta(
                             driver,
                             self._user_state_table,
                             ("app_name", "user_id"),
@@ -520,7 +520,7 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
             raise
         return _json_dict(_row_value(row, "state", 0)) if row is not None else None
 
-    def _merge_state_locked(
+    def _apply_state_delta(
         self,
         driver: Any,
         table: str,

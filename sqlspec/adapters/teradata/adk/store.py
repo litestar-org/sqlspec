@@ -149,7 +149,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                         _raise_missing_created_session()
                     scoped_started = True
                     current_app_state = (
-                        self._merge_scoped_state_tx(
+                        self._apply_state_delta(
                             cursor,
                             table=self._app_state_table,
                             where_sql=_APP_KEY_WHERE,
@@ -169,7 +169,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                         conn.rollback()
                         continue
                     current_user_state = (
-                        self._merge_scoped_state_tx(
+                        self._apply_state_delta(
                             cursor,
                             table=self._user_state_table,
                             where_sql=_USER_KEY_WHERE,
@@ -337,7 +337,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                     scoped_started = True
                     merged_app_state: dict[str, Any] | None = None
                     if app_state_delta:
-                        merged_app_state = self._merge_scoped_state_tx(
+                        merged_app_state = self._apply_state_delta(
                             cursor,
                             table=self._app_state_table,
                             where_sql=_APP_KEY_WHERE,
@@ -351,7 +351,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
                             continue
                     merged_user_state: dict[str, Any] | None = None
                     if user_state_delta:
-                        merged_user_state = self._merge_scoped_state_tx(
+                        merged_user_state = self._apply_state_delta(
                             cursor,
                             table=self._user_state_table,
                             where_sql=_USER_KEY_WHERE,
@@ -596,7 +596,7 @@ class TeradataADKStore(BaseSyncADKStore["TeradataConfig"]):
             raise
         return _json_dict(_row_value(row, "state", 0)) if row is not None else None
 
-    def _merge_scoped_state_tx(
+    def _apply_state_delta(
         self,
         cursor: Any,
         *,
