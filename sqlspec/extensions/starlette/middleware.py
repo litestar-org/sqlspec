@@ -1,6 +1,7 @@
 """HTTP middleware classes for the Starlette SQLSpec extension."""
 
 import asyncio
+import sys
 from collections.abc import Mapping, Sequence
 from contextlib import (
     AbstractContextManager,
@@ -173,7 +174,7 @@ class SQLSpecRequestLeaseMiddleware:
                     for state in self.config_states:
                         pop_state_value(request.state, _response_owner_key(state.connection_key))
                         pop_state_value(request.state, _pending_connection_key(state.connection_key))
-                        _clear_deferred_session(request, deferred_session_key(state))
+                        await _clear_deferred_session(request, deferred_session_key(state))
                         for resource_key in (
                             state.read_connection_key,
                             state.read_session_key,
@@ -182,7 +183,7 @@ class SQLSpecRequestLeaseMiddleware:
                             if resource_key is not None:
                                 pop_state_value(request.state, _resource_slot_key(resource_key))
                                 pop_state_value(request.state, resource_key)
-                                _clear_deferred_session(request, f"{resource_key}_deferred")
+                                await _clear_deferred_session(request, f"{resource_key}_deferred")
 
     async def _finalize(self, request: "Request", state: "SQLSpecConfigState", commit: bool) -> None:
         should_commit = commit and state.commit_mode != "manual"
@@ -752,16 +753,22 @@ async def _clear_published_connection(request: "Request", config_state: "SQLSpec
     session = get_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}", None)
     if session is None:
         session = get_state_value(request.state, f"{config_state.session_key}_instance", None)
+    stream_owner = (
+        session if session is not None else get_state_value(request.state, deferred_session_key(config_state), None)
+    )
     try:
-        if session is not None:
-            try:
+        try:
+            if session is not None:
                 runtime = getattr(session, "observability", None)
                 if runtime is not None and not runtime.is_idle:
                     await runtime.emit_session_end_async(session)
+        finally:
+            try:
+                if stream_owner is not None:
+                    await ensure_async_(stream_owner._close_open_streams)(error=sys.exc_info()[1] is not None)
             finally:
-                detach = getattr(session, "_detach_connection", None)
-                if detach is not None:
-                    detach()
+                if session is not None:
+                    session._detach_connection()
     finally:
         pop_state_value(request.state, f"sqlspec_session_cache_{config_state.session_key}")
         pop_state_value(request.state, f"{config_state.session_key}_instance")
@@ -842,7 +849,7 @@ async def _request_connection_cm(config_state: "SQLSpecConfigState", request: "R
             yield None
         finally:
             pop_state_value(request.state, pending_key)
-            _clear_deferred_session(request, deferred_session_key(config_state))
+            await _clear_deferred_session(request, deferred_session_key(config_state))
 
 
 async def _finalize_request_transaction(
@@ -945,13 +952,14 @@ def _reject_missing_tenant(scope: "Scope") -> NoReturn:
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
-def _clear_deferred_session(request: "Request", key: str) -> None:
-    """Pop one deferred session key from request state and detach any held handle."""
+async def _clear_deferred_session(request: "Request", key: str) -> None:
+    """Pop one deferred session key from request state, closing its open streams and detaching it."""
     deferred = pop_state_value(request.state, key)
     if deferred is not None:
-        detach = getattr(deferred, "_detach_connection", None)
-        if callable(detach):
-            detach()
+        try:
+            await deferred._close_open_streams(error=sys.exc_info()[1] is not None)
+        finally:
+            deferred._detach_connection()
 
 
 def _is_routing_state_active(state: "SQLSpecConfigState") -> bool:

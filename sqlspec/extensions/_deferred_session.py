@@ -118,6 +118,16 @@ class DeferredAsyncSession:
     def __repr__(self) -> str:
         return f"<DeferredAsyncSession {self._config.driver_type.__name__}>"
 
+    async def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close the opened driver session's row streams, if the connection was ever opened.
+
+        Args:
+            error: Whether the request is ending because of an error.
+        """
+        session = self._current()
+        if session is not None:
+            await session._close_open_streams(error=error)
+
     def _detach_connection(self) -> None:
         """Mark the deferred session closed and detach the underlying driver session when open."""
         self._closed = True
@@ -330,6 +340,21 @@ class PortalSession:
 
     def __repr__(self) -> str:
         return f"<PortalSession {type(self._session).__name__}>"
+
+    def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close the wrapped session's row streams on the portal's event loop.
+
+        Args:
+            error: Whether the request is ending because of an error.
+        """
+        close = self._session._close_open_streams
+        if _in_event_loop():
+            return
+
+        async def run() -> None:
+            await close(error=error)
+
+        call_portal_with_context(self._portal, run, tenant_override=None)
 
     def _detach_connection(self) -> None:
         """Detach the wrapped asynchronous driver session directly without dispatching via the portal."""

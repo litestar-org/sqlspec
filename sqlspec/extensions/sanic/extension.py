@@ -1167,10 +1167,15 @@ class SQLSpecPlugin:
         has_payload = has_context_value(request.ctx, payload_key)
         captured_payload = pop_context_value(request.ctx, payload_key)
 
-        if deferred is not None:
-            deferred_detach = getattr(deferred, "_detach_connection", None)
-            if deferred_detach is not None:
-                deferred_detach()
+        request_exc = (
+            exc_override if exc_override is not None else get_context_value(request.ctx, _REQUEST_EXCEPTION_KEY, None)
+        )
+        stream_owner = session if session is not None else deferred
+        try:
+            if stream_owner is not None:
+                await ensure_async_(stream_owner._close_open_streams)(error=request_exc is not None)
+        finally:
+            _detach_deferred_session(deferred)
 
         if connection is None and connection_manager is None and session is None:
             return
@@ -1182,9 +1187,7 @@ class SQLSpecPlugin:
                     if runtime is not None and not runtime.is_idle:
                         await runtime.emit_session_end_async(session)
                 finally:
-                    detach = getattr(session, "_detach_connection", None)
-                    if detach is not None:
-                        detach()
+                    session._detach_connection()
         finally:
             if connection is not None or connection_manager is not None:
                 exc = (

@@ -725,6 +725,20 @@ class SQLSpecPlugin:
         if resource_errors:
             raise resource_errors[0]
 
+    def _close_session_streams(
+        self,
+        config_state: FlaskConfigState,
+        session: Any,
+        *,
+        error: bool,
+        tenant_override: "TenantContextPayload | Literal['ambient'] | None",
+    ) -> None:
+        """Close a request session's open row streams, on the portal loop for asynchronous sessions."""
+        if config_state.is_async and not isinstance(session, PortalSession):
+            self._call_portal(config_state, session._close_open_streams, error=error, tenant_override=tenant_override)
+        else:
+            session._close_open_streams(error=error)
+
     def _release_config_connection(
         self,
         config_state: FlaskConfigState,
@@ -751,9 +765,15 @@ class SQLSpecPlugin:
                         else:
                             runtime.emit_session_end_sync(session)
                 finally:
-                    detach = getattr(session, "_detach_connection", None)
-                    if detach is not None:
-                        detach()
+                    try:
+                        self._close_session_streams(
+                            config_state,
+                            session,
+                            error=exc_info[1] is not None,
+                            tenant_override=captured_payload if has_captured_payload else "ambient",
+                        )
+                    finally:
+                        session._detach_connection()
         finally:
             if connection is not None or conn_ctx is not None:
                 try:

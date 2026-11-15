@@ -183,6 +183,13 @@ class _RoutingSessionState:
         self._replica_streams = 0
         self._preparer = CommonDriverAttributesMixin(None, self._statement_config, config.driver_features)
 
+    def _open_drivers(self) -> "tuple[Any, ...]":
+        drivers = []
+        for driver in (self._primary_driver, self._replica_driver):
+            if driver is not None and driver not in drivers:
+                drivers.append(driver)
+        return tuple(drivers)
+
     def _detach_connection(self) -> None:
         """Detach underlying driver connections and mark the routing session closed."""
         for driver in (self._primary_driver, self._replica_driver):
@@ -337,6 +344,15 @@ class SyncRoutingSession(_RoutingSessionState, Generic[SyncDriverT]):
             self._stack.__exit__(exc_type, exc_val, exc_tb)
         finally:
             self._detach_connection()
+
+    def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close row streams held by the primary and replica sessions.
+
+        Args:
+            error: Whether the session is ending because of an error.
+        """
+        for driver in self._open_drivers():
+            driver._close_open_streams(error=error)
 
     def close(self) -> None:
         """Release all physical checkouts and prevent further execution."""
@@ -1052,6 +1068,15 @@ class AsyncRoutingSession(_RoutingSessionState, Generic[AsyncDriverT]):
             await self._stack.__aexit__(exc_type, exc_val, exc_tb)
         finally:
             self._detach_connection()
+
+    async def _close_open_streams(self, *, error: bool = False) -> None:
+        """Close row streams held by the primary and replica sessions.
+
+        Args:
+            error: Whether the session is ending because of an error.
+        """
+        for driver in self._open_drivers():
+            await driver._close_open_streams(error=error)
 
     async def aclose(self) -> None:
         """Release all physical checkouts and prevent further execution."""

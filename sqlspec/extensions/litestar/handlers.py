@@ -588,6 +588,7 @@ async def _release_request_session(
     if session is None:
         session = get_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
     delete_sqlspec_scope_state(scope, f"{connection_scope_key}_session")
+    request_exc = exc_override if exc_override is not None else get_sqlspec_scope_state(scope, _REQUEST_EXCEPTION_KEY)
     try:
         try:
             if session is not None:
@@ -595,10 +596,15 @@ async def _release_request_session(
                 if runtime is not None and not runtime.is_idle:
                     await runtime.emit_session_end_async(session)
         finally:
-            if session is not None:
-                detach = getattr(session, "_detach_connection", None)
-                if detach is not None:
-                    detach()
+            stream_owner = session
+            if stream_owner is None and session_scope_key is not None and session_scope_key.endswith("_instance"):
+                stream_owner = get_sqlspec_scope_state(scope, f"{session_scope_key[:-9]}_deferred")
+            try:
+                if stream_owner is not None:
+                    await ensure_async_(stream_owner._close_open_streams)(error=request_exc is not None)
+            finally:
+                if session is not None:
+                    session._detach_connection()
     finally:
         try:
             await _exit_connection_context(
@@ -670,9 +676,10 @@ async def _exit_connection_context(
             if runtime is not None and not runtime.is_idle:
                 await runtime.emit_session_end_async(session)
         finally:
-            detach = getattr(session, "_detach_connection", None)
-            if detach is not None:
-                detach()
+            try:
+                await ensure_async_(session._close_open_streams)(error=exc is not None)
+            finally:
+                session._detach_connection()
     with TenantContext.bind(payload):
         if isinstance(connection_cm, AbstractAsyncContextManager):
             await connection_cm.__aexit__(*exit_args)
