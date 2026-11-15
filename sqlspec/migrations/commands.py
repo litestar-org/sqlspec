@@ -2261,10 +2261,13 @@ class SyncMigrationCommands(MigrationCommandsCore["SyncConfigT", SyncMigrationRu
             records: Applied records to audit. Read from the tracking table when None.
             versions: Optional subset of applied versions to audit.
         """
-        if records is None:
-            records = self._read_applied_migrations(driver) if dry_run else self.tracker.get_applied_migrations(driver)
+        audited: list[AppliedMigrationRecord] = (
+            records
+            if records is not None
+            else (self._read_applied_migrations(driver) if dry_run else self.tracker.get_applied_migrations(driver))
+        )
         mismatched, rerecord = self._applied_checksum_audit(
-            records, self.runner.get_migration_files(), versions=versions
+            audited, self.runner.get_migration_files(), versions=versions
         )
         self._ensure_applied_checksums(mismatched)
         self._rerecord_legacy_checksums(
@@ -3562,14 +3565,15 @@ class AsyncMigrationCommands(MigrationCommandsCore["AsyncConfigT", AsyncMigratio
             records: Applied records to audit. Read from the tracking table when None.
             versions: Optional subset of applied versions to audit.
         """
-        if records is None:
-            records = (
-                await self._read_applied_migrations(driver)
-                if dry_run
-                else await self.tracker.get_applied_migrations(driver)
-            )
+        audited: list[AppliedMigrationRecord]
+        if records is not None:
+            audited = records
+        elif dry_run:
+            audited = await self._read_applied_migrations(driver)
+        else:
+            audited = await self.tracker.get_applied_migrations(driver)
         mismatched, rerecord = self._applied_checksum_audit(
-            records, await self.runner.get_migration_files(), versions=versions
+            audited, await self.runner.get_migration_files(), versions=versions
         )
         self._ensure_applied_checksums(mismatched)
         await self._rerecord_legacy_checksums(
